@@ -29,7 +29,7 @@ HTTPS 测试使用本地协议夹具；真实管理端的标准信任链 WSS 联
 
 本项目为单个 Rust 包。根 `Cargo.toml`/`Cargo.lock` 定义发行输入，`src/` 实现协议消费、本机适配、存储、CLI 和平台服务。`src/storage/sqlite.rs` 负责 Windows 当前 facts 表与事务，`src/cli/tests.rs` 保存 CLI 行为测试，根 `tests/` 验证网络、受保护状态与执行事实。`packaging/` 保存平台安装器与生命周期脚本，`scripts/` 保存构建、发行检查，`docs/` 保存配置与安装说明。客户端没有 Web 或独立协议包目录，协议从固定服务端源包消费。
 
-当前使用 Rust `1.99.0`、xcsc `1.0.0` 与设备通信协议 v1。产品协议 `1.0.0` 固定官方 xscs 源码 `abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a`，由 `Cargo.lock` 核验；任务身份与副作用指纹相互独立。配置覆盖与待配对列表能力按实际实现报告。当前结构严格解码，Windows 执行事实表及 FULL 持久性事务、Unix 私有执行事实继续保全。
+当前使用 Rust `1.99.0`、xcsc `1.0.1` 与设备通信协议 v1。产品协议 `1.0.0` 固定官方 xscs 源码 `abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a`，由 `Cargo.lock` 核验；任务身份与副作用指纹相互独立。配置覆盖与待配对列表能力按实际实现报告。当前结构严格解码，Windows 执行事实表及 FULL 持久性事务、Unix 私有执行事实继续保全。
 
 结果先持久化，管理端收存后压缩为去重记录；WSS 中断不取消已开始的执行。需与同步更新的管理端联调，见[管理端通信与执行恢复](https://github.com/isarmg/xscs/blob/main/docs/communication-reliability.md)。
 
