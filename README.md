@@ -19,7 +19,7 @@ Windows 11 x64、Ubuntu 24.04 x86_64、macOS Apple Silicon（arm64）。固定�
 Ubuntu 24.04：
 
 ```sh
-sudo apt install ./xscc_1.0.0_amd64.deb
+sudo apt install ./xscc_1.0.1_amd64.deb
 sudo xscc service stop
 sudo xscc setup --interactive
 sudo xscc status --check --format json
@@ -29,14 +29,14 @@ sudo xscc doctor --sunshine --format json
 macOS Apple Silicon：
 
 ```sh
-sudo installer -pkg ./xscc-1.0.0-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./xscc-1.0.1-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/xscc service stop
 sudo /usr/local/bin/xscc setup --interactive
 sudo /usr/local/bin/xscc status --check --format json
 sudo /usr/local/bin/xscc doctor --sunshine --format json
 ```
 
-Windows：运行 `xscc-1.0.0-windows-x64.msi` 完成安装，再打开新的管理员 PowerShell：
+Windows：运行 `xscc-1.0.1-windows-x64.msi` 完成安装，再打开新的管理员 PowerShell：
 
 ```powershell
 xscc service stop
@@ -55,7 +55,7 @@ xscc doctor --sunshine --format json
 git clone https://github.com/isarmg/xscc.git
 cd xscc
 python3 scripts/package-client.py --output "$HOME/xscc-output"
-sudo apt install "$HOME/xscc-output/xscc_1.0.0_amd64.deb"
+sudo apt install "$HOME/xscc-output/xscc_1.0.1_amd64.deb"
 sudo xscc service stop
 sudo xscc setup --interactive
 sudo xscc status --check --format json

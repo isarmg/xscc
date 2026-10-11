@@ -4,20 +4,20 @@
 
 ## 安装并配对
 
-先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.0 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.0) 下载 `xscc-1.0.0-macos-arm64-unsigned.pkg` 与同名 `.sha256`。
+先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.1 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.1) 下载 `xscc-1.0.1-macos-arm64-unsigned.pkg` 与同名 `.sha256`。
 
 PKG 未签名、未公证。核验来源与摘要后，按系统提供的批准流程安装。
 
 在下载目录核对 PKG 摘要，与对应 `.sha256` 中同名行比较：
 
 ```sh
-shasum -a 256 xscc-1.0.0-macos-arm64-unsigned.pkg
+shasum -a 256 xscc-1.0.1-macos-arm64-unsigned.pkg
 ```
 
 一致后安装并设置：
 
 ```sh
-sudo installer -pkg ./xscc-1.0.0-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./xscc-1.0.1-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/xscc service stop
 sudo /usr/local/bin/xscc setup --interactive
 sudo /usr/local/bin/xscc status --check --format json
@@ -67,7 +67,7 @@ sudo sh deploy/macos/uninstall-macos.sh
 python3 scripts/package-client.py --output "$HOME/xscc-output"
 ```
 
-生成 `xscc-1.0.0-macos-arm64-unsigned.pkg`、`xscc-1.0.0-aarch64-apple-darwin.tar.gz` 及对应 manifest / 校验文件。
+生成 `xscc-1.0.1-macos-arm64-unsigned.pkg`、`xscc-1.0.1-aarch64-apple-darwin.tar.gz` 及对应 manifest / 校验文件。
 
 正式标签构建加 `--require-tag`，要求与版本号一致的 annotated tag 精确指向 HEAD。归档用于分发二进制与文档；系统服务通过原生安装包安装。
 

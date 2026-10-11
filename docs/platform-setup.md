@@ -22,7 +22,7 @@
 
 先安装 Sunshine `v2026.914.233613`，在其 Web UI 设置用户名和密码。准备本机 HTTPS 回环地址，通常是 `https://127.0.0.1:47990/`。这个密码用于本机 Sunshine API，实例授权码用于远程管理端。Sunshine 上游安装说明见[Getting Started](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html)。
 
-下载入口：[1.0.0 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.0)。各平台指南列出准确的原生包和校验文件名。安装前核对摘要；已发布包的源码身份以对应 manifest 和 `version` 输出为准。
+下载入口：[1.0.1 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.1)。各平台指南列出准确的原生包和校验文件名。安装前核对摘要；已发布包的源码身份以对应 manifest 和 `version` 输出为准。
 
 ## 向导输入与完成结果
 

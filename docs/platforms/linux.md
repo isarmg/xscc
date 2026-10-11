@@ -4,18 +4,18 @@
 
 ## 安装并配对
 
-先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.0 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.0) 下载 `xscc_1.0.0_amd64.deb` 与 `xscc_1.0.0_amd64.deb.sha256`。
+先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.1 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.1) 下载 `xscc_1.0.1_amd64.deb` 与 `xscc_1.0.1_amd64.deb.sha256`。
 
 进入下载目录，先核对安装包摘要：
 
 ```sh
-sha256sum --check --strict xscc_1.0.0_amd64.deb.sha256
+sha256sum --check --strict xscc_1.0.1_amd64.deb.sha256
 ```
 
 预期校验结果为 OK。随后执行：
 
 ```sh
-sudo apt install ./xscc_1.0.0_amd64.deb
+sudo apt install ./xscc_1.0.1_amd64.deb
 sudo xscc service stop
 sudo xscc setup --interactive
 sudo xscc status --check --format json
@@ -40,7 +40,7 @@ sudo journalctl -u xscc.service -n 100 --no-pager
 - 服务未运行：检查上述 journal 和 `service status --format json`；完成配对后再启动。
 - Sunshine 可访问但服务控制失败：核对目标是否为系统级 `sunshine.service`，以及本机服务授权。Sunshine 连接和凭据问题见[通用排障](../troubleshooting.md)。
 
-同版 DEB 可用 `sudo apt install --reinstall ./xscc_1.0.0_amd64.deb` 修复，保留业务状态。修复后检查版本、服务与业务连接。
+同版 DEB 可用 `sudo apt install --reinstall ./xscc_1.0.1_amd64.deb` 修复，保留业务状态。修复后检查版本、服务与业务连接。
 
 ## 卸载
 
@@ -60,7 +60,7 @@ sudo apt remove xscc
 python3 scripts/package-client.py --output "$HOME/xscc-output"
 ```
 
-生成 `xscc_1.0.0_amd64.deb`、`xscc-1.0.0-x86_64-unknown-linux-gnu.tar.gz` 及对应 manifest / 校验文件。
+生成 `xscc_1.0.1_amd64.deb`、`xscc-1.0.1-x86_64-unknown-linux-gnu.tar.gz` 及对应 manifest / 校验文件。
 
 正式标签构建加 `--require-tag`，要求与版本号一致的 annotated tag 精确指向 HEAD。归档用于分发二进制与文档；系统服务通过原生安装包安装。
 

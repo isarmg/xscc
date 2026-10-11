@@ -4,18 +4,18 @@
 
 ## 安装并配对
 
-先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.0 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.0) 下载 `xscc-1.0.0-windows-x64.msi` 与同名 `.sha256`。
+先完成[安装前准备](../platform-setup.md#开始前准备)。从 [1.0.1 Release](https://github.com/isarmg/xscc/releases/tag/v1.0.1) 下载 `xscc-1.0.1-windows-x64.msi` 与同名 `.sha256`。
 
 在管理员 PowerShell 的下载目录中计算 SHA-256，与校验文件内同名行比较：
 
 ```powershell
-Get-FileHash .\xscc-1.0.0-windows-x64.msi -Algorithm SHA256
+Get-FileHash .\xscc-1.0.1-windows-x64.msi -Algorithm SHA256
 ```
 
 一致后安装并等待向导完成：
 
 ```powershell
-$msi = (Resolve-Path .\xscc-1.0.0-windows-x64.msi).Path
+$msi = (Resolve-Path .\xscc-1.0.1-windows-x64.msi).Path
 $install = Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /norestart /l*v `"$env:TEMP\xscc-install.log`"" -Wait -PassThru
 $install.ExitCode
 ```
@@ -72,7 +72,7 @@ MSI 允许选择本机安装目录，安装全部组件并登记系统服务；�
 python scripts/package-client.py --output "$env:USERPROFILE\xscc-output"
 ```
 
-生成 `xscc-1.0.0-windows-x64.msi`、`xscc-1.0.0-x86_64-pc-windows-msvc.zip` 及对应 manifest / 校验文件。
+生成 `xscc-1.0.1-windows-x64.msi`、`xscc-1.0.1-x86_64-pc-windows-msvc.zip` 及对应 manifest / 校验文件。
 
 正式标签构建加 `--require-tag`，要求与版本号一致的 annotated tag 精确指向 HEAD。归档用于分发二进制与文档；系统服务通过原生安装包安装。
 
