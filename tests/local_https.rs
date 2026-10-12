@@ -1,7 +1,6 @@
 //! Real HTTPS and HTTP behavior against a local protocol fixture, NOT Sunshine acceptance.
 use std::{
     path::Path,
-    process::Command as ProcessCommand,
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -373,7 +372,7 @@ async fn doctor_failure_reports_the_self_signed_loopback_tls_policy() {
     ] {
         let selected = state.clone();
         let output = tokio::task::spawn_blocking(move || {
-            ProcessCommand::new(env!("CARGO_BIN_EXE_xscc"))
+            std::process::Command::new(env!("CARGO_BIN_EXE_xscc"))
                 .args(["doctor", "--sunshine", "--format", "json", "--config"])
                 .arg(selected)
                 .output()
