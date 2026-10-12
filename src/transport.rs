@@ -230,7 +230,22 @@ impl ManagerConnection {
         health: &watch::Receiver<HealthObservation>,
         execution: &mut ExecutionState,
     ) -> Result<(), TransportError> {
-        let mut socket = self.connect().await?;
+        let socket = self.connect().await?;
+        self.session_connected(socket, binding, capabilities, executor, health, execution)
+            .await
+    }
+
+    // Keep the authenticated socket loop independently testable with a private
+    // trusted TLS fixture; production always obtains its socket via connect().
+    async fn session_connected<A: Sunshine + 'static, J: Journal + 'static>(
+        &self,
+        mut socket: Socket,
+        binding: &Binding,
+        capabilities: &Capabilities,
+        executor: Arc<Executor<A, J>>,
+        health: &watch::Receiver<HealthObservation>,
+        execution: &mut ExecutionState,
+    ) -> Result<(), TransportError> {
         send(
             &mut socket,
             ClientMessage::Hello {
@@ -291,37 +306,8 @@ impl ManagerConnection {
                                 }
                             }
                             ManagerMessage::Task { mode, task, expires_at_unix_ms, remaining_ms } => {
-                                let fingerprint = task.fingerprint().map_err(|_| TransportError::Protocol)?;
-                                if let Some(active) = &execution.active {
-                                    // A retry can arrive before the first execution finishes. Keep
-                                    // the original execution and its eventual result, never run twice.
-                                    if active.id == task.operation_id && active.fingerprint == fingerprint {
-                                        send(&mut socket, ClientMessage::Progress { operation_id: active.id.clone(), fingerprint: active.fingerprint.clone() }).await?;
-                                        continue;
-                                    }
-                                    return Err(TransportError::Protocol);
-                                }
-                                if mode == xscs_protocol::DeliveryMode::InspectOnly {
-                                    // On this ordered socket, Progress separates earlier replayed
-                                    // results from the result of this inspection, including cache hits.
-                                    send(&mut socket, ClientMessage::Progress { operation_id: task.operation_id.clone(), fingerprint: fingerprint.clone() }).await?;
-                                }
-                                if let Some((previous, report)) = execution.completed.get(&task.operation_id) {
-                                    if previous != &fingerprint { return Err(TransportError::Protocol); }
-                                    if mode != xscs_protocol::DeliveryMode::InspectOnly || !matches!(report, Report::Unknown { .. }) {
-                                        send(&mut socket, ClientMessage::Result { operation_id: task.operation_id.clone(), report: report.clone() }).await?;
-                                        continue;
-                                    }
-                                    superseded.insert(task.operation_id.clone(), (fingerprint.clone(), xscs_protocol::report_digest(report).map_err(|_| TransportError::Protocol)?));
-                                    // An inspect request must collect fresh evidence.
-                                    execution.completed.remove(&task.operation_id);
-                                }
-                                let id = task.operation_id.clone();
-                                let mutation = !matches!(task.command, xscs_protocol::Command::ReadConfig {} | xscs_protocol::Command::ListApplications {} | xscs_protocol::Command::ListPendingPairings {} | xscs_protocol::Command::ListPairedClients {} | xscs_protocol::Command::ReadLogs { .. } | xscs_protocol::Command::ReadDiagnostics {} | xscs_protocol::Command::ReadVirtualInputStatus {} | xscs_protocol::Command::ReadServiceStatus {});
-                                let executor = executor.clone();
-                                let deadline = (mode == xscs_protocol::DeliveryMode::Execute).then(|| ExecutionDeadline::received(expires_at_unix_ms, remaining_ms));
-                                let handle = tokio::spawn(async move { executor.deliver_before(&task, mode, deadline).await });
-                                execution.active = Some(ActiveExecution { id, fingerprint, mutation, handle });
+                                execution.deliver_task(&mut socket, executor.clone(), mode, task,
+                                    (expires_at_unix_ms, remaining_ms), &mut superseded).await?;
                             }
                         },
                         Message::Ping(bytes) => send_frame(&mut socket, Message::Pong(bytes)).await?,
@@ -415,6 +401,104 @@ struct ExecutionState {
     acknowledging: FuturesUnordered<tokio::task::JoinHandle<ReceiptCompletion>>,
 }
 impl ExecutionState {
+    // This is the production Task branch. Socket order is established before
+    // changing the outbox or spawning work; a failed send leaves both intact.
+    async fn deliver_task<A: Sunshine + 'static, J: Journal + 'static>(
+        &mut self,
+        socket: &mut Socket,
+        executor: Arc<Executor<A, J>>,
+        mode: xscs_protocol::DeliveryMode,
+        task: Box<xscs_protocol::Task>,
+        budget: (u64, u64),
+        superseded: &mut BTreeMap<String, (String, String)>,
+    ) -> Result<(), TransportError> {
+        let fingerprint = task.fingerprint().map_err(|_| TransportError::Protocol)?;
+        if let Some(active) = &self.active {
+            // A retry can arrive before the first execution finishes. Keep
+            // the original execution and its eventual result, never run twice.
+            if active.id == task.operation_id && active.fingerprint == fingerprint {
+                send(
+                    socket,
+                    ClientMessage::Progress {
+                        operation_id: active.id.clone(),
+                        fingerprint: active.fingerprint.clone(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            return Err(TransportError::Protocol);
+        }
+        // Do not confirm a task that conflicts with a retained result.
+        if self
+            .completed
+            .get(&task.operation_id)
+            .is_some_and(|(previous, _)| previous != &fingerprint)
+        {
+            return Err(TransportError::Protocol);
+        }
+        if mode == xscs_protocol::DeliveryMode::InspectOnly {
+            // On this ordered socket, Progress separates earlier replayed
+            // results from the result of this inspection, including cache hits.
+            send(
+                socket,
+                ClientMessage::Progress {
+                    operation_id: task.operation_id.clone(),
+                    fingerprint: fingerprint.clone(),
+                },
+            )
+            .await?;
+        }
+        if let Some((_, report)) = self.completed.get(&task.operation_id) {
+            if mode != xscs_protocol::DeliveryMode::InspectOnly
+                || !matches!(report, Report::Unknown { .. })
+            {
+                send(
+                    socket,
+                    ClientMessage::Result {
+                        operation_id: task.operation_id.clone(),
+                        report: report.clone(),
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
+            superseded.insert(
+                task.operation_id.clone(),
+                (
+                    fingerprint.clone(),
+                    xscs_protocol::report_digest(report).map_err(|_| TransportError::Protocol)?,
+                ),
+            );
+            // An inspect request must collect fresh evidence.
+            self.completed.remove(&task.operation_id);
+        }
+        let id = task.operation_id.clone();
+        let mutation = !matches!(
+            task.command,
+            xscs_protocol::Command::ReadConfig {}
+                | xscs_protocol::Command::ListApplications {}
+                | xscs_protocol::Command::ListPendingPairings {}
+                | xscs_protocol::Command::ListPairedClients {}
+                | xscs_protocol::Command::ReadLogs { .. }
+                | xscs_protocol::Command::ReadDiagnostics {}
+                | xscs_protocol::Command::ReadVirtualInputStatus {}
+                | xscs_protocol::Command::ReadServiceStatus {}
+        );
+        let deadline = (mode == xscs_protocol::DeliveryMode::Execute)
+            .then(|| ExecutionDeadline::received(budget.0, budget.1));
+        let handle =
+            tokio::spawn(async move { executor.deliver_before(&task, mode, deadline).await });
+        self.active = Some(ActiveExecution {
+            id,
+            fingerprint,
+            mutation,
+            handle,
+        });
+
+        Ok(())
+    }
+
     async fn shutdown(&mut self) -> Result<(), TransportError> {
         // Stop receiving tasks first, then let the already-owned execution and
         // receipts reach their existing journal commits. Never replay an effect.
@@ -695,3 +779,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transport_tls_tests.rs"]
+mod tls_tests;
