@@ -266,6 +266,9 @@ impl ManagerConnection {
             .await?;
         }
         let mut last_snapshot = None;
+        // One inspection per operation per session can supersede an earlier Unknown.
+        // Keep only that sent report's identity until the new report is acknowledged.
+        let mut superseded = BTreeMap::<String, (String, String)>::new();
         crate::runtime_status::observe("manager_session", serde_json::json!("connected"));
         loop {
             tokio::select! {
@@ -279,8 +282,7 @@ impl ManagerConnection {
                         Message::Text(text) => match decode_manager_message(text.as_bytes()).map_err(|_| TransportError::Protocol)? {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
                             ManagerMessage::ResultAccepted { operation_id, fingerprint, report_digest, finalized } => {
-                                if let Some((expected, report)) = execution.completed.get(&operation_id) {
-                                    if expected != &fingerprint || xscs_protocol::report_digest(report).ok().as_deref() != Some(&report_digest) { return Err(TransportError::Protocol); }
+                                if receipt_requires_commit(execution.completed.get(&operation_id), superseded.get(&operation_id), &fingerprint, &report_digest, finalized)? {
                                     let executor = executor.clone();
                                     execution.acknowledging.push(tokio::spawn(async move {
                                         let result = executor.acknowledge_final(&operation_id, &fingerprint, &report_digest, finalized).await;
@@ -293,8 +295,16 @@ impl ManagerConnection {
                                 if let Some(active) = &execution.active {
                                     // A retry can arrive before the first execution finishes. Keep
                                     // the original execution and its eventual result, never run twice.
-                                    if active.id == task.operation_id && active.fingerprint == fingerprint { continue; }
+                                    if active.id == task.operation_id && active.fingerprint == fingerprint {
+                                        send(&mut socket, ClientMessage::Progress { operation_id: active.id.clone(), fingerprint: active.fingerprint.clone() }).await?;
+                                        continue;
+                                    }
                                     return Err(TransportError::Protocol);
+                                }
+                                if mode == xscs_protocol::DeliveryMode::InspectOnly {
+                                    // On this ordered socket, Progress separates earlier replayed
+                                    // results from the result of this inspection, including cache hits.
+                                    send(&mut socket, ClientMessage::Progress { operation_id: task.operation_id.clone(), fingerprint: fingerprint.clone() }).await?;
                                 }
                                 if let Some((previous, report)) = execution.completed.get(&task.operation_id) {
                                     if previous != &fingerprint { return Err(TransportError::Protocol); }
@@ -302,8 +312,8 @@ impl ManagerConnection {
                                         send(&mut socket, ClientMessage::Result { operation_id: task.operation_id.clone(), report: report.clone() }).await?;
                                         continue;
                                     }
-                                    // An inspect request must collect fresh evidence even when the
-                                    // receipt for an earlier uncertain result is still being saved.
+                                    superseded.insert(task.operation_id.clone(), (fingerprint.clone(), xscs_protocol::report_digest(report).map_err(|_| TransportError::Protocol)?));
+                                    // An inspect request must collect fresh evidence.
                                     execution.completed.remove(&task.operation_id);
                                 }
                                 let id = task.operation_id.clone();
@@ -333,6 +343,7 @@ impl ManagerConnection {
                     result.map_err(|_| TransportError::Configuration)?;
                     if execution.completed.get(&id).is_some_and(|(_, report)| xscs_protocol::report_digest(report).ok().as_deref() == Some(&digest)) {
                         execution.completed.remove(&id);
+                        superseded.remove(&id);
                     }
                 },
                 _ = tick.tick() => {
@@ -365,6 +376,33 @@ impl ManagerConnection {
             }
         }
     }
+}
+
+// Validate against the current observation or the one this session superseded.
+// Unknown receipts cannot compact intent until the Manager supplies a final outcome.
+fn receipt_requires_commit(
+    current: Option<&(String, Report)>,
+    superseded: Option<&(String, String)>,
+    fingerprint: &str,
+    digest: &str,
+    finalized: bool,
+) -> Result<bool, TransportError> {
+    let current_digest = current.and_then(|(_, report)| xscs_protocol::report_digest(report).ok());
+    if superseded.is_some_and(|(previous, sent)| previous == fingerprint && sent == digest)
+        && current_digest.as_deref() != Some(digest)
+    {
+        // A delayed old receipt must neither acknowledge nor reject the new report.
+        return Ok(false);
+    }
+    let Some((expected, report)) = current else {
+        return Ok(false);
+    };
+    if expected != fingerprint || current_digest.as_deref() != Some(digest) {
+        return Err(TransportError::Protocol);
+    }
+    // Unknown remains in the journal and is polled regardless of accepted_digest.
+    // Avoid racing a redundant receipt write against fresh inspection persistence.
+    Ok(finalized || !matches!(report, Report::Unknown { .. }))
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -476,6 +514,84 @@ fn classify_handshake(error: tungstenite::Error) -> TransportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_receipts_wait_for_final_resolution_without_racing_inspection() {
+        let report = Report::Unknown {
+            reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
+        };
+        let digest = xscs_protocol::report_digest(&report).unwrap();
+        let current = ("fingerprint".to_owned(), report);
+        let previous = (current.0.clone(), digest.clone());
+        for superseded in [None, Some(&previous)] {
+            assert_eq!(
+                receipt_requires_commit(Some(&current), superseded, &current.0, &digest, false),
+                Ok(false)
+            );
+            assert_eq!(
+                receipt_requires_commit(Some(&current), superseded, &current.0, &digest, true),
+                Ok(true)
+            );
+        }
+    }
+
+    #[test]
+    fn delayed_receipt_only_matches_the_known_superseded_observation() {
+        let previous = (
+            "fingerprint".to_owned(),
+            xscs_protocol::report_digest(&Report::Unknown {
+                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
+            })
+            .unwrap(),
+        );
+        let current = (previous.0.clone(), Report::ApplicationClosed {});
+        let digest = xscs_protocol::report_digest(&current.1).unwrap();
+        for finalized in [false, true] {
+            for observation in [None, Some(&current)] {
+                assert_eq!(
+                    receipt_requires_commit(
+                        observation,
+                        Some(&previous),
+                        &previous.0,
+                        &previous.1,
+                        finalized,
+                    ),
+                    Ok(false)
+                );
+            }
+            assert_eq!(
+                receipt_requires_commit(
+                    Some(&current),
+                    Some(&previous),
+                    &current.0,
+                    &digest,
+                    finalized,
+                ),
+                Ok(true),
+                "confirmed evidence is compacted even while the Manager retains Unknown"
+            );
+        }
+        for (fingerprint, digest) in [
+            (current.0.as_str(), "unsent-digest"),
+            ("another-fingerprint", previous.1.as_str()),
+        ] {
+            assert_eq!(
+                receipt_requires_commit(
+                    Some(&current),
+                    Some(&previous),
+                    fingerprint,
+                    digest,
+                    false,
+                ),
+                Err(TransportError::Protocol)
+            );
+        }
+        assert_eq!(
+            receipt_requires_commit(None, None, &previous.0, &previous.1, true),
+            Ok(false),
+            "a repeated receipt after cleanup cannot recreate execution state"
+        );
+    }
 
     fn executing(handle: tokio::task::JoinHandle<Report>) -> ExecutionState {
         ExecutionState {
