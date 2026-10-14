@@ -16,6 +16,7 @@ CLIENT_WINDOWS_RUNNER = "windows-2025"
 MAX_TIMEOUT_MINUTES = 30
 MAX_WORKFLOW_BYTES = 1024 * 1024
 PINNED_OFFICIAL_ACTIONS = {
+    "actions/cache": "0400d5f644dc74513175e3cd8d07132dd4860809",
     "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
