@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -14,6 +15,37 @@ inventory=importlib.util.module_from_spec(SPEC);SPEC.loader.exec_module(inventor
 
 
 class ReleaseInventoryTests(unittest.TestCase):
+    def test_actual_utf8_runtime_identity_survives_windows_default_encoding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            stage=Path(temporary).resolve(strict=True)
+            root_ref='urn:runtime:current-\u0401'
+            def source(destination,*args):
+                destination.mkdir();return destination
+            def produce(source,manifest,root_name,stage,*args,**kwargs):
+                path=stage/'share/runtime-sbom.cdx.json'
+                path.write_bytes(json.dumps({'metadata':{'component':{'bom-ref':root_ref}},
+                    'components':[{'name':'current-\u0401'}]},ensure_ascii=False).encode('utf-8'))
+                return path
+            receipts=[]
+            def finalize(stage,boms,receipt,*args,**kwargs):
+                receipts.append(json.loads(receipt.read_bytes()));return 'verified fixture handoff'
+            modules={'sbom':SimpleNamespace(produce_runtime_cargo_bom=produce),
+                     'release_sbom':SimpleNamespace(finalize=finalize)}
+            original=Path.read_text
+            def windows_default(path,*args,**kwargs):
+                if 'encoding' not in kwargs:
+                    kwargs['encoding']='cp1252'
+                return original(path,*args,**kwargs)
+            with patch.object(inventory,'checkout_tools',side_effect=lambda destination,*args:destination), \
+                 patch.object(inventory,'exported_source',side_effect=source), \
+                 patch.object(inventory,'load_tool',side_effect=lambda name,*args:modules[name]), \
+                 patch.object(inventory,'run',side_effect=lambda command,*args:'a'*40 if command[1]=='rev-parse' else ''), \
+                 patch.object(Path,'read_text',windows_default):
+                result=inventory.generate(stage,product='xscc',version='1.0.0',revision='a'*40,
+                    target='x86_64-pc-windows-msvc',root_name='xscc',runtime_files=[])
+            self.assertEqual(result,'verified fixture handoff')
+            self.assertEqual(receipts[0]['runtime_roots'][0]['ref'],root_ref)
+
     def test_unbound_or_mutable_tool_source_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)

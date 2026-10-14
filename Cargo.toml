@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "1560d7da0057da3a7eb5dc5096d2891fdf671215", version = "=1.0.0" }
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "25c9ec6950c4f64592dbba87fc05d0ad200fdf56", version = "=1.0.0" }
 thiserror = "2"
 tokio = { version = "~1.53.2", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
