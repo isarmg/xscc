@@ -59,6 +59,8 @@ class PackageTests(unittest.TestCase):
                 policy_reader.validate(policy, tables, {'source_revision': revision})
             except ValueError:
                 print('Actual current XSCC installer table names:', json.dumps(tables['table_names']))
+                print('Actual current XSCC installer directories:', json.dumps(tables['directories']))
+                print('Declared current XSCC installer directories:', json.dumps(policy['directories']))
                 raise
             # Exercise the rejection against actual native table rows rather
             # than weakening the policy to accept an unexpected build result.
