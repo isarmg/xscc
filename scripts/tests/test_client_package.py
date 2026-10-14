@@ -37,19 +37,29 @@ class PackageTests(unittest.TestCase):
             # launches its placeholder executable or claims client acceptance.
             executable = private / 'fixture.exe'
             shutil.copyfile(sys.executable, executable)
+            tools = inventory.checkout_tools(private / 'tools', environment)
+            policy_reader = inventory.load_tool('msi_policy', tools)
+            stage = private / 'policy'
+            policy = policy_reader.create(builder.ROOT / 'packaging/windows/Package.wxs',
+                                          stage, version, revision)
+            # The policy describes final IncludeInventory=1 authoring. Build
+            # that same layout, not the bootstrap MSI with its conditional
+            # share directory omitted.
+            inventory_source = private / 'inventory.wxs'
+            subprocess.run([sys.executable, str(builder.ROOT / 'scripts/wix-inventory-files.py'),
+                            '--directory', str(stage / 'share'), '--output', str(inventory_source),
+                            '--product', 'xscc'], cwd=builder.ROOT, env=environment,
+                           check=True, timeout=30)
             output = private / 'output'
             subprocess.run(['dotnet', 'build', str(builder.ROOT / 'packaging/windows/Xscc.wixproj'),
                             '-c', 'Release', '-p:ClientExe=' + str(executable),
                             '-p:ProductVersion=' + version,
+                            '-p:IncludeInventory=1', '-p:InventoryWxs=' + str(inventory_source),
                             '-p:BaseIntermediateOutputPath=' + str(private / 'obj') + os.sep,
                             '-p:OutputPath=' + str(output) + os.sep],
                            cwd=builder.ROOT, env=environment, check=True, timeout=180)
             artifact = output / ('xscc-' + version + '-windows-x64.msi')
             self.assertTrue(artifact.is_file())
-            tools = inventory.checkout_tools(private / 'tools', environment)
-            policy_reader = inventory.load_tool('msi_policy', tools)
-            policy = policy_reader.create(builder.ROOT / 'packaging/windows/Package.wxs',
-                                          private / 'policy', version, revision)
             evidence = private / 'actual-tables.json'
             inventory.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File',
                            str(tools / 'scripts/msi_tables.ps1'), '-Artifact', str(artifact),
