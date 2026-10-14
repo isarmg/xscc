@@ -141,14 +141,22 @@ class PackageTests(unittest.TestCase):
                 name=archive.name.removesuffix('.tar.gz')
                 stage=root/'stage'/name
                 stage.mkdir(parents=True)
+                archived_modes={}
                 with tarfile.open(archive) as source:
                     for entry in source:
+                        archived_modes[entry.name]=entry.mode
                         target=stage/Path(entry.name).relative_to(name)
                         target.parent.mkdir(parents=True,exist_ok=True)
                         target.write_bytes(source.extractfile(entry).read())
                         target.chmod(entry.mode)
                 with tarfile.open(archive,'w:gz') as output:
-                    output.add(stage,arcname=name)
+                    def retained_posix_modes(entry):
+                        # NTFS chmod cannot express Unix archive permissions.
+                        # Keep the actual source archive modes while exercising
+                        # the real writer's directory entries on every host.
+                        if entry.isfile():entry.mode=archived_modes[entry.name]
+                        return entry
+                    output.add(stage,arcname=name,filter=retained_posix_modes)
                     if injected is not None:
                         entry=tarfile.TarInfo(name+'/share/'+injected)
                         if injected in ('empty-directory','traversal-directory'):
