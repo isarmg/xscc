@@ -13,6 +13,10 @@ import tarfile
 import tempfile
 import zipfile
 
+MAX_ARCHIVE_ENTRIES=16384
+MAX_ARCHIVE_NAME_BYTES=4096
+MAX_ARCHIVE_DEPTH=32
+
 
 def run(*args):
     env = powershell_environment() if args[0] == "powershell.exe" else None
@@ -45,8 +49,8 @@ def digest(path):
 
 
 def verify_inventory(root, manifest, target, sha):
-    bom = json.loads((root / 'share/release-sbom.cdx.json').read_text())
-    runtime = json.loads((root / 'share/runtime-sbom.cdx.json').read_text())
+    bom = json.loads((root / 'share/release-sbom.cdx.json').read_text(encoding='utf-8'))
+    runtime = json.loads((root / 'share/runtime-sbom.cdx.json').read_text(encoding='utf-8'))
     for document in (bom, runtime):
         if document.get('bomFormat') != 'CycloneDX' or document.get('specVersion') != '1.5':
             raise ValueError('release runtime inventory is not CycloneDX 1.5')
@@ -94,8 +98,20 @@ def verify(archive, destination, sha):
     root = destination / name
     root.mkdir()
     seen = set()
+    directories = set()
     archive_modes = {}
     budget = 128 * 1024 * 1024
+    entries=0
+
+    def charge(path):
+        nonlocal entries
+        entries+=1
+        if entries>MAX_ARCHIVE_ENTRIES:
+            raise ValueError('archive entry count exceeded')
+        if (not isinstance(path,str) or not path or ':' in path or len(path.encode('utf-8'))>MAX_ARCHIVE_NAME_BYTES or
+                any(ord(value)<32 or ord(value)==127 for value in path) or
+                len(path.split('/'))>MAX_ARCHIVE_DEPTH):
+            raise ValueError('archive entry name exceeds its bounds')
 
     def write(path, size, data, mode):
         nonlocal budget
@@ -121,6 +137,7 @@ def verify(archive, destination, sha):
     if windows:
         with zipfile.ZipFile(archive) as source:
             for entry in source.infolist():
+                charge(entry.filename)
                 if entry.is_dir() or (entry.external_attr >> 16) & 0o170000 not in (0, 0o100000):
                     raise ValueError("non-file ZIP entry")
                 with source.open(entry) as data:
@@ -128,14 +145,27 @@ def verify(archive, destination, sha):
     else:
         with tarfile.open(archive) as source:
             for entry in source:
-                if entry.isdir() and (entry.name==name or entry.name.startswith(name+'/share/')) and '..' not in entry.name.split('/'):
+                charge(entry.name)
+                if entry.isdir():
+                    parts=entry.name.split('/')
+                    if (entry.name in directories or '\\' in entry.name or
+                            any(value in ('', '.', '..') for value in parts) or
+                            (entry.name not in (name, name+'/share') and not entry.name.startswith(name+'/share/'))):
+                        raise ValueError('unexpected or duplicate TAR directory')
+                    directories.add(entry.name)
                     continue
                 if not entry.isfile():
-                    raise ValueError("non-file TAR entry")
+                    raise ValueError("non-file TAR entry: "+repr(entry.name[:128]))
                 with source.extractfile(entry) as data:
                     write(entry.name, entry.size, data, entry.mode)
     if not required<=seen:
         raise ValueError("incomplete package")
+    parents={name}
+    for relative in seen:
+        parts=relative.split('/')
+        parents.update(name+'/'+('/'.join(parts[:index])) for index in range(1,len(parts)))
+    if not directories<=parents:
+        raise ValueError('TAR directory has no delivered file')
     raw=(root/'share/package.json').read_bytes()
     if (root/'share/package.sha256').read_bytes()!=(hashlib.sha256(raw).hexdigest()+'\n').encode():
         raise ValueError('release manifest checksum mismatch')

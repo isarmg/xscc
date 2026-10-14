@@ -133,6 +133,40 @@ class PackageTests(unittest.TestCase):
                 with patch.object(checker, "run", return_value=f"xscc {VERSION} (git {SHA}; xscs-management/1)"):
                     checker.verify(archive, root, SHA)
 
+    def test_actual_tar_writer_directories_are_accepted_and_unknown_objects_rejected(self):
+        for injected in (None, 'empty-directory', 'symlink', 'hardlink', 'traversal-directory'):
+            with self.subTest(injected=injected), tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                archive=self.fixture(root)
+                name=archive.name.removesuffix('.tar.gz')
+                stage=root/'stage'/name
+                stage.mkdir(parents=True)
+                with tarfile.open(archive) as source:
+                    for entry in source:
+                        target=stage/Path(entry.name).relative_to(name)
+                        target.parent.mkdir(parents=True,exist_ok=True)
+                        target.write_bytes(source.extractfile(entry).read())
+                        target.chmod(entry.mode)
+                with tarfile.open(archive,'w:gz') as output:
+                    output.add(stage,arcname=name)
+                    if injected is not None:
+                        entry=tarfile.TarInfo(name+'/share/'+injected)
+                        if injected in ('empty-directory','traversal-directory'):
+                            entry.type=tarfile.DIRTYPE
+                            if injected=='traversal-directory':entry.name=name+'/share/../escape'
+                        else:
+                            entry.type=tarfile.SYMTYPE if injected=='symlink' else tarfile.LNKTYPE
+                            entry.linkname=name+'/README.md'
+                        output.addfile(entry)
+                archive.with_name(archive.name+'.sha256').write_text(f'{checker.digest(archive)}  {archive.name}\n')
+                with patch.object(checker,'run',return_value=f'xscc {VERSION} (git {SHA}; xscs-management/1)') as executable:
+                    if injected is None:
+                        checker.verify(archive,root,SHA)
+                        executable.assert_called_once()
+                    else:
+                        with self.assertRaises(ValueError):checker.verify(archive,root,SHA)
+                        executable.assert_not_called()
+
     def test_archive_permission_change_is_rejected_before_execution(self):
         for windows in (False,True):
             with self.subTest(windows=windows),tempfile.TemporaryDirectory() as temporary:
@@ -141,6 +175,40 @@ class PackageTests(unittest.TestCase):
                 with patch.object(checker,'run') as executable,self.assertRaisesRegex(ValueError,'manifest file inventory mismatch'):
                     checker.verify(archive,root,SHA)
                 executable.assert_not_called()
+
+    def test_zero_size_directories_count_and_names_are_bounded_before_execution(self):
+        for case in ('count','long-name','control','depth'):
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                archive=self.fixture(root)
+                name=archive.name.removesuffix('.tar.gz')
+                with tarfile.open(archive,'r:gz') as source:
+                    retained=[(entry,source.extractfile(entry).read()) for entry in source]
+                with tarfile.open(archive,'w:gz') as output:
+                    if case=='count':
+                        for index in range(checker.MAX_ARCHIVE_ENTRIES+1):
+                            entry=tarfile.TarInfo(name+'/share/directory'+str(index));entry.type=tarfile.DIRTYPE;output.addfile(entry)
+                    else:
+                        extra={'long-name':'Ё'*(checker.MAX_ARCHIVE_NAME_BYTES//2),'control':'hidden\nname','depth':'/'.join(['deep']*checker.MAX_ARCHIVE_DEPTH)}[case]
+                        entry=tarfile.TarInfo(name+'/share/'+extra);entry.type=tarfile.DIRTYPE;output.addfile(entry)
+                    for entry,payload in retained:output.addfile(entry,io.BytesIO(payload))
+                archive.with_name(archive.name+'.sha256').write_text(f'{checker.digest(archive)}  {archive.name}\n')
+                expected='archive entry count exceeded' if case=='count' else 'archive entry name exceeds its bounds'
+                with patch.object(checker,'run') as executable,self.assertRaisesRegex(ValueError,expected):
+                    checker.verify(archive,root,SHA)
+                executable.assert_not_called()
+
+    def test_zip_zero_size_files_also_charge_the_entry_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);archive=self.fixture(root,windows=True)
+            name=archive.name.removesuffix('.zip')
+            with zipfile.ZipFile(archive,'w') as output:
+                for index in range(checker.MAX_ARCHIVE_ENTRIES+1):
+                    output.writestr(name+'/share/file'+str(index),b'')
+            archive.with_name(archive.name+'.sha256').write_text(f'{checker.digest(archive)}  {archive.name}\n')
+            with patch.object(checker,'run') as executable,self.assertRaisesRegex(ValueError,'archive entry count exceeded'):
+                checker.verify(archive,root,SHA)
+            executable.assert_not_called()
 
     def test_intel_macos_archive_is_not_a_supported_release(self):
         with tempfile.TemporaryDirectory() as tmp:
