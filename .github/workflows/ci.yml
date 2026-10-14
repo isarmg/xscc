@@ -9,9 +9,10 @@ on:
 
 permissions: {}
 
+# Superseded branch/PR CI can stop; release and manual runs stay independent.
 concurrency:
-  group: client-packages-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: xscc-ci-${{ github.workflow }}-${{ github.event_name }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')) && github.ref || github.run_id }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref_type == 'branch')) }}
 
 jobs:
   # Keep PR workflows and existing check names present; filter jobs, not triggers.
