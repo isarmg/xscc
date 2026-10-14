@@ -30,7 +30,8 @@ class ReleaseInventoryTests(unittest.TestCase):
             root=Path(temporary);source=root/'git';source.mkdir()
             def git(*args):
                 return subprocess.check_output(['git',*args],cwd=source,text=True).strip()
-            git('init','--quiet');(source/'current.c').write_bytes(b'committed build source\n')
+            git('init','--quiet');git('config','core.autocrlf','true')
+            (source/'current.c').write_bytes(b'committed build source\n')
             git('add','current.c')
             git('-c','user.name=Release fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','--quiet','-m','actual source fixture')
             revision=git('rev-parse','HEAD')

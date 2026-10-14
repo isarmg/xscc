@@ -12,7 +12,7 @@ NS={'w':module.NAMESPACE}
 class WixInventoryFilesTests(unittest.TestCase):
     def test_every_actual_nested_build_input_is_authored_and_identity_is_stable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);payload=root/'share';payload.mkdir()
+            root=Path(temporary).resolve(strict=True);payload=root/'share';payload.mkdir()
             for name in ('release-sbom.cdx.json','build-inputs/sqlite/sqlite3.c','licenses/native/TLS/COPYRIGHT.txt'):
                 file=payload/name;file.parent.mkdir(parents=True,exist_ok=True);file.write_text(name)
             first=root/'first.wxs';second=root/'second.wxs'
@@ -28,7 +28,7 @@ class WixInventoryFilesTests(unittest.TestCase):
 
     def test_linked_evidence_is_rejected_before_output_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);payload=root/'share';payload.mkdir()
+            root=Path(temporary).resolve(strict=True);payload=root/'share';payload.mkdir()
             (root/'external').write_text('outside input')
             (payload/'input').symlink_to(root/'external')
             output=root/'inventory.wxs'

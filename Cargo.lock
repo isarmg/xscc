@@ -2519,7 +2519,7 @@ dependencies = [
 [[package]]
 name = "xscs-protocol"
 version = "1.0.0"
-source = "git+https://github.com/isarmg/xscs.git?rev=3a5ca5a08f77ae4ef4ea322b475ee6b7adaaf3a0#3a5ca5a08f77ae4ef4ea322b475ee6b7adaaf3a0"
+source = "git+https://github.com/isarmg/xscs.git?rev=1560d7da0057da3a7eb5dc5096d2891fdf671215#1560d7da0057da3a7eb5dc5096d2891fdf671215"
 dependencies = [
  "hex",
  "schemars",
