@@ -25,7 +25,6 @@ xscc 是 Sunshine 主机上的本机管理代理，以系统服务主动连接 x
 - [命令参考](cli-compatibility.md)：命令、输出和状态路径
 - [开发指南](development.md)：共用工具链、测试和源码结构
 - [公共库](common-support.md)与[原生接口审查](unsafe-audit.md)
-- [1.0.1 发行说明](releases/1.0.1.md)
-- [1.0.0 历史发行说明](releases/1.0.0.md)
+- [1.0.0 发行说明](releases/1.0.0.md)
 
 管理端的操作流程见 [xscs 使用指南](https://github.com/isarmg/xscs/blob/main/docs/usage.md)，通信与持久结果见[执行可靠性](https://github.com/isarmg/xscs/blob/main/docs/communication-reliability.md)。
