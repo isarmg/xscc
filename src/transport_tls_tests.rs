@@ -575,3 +575,162 @@ async fn duplicate_active_failed_progress_send_preserves_original_execution() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(superseded.is_empty());
 }
+
+struct PausedClose {
+    calls: Arc<AtomicUsize>,
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Semaphore>,
+}
+#[async_trait::async_trait]
+impl Sunshine for PausedClose {
+    async fn read(&mut self) -> Result<Configuration, AdapterError> {
+        Err(AdapterError::UnsupportedCapability)
+    }
+    async fn save(&mut self, _: &Configuration) -> Result<(), AdapterError> {
+        Err(AdapterError::UnsupportedCapability)
+    }
+    async fn restart(&mut self) -> Result<(), AdapterError> {
+        Err(AdapterError::UnsupportedCapability)
+    }
+    async fn close_application(&mut self) -> Result<(), AdapterError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.entered.notify_one();
+        self.release.acquire().await.unwrap().forget();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn reconnect_adopts_owned_execution_and_commits_its_receipt_without_reexecution() {
+    let (connection, client, mut manager) = socket_pair().await;
+    let task = task();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let mut journal = JournalFixture::default();
+    let executor = Arc::new(Executor::new(
+        task.binding.clone(),
+        PausedClose {
+            calls: calls.clone(),
+            entered: entered.clone(),
+            release: release.clone(),
+        },
+        journal.clone(),
+    ));
+    let run_session =
+        |connection: ManagerConnection, client: Socket, mut execution: ExecutionState| {
+            let executor = executor.clone();
+            let binding = task.binding.clone();
+            tokio::spawn(async move {
+                let (_health_tx, health) = watch::channel(HealthObservation::default());
+                let result = connection
+                    .session_connected(
+                        client,
+                        &binding,
+                        &capabilities(),
+                        executor,
+                        &health,
+                        &mut execution,
+                    )
+                    .await;
+                (result, execution)
+            })
+        };
+    let session = run_session(connection, client, ExecutionState::default());
+    consume_startup(&mut manager, &task, None).await;
+    let delivery = ManagerMessage::Task {
+        mode: DeliveryMode::Execute,
+        task: Box::new(task.clone()),
+        expires_at_unix_ms: (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64)
+            + 90_000,
+        remaining_ms: 90_000,
+    };
+    transmit(&mut manager, delivery.clone()).await;
+    timeout(Duration::from_secs(2), entered.notified())
+        .await
+        .unwrap();
+    manager.close(None).await.unwrap();
+    let (result, execution) = timeout(Duration::from_secs(2), session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result, Err(TransportError::Disconnected));
+    assert!(execution.active.is_some());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let record = journal.load(&task.operation_id).unwrap().unwrap();
+    assert_eq!(record.effect, Some(EffectIntent::Unobservable));
+    assert!(record.report.is_none());
+
+    let (connection, client, mut manager) = socket_pair().await;
+    let session = run_session(connection, client, execution);
+    match receive(&mut manager).await {
+        ClientMessage::Hello {
+            active_operation: Some(active),
+            ..
+        } => {
+            assert_eq!(active.operation_id, task.operation_id);
+            assert_eq!(active.fingerprint, task.fingerprint().unwrap());
+        }
+        message => panic!("missing adopted execution: {message:?}"),
+    }
+    transmit(&mut manager, delivery).await;
+    assert!(matches!(
+        receive(&mut manager).await,
+        ClientMessage::Progress { .. }
+    ));
+    release.add_permits(1);
+    let report = loop {
+        match receive(&mut manager).await {
+            ClientMessage::Result {
+                operation_id,
+                report,
+            } => {
+                assert_eq!(operation_id, task.operation_id);
+                break report;
+            }
+            ClientMessage::Progress { .. } | ClientMessage::Heartbeat { .. } => {}
+            message => panic!("unexpected reconnect message: {message:?}"),
+        }
+    };
+    assert_eq!(report, Report::ApplicationClosed {});
+    transmit(
+        &mut manager,
+        ManagerMessage::ResultAccepted {
+            operation_id: task.operation_id.clone(),
+            fingerprint: task.fingerprint().unwrap(),
+            report_digest: xscs_protocol::report_digest(&report).unwrap(),
+            finalized: true,
+        },
+    )
+    .await;
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if journal
+                .load(&task.operation_id)
+                .unwrap()
+                .unwrap()
+                .acknowledged
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    transmit(&mut manager, ManagerMessage::Revoked {}).await;
+    let (result, execution) = timeout(Duration::from_secs(2), session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result, Err(TransportError::Revoked));
+    assert!(execution.active.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let record = journal.load(&task.operation_id).unwrap().unwrap();
+    assert!(record.acknowledged);
+    assert!(record.effect.is_none());
+    assert!(record.report.is_none());
+}
