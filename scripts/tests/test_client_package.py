@@ -4,8 +4,12 @@ import io
 import json
 import os
 from pathlib import Path, PureWindowsPath
+import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -18,6 +22,50 @@ VERSION = "0.1.0-rc.1"
 
 
 class PackageTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "actual WiX and Windows Installer COM database")
+    def test_current_windows_authoring_matches_actual_installer_tables(self):
+        builder_spec = importlib.util.spec_from_file_location("client_builder", Path(__file__).resolve().parents[1] / "package-client.py")
+        builder = importlib.util.module_from_spec(builder_spec)
+        builder_spec.loader.exec_module(builder)
+        inventory = builder.inventory_module()
+        environment = inventory.clean_environment()
+        revision = inventory.run(['git', 'rev-parse', 'HEAD'], builder.ROOT, environment)
+        version = tomllib.loads((builder.ROOT / 'Cargo.toml').read_text(encoding='utf-8'))['package']['version']
+        with tempfile.TemporaryDirectory(prefix='xscc-current-msi-policy-') as temporary:
+            private = Path(temporary).resolve(strict=True)
+            # This is a compile-only installer fixture. It never installs or
+            # launches its placeholder executable or claims client acceptance.
+            executable = private / 'fixture.exe'
+            shutil.copyfile(sys.executable, executable)
+            output = private / 'output'
+            subprocess.run(['dotnet', 'build', str(builder.ROOT / 'packaging/windows/Xscc.wixproj'),
+                            '-c', 'Release', '-p:ClientExe=' + str(executable),
+                            '-p:ProductVersion=' + version,
+                            '-p:BaseIntermediateOutputPath=' + str(private / 'obj') + os.sep,
+                            '-p:OutputPath=' + str(output) + os.sep],
+                           cwd=builder.ROOT, env=environment, check=True, timeout=180)
+            artifact = output / ('xscc-' + version + '-windows-x64.msi')
+            self.assertTrue(artifact.is_file())
+            tools = inventory.checkout_tools(private / 'tools', environment)
+            policy_reader = inventory.load_tool('msi_policy', tools)
+            policy = policy_reader.create(builder.ROOT / 'packaging/windows/Package.wxs',
+                                          private / 'policy', version, revision)
+            evidence = private / 'actual-tables.json'
+            inventory.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File',
+                           str(tools / 'scripts/msi_tables.ps1'), '-Artifact', str(artifact),
+                           '-Output', str(evidence)], builder.ROOT, environment)
+            tables = policy_reader.sbom.load(evidence)
+            try:
+                policy_reader.validate(policy, tables, {'source_revision': revision})
+            except ValueError:
+                print('Actual current XSCC installer table names:', json.dumps(tables['table_names']))
+                raise
+            # Exercise the rejection against actual native table rows rather
+            # than weakening the policy to accept an unexpected build result.
+            tables['actions'][0][1] = int(tables['actions'][0][1]) ^ 2048
+            with self.assertRaises(ValueError):
+                policy_reader.validate(policy, tables, {'source_revision': revision})
+
     def test_packager_requires_immutable_protocol_input_and_matching_lock(self):
         builder_spec = importlib.util.spec_from_file_location("client_builder", Path(__file__).resolve().parents[1] / "package-client.py")
         builder = importlib.util.module_from_spec(builder_spec)
