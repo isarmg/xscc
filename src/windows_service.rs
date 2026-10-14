@@ -87,7 +87,7 @@ fn run() -> windows_service::Result<()> {
         ServiceExitCode::Win32(0),
     ))?;
     let args: Vec<_> = std::env::args_os().collect();
-    let result = if args.len() == 4 && args[2] == "--state" {
+    let result = if args.len() == 4 && args[2] == "--config" {
         let state_path = PathBuf::from(&args[3]);
         let protected = xscc::storage::prepare_root(&state_path);
         let prepared = protected

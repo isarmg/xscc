@@ -7,7 +7,7 @@ fn main() -> ExitCode {
     if args
         .first()
         .is_some_and(|s| s == "--windows-service" || s == "service")
-        && args.get(1).is_some_and(|s| s == "--state")
+        && args.get(1).is_some_and(|s| s == "--config")
     {
         return windows_service::dispatch().map_or(ExitCode::FAILURE, |_| ExitCode::SUCCESS);
     }

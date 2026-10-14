@@ -56,19 +56,46 @@ class PackageTests(unittest.TestCase):
         builder_spec.loader.exec_module(builder)
         for source in builder.COMMON_FILES:
             self.assertTrue((builder.ROOT / source).is_file(), source)
-        directory = Mock()
-        directory.iterdir.return_value = [PureWindowsPath(name) for name in ['bootstrap.example.json', 'README.md', 'LICENSE']]
-        self.assertEqual([p.name for p in builder.package_files(directory)], ['LICENSE', 'README.md', 'bootstrap.example.json'])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory=Path(temporary)
+            (directory/'share').mkdir()
+            for name in ['bootstrap.example.json','README.md','LICENSE','share/runtime-sbom.cdx.json']:
+                (directory/name).write_bytes(b'input')
+            self.assertEqual([p.relative_to(directory).as_posix() for p in builder.package_files(directory)],
+                             ['LICENSE','README.md','bootstrap.example.json','share/runtime-sbom.cdx.json'])
 
-    def fixture(self, temporary, windows=False, extra=None, wrong_sha=False, mac_target=None):
+    def fixture(self, temporary, windows=False, extra=None, wrong_sha=False, mac_target=None,
+                inventory_target=None, unbound=False):
         target = mac_target or ("x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu")
         name = f"xscc-{VERSION}-{target}"
         names = ["xscc.exe" if windows else "xscc", "README.md", "platform-setup.md", "LICENSE", "bootstrap.example.json"]
         files = {n: b"fixture" for n in names}
-        hashes = {n: hashlib.sha256(b).hexdigest() for n, b in files.items()}
-        manifest = {"product": "xscc", "version": VERSION, "source_commit": "b" * 40 if wrong_sha else SHA, "target": target, "protocol": "xscs-management/1", "authenticode_signed": False, "files": hashes}
-        files["manifest.json"] = json.dumps(manifest).encode()
-        files["SHA256SUMS"] = "".join(f"{hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in sorted(files.items())).encode()
+        runtime_ref='pkg:cargo/xscc@'+VERSION+'?source_revision='+SHA
+        runtime={'bomFormat':'CycloneDX','specVersion':'1.5',
+                 'metadata':{'component':{'type':'application','name':'xscc','version':VERSION,'bom-ref':runtime_ref}},
+                 'components':[{'type':'library','name':'fixture-dependency','version':'1.0.0','bom-ref':'fixture-dependency'}],
+                 'dependencies':[{'ref':runtime_ref,'dependsOn':['fixture-dependency']},
+                                 {'ref':'fixture-dependency','dependsOn':[]}]}
+        files['share/runtime-sbom.cdx.json']=json.dumps(runtime).encode()
+        files['share/THIRD_PARTY_RUNTIME_LICENSES.txt']=b'Test-only actual inventory fixture.\n'
+        file_components=[{'type':'file','bom-ref':'urn:release-file:'+n,'name':n,
+                          'hashes':[{'alg':'SHA-256','content':hashlib.sha256(b).hexdigest()}]}
+                         for n,b in files.items()]
+        root_component=dict(runtime['metadata']['component'])
+        binding=[] if unbound else [{'path':names[0],'sha256':hashlib.sha256(files[names[0]]).hexdigest(),'archive_entry':None}]
+        root_component['properties']=[{'name':'release-file-bindings','value':json.dumps(binding)}]
+        sbom={'bomFormat':'CycloneDX','specVersion':'1.5',
+              'metadata':{'component':{'type':'application','name':'xscc','version':VERSION,'bom-ref':'release'},
+                          'properties':[{'name':'source_revision','value':SHA},
+                                        {'name':'target','value':inventory_target or target}]},
+              'components':[root_component,*runtime['components'],*file_components]}
+        files['share/release-sbom.cdx.json']=json.dumps(sbom).encode()
+        identity={'product':'xscc','version':VERSION,'source_revision':'b'*40 if wrong_sha else SHA,'target':target}
+        manifest={'manifest_version':1,'kind':'release-inventory','identity':identity,
+                  'files':[{'path':n,'sha256':hashlib.sha256(b).hexdigest(),'size':len(b),'mode':0o600 if windows else 0o644}
+                           for n,b in sorted(files.items())]}
+        raw=json.dumps(manifest).encode();files['share/package.json']=raw
+        files['share/package.sha256']=(hashlib.sha256(raw).hexdigest()+'\n').encode()
         entries = [(name + "/" + n, b) for n, b in files.items()]
         if extra is not None:
             entries.append((extra.replace("ROOT", name), b"bad"))
@@ -82,6 +109,7 @@ class PackageTests(unittest.TestCase):
                 for n, b in entries:
                     entry = tarfile.TarInfo(n)
                     entry.size = len(b)
+                    entry.mode = 0o644
                     out.addfile(entry, io.BytesIO(b))
         archive.with_name(archive.name + ".sha256").write_text(f"{checker.digest(archive)}  {archive.name}\n")
         return archive
@@ -112,7 +140,8 @@ class PackageTests(unittest.TestCase):
 
     def test_traversal_extra_and_duplicate_entries_rejected(self):
         for windows in [False, True]:
-            for extra in ["ROOT/../escape", "ROOT/unknown", "ROOT/README.md", "/absolute"]:
+            for extra in ["ROOT/../escape", "ROOT/unknown", "ROOT/README.md", "/absolute",
+                          "ROOT/share/unknown", "ROOT/share/../escape", "ROOT/share/runtime-sbom.cdx.json"]:
                 with self.subTest(windows=windows, extra=extra), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     archive = self.fixture(root, windows=windows, extra=extra)
@@ -126,6 +155,15 @@ class PackageTests(unittest.TestCase):
             with patch.object(checker, "run") as executable, self.assertRaises(ValueError):
                 checker.verify(archive, root, SHA)
             executable.assert_not_called()
+
+    def test_resolved_inventory_cannot_claim_another_target_or_drop_binary_binding(self):
+        for arguments in ({'inventory_target':'aarch64-apple-darwin'},{'unbound':True}):
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                archive=self.fixture(root,**arguments)
+                with patch.object(checker,'run') as executable, self.assertRaisesRegex(ValueError,'inventory|runtime graph'):
+                    checker.verify(archive,root,SHA)
+                executable.assert_not_called()
 
     def test_tampered_archive_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,7 +7,7 @@ fi
 if [[ -e /usr/local/bin/xscc || -L /usr/local/bin/xscc ]]; then
   [[ -L /usr/local/bin/xscc && $(readlink /usr/local/bin/xscc) = /opt/xscc/xscc ]] || exit 8
 fi
-grep -Fqx 'ExecStart=/opt/xscc/xscc run --state /var/lib/xscc' /etc/systemd/system/xscc.service || exit 8
+grep -Fqx 'ExecStart=/opt/xscc/xscc run --config /var/lib/xscc' /etc/systemd/system/xscc.service || exit 8
 timeout 60s systemctl disable --now xscc.service
 if systemctl is-active --quiet xscc.service; then exit 9; fi
 if [[ -L /usr/local/bin/xscc ]]; then rm /usr/local/bin/xscc; fi

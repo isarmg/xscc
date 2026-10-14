@@ -25,11 +25,15 @@ HTTPS 测试使用本地协议夹具；真实管理端的标准信任链 WSS 联
 - [Windows MSI](platforms/windows.md#构建原生安装包)
 - [macOS PKG](platforms/macos.md#构建原生安装包)
 
+正式打包从 `build-tools-source.json` 固定的 `xssi` 提交取得公共物料工具，只接受当前干净源码。工具按实际目标生成 Cargo 运行依赖图，补全静态 SQLite 的实际源文件与原始许可，并核验最终安装包的完整文件、脚本及服务入口。Windows 还只读核对实际 MSI 的服务、注册表、环境变量及自定义动作与本次 WXS 源码一致。
+
+最终交付目录保留原生安装包对应的 SBOM、`share/package.json` 和 `share/package.sha256`。发行校验使用 SHA-256；平台签名状态单独说明。构建工具修订未固定时打包会明确失败，不能把开发测试里的物料夹具用于发行。
+
 ## 仓库与通信边界
 
 本项目为单个 Rust 包。根 `Cargo.toml`/`Cargo.lock` 定义发行输入，`src/` 实现协议消费、本机适配、存储、CLI 和平台服务。`src/storage/sqlite.rs` 负责 Windows 当前 facts 表与事务，`src/cli/tests.rs` 保存 CLI 行为测试，根 `tests/` 验证网络、受保护状态与执行事实。`packaging/` 保存平台安装器与生命周期脚本，`scripts/` 保存构建、发行检查，`docs/` 保存配置与安装说明。客户端没有 Web 或独立协议包目录，协议从固定服务端源包消费。
 
-当前使用 Rust `1.99.0`、xcsc `1.0.1` 与设备通信协议 v1。产品协议 `1.0.0` 固定官方 xscs 源码 `abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a`，由 `Cargo.lock` 核验；任务身份与副作用指纹相互独立。配置覆盖与待配对列表能力按实际实现报告。当前结构严格解码，Windows 执行事实表及 FULL 持久性事务、Unix 私有执行事实继续保全。
+当前使用 Rust `1.99.0`、xcsc `1.0.5` 与设备通信协议 v1。产品协议 `1.0.0` 固定官方 xscs 源码 `abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a`，由 `Cargo.lock` 核验；任务身份与副作用指纹相互独立。配置覆盖与待配对列表能力按实际实现报告。当前结构严格解码，Windows 执行事实表及 FULL 持久性事务、Unix 私有执行事实继续保全。
 
 结果先持久化，管理端收存后压缩为去重记录；WSS 中断不取消已开始的执行。需与同步更新的管理端联调，见[管理端通信与执行恢复](https://github.com/isarmg/xscs/blob/main/docs/communication-reliability.md)。
 
@@ -37,7 +41,7 @@ HTTPS 测试使用本地协议夹具；真实管理端的标准信任链 WSS 联
 
 所有当前平台支持的管理能力均启用，没有功能开关。完整设置询问开机自启（默认 Yes），随后启动并验证连接。无交互部署通过受保护 stdin JSON 执行 `setup --input-stdin --non-interactive`，字段、回环限制、候选配置、密码更新和授权码轮换见[配置指南](configuration.md)。
 
-`setup --interactive` / `pair --interactive` 的实例授权码为明文输入；Sunshine 密码使用隐藏输入。两者不写入日志或命令参数。不要自行把凭据加入 Shell 历史、脚本或日志；任务或账户异常时遵循平台指南保全执行事实。
+`setup --interactive` / `pair --interactive` 的实例授权码使用隐藏输入；Sunshine 密码使用隐藏输入。两者不写入日志或命令参数。不要自行把凭据加入 Shell 历史、脚本或日志；任务或账户异常时遵循平台指南保全执行事实。
 
 公共接口与平台边界见[公共支撑](common-support.md)。代码采用 [Apache License 2.0](../LICENSE-APACHE)。
 

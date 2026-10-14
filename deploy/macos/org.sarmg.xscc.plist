@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>org.sarmg.xscc</string>
-<key>ProgramArguments</key><array><string>/usr/local/libexec/xscc</string><string>run</string><string>--state</string><string>/Library/Application Support/xscc</string></array>
+<key>ProgramArguments</key><array><string>/usr/local/libexec/xscc</string><string>run</string><string>--config</string><string>/Library/Application Support/xscc</string></array>
 <key>UserName</key><string>_xscc</string>
 <key>GroupName</key><string>_xscc</string>
 <key>WorkingDirectory</key><string>/Library/Application Support/xscc</string>

@@ -59,7 +59,7 @@ link=/usr/local/bin/xscc
 if [[ -e $link || -L $link ]]; then [[ -L $link && $(readlink "$link") = "$target" ]] || exit 8; fi
 if [[ -f $unit ]]; then
   if [[ $os = Linux ]]; then
-    grep -Fqx 'ExecStart=/opt/xscc/xscc run --state /var/lib/xscc' "$unit" || exit 8
+    grep -Fqx 'ExecStart=/opt/xscc/xscc run --config /var/lib/xscc' "$unit" || exit 8
   else
     [[ $(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$unit") = "$target" ]] || exit 8
   fi

@@ -15,13 +15,13 @@
           <File Id="ClientExe" Source="$(var.ClientExe)" Name="xscc.exe" KeyPath="yes" />
           <Environment Id="XsccMachinePath" Name="PATH" Value="[INSTALLFOLDER]" Action="set" Part="last" Permanent="no" System="yes" />
           <RegistryValue Root="HKLM" Key="Software\sarmg\xscc" Name="InstallLocation" Type="string" Value="[INSTALLFOLDER]" />
-          <RemoveRegistryValue Id="RemoveLegacyTrayRun" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="XsccTray" />
-          <RemoveFile Id="RemoveLegacyTrayFile" Name="xscc-tray.exe" On="install" />
-          <RemoveFile Id="RemoveLegacyTrayShortcut" Directory="ProgramMenuFolder" Name="xscc.lnk" On="install" />
-          <ServiceInstall Id="ServiceInstall" Name="Xscc" DisplayName="xscc" Description="Sunshine management only; configure with xscc setup." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="--windows-service --state &quot;[CommonAppDataFolder]Xscc&quot;" />
+          <ServiceInstall Id="ServiceInstall" Name="Xscc" DisplayName="xscc" Description="Sunshine management only; configure with xscc setup." Type="ownProcess" Start="auto" ErrorControl="normal" Arguments="--windows-service --config &quot;[CommonAppDataFolder]Xscc&quot;" />
           <!-- Register native boot startup by default. Local setup pairs and starts the service. -->
           <ServiceControl Id="ServiceControl" Name="Xscc" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>
+        <?if $(var.IncludeInventory) = 1 ?>
+        <Directory Id="ReleaseInventoryDirectory" Name="share" />
+        <?endif?>
       </Directory>
     </StandardDirectory>
     <StandardDirectory Id="CommonAppDataFolder">
@@ -40,6 +40,9 @@
     <StandardDirectory Id="ProgramMenuFolder" />
     <Feature Id="Complete" Title="xscc program" Description="Install xscc client program and service." Level="1" AllowAbsent="no" Display="expand">
       <ComponentRef Id="ClientService" />
+      <?if $(var.IncludeInventory) = 1 ?>
+      <ComponentGroupRef Id="ReleaseInventoryFiles" />
+      <?endif?>
       <ComponentRef Id="PreserveConfigurationSelection" />
       <ComponentRef Id="PreserveDataSelection" />
       <ComponentRef Id="PrepareSetupSelection" />

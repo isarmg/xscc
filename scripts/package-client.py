@@ -2,6 +2,7 @@
 """Build a source-bound Client archive on its native OS; never package the Server."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -29,7 +31,15 @@ def digest(path):
 
 def package_files(directory):
     # WindowsPath sorts case-insensitively; the wire format uses exact ASCII names.
-    return sorted(directory.iterdir(), key=lambda path: path.name)
+    return sorted((path for path in directory.rglob('*') if path.is_file()),
+                  key=lambda path: path.relative_to(directory).as_posix())
+
+
+def inventory_module():
+    spec = importlib.util.spec_from_file_location('client_release_inventory', ROOT / 'scripts/release-inventory.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def verify_protocol_source(manifest, lock):
@@ -102,20 +112,18 @@ def main():
         shutil.copy2(binary, stage / executable)
         for source, destination in COMMON_FILES.items():
             shutil.copy2(ROOT / source, stage / destination)
-        # The native package is the only installer. Keep the archive limited to
-        # the executable, immutable docs and verification metadata; no shell,
-        # PowerShell or Python installer wrapper is distributed.
-        manifest = {"product": "xscc", "version": version, "source_commit": sha, "target": target,
-                    "protocol": "xscs-management/1", "authenticode_signed": False, "native_acceptance": "required", "notarized": False,
-                    "files": {p.name: digest(p) for p in package_files(stage)}}
-        (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-        (stage / "SHA256SUMS").write_text("".join(f"{digest(p)}  {p.name}\n" for p in package_files(stage)), encoding="utf-8")
+        inventory_module().generate(stage, product='xscc', version=version,
+            revision=sha, target=target, root_name='xscc',
+            runtime_files=[{'path': executable, 'archive_entry': None}])
+        subprocess.run([sys.executable,str(ROOT/'scripts/verify-release-inventory.py'),
+                        '--stage',str(stage),'--target',target],check=True,
+                       env=inventory_module().clean_environment())
         args.output.mkdir(parents=True, exist_ok=False)
         archive = args.output / (name + (".zip" if windows else ".tar.gz"))
         if windows:
             with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as out:
                 for p in package_files(stage):
-                    out.write(p, f"{name}/{p.name}")
+                    out.write(p, f"{name}/{p.relative_to(stage).as_posix()}")
         else:
             with tarfile.open(archive, "x:gz") as out:
                 out.add(stage, arcname=name)
@@ -123,11 +131,14 @@ def main():
     if windows:
         # MSI's ProductVersion is numeric; the source version remains in its manifest.
         subprocess.run(["powershell.exe", "-NoProfile", "-File", str(ROOT / "scripts/build-windows-installer.ps1"),
-                        "-ClientExe", str(binary), "-Output", str(args.output), "-Version", version.split("-")[0]],
+                        "-ClientExe", str(binary), "-Output", str(args.output), "-Version", version.split("-")[0], "-SourceVersion", version,
+                        "-SourceRevision", sha, "-Target", target],
                        check=True, env={key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"})
         numeric_version = version.split("-")[0]
         (args.output / f"xscc-{numeric_version}-windows-x64.msi").rename(
             args.output / f"xscc-{version}-windows-x64.msi")
+        (args.output / f"xscc-{numeric_version}-windows-x64.msi.inner-sbom.cdx.json").rename(
+            args.output / f"xscc-{version}-windows-x64.msi.inner-sbom.cdx.json")
     elif macos:
         subprocess.run(
             [
@@ -136,12 +147,14 @@ def main():
                 str(binary),
                 version,
                 str(args.output / f"xscc-{version}-macos-arm64-unsigned.pkg"),
+                sha, target,
             ],
             check=True,
         )
     else:
         subprocess.run(["python3", str(ROOT / "scripts/build-linux-installer.py"), "--binary", str(binary),
-                        "--output", str(args.output), "--version", version], check=True)
+                        "--output", str(args.output), "--version", version,
+                        "--source-revision", sha, "--target", target], check=True)
     # WiX debug databases are build intermediates, not release assets.
     for debug_database in args.output.glob("*.wixpdb"):
         debug_database.unlink()
@@ -155,6 +168,14 @@ def main():
             "product": "xscc", "version": version, "source_commit": sha,
             "authenticode_signed": False, "native_acceptance": "required", "notarized": False, "sha256": digest(installer), "target": target,
         }, indent=2) + "\n")
+    with tempfile.TemporaryDirectory(prefix='xscc-final-native-') as temporary:
+        installers=sorted([*args.output.glob('*.msi'),*args.output.glob('*.deb'),*args.output.glob('*.pkg')])
+        arguments=[sys.executable,str(ROOT/'scripts/package-native-delivery.py'),
+                   '--stage',str(Path(temporary)/'delivery'),'--target',target,
+                   '--output',str(args.output/(name+'-native-delivery.tar.gz'))]
+        for installer in installers:
+            arguments.extend(['--artifact',str(installer),'--inner-bom',str(installer.with_name(installer.name+'.inner-sbom.cdx.json'))])
+        subprocess.run(arguments,check=True,env=inventory_module().clean_environment())
     if run("git", "rev-parse", "HEAD") != sha or run("git", "status", "--porcelain", "--untracked-files=all"):
         raise RuntimeError("source changed while packaging; do not publish output")
     print(f"Built {archive.name} at {sha}; installation and real Sunshine acceptance are separate gates.")

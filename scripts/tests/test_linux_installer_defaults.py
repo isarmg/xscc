@@ -3,6 +3,7 @@
 System commands are simulated, so these prove installation transactions and
 startup intent; disposable GitHub runners still exercise real systemd.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from native_package_fixture import make_linux_package
 
 ROOT = Path(__file__).resolve().parents[2]
 SHIM = r'''#!/usr/bin/env python3
@@ -28,6 +30,8 @@ if name == 'stat':
  path = Path(args[-1]); pattern = args[-2]
  if pattern == '%u': print(1001 if path == state else 0)
  elif pattern == '%a': print(oct(path.stat().st_mode & 0o777)[2:])
+ elif pattern == '%g': print(0)
+ elif pattern == '%h': print(path.stat().st_nlink)
  else: sys.exit(2)
  sys.exit(0)
 if name == 'getent':
@@ -87,10 +91,7 @@ class LinuxInstallerDefaultsTests(unittest.TestCase):
         binary = directory / 'verified-client'
         binary.write_text("#!/bin/sh\nprintf 'xscc fixture\\n'\n")
         binary.chmod(0o755)
-        subprocess.run([
-            'python3', str(ROOT / 'scripts/build-linux-installer.py'), '--binary', str(binary),
-            '--output', str(directory), '--version', '0.3.2',
-        ], check=True, capture_output=True)
+        make_linux_package(binary, directory, '0.3.2')
         deb = directory / 'xscc_0.3.2_amd64.deb'
         cls.control = directory / 'control'
         cls.extracted = directory / 'extracted'
@@ -127,6 +128,8 @@ class LinuxInstallerDefaultsTests(unittest.TestCase):
         unit = self.extracted / 'usr/lib/systemd/system/xscc.service'
         shutil.copy2(unit, system / 'usr/lib/systemd/system/xscc.service')
         if manual:
+            (system/'opt/xscc').mkdir(mode=0o755)
+            shutil.copy2(self.extracted/'opt/xscc/xscc',system/'opt/xscc/xscc')
             (system / 'etc/systemd/system/xscc.service').write_text(self.redirect(unit.read_text(), system))
         if enabled:
             link = system / 'etc/systemd/system/multi-user.target.wants/xscc.service'
@@ -136,10 +139,13 @@ class LinuxInstallerDefaultsTests(unittest.TestCase):
         return root, system, state, env
 
     @staticmethod
-    def redirect(contents, system):
-        for prefix in ('/opt', '/var/lib', '/etc/systemd/system', '/usr/local/bin', '/usr/lib/systemd/system', '/run'):
-            contents = contents.replace(prefix, str(system) + prefix)
-        return contents
+    def redirect(contents,system):
+        template=(ROOT/'deploy/xscc.service').read_text()
+        rewritten=template
+        for prefix in ('/opt','/var/lib','/etc/systemd/system','/usr/local/bin','/usr/lib/systemd/system','/run'):
+            contents=contents.replace(prefix,str(system)+prefix)
+            rewritten=rewritten.replace(prefix,str(system)+prefix)
+        return contents.replace(hashlib.sha256(template.encode()).hexdigest(),hashlib.sha256(rewritten.encode()).hexdigest())
 
     def invoke(self, root, env, script, *arguments):
         return subprocess.run(['sh', str(root / script), *arguments], env=env, input='', capture_output=True, text=True, timeout=20)
@@ -219,6 +225,24 @@ class LinuxInstallerDefaultsTests(unittest.TestCase):
         self.assertEqual(rejected.returncode, 8)
         self.assertEqual(original.read_text(), 'unchanged')
         self.assertEqual(self.service(root), {'enabled': False, 'active': False})
+
+    def test_current_conversion_rejects_changed_unit_program_modes_and_links_without_deleting(self):
+        for change in ('unit','binary','mode','link'):
+            with self.subTest(change=change):
+                root,system,state,env=self.fixture(manual=True)
+                unit=system/'etc/systemd/system/xscc.service'
+                binary=system/'opt/xscc/xscc'
+                if change=='unit':unit.write_text(unit.read_text().replace('ProtectSystem=strict','ProtectSystem=false'))
+                elif change=='binary':binary.write_bytes(b'previous or unknown client source')
+                elif change=='mode':unit.chmod(0o666)
+                else:(root/'unit-alias').hardlink_to(unit)
+                original=unit.read_bytes();program=binary.read_bytes()
+                result=self.invoke(root,env,'preinst','install')
+                self.assertEqual(result.returncode,8,result.stderr)
+                self.assertEqual(unit.read_bytes(),original)
+                self.assertEqual(binary.read_bytes(),program)
+                self.assertFalse((system/'etc/systemd/system/.xscc-package-startup-policy').exists())
+                self.assertFalse(self.commands(root))
 
     def test_script_install_rolls_back_partial_enable_links(self):
         for fail in (False, True):

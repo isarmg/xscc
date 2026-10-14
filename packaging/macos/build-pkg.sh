@@ -3,14 +3,16 @@ set -eu
 # Package payload directories must stay traversable by the service account.
 umask 022
 
-if [ "$#" -ne 3 ]; then
-  echo 'Usage: build-pkg.sh ABSOLUTE_BINARY VERSION ABSOLUTE_OUTPUT' >&2
+if [ "$#" -ne 5 ]; then
+  echo 'Usage: build-pkg.sh ABSOLUTE_BINARY VERSION ABSOLUTE_OUTPUT SOURCE_REVISION TARGET' >&2
   exit 2
 fi
 
 binary=$1
 version=$2
 output=$3
+source_revision=$4
+target=$5
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 plist="$project_dir/deploy/macos/org.sarmg.xscc.plist"
 
@@ -38,7 +40,16 @@ mkdir -p \
 install -m 0755 "$binary" "$payload/usr/local/libexec/xscc"
 ln -s /usr/local/libexec/xscc "$payload/usr/local/bin/xscc"
 install -m 0644 "$plist" "$payload/Library/LaunchDaemons/org.sarmg.xscc.plist"
+mkdir -p "$payload/installer-scripts/macos"
+for script in preinstall postinstall; do
+  install -m 0755 "$project_dir/packaging/macos/scripts/$script" "$payload/installer-scripts/macos/$script"
+done
+python3 "$project_dir/scripts/native-inventory.py" --stage "$payload" \
+  --runtime-path usr/local/libexec/xscc \
+  --version "$version" --source-revision "$source_revision" --target "$target"
+cp "$payload/usr/local/share/xscc/release-sbom.cdx.json" "${output}.inner-sbom.cdx.json"
 
+rm -rf "$payload/installer-scripts"
 pkgbuild \
   --root "$payload" \
   --scripts "$project_dir/packaging/macos/scripts" \

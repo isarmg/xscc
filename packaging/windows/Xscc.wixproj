@@ -6,9 +6,13 @@
     <Cultures>en-US</Cultures>
     <SuppressSpecificWarnings>1075</SuppressSpecificWarnings>
     <SuppressIces>ICE74</SuppressIces>
-    <DefineConstants>ClientExe=$(ClientExe);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf</DefineConstants>
+    <IncludeInventory Condition="'$(IncludeInventory)' == ''">0</IncludeInventory>
+    <DefineConstants>ClientExe=$(ClientExe);InventoryDirectory=$(InventoryDirectory);ProductVersion=$(ProductVersion);LicenseRtf=$(MSBuildThisFileDirectory)License.rtf;IncludeInventory=$(IncludeInventory)</DefineConstants>
     <OutputName>xscc-$(ProductVersion)-windows-x64</OutputName>
   </PropertyGroup>
+  <ItemGroup Condition="'$(IncludeInventory)' == '1'">
+    <Compile Include="$(InventoryWxs)" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="4.0.6" />
     <PackageReference Include="WixToolset.Util.wixext" Version="4.0.6" />

@@ -28,7 +28,7 @@ function Protect-LocalPath([string]$Path,[bool]$Directory) {
   Set-Acl -LiteralPath $Path -AclObject $acl
 }
 $target = Join-Path $binDir 'xscc.exe'
-$command = '"' + $target + '" --windows-service --state "' + $stateDir + '"'
+$command = '"' + $target + '" --windows-service --config "' + $stateDir + '"'
 $existingService = Get-CimInstance Win32_Service -Filter "Name='Xscc'"
 if ($existingService -and ($existingService.PathName -ne $command -or $existingService.StartName -ne 'LocalSystem')) { throw 'Same-name service points outside the managed Client installation.' }
 foreach ($path in @($binDir,$stateDir,$target)) {
@@ -65,7 +65,7 @@ try {
         Protect-LocalPath $stateDir $true
     }
     if ($Bootstrap -and $madeState) {
-      & $target init --state $stateDir --bootstrap $Bootstrap
+      & $target init --config $stateDir --bootstrap $Bootstrap
       if ($LASTEXITCODE -ne 0) { throw 'Protected bootstrap import failed; installation will roll back.' }
     }
     # Drop the installing user's individual ACE before running as LocalSystem.
@@ -75,7 +75,7 @@ try {
     }
     Protect-LocalPath $stateDir $true
     }
-    $command = '"' + $target + '" --windows-service --state "' + $stateDir + '"'
+    $command = '"' + $target + '" --windows-service --config "' + $stateDir + '"'
     if (-not $existingService) {
     $null = New-Service -Name Xscc -DisplayName 'xscc' -BinaryPathName $command -StartupType Automatic -Description 'Independent management only; no video forwarding or general remote control.'
     $madeService = $true

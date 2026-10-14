@@ -5,6 +5,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from native_package_fixture import make_linux_package
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +21,7 @@ class InstallerTests(unittest.TestCase):
         service = tree.find('.//w:ServiceInstall', ns)
         self.assertEqual(service.get('Name'), 'Xscc')
         self.assertEqual(service.get('Start'), 'auto')
-        self.assertIn('service --state', service.get('Arguments'))
+        self.assertIn('service --config', service.get('Arguments'))
         self.assertIsNone(tree.find('.//w:ServiceControl', ns).get('Start'))
         ui = tree.find('.//ui:WixUI', ns)
         self.assertEqual(ui.get('Id'), 'WixUI_InstallDir')
@@ -75,7 +76,7 @@ class InstallerTests(unittest.TestCase):
             binary = directory / 'xscc'
             binary.write_bytes(b'package-layout-fixture')
             binary.chmod(0o755)
-            subprocess.run(['python3', str(ROOT / 'scripts/build-linux-installer.py'), '--binary', str(binary), '--output', tmp, '--version', '0.1.0-rc.1'], check=True, stdout=subprocess.DEVNULL, umask=0o077)
+            make_linux_package(binary, directory, '0.1.0-rc.1', umask=0o077)
             deb = directory / 'xscc_0.1.0-rc.1_amd64.deb'
             self.assertEqual(subprocess.check_output(['dpkg-deb', '-f', str(deb), 'Version'], text=True).strip(), '0.1.0~rc1')
             self.assertEqual(subprocess.check_output(['dpkg-deb', '-f', str(deb), 'Architecture'], text=True).strip(), 'amd64')

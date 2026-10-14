@@ -88,6 +88,14 @@ jobs:
           cargo test --locked -p xscc --test cli_contract -- --ignored
           cargo test --locked -p xscc --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
           python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Install exact release inventory tools
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.7.0
+      - name: Install reviewed Cargo inventory and audit tools
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
       - name: Build only the Linux Client
         run: |
           tag_args=()
@@ -102,7 +110,7 @@ jobs:
           sudo chmod go-w /opt /usr/local /usr/local/bin
       - name: Verify extracted package and actual systemd install lifecycle
         run: |
-          mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz')
+          mapfile -t archives < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.tar.gz' ! -name '*-delivery.tar.gz')
           test "${#archives[@]}" = 1
           mapfile -t installers < <(find "$RUNNER_TEMP/client-output" -maxdepth 1 -type f -name '*.deb')
           test "${#installers[@]}" = 1
@@ -149,6 +157,36 @@ jobs:
           cargo test --locked -p xscc --test local_https -- --ignored --skip authenticated_wss_delivers_result_and_revocation_stops_reconnect
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python -m unittest discover -s scripts/tests -p 'test_*.py'
+          exit $LASTEXITCODE
+      - name: Install exact release inventory tools
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.7.0
+      - name: Provide exact LLVM native dependency reader
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $reader=Join-Path $env:ProgramFiles 'LLVM\bin\llvm-readobj.exe'
+          $exact=Test-Path -LiteralPath $reader
+          if ($exact) { $exact=(& $reader --version) -match 'LLVM version 20[.]1[.]8' }
+          if (-not $exact) {
+            choco install llvm --version=20.1.8 --force --yes --no-progress
+            if ($LASTEXITCODE) { throw 'Exact LLVM reader installation failed' }
+          }
+          $version=& $reader --version
+          if ($LASTEXITCODE -or -not ($version -match 'LLVM version 20[.]1[.]8')) { throw 'Required LLVM reader differs from its exact version' }
+          (Split-Path -Parent $reader) >> $env:GITHUB_PATH
+      - name: Install reviewed Cargo inventory and audit tools
+        shell: pwsh
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo install cargo-audit --version 0.22.2 --locked
+          exit $LASTEXITCODE
+      - name: Install exact mature MSI extraction tool
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.6
           exit $LASTEXITCODE
       - name: Build only the Windows Client
         shell: pwsh
@@ -238,7 +276,7 @@ jobs:
         run: |
           bash scripts/prepare-native-macos-fixture.sh "$PWD/target/release/xscc"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
-          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/xscc --seed "$PWD/target/debug/examples/native_acceptance_seed" --state "/Library/Application Support/xscc" --service-user _xscc:_xscc
+          sudo env GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" python3 scripts/native-service-acceptance.py --binary /usr/local/libexec/xscc --seed "$PWD/target/debug/examples/native_acceptance_seed" --config "/Library/Application Support/xscc" --service-user _xscc:_xscc
           sudo sh deploy/macos/uninstall-macos.sh
           sudo test -f "/Library/Application Support/xscc/provisioning/identity.json"
           sudo test -d "/Library/Application Support/xscc/journal"
@@ -247,10 +285,18 @@ jobs:
           sudo cmp "$RUNNER_TEMP/identity-before-reinstall.json" "/Library/Application Support/xscc/provisioning/identity.json"
           sudo sh deploy/macos/install-macos.sh "$PWD/target/release/xscc"
           sudo sh deploy/macos/uninstall-macos.sh
+      - name: Install exact release inventory tools
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.7.0
+      - name: Install reviewed Cargo inventory and audit tools
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
       - name: Package and independently verify the native Mac archive and PKG
         run: |
           python3 scripts/package-client.py --output "$RUNNER_TEMP/client-output"
-          archives=("$RUNNER_TEMP"/client-output/*.tar.gz)
+          archives=("$RUNNER_TEMP"/client-output/xscc-*-aarch64-apple-darwin.tar.gz)
           test "${#archives[@]}" = 1
           packages=("$RUNNER_TEMP"/client-output/*.pkg)
           test "${#packages[@]}" = 1

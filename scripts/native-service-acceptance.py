@@ -24,7 +24,7 @@ def exercise(binary, seed, state, service_user=None):
         raise RuntimeError("absolute paths required")
 
     def cli(*args, expected=0, input=None):
-        result = execute([binary, *args, "--state", state, "--format", "json", "--timeout", "30s", "--non-interactive"], input=input)
+        result = execute([binary, *args, "--config", state, "--format", "json", "--timeout", "30s", "--non-interactive"], input=input)
         if result.returncode != expected:
             raise RuntimeError(f"{args[:2]} returned {result.returncode}, expected {expected}; CLI response: {result.stdout[:4096]}")
         value = json.loads(result.stdout)
@@ -72,7 +72,7 @@ def exercise(binary, seed, state, service_user=None):
             powershell_env = {key: value for key, value in os.environ.items() if key.lower() != "psmodulepath"}
             acl = execute(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", acl_script], env=powershell_env)
             assert acl.returncode == 0, f"runtime log folder ACL failed: exit={acl.returncode}; {acl.stdout[:1024]}; {acl.stderr[:1024]}"
-            raw = execute([binary, "logs", "--state", state, "--format", "ndjson", "--follow", "--timeout", "2s"])
+            raw = execute([binary, "logs", "--config", state, "--format", "ndjson", "--follow", "--timeout", "2s"])
             assert raw.returncode == 0 and raw.stdout.strip(), "typed Windows log follow did not expose service diagnostics"
             assert all(json.loads(line)["ok"] for line in raw.stdout.splitlines())
         assert live["health"] == "unknown", "offline fixture must not report healthy"
@@ -105,7 +105,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     parser.add_argument("--seed", required=True, type=Path)
-    parser.add_argument("--state", required=True, type=Path)
+    parser.add_argument("--config", required=True, type=Path, dest="state")
     parser.add_argument("--service-user")
     args = parser.parse_args()
     exercise(args.binary, args.seed, args.state, args.service_user)

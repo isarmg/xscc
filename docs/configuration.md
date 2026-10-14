@@ -101,7 +101,7 @@ sudo rm -f /root/sunshine-bootstrap.json
 sudo xscc setup --interactive
 ```
 
-实例授权码在交互终端明文回显，Sunshine 密码隐藏输入；自动化使用受保护 stdin。
+实例授权码在交互终端隐藏输入，Sunshine 密码隐藏输入；自动化使用受保护 stdin。
 
 `setup` 仅询问是否开机自启，默认 Yes，直接按 Enter 即可；完成配对后固定启动后台服务并验证连接。
 当前平台支持的管理功能全部启用，没有重启、应用、配对、诊断或维护权限开关。

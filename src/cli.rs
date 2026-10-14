@@ -506,7 +506,6 @@ fn setup_args(args: &Args, words: Vec<String>, interactive: bool) -> Args {
                 "--format"
                     | "--timeout"
                     | "--config"
-                    | "--state"
                     | "--non-interactive"
                     | "--no-color"
                     | "--input-stdin"
@@ -533,12 +532,7 @@ fn setup_service_args(args: &Args) -> Args {
         .filter(|(name, _)| {
             matches!(
                 name.as_str(),
-                "--format"
-                    | "--timeout"
-                    | "--config"
-                    | "--state"
-                    | "--non-interactive"
-                    | "--no-color"
+                "--format" | "--timeout" | "--config" | "--non-interactive" | "--no-color"
             )
         })
         .map(|(name, value)| (name.clone(), value.clone()))
@@ -627,11 +621,8 @@ fn execute_pair(args: &Args, path: &Path) -> Result<Value> {
         } else {
             prompt_text("Server HTTPS origin", MAX_URL_BYTES, deadline)?
         };
-        let authorization_code = Zeroizing::new(prompt_text(
-            "Authorization code (visible)",
-            MAX_AUTHORIZATION_CODE_BYTES,
-            deadline,
-        )?);
+        let authorization_code =
+            prompt_secret("Authorization code", MAX_AUTHORIZATION_CODE_BYTES, deadline)?;
         if !xscs_protocol::is_valid_authorization_code(&authorization_code) {
             return Err(fail(2, "invalid_authorization_code"));
         }
@@ -981,6 +972,9 @@ fn no_args(args: &Args) -> u8 {
 }
 
 fn validate_product_paths(args: Args) -> Result<Args> {
+    if args.has("--state") {
+        return Err(fail(2, "unknown_option").with_detail("--state"));
+    }
     for option in ["--file", "--bootstrap"] {
         if let Some(path) = args.get(option) {
             absolute(Path::new(path))?;
@@ -1006,7 +1000,7 @@ pub fn entry(raw: Vec<String>) -> u8 {
     // Help and version are read-only and must remain available without UAC.
     if args.has("--help") {
         println!(
-            "xscc: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY (--state is an alias for the same state directory)\nsetup/pair uses --interactive or --input-stdin. Local Sunshine must use an HTTPS loopback IP and valid Sunshine API credentials; its local certificate identity is not checked. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
+            "xscc: setup; config init|show|edit|validate|diff|apply; pair [status|resume|replace]; credentials update; status; doctor; service status|start|stop|restart|enable|disable; run; version\nGlobal: --format human|json|ndjson --non-interactive --timeout 60s --no-color --config ABSOLUTE_STATE_DIRECTORY\nsetup/pair uses --interactive or --input-stdin. Local Sunshine must use an HTTPS loopback IP and valid Sunshine API credentials; its local certificate identity is not checked. setup completes pairing, service startup policy and connection verification. No secret arguments. config edit uses VISUAL or EDITOR and commits through the same revision check as config apply. Services must be stopped for writes."
         );
         return 0;
     }
@@ -1060,7 +1054,6 @@ pub fn entry(raw: Vec<String>) -> u8 {
         return follow_log_source("xscc", args, &XsccErrorCatalog, |args| {
             let path = args
                 .get("--config")
-                .or(args.get("--state"))
                 .map(PathBuf::from)
                 .unwrap_or_else(default_state);
             windows_runtime_logs(args, &path)
@@ -1104,12 +1097,8 @@ fn execute(args: &Args) -> Result<Value> {
             json!({"version":env!("CARGO_PKG_VERSION"),"commit":env!("XSCC_BUILD_SHA"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,"protocol":xscs_protocol::PROTOCOL,"cli_schema_version":1,"config_format":"xscc-bootstrap-v1","state_format":"xscc-identity-journal-v1","ipc_version":1}),
         );
     }
-    if args.has("--state") && args.has("--config") {
-        return Err(fail(2, "duplicate_state_selection"));
-    }
     let path = args
         .get("--config")
-        .or(args.get("--state"))
         .map(PathBuf::from)
         .unwrap_or_else(default_state);
     match words.as_slice() {

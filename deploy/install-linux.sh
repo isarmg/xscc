@@ -63,7 +63,7 @@ mkdir -m 0700 /var/lib/xscc
 made_state=1
 install -m 0755 -- "$binary" /opt/xscc/xscc
 if [[ -n $bootstrap ]]; then
-  /opt/xscc/xscc init --state /var/lib/xscc --bootstrap "$bootstrap"
+  /opt/xscc/xscc init --config /var/lib/xscc --bootstrap "$bootstrap"
 fi
 useradd --system --user-group --home-dir /var/lib/xscc --shell /usr/sbin/nologin xscc
 made_user=1

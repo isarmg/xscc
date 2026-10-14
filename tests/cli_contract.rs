@@ -11,7 +11,7 @@ use xscc::storage::{MaintenanceGuard, ProtectedState};
 fn call(path: &Path, args: &[&str], input: Option<&str>) -> (i32, Value) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_xscc"))
         .args(args)
-        .arg("--state")
+        .arg("--config")
         .arg(path)
         .args(["--format", "json", "--non-interactive"])
         .stdin(Stdio::piped())
@@ -42,6 +42,49 @@ fn call(path: &Path, args: &[&str], input: Option<&str>) -> (i32, Value) {
 fn private_file(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+#[test]
+fn removed_state_alias_is_rejected_before_reads_writes_or_service_actions() {
+    let temp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let current = temp.path().join("current-state");
+    let rejected = temp.path().join("former-alias-target");
+    fs::create_dir(&rejected).unwrap();
+    private_file(&rejected.join("operator-evidence"), b"preserve these bytes");
+    for command in [
+        vec!["version"],
+        vec!["status", "--watch"],
+        vec!["logs", "--follow"],
+        vec!["config", "init"],
+        vec!["setup", "--input-stdin"],
+        vec!["service", "start"],
+    ] {
+        let mut arguments = command;
+        arguments.extend(["--state", rejected.to_str().unwrap()]);
+        let (exit, result) = call(&current, &arguments, None);
+        assert_eq!(exit, 2, "{result}");
+        assert_eq!(result["error"]["code"], "unknown_option");
+        assert!(!current.exists());
+        assert_eq!(
+            fs::read(rejected.join("operator-evidence")).unwrap(),
+            b"preserve these bytes"
+        );
+        assert_eq!(fs::read_dir(&rejected).unwrap().count(), 1);
+    }
+    // With no --config, version normally needs no state. Rejection must still
+    // precede that shortcut without inspecting any default installation.
+    let output = Command::new(env!("CARGO_BIN_EXE_xscc"))
+        .args([
+            "version",
+            "--state",
+            rejected.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "unknown_option");
 }
 #[test]
 fn readonly_missing_state_never_creates_it_and_invalid_input_is_bounded() {
