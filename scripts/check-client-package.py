@@ -94,6 +94,7 @@ def verify(archive, destination, sha):
     root = destination / name
     root.mkdir()
     seen = set()
+    archive_modes = {}
     budget = 128 * 1024 * 1024
 
     def write(path, size, data, mode):
@@ -115,6 +116,7 @@ def verify(archive, destination, sha):
             output.write(payload)
         destination.chmod(mode & 0o777)
         seen.add(relative)
+        archive_modes[relative] = mode & 0o777
 
     if windows:
         with zipfile.ZipFile(archive) as source:
@@ -153,12 +155,12 @@ def verify(archive, destination, sha):
     expected=[]
     for relative in sorted(payload):
         path=root/relative
-        expected.append({'path':relative,'sha256':digest(path),'size':path.stat().st_size,'mode':stat.S_IMODE(path.stat().st_mode)})
-    if windows and os.name=='nt':
-        recorded=authority['files']
-        if [dict(value,mode=0) for value in recorded]!=[dict(value,mode=0) for value in expected]:
-            raise ValueError('manifest file inventory mismatch')
-    elif authority['files']!=expected:
+        # NTFS chmod/stat expresses the read-only attribute rather than the
+        # archive's POSIX permission bits. Check the actual archive metadata on
+        # NT hosts, including when testing a Unix package there.
+        mode=archive_modes[relative] if os.name=='nt' else stat.S_IMODE(path.stat().st_mode)
+        expected.append({'path':relative,'sha256':digest(path),'size':path.stat().st_size,'mode':mode})
+    if authority['files']!=expected:
         raise ValueError('manifest file inventory mismatch')
     manifest={'version':identity['version'],'files':{value['path']:value['sha256'] for value in expected if value['path']!='share/release-sbom.cdx.json'}}
     verify_inventory(root, manifest, target, sha)

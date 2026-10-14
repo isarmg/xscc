@@ -1,13 +1,13 @@
 [package]
 name = "xscc"
-version = "1.0.4"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
 [dependencies]
-xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "c0cf985f82663199e270112a72bbf54ce48ff415", version = "=1.0.5" }
+xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "6fca4299f5c34a79db1c7bd4e889b418d2a58e2d", version = "=1.0.0" }
 async-trait = "0.1"
 base64 = "0.23"
 futures-util = { version = "0.3", features = ["sink"] }
@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "abe8df18d5f69a17f5d3b7f5a2b3c396b60ece9a", version = "=1.0.0" }
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "3a5ca5a08f77ae4ef4ea322b475ee6b7adaaf3a0", version = "=1.0.0" }
 thiserror = "2"
 tokio = { version = "~1.53.2", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }

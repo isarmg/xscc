@@ -60,7 +60,7 @@ class ReleaseInventoryTests(unittest.TestCase):
 
     def test_build_credentials_are_absent_but_proxy_and_trust_remain(self):
         environment={'GH_TOKEN':'credential','GITHUB_TOKEN':'credential','SERVICE_PASSWORD':'credential',
-                     'XSSI_SIGNING_KEY_PEM':'credential','SERVICE_TOKEN':'credential','PRIVATE_SECRET':'credential',
+                     'BUILD_SIGNING_TEST_CREDENTIAL':'credential','SERVICE_TOKEN':'credential','PRIVATE_SECRET':'credential',
                      'HTTPS_PROXY':'https://proxy.example.invalid:8443','CARGO_HTTP_CAINFO':'/tmp/public-ca.pem',
                      'SOURCE_REVISION':'a'*40}
         with patch.dict(os.environ,environment,clear=True):

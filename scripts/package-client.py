@@ -107,7 +107,7 @@ def main():
         raise RuntimeError("binary source identity mismatch")
     name = f"xscc-{version}-{target}"
     with tempfile.TemporaryDirectory(prefix="client-package-") as tmp:
-        stage = Path(tmp) / name
+        stage = Path(tmp).resolve(strict=True) / name
         stage.mkdir()
         shutil.copy2(binary, stage / executable)
         for source, destination in COMMON_FILES.items():
@@ -171,7 +171,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='xscc-final-native-') as temporary:
         installers=sorted([*args.output.glob('*.msi'),*args.output.glob('*.deb'),*args.output.glob('*.pkg')])
         arguments=[sys.executable,str(ROOT/'scripts/package-native-delivery.py'),
-                   '--stage',str(Path(temporary)/'delivery'),'--target',target,
+                   '--stage',str(Path(temporary).resolve(strict=True)/'delivery'),'--target',target,
                    '--output',str(args.output/(name+'-native-delivery.tar.gz'))]
         for installer in installers:
             arguments.extend(['--artifact',str(installer),'--inner-bom',str(installer.with_name(installer.name+'.inner-sbom.cdx.json'))])

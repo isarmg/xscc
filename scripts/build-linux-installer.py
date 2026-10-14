@@ -31,7 +31,7 @@ def main():
         parser.error('invalid version')
     version = args.version.replace('-rc.', '~rc')
     with tempfile.TemporaryDirectory(prefix='xscc-deb-') as temporary:
-        stage = Path(temporary)
+        stage = Path(temporary).resolve(strict=True)
         stage.chmod(0o755)
         for directory in ['DEBIAN', 'opt/xscc', 'usr/bin', 'usr/lib/systemd/system', 'usr/share/doc/xscc']:
             (stage / directory).mkdir(parents=True)

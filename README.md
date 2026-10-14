@@ -1,6 +1,6 @@
 # xscc
 
-当前源码候选版本为 **1.0.4**，尚未发布。以下同版包名用于源码构建产物或后续正式发行；下载前核对对应 Release 已存在，旧版资产不包含本轮修复。
+当前源码候选版本为 **1.0.0**，尚未发布。以下同版包名用于源码构建产物或后续正式发行；下载前核对对应 Release 已存在，旧版资产不包含本轮修复。
 
 xscc 是 xscs 的本机 Sunshine 管理代理，主动连接管理端，执行本机管理任务并持久保存执行结果。
 
@@ -21,7 +21,7 @@ Windows 11 x64、Ubuntu 24.04 x86_64、macOS Apple Silicon（arm64）。固定�
 Ubuntu 24.04：
 
 ```sh
-sudo apt install ./xscc_1.0.4_amd64.deb
+sudo apt install ./xscc_1.0.0_amd64.deb
 sudo xscc service stop
 sudo xscc setup --interactive
 sudo xscc status --check --format json
@@ -31,14 +31,14 @@ sudo xscc doctor --sunshine --format json
 macOS Apple Silicon：
 
 ```sh
-sudo installer -pkg ./xscc-1.0.4-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./xscc-1.0.0-macos-arm64-unsigned.pkg -target /
 sudo /usr/local/bin/xscc service stop
 sudo /usr/local/bin/xscc setup --interactive
 sudo /usr/local/bin/xscc status --check --format json
 sudo /usr/local/bin/xscc doctor --sunshine --format json
 ```
 
-Windows：运行 `xscc-1.0.4-windows-x64.msi` 完成安装，再打开新的管理员 PowerShell：
+Windows：运行 `xscc-1.0.0-windows-x64.msi` 完成安装，再打开新的管理员 PowerShell：
 
 ```powershell
 xscc service stop
@@ -57,7 +57,7 @@ xscc doctor --sunshine --format json
 git clone https://github.com/isarmg/xscc.git
 cd xscc
 python3 scripts/package-client.py --output "$HOME/xscc-output"
-sudo apt install "$HOME/xscc-output/xscc_1.0.4_amd64.deb"
+sudo apt install "$HOME/xscc-output/xscc_1.0.0_amd64.deb"
 sudo xscc service stop
 sudo xscc setup --interactive
 sudo xscc status --check --format json

@@ -65,7 +65,7 @@ class PackageTests(unittest.TestCase):
                              ['LICENSE','README.md','bootstrap.example.json','share/runtime-sbom.cdx.json'])
 
     def fixture(self, temporary, windows=False, extra=None, wrong_sha=False, mac_target=None,
-                inventory_target=None, unbound=False):
+                inventory_target=None, unbound=False, archive_mode=None):
         target = mac_target or ("x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu")
         name = f"xscc-{VERSION}-{target}"
         names = ["xscc.exe" if windows else "xscc", "README.md", "platform-setup.md", "LICENSE", "bootstrap.example.json"]
@@ -103,13 +103,16 @@ class PackageTests(unittest.TestCase):
         if windows:
             with zipfile.ZipFile(archive, "w") as out:
                 for n, b in entries:
-                    out.writestr(n, b)
+                    entry=zipfile.ZipInfo(n)
+                    entry.create_system=3
+                    entry.external_attr=(0o100000 | (0o600 if archive_mode is None else archive_mode)) << 16
+                    out.writestr(entry, b)
         else:
             with tarfile.open(archive, "w:gz") as out:
                 for n, b in entries:
                     entry = tarfile.TarInfo(n)
                     entry.size = len(b)
-                    entry.mode = 0o644
+                    entry.mode = 0o644 if archive_mode is None else archive_mode
                     out.addfile(entry, io.BytesIO(b))
         archive.with_name(archive.name + ".sha256").write_text(f"{checker.digest(archive)}  {archive.name}\n")
         return archive
@@ -129,6 +132,15 @@ class PackageTests(unittest.TestCase):
                 archive = self.fixture(root, mac_target=target)
                 with patch.object(checker, "run", return_value=f"xscc {VERSION} (git {SHA}; xscs-management/1)"):
                     checker.verify(archive, root, SHA)
+
+    def test_archive_permission_change_is_rejected_before_execution(self):
+        for windows in (False,True):
+            with self.subTest(windows=windows),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary)
+                archive=self.fixture(root,windows=windows,archive_mode=0o644 if windows else 0o600)
+                with patch.object(checker,'run') as executable,self.assertRaisesRegex(ValueError,'manifest file inventory mismatch'):
+                    checker.verify(archive,root,SHA)
+                executable.assert_not_called()
 
     def test_intel_macos_archive_is_not_a_supported_release(self):
         with tempfile.TemporaryDirectory() as tmp:
