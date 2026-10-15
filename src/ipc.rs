@@ -622,10 +622,10 @@ async fn handle(data: Data, stream: &mut Connection) {
             allow_err!(stream.send(&Data::MouseMoveTime(t)).await);
         }
         Data::Close => {
-            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
-            crate::management::shutdown().await;
             log::info!("Receive close message");
             if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
+                #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                crate::management::shutdown().await;
                 #[cfg(not(target_os = "android"))]
                 crate::server::input_service::fix_key_down_timeout_at_exit();
                 if is_server() {
