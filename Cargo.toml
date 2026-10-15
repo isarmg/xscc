@@ -1,39 +1,30 @@
 [package]
 name = "xscc"
-version = "1.0.0"
+version = "2.0.0-dev"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
+autobins = false
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
-xcsc = { git = "https://github.com/isarmg/xcsc.git", rev = "6fca4299f5c34a79db1c7bd4e889b418d2a58e2d", version = "=1.0.0" }
 async-trait = "0.1"
-base64 = "0.23"
 futures-util = { version = "0.3", features = ["sink"] }
-reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
-rand = "0.10"
-uuid = { version = "1", features = ["v4", "serde"] }
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.11"
-xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "25c9ec6950c4f64592dbba87fc05d0ad200fdf56", version = "=1.0.0" }
 thiserror = "2"
-tokio = { version = "~1.53.2", features = ["macros", "process", "rt-multi-thread", "sync", "time", "signal"] }
+tokio = { version = "~1.53.2", features = ["macros", "rt", "sync", "time", "net"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
-tokio-rustls = "0.26"
 url = "2"
-zeroize = { version = "1.9.1", features = ["serde"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"] }
-windows-service = "=0.8.1"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Diagnostics_ToolHelp", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+zeroize = "1.9.1"
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "1123ca04354ad710445eee671a43bd2c9926b645", version = "=2.0.0-dev" }
 
 [dev-dependencies]
-sqlx = { version = "=0.9.0", default-features = false, features = ["sqlite-bundled"] }
 uuid = { version = "1", features = ["v4"] }
-tempfile = "3"
 
 [lints.rust]
-unsafe_op_in_unsafe_fn = "deny"
+unsafe_code = "forbid"

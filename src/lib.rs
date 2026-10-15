@@ -1,18 +1,5 @@
-//! Sunshine-specific local management executor. Does not run inside Sunshine.
-pub mod adapter;
+//! Embedded RustDesk management client. The host owns Tokio, credentials, storage and shutdown.
 pub mod engine;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub mod journal;
-#[cfg(target_os = "windows")]
-#[path = "windows_journal.rs"]
-pub mod journal;
-pub mod provisioning;
-pub mod storage;
+pub mod host;
 pub mod transport;
-
-pub mod cli;
-pub use xcsc::runtime::local_status as runtime_status;
-
-mod process_identity;
-
-mod elapsed_clock;
+pub use xscs_protocol as protocol;

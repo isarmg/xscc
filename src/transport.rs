@@ -1,7 +1,7 @@
 //! Product WSS transport. No generic Client platform, URL passthrough or Manager credential logging.
 use crate::{
-    adapter::Sunshine,
     engine::{ExecutionDeadline, Executor, Journal},
+    host::RustDeskHost,
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -20,43 +20,35 @@ use tokio_tungstenite::{
     },
 };
 use url::Url;
-use xcsc::runtime::RetryBackoff;
+
 use xscs_protocol::{
-    Binding, Capabilities, ClientMessage, ConfigSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
-    PROTOCOL, Report, WEBSOCKET_SUBPROTOCOL, decode_manager_message,
+    Binding, Capabilities, ClientMessage, DiagnosticSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
+    Report, WEBSOCKET_SUBPROTOCOL, decode_manager_message,
 };
 use zeroize::Zeroizing;
 
-fn session_record(
-    binding: &Binding,
-    event: &str,
-    level: xcsc::log::Level,
-    code: Option<&str>,
-) -> Result<xcsc::log::LogRecord, xcsc::log::LogError> {
-    let mut record = xcsc::log::LogRecord::instance(
-        "xscc",
-        "manager-transport",
+fn session_log(binding: &Binding, event: &str, code: Option<&str>) {
+    log::debug!(
+        "xscc session: device={} event={} code={}",
+        binding.device_id,
         event,
-        "Manager session state changed.",
-        level,
-        &binding.device_id.to_string(),
-    )?
-    .with_instance_type("sunshine-device")?;
-    if let Some(code) = code {
-        record = record.with_error_code(code)?;
-    }
-    Ok(record)
+        code.unwrap_or("none")
+    );
 }
 
-fn session_log(
-    binding: &Binding,
-    event: &str,
-    level: xcsc::log::Level,
-    code: Option<&str>,
-) -> Result<(), TransportError> {
-    session_record(binding, event, level, code)
-        .and_then(|record| record.emit())
-        .map_err(|_| TransportError::Diagnostics)
+#[derive(Default)]
+struct RetryBackoff {
+    attempt: u32,
+}
+impl RetryBackoff {
+    fn reset(&mut self) {
+        self.attempt = 0;
+    }
+    fn next_delay(&mut self) -> Duration {
+        let delay = Duration::from_secs(1u64 << self.attempt.min(6)).min(Duration::from_secs(60));
+        self.attempt = self.attempt.saturating_add(1);
+        delay
+    }
 }
 
 pub use xscs_protocol::CONNECT_PATH;
@@ -74,16 +66,13 @@ pub enum TransportError {
     Disconnected,
     #[error("invalid Manager protocol message")]
     Protocol,
-    #[error("runtime diagnostics unavailable")]
-    Diagnostics,
     #[error("Client shutdown left an execution outcome uncertain")]
     ShutdownIncomplete,
 }
 
 #[derive(Clone, Default)]
 pub struct HealthObservation {
-    pub sunshine_reachable: bool,
-    pub configuration: Option<ConfigSnapshot>,
+    pub diagnostics: Option<DiagnosticSnapshot>,
     pub observed_at: Option<Instant>,
 }
 
@@ -150,9 +139,9 @@ impl ManagerConnection {
         Ok(socket)
     }
 
-    /// Terminal authentication failure stops reconnecting. Other reconnects use xcsc backoff.
+    /// Terminal authentication failure stops reconnecting. Other reconnects use bounded backoff.
     /// The caller owns protected credential/revocation state and retains the Executor across sessions.
-    pub async fn run<A: Sunshine + 'static, J: Journal + 'static>(
+    pub async fn run<A: RustDeskHost + 'static, J: Journal + 'static>(
         &self,
         binding: Binding,
         capabilities: Capabilities,
@@ -160,7 +149,7 @@ impl ManagerConnection {
         health: watch::Receiver<HealthObservation>,
         mut shutdown: watch::Receiver<bool>,
     ) -> Result<(), TransportError> {
-        if capabilities.protocol != PROTOCOL {
+        if capabilities.validate().is_err() {
             return Err(TransportError::Configuration);
         }
         let mut execution = ExecutionState::default();
@@ -173,8 +162,7 @@ impl ManagerConnection {
                 execution.completed.insert(id, (record.fingerprint, report));
             }
         }
-        let mut backoff = RetryBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 20)
-            .map_err(|_| TransportError::Configuration)?;
+        let mut backoff = RetryBackoff::default();
         loop {
             if *shutdown.borrow() {
                 return execution.shutdown().await;
@@ -185,7 +173,6 @@ impl ManagerConnection {
                 _ = shutdown.changed() => return execution.shutdown().await,
                 result = self.session(&binding, &capabilities, executor.clone(), &health, &mut execution) => result,
             };
-            crate::runtime_status::observe("manager_session", serde_json::json!("disconnected"));
             let (event, code) = match result {
                 Err(TransportError::Revoked) => {
                     ("xscc.session.authorization_failed", "credential_rejected")
@@ -196,25 +183,21 @@ impl ManagerConnection {
                 Err(TransportError::Configuration) => {
                     ("xscc.session.state_failed", "state_invalid")
                 }
-                Err(TransportError::Diagnostics) => return result,
                 _ => ("xscc.session.disconnected", "connection_failed"),
             };
-            session_log(&binding, event, xcsc::log::Level::Warn, Some(code))?;
+            session_log(&binding, event, Some(code));
             if matches!(
                 result,
                 Err(TransportError::Revoked
                     | TransportError::Configuration
-                    | TransportError::Protocol
-                    | TransportError::Diagnostics)
+                    | TransportError::Protocol)
             ) {
                 return result;
             }
             if started.elapsed() >= Duration::from_secs(60) {
                 backoff.reset();
             }
-            let delay = backoff
-                .next_delay()
-                .map_err(|_| TransportError::Configuration)?;
+            let delay = backoff.next_delay();
             tokio::select! {
                 _ = shutdown.changed() => return execution.shutdown().await,
                 _ = tokio::time::sleep(delay) => {},
@@ -222,7 +205,7 @@ impl ManagerConnection {
         }
     }
 
-    async fn session<A: Sunshine + 'static, J: Journal + 'static>(
+    async fn session<A: RustDeskHost + 'static, J: Journal + 'static>(
         &self,
         binding: &Binding,
         capabilities: &Capabilities,
@@ -237,7 +220,7 @@ impl ManagerConnection {
 
     // Keep the authenticated socket loop independently testable with a private
     // trusted TLS fixture; production always obtains its socket via connect().
-    async fn session_connected<A: Sunshine + 'static, J: Journal + 'static>(
+    async fn session_connected<A: RustDeskHost + 'static, J: Journal + 'static>(
         &self,
         mut socket: Socket,
         binding: &Binding,
@@ -260,12 +243,7 @@ impl ManagerConnection {
             },
         )
         .await?;
-        session_log(
-            binding,
-            "xscc.session.connected",
-            xcsc::log::Level::Info,
-            None,
-        )?;
+        session_log(binding, "xscc.session.connected", None);
         let mut tick = tokio::time::interval(HEARTBEAT_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut last_peer = Instant::now();
@@ -284,7 +262,6 @@ impl ManagerConnection {
         // One inspection per operation per session can supersede an earlier Unknown.
         // Keep only that sent report's identity until the new report is acknowledged.
         let mut superseded = BTreeMap::<String, (String, String)>::new();
-        crate::runtime_status::observe("manager_session", serde_json::json!("connected"));
         loop {
             tokio::select! {
                 // Credential revocation/connection close wins over publishing another result.
@@ -292,7 +269,6 @@ impl ManagerConnection {
                 incoming = socket.next() => {
                     let frame = incoming.ok_or(TransportError::Disconnected)?.map_err(|_| TransportError::Disconnected)?;
                     last_peer = Instant::now();
-                    crate::runtime_status::observe("last_peer_at",serde_json::json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
                     match frame {
                         Message::Text(text) => match decode_manager_message(text.as_bytes()).map_err(|_| TransportError::Protocol)? {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
@@ -320,7 +296,6 @@ impl ManagerConnection {
                 result = async { (&mut execution.active.as_mut().expect("guarded execution").handle).await }, if execution.active.is_some() => {
                     let active = execution.active.take().expect("completed execution");
                     let report = result.map_err(|_| TransportError::Configuration)?;
-                    if active.mutation { execution.mutation_completed = Some(Instant::now()); }
                     execution.completed.insert(active.id.clone(), (active.fingerprint, report.clone()));
                     send(&mut socket, ClientMessage::Result { operation_id: active.id, report }).await?;
                 },
@@ -336,7 +311,7 @@ impl ManagerConnection {
                     if last_peer.elapsed() >= PEER_TIMEOUT { return Err(TransportError::Disconnected); }
                     if execution.active.is_none() {
                         // Fetch final receipts after a human resolution, preserving uncertain intent
-                        // until the Manager confirms that xcsc has a terminal outcome.
+                        // until the Manager confirms that xscs has a terminal outcome.
                         for (id, record) in executor.pending_results().await.map_err(|_| TransportError::Configuration)? {
                             if let Some(report) = record.report {
                                 execution.completed.entry(id.clone()).or_insert((record.fingerprint, report.clone()));
@@ -349,14 +324,9 @@ impl ManagerConnection {
                     if let Some(active) = &execution.active {
                         send(&mut socket, ClientMessage::Progress { operation_id: active.id.clone(), fingerprint: active.fingerprint.clone() }).await?;
                     }
-                    let configuration = if fresh && observation.observed_at.is_some_and(|at| execution.mutation_completed.is_none_or(|done| at >= done)) && execution.active.as_ref().is_none_or(|active| !active.mutation) {
-                        observation.configuration.filter(|snapshot| last_snapshot.as_ref() != Some(&snapshot.revision))
-                    } else { None };
-                    if let Some(snapshot) = &configuration { last_snapshot = Some(snapshot.revision.clone()); }
-                    send(&mut socket, ClientMessage::Heartbeat {
-                        sunshine_reachable: fresh.then_some(observation.sunshine_reachable),
-                        configuration,
-                    }).await?;
+                    let diagnostics = if fresh { observation.diagnostics.filter(|snapshot| last_snapshot.as_ref() != Some(snapshot)) } else { None };
+                    if let Some(snapshot) = &diagnostics { last_snapshot = Some(snapshot.clone()); }
+                    send(&mut socket, ClientMessage::Heartbeat { diagnostics }).await?;
                     send_frame(&mut socket, Message::Ping(Vec::new().into())).await?;
                 },
             }
@@ -397,13 +367,12 @@ type ReceiptCompletion = (String, String, Result<(), crate::engine::JournalError
 struct ExecutionState {
     active: Option<ActiveExecution>,
     completed: BTreeMap<String, (String, Report)>,
-    mutation_completed: Option<Instant>,
     acknowledging: FuturesUnordered<tokio::task::JoinHandle<ReceiptCompletion>>,
 }
 impl ExecutionState {
     // This is the production Task branch. Socket order is established before
     // changing the outbox or spawning work; a failed send leaves both intact.
-    async fn deliver_task<A: Sunshine + 'static, J: Journal + 'static>(
+    async fn deliver_task<A: RustDeskHost + 'static, J: Journal + 'static>(
         &mut self,
         socket: &mut Socket,
         executor: Arc<Executor<A, J>>,
@@ -474,17 +443,6 @@ impl ExecutionState {
             self.completed.remove(&task.operation_id);
         }
         let id = task.operation_id.clone();
-        let mutation = !matches!(
-            task.command,
-            xscs_protocol::Command::ReadConfig {}
-                | xscs_protocol::Command::ListApplications {}
-                | xscs_protocol::Command::ListPendingPairings {}
-                | xscs_protocol::Command::ListPairedClients {}
-                | xscs_protocol::Command::ReadLogs { .. }
-                | xscs_protocol::Command::ReadDiagnostics {}
-                | xscs_protocol::Command::ReadVirtualInputStatus {}
-                | xscs_protocol::Command::ReadServiceStatus {}
-        );
         let deadline = (mode == xscs_protocol::DeliveryMode::Execute)
             .then(|| ExecutionDeadline::received(budget.0, budget.1));
         let handle =
@@ -492,7 +450,6 @@ impl ExecutionState {
         self.active = Some(ActiveExecution {
             id,
             fingerprint,
-            mutation,
             handle,
         });
 
@@ -545,7 +502,6 @@ impl ExecutionState {
 struct ActiveExecution {
     id: String,
     fingerprint: String,
-    mutation: bool,
     handle: tokio::task::JoinHandle<Report>,
 }
 
@@ -596,190 +552,5 @@ fn classify_handshake(error: tungstenite::Error) -> TransportError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn unknown_receipts_wait_for_final_resolution_without_racing_inspection() {
-        let report = Report::Unknown {
-            reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
-        };
-        let digest = xscs_protocol::report_digest(&report).unwrap();
-        let current = ("fingerprint".to_owned(), report);
-        let previous = (current.0.clone(), digest.clone());
-        for superseded in [None, Some(&previous)] {
-            assert_eq!(
-                receipt_requires_commit(Some(&current), superseded, &current.0, &digest, false),
-                Ok(false)
-            );
-            assert_eq!(
-                receipt_requires_commit(Some(&current), superseded, &current.0, &digest, true),
-                Ok(true)
-            );
-        }
-    }
-
-    #[test]
-    fn delayed_receipt_only_matches_the_known_superseded_observation() {
-        let previous = (
-            "fingerprint".to_owned(),
-            xscs_protocol::report_digest(&Report::Unknown {
-                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
-            })
-            .unwrap(),
-        );
-        let current = (previous.0.clone(), Report::ApplicationClosed {});
-        let digest = xscs_protocol::report_digest(&current.1).unwrap();
-        for finalized in [false, true] {
-            for observation in [None, Some(&current)] {
-                assert_eq!(
-                    receipt_requires_commit(
-                        observation,
-                        Some(&previous),
-                        &previous.0,
-                        &previous.1,
-                        finalized,
-                    ),
-                    Ok(false)
-                );
-            }
-            assert_eq!(
-                receipt_requires_commit(
-                    Some(&current),
-                    Some(&previous),
-                    &current.0,
-                    &digest,
-                    finalized,
-                ),
-                Ok(true),
-                "confirmed evidence is compacted even while the Manager retains Unknown"
-            );
-        }
-        for (fingerprint, digest) in [
-            (current.0.as_str(), "unsent-digest"),
-            ("another-fingerprint", previous.1.as_str()),
-        ] {
-            assert_eq!(
-                receipt_requires_commit(
-                    Some(&current),
-                    Some(&previous),
-                    fingerprint,
-                    digest,
-                    false,
-                ),
-                Err(TransportError::Protocol)
-            );
-        }
-        assert_eq!(
-            receipt_requires_commit(None, None, &previous.0, &previous.1, true),
-            Ok(false),
-            "a repeated receipt after cleanup cannot recreate execution state"
-        );
-    }
-
-    fn executing(handle: tokio::task::JoinHandle<Report>) -> ExecutionState {
-        ExecutionState {
-            active: Some(ActiveExecution {
-                id: "shutdown-test".into(),
-                fingerprint: "shutdown-test".into(),
-                mutation: true,
-                handle,
-            }),
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn shutdown_waits_for_owned_execution() {
-        let (completed, mut observed) = tokio::sync::oneshot::channel();
-        let mut execution = executing(tokio::spawn(async move {
-            tokio::task::yield_now().await;
-            completed.send(()).unwrap();
-            Report::Unknown {
-                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
-            }
-        }));
-        assert_eq!(execution.shutdown().await, Ok(()));
-        assert_eq!(observed.try_recv(), Ok(()));
-        assert!(execution.active.is_none());
-    }
-
-    #[tokio::test]
-    async fn shutdown_reports_execution_persistence_failure() {
-        let mut execution = executing(tokio::spawn(async {
-            Report::Unknown {
-                reason: xscs_protocol::Uncertainty::PersistenceFailure,
-            }
-        }));
-        assert_eq!(
-            execution.shutdown().await,
-            Err(TransportError::ShutdownIncomplete)
-        );
-    }
-
-    #[tokio::test]
-    async fn shutdown_preserves_business_uncertainty() {
-        let mut execution = executing(tokio::spawn(async {
-            Report::Unknown {
-                reason: xscs_protocol::Uncertainty::EffectNotConfirmed,
-            }
-        }));
-        assert_eq!(execution.shutdown().await, Ok(()));
-    }
-
-    #[test]
-    fn handshake_distinguishes_manager_authentication_from_proxy_failures() {
-        for (status, marker, expected) in [
-            (
-                StatusCode::UNAUTHORIZED,
-                Some("unauthorized"),
-                TransportError::Revoked,
-            ),
-            (StatusCode::UNAUTHORIZED, None, TransportError::Disconnected),
-            (
-                StatusCode::UNAUTHORIZED,
-                Some("forbidden"),
-                TransportError::Disconnected,
-            ),
-            (
-                StatusCode::FORBIDDEN,
-                Some("unauthorized"),
-                TransportError::Disconnected,
-            ),
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                None,
-                TransportError::Disconnected,
-            ),
-        ] {
-            let mut builder = tungstenite::http::Response::builder().status(status);
-            if let Some(marker) = marker {
-                builder = builder.header("x-error-code", marker);
-            }
-            let response = builder.body(None).unwrap();
-            assert_eq!(
-                classify_handshake(tungstenite::Error::Http(Box::new(response))),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn unmarked_manager_401_retries_when_proxy_drops_authorization() {
-        let response = tungstenite::http::Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .header("content-type", "application/json")
-            .body(Some(
-                br#"{"code":"unauthorized","message":"unauthorized","retryable":false}"#.to_vec(),
-            ))
-            .unwrap();
-        assert_eq!(
-            classify_handshake(tungstenite::Error::Http(Box::new(response))),
-            TransportError::Disconnected
-        );
-    }
-}
-
-#[cfg(test)]
-#[path = "transport_tls_tests.rs"]
-mod tls_tests;
+#[path = "transport_tests.rs"]
+mod tests;
