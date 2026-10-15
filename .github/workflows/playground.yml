@@ -1,0 +1,362 @@
+name: playground
+
+on:
+  #schedule:
+    # schedule build every night
+  #  - cron: "0/6 * * * *"
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: "1.99.0"
+  MACOSX_DEPLOYMENT_TARGET: "26.0"
+  CARGO_NDK_VERSION: "4.1.2"
+  LLVM_VERSION: "23.1.3"
+  FLUTTER_VERSION: "3.47.7"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  TAG_NAME: "nightly"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VERSION: "1.5.1"
+  NDK_VERSION: "r30"
+  #signing keys env variable checks
+  ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
+  MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
+  # To make a custom build with your own servers set the below secret values
+  RS_PUB_KEY: "${{ secrets.RS_PUB_KEY }}"
+  RENDEZVOUS_SERVER: "${{ secrets.RENDEZVOUS_SERVER }}"
+  API_SERVER: "${{ secrets.API_SERVER }}"
+  UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
+  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
+
+jobs:
+  build-for-macOS:
+    name: ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {
+              target: aarch64-apple-darwin,
+              os: macos-26,
+              extra-build-args: "",
+              arch: aarch64,
+              flutter: "3.47.7",
+              bridge: "1.80.1",
+            }
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
+        with:
+          submodules: recursive
+
+      - name: Import the codesign cert
+        if: env.MACOS_P12_BASE64 != null
+        uses: apple-actions/import-codesign-certs@253ddeeac23f2bdad1646faac5c8c2832e800071 # v1
+        with:
+          p12-file-base64: ${{ secrets.MACOS_P12_BASE64 }}
+          p12-password: ${{ secrets.MACOS_P12_PASSWORD }}
+          keychain: rustdesk
+
+      - name: Check sign and import sign key
+        if: env.MACOS_P12_BASE64 != null
+        run: |
+          security default-keychain -s rustdesk.keychain
+          security find-identity -v
+
+      - name: Import notarize key
+        if: env.MACOS_P12_BASE64 != null
+        uses: timheuer/base64-to-file@adaa40c0c581f276132199d4cf60afa07ce60eac # v1.2
+        with:
+          # https://gregoryszorc.com/docs/apple-codesign/stable/apple_codesign_rcodesign.html#notarizing-and-stapling
+          fileName: rustdesk.json
+          fileDir: ${{ github.workspace }}
+          encodedString: ${{ secrets.MACOS_NOTARIZE_JSON }}
+
+      - name: Install rcodesign tool
+        if: env.MACOS_P12_BASE64 != null
+        shell: bash
+        run: |
+          pushd /tmp
+          wget https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.22.0/apple-codesign-0.22.0-macos-universal.tar.gz
+          tar -zxvf apple-codesign-0.22.0-macos-universal.tar.gz
+          mv apple-codesign-0.22.0-macos-universal/rcodesign /usr/local/bin
+          popd
+
+      - name: Install build runtime
+        run: |
+          brew install llvm create-dmg pkg-config
+
+      - name: Install flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ matrix.job.flutter }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: ${{ matrix.job.os }}
+
+      - name: Install flutter rust bridge deps
+        shell: bash
+        run: |
+          cargo install flutter_rust_bridge_codegen --version ${{ matrix.job.bridge }} --features "uuid" --locked
+          pushd flutter && flutter pub get && popd
+          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Install vcpkg dependencies
+        run: |
+          $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+          
+      - name: Restore from cache and install vcpkg
+        uses: lukka/run-vcpkg@8a5116de2b552d6fc8894e9774aacaf2e5db4823 # v7 2026-05-26
+        if: false
+        with:
+          setupOnly: true
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Install vcpkg dependencies
+        if: false
+        run: |
+          $VCPKG_ROOT/vcpkg install libvpx libyuv opus aom
+
+      - name: Show version information (Rust, cargo, Clang)
+        shell: bash
+        run: |
+          clang --version || true
+          rustup -V
+          rustup toolchain list
+          rustup default
+          cargo -V
+          rustc -V
+
+      - name: Build rustdesk
+        run: |
+          ./build.py --flutter ${{ matrix.job.extra-build-args }}
+
+      - name: create unsigned dmg
+        run: |
+          CREATE_DMG="$(command -v create-dmg)"
+          CREATE_DMG="$(readlink -f "$CREATE_DMG")"
+          sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
+          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+
+      - name: Codesign app and create signed dmg
+        if: env.MACOS_P12_BASE64 != null
+        run: |
+          # Patch create-dmg to give more attempts to unmount image
+          CREATE_DMG="$(command -v create-dmg)"
+          CREATE_DMG="$(readlink -f "$CREATE_DMG")"
+          sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
+          # Unlock keychain
+          security default-keychain -s rustdesk.keychain
+          security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
+          # start sign the rustdesk.app and dmg
+          rm -rf *.dmg || true
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
+          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
+          # notarize the rustdesk-${{ env.VERSION }}.dmg
+          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple rustdesk-${{ env.VERSION }}.dmg
+
+      - name: Rename rustdesk
+        run: |
+          for name in rustdesk*??.dmg; do
+              mv "$name" "${name%%.dmg}-${{ matrix.job.arch }}-flutter${{ matrix.job.flutter }}.dmg"
+          done
+
+      - name: Publish DMG package
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          prerelease: true
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            rustdesk*-${{ matrix.job.arch }}*.dmg
+
+
+  build-rustdesk-android:
+    if: false
+    name: build rustdesk android apk ${{ matrix.job.target }}
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - {
+              arch: aarch64,
+              target: aarch64-linux-android,
+              os: ubuntu-22.04,
+              openssl-arch: android-arm64,
+              ref: master, # latest
+            }
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+               clang \
+               cmake \
+               curl \
+               gcc-multilib \
+               git \
+               g++ \
+               g++-multilib \
+               libayatana-appindicator3-dev\
+               libasound2-dev \
+               libc6-dev \
+               libclang-dev \
+               libunwind-dev \
+               libgstreamer1.0-dev \
+               libgstreamer-plugins-base1.0-dev \
+               libgtk-3-dev \
+               libpulse-dev \
+               libva-dev \
+               libvdpau-dev \
+               libxcb-randr0-dev \
+               libxcb-shape0-dev \
+               libxcb-xfixes0-dev \
+               libxfixes-dev \
+               llvm-dev \
+               nasm \
+               yasm \
+               ninja-build \
+               pkg-config \
+               tree \
+               wget
+
+      - name: Install flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: "rustfmt"
+
+      - name: Install flutter rust bridge deps
+        run: |
+          git config --global core.longpaths true
+          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          sed -i 's/uni_links_desktop/#uni_links_desktop/g' flutter/pubspec.yaml
+          pushd flutter ; flutter pub get ; popd
+          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
+
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+      - name: Install vcpkg dependencies
+        run: |
+          case ${{ matrix.job.target }} in
+            aarch64-linux-android)
+              ./flutter/build_android_deps.sh arm64-v8a
+            ;;
+          esac
+        shell: bash
+
+      - name: Clone deps
+        shell: bash
+        run: |
+          pushd /opt
+          git clone https://github.com/rustdesk-org/rustdesk_thirdparty_lib.git --depth=1
+          ls -ls /opt/artifacts/vcpkg/installed/arm64-android/lib/
+          # cp -rf /opt/rustdesk_thirdparty_lib/vcpkg/* /opt/artifacts/vcpkg/
+          ls -ls /opt/artifacts/vcpkg/installed/arm64-android/lib/
+
+      - name: Build rustdesk lib
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          rustup target add ${{ matrix.job.target }}
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          case ${{ matrix.job.target }} in
+            aarch64-linux-android)
+              ./flutter/ndk_arm64.sh
+              mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+            ;;
+          esac
+
+      - name: Install Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '27'
+
+      - name: Build rustdesk
+        shell: bash
+        run: |
+          # temporary use debug sign config
+          sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+          case ${{ matrix.job.target }} in
+            aarch64-linux-android)
+              mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+              cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+              # build flutter
+              pushd flutter
+              flutter build apk --release --target-platform android-arm64 --split-per-abi
+              mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+            ;;
+          esac
+          popd
+          mkdir -p signed-apk; pushd signed-apk
+          mv ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk ./rustdesk-test-${{ matrix.job.arch }}.apk
+
+      - uses: r0adkll/sign-android-release@349ebdef58775b1e0d8099458af0816dc79b6407 # v1
+        name: Sign app APK
+        if: env.ANDROID_SIGNING_KEY != null
+        id: sign-rustdesk
+        with:
+          releaseDirectory: ./signed-apk
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        env:
+          # override default build-tools version (29.0.3) -- optional
+          BUILD_TOOLS_VERSION: "30.0.2"
+
+      - name: Publish signed apk package
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          prerelease: true
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}

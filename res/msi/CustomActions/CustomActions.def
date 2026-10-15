@@ -1,0 +1,15 @@
+LIBRARY "CustomActions"
+
+EXPORTS
+    CheckSupportedWindows
+    CustomActionHello
+    RemoveRuntimeGeneratedFiles
+    TerminateProcesses
+    AddFirewallRules
+    SetPropertyIsServiceRunning
+    TryStopDeleteService
+    CreateStartService
+    TryDeleteStartupShortcut
+    SetPropertyFromConfig
+    AddRegSoftwareSASGeneration
+    RemoveAmyuniIdd

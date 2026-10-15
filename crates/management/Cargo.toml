@@ -1,0 +1,30 @@
+[package]
+name = "xscc"
+version = "2.0.0-dev"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+autobins = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+futures-util = { version = "0.3", features = ["sink"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "~1.53.2", features = ["macros", "rt", "sync", "time", "net"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+url = "2"
+zeroize = "1.9.1"
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "2bf023c22a92783b85171be6e61014120bd480f3", version = "=2.0.0-dev" }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,53 @@
+name: Embedded management library
+on:
+  push:
+    branches: [main, feat/management-prep]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-layout:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+      - name: Validate workspace layout
+        shell: bash
+        run: |
+          cargo metadata --no-deps --locked --offline --format-version 1 > "$RUNNER_TEMP/xscc-metadata.json"
+          python3 - <<'PY_LAYOUT'
+          import json, os
+          from pathlib import Path
+          metadata = json.loads((Path(os.environ['RUNNER_TEMP']) / 'xscc-metadata.json').read_text())
+          root = Path(metadata['workspace_root']).resolve()
+          application = next(p for p in metadata['packages'] if p['name'] == 'rustdesk')
+          management = next(p for p in metadata['packages'] if p['name'] == 'xscc')
+          dependency = next(d for d in application['dependencies'] if d['name'] == 'xscc')
+          assert Path(application['manifest_path']).resolve() == root / 'Cargo.toml'
+          assert Path(management['manifest_path']).resolve() == root / 'crates/management/Cargo.toml'
+          assert Path(dependency['path']).resolve() == root / 'crates/management'
+          assert dependency['source'] is None
+          assert management['id'] in metadata['workspace_members']
+          PY_LAYOUT
+  library:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          components: rustfmt,clippy
+      - run: cargo fmt -p xscc -- --check
+      - run: cargo clippy --locked -p xscc --all-targets -- -D warnings
+      - run: cargo test --locked -p xscc

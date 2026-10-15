@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "repository": "https://github.com/isarmg/rustdesk.git",
+  "branch": "streaming-foundation",
+  "commit": "8f7f6e6a2708d96a9d19ef7af56c7c4dee3c9d0a",
+  "tree": "c40dea713051fd0877969e8360a8b978064ce25f",
+  "integration": "independent-source-copy",
+  "application_path": ".",
+  "management_path": "crates/management",
+  "preserve_source_history": false
+}

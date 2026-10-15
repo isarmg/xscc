@@ -1,6 +1,6 @@
 # RustDesk 稳定后才执行的工作
 
-本分支仅准备嵌入式管理合同。当前未连接真实 RustDesk，不提供可部署的宿主插件或安装包。
+本分支已将 streaming-foundation 的原生应用源码归并到 xscc 根目录，注册和受保护绑定存储基础通过 `crates/management` 使用管理库。完整管理任务生命周期、列表授权和原生会话执行尚未接通；源码整合不代表已经完成各平台部署验收。
 
 接入前记录 RustDesk 精确 revision、Rust/Flutter 工具链和固定依赖；先完成 Windows 主机/观看端构建与正常串流、音频、输入、重连验证，再评估 Wayland/macOS。
 

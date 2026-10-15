@@ -1,0 +1,43 @@
+def legacyPluginNamespaces = [
+    external_path: 'com.pinciat.external_path',
+    flutter_keyboard_visibility: 'com.jrai.flutter_keyboard_visibility',
+    uni_links: 'name.avioli.unilinks',
+]
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+rootProject.buildDir = '../build'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    def legacyNamespace = legacyPluginNamespaces[project.name]
+    if (legacyNamespace != null) {
+        project.plugins.withId('com.android.library') {
+            project.android.namespace = legacyNamespace
+        }
+    }
+    // JDK 27 no longer accepts Java 8 output; align Java and Kotlin in plugins too.
+    project.afterEvaluate {
+        if (project.extensions.findByName('android') != null) {
+            project.android.compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+            project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile).configureEach {
+                compilerOptions.jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            }
+        }
+    }
+}
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

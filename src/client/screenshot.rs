@@ -1,0 +1,131 @@
+use hbb_common::ResultType;
+use std::sync::Mutex;
+
+lazy_static::lazy_static! {
+    static ref SCREENSHOT: Mutex<Screenshot> = Default::default();
+}
+
+pub enum ScreenshotAction {
+    SaveAs(String),
+    Discard,
+}
+
+impl Default for ScreenshotAction {
+    fn default() -> Self {
+        Self::Discard
+    }
+}
+
+impl From<&str> for ScreenshotAction {
+    fn from(value: &str) -> Self {
+        match value.chars().next() {
+            Some('0') => {
+                if let Some((pos, _)) = value.char_indices().nth(2) {
+                    let substring = &value[pos..];
+                    Self::SaveAs(substring.to_string())
+                } else {
+                    Self::default()
+                }
+            }
+            Some('2') => Self::default(),
+            _ => Self::default(),
+        }
+    }
+}
+
+impl Into<String> for ScreenshotAction {
+    fn into(self) -> String {
+        match self {
+            Self::SaveAs(p) => format!("0:{p}"),
+            Self::Discard => "2".to_owned(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Screenshot {
+    data: Option<bytes::Bytes>,
+}
+
+impl Screenshot {
+    fn set_screenshot(&mut self, data: bytes::Bytes) {
+        self.data.replace(data);
+    }
+
+    fn handle_screenshot(&mut self, action: String) -> String {
+        let Some(data) = self.data.as_ref().cloned() else {
+            return "No cached screenshot".to_owned();
+        };
+        match Self::handle_screenshot_(data, action) {
+            Ok(()) => {
+                self.data = None;
+                "".to_owned()
+            }
+            Err(e) => e.to_string(),
+        }
+    }
+
+    fn handle_screenshot_(data: bytes::Bytes, action: String) -> ResultType<()> {
+        if action == "1" {
+            hbb_common::bail!("Image clipboard is not supported");
+        }
+        match ScreenshotAction::from(&action as &str) {
+            ScreenshotAction::SaveAs(p) => {
+                std::fs::write(p, data)?;
+            }
+            ScreenshotAction::Discard => {}
+        }
+        Ok(())
+    }
+}
+
+pub fn set_screenshot(data: bytes::Bytes) {
+    SCREENSHOT.lock().unwrap().set_screenshot(data);
+}
+
+pub fn handle_screenshot(action: String) -> String {
+    SCREENSHOT.lock().unwrap().handle_screenshot(action)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Screenshot;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn removed_copy_action_preserves_the_screenshot_for_saving() {
+        let mut screenshot = Screenshot {
+            data: Some(bytes::Bytes::from_static(b"screenshot data")),
+        };
+        assert!(!screenshot.handle_screenshot("1".to_owned()).is_empty());
+        assert!(screenshot.data.is_some());
+    }
+
+    #[test]
+    fn preserves_cached_screenshot_when_save_fails() {
+        let data = bytes::Bytes::from_static(b"screenshot data");
+        let mut screenshot = Screenshot {
+            data: Some(data.clone()),
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let missing_parent = std::env::temp_dir()
+            .join(format!("rustdesk-screenshot-missing-parent-{unique}"))
+            .join("screenshot.png");
+        let valid_path = std::env::temp_dir().join(format!("rustdesk-screenshot-{unique}.png"));
+
+        let error = screenshot.handle_screenshot(format!("0:{}", missing_parent.display()));
+
+        assert!(!error.is_empty());
+        assert_eq!(screenshot.data.as_deref(), Some(data.as_ref()));
+        assert_eq!(
+            screenshot.handle_screenshot(format!("0:{}", valid_path.display())),
+            ""
+        );
+        assert!(screenshot.data.is_none());
+        assert_eq!(std::fs::read(&valid_path).unwrap(), data.as_ref());
+        std::fs::remove_file(valid_path).unwrap();
+    }
+}
