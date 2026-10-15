@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 
 class ManagedHosts extends StatefulWidget {
   const ManagedHosts({super.key});
@@ -35,7 +36,9 @@ class _ManagedHostsState extends State<ManagedHosts> {
     final result = jsonDecode(
       await bind.mainManagedRequest(request: jsonEncode(request)),
     ) as Map<String, dynamic>;
-    if (result['error'] != null) throw Exception(result['error']);
+    if (result['error'] != null) {
+      throw Exception(result['error']);
+    }
     return result['value'];
   }
 
@@ -44,17 +47,19 @@ class _ManagedHostsState extends State<ManagedHosts> {
     _polling = true;
     try {
       final status = await _request({'type': 'status'}) as Map<String, dynamic>;
-      if (mounted)
+      if (mounted) {
         setState(() {
           _status = status;
           _error = null;
         });
+      }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _status = null;
           _error = '$error';
         });
+      }
     } finally {
       _polling = false;
     }
@@ -255,8 +260,9 @@ class _ManagedSettingsState extends State<_ManagedSettings> {
           })
           .toList();
       if (addresses.length > 4) throw const FormatException('最多填写 4 个连接地址');
-      if (!_configured && _code.text.trim().isEmpty)
+      if (!_configured && _code.text.trim().isEmpty) {
         throw const FormatException('请输入实例授权码');
+      }
       Navigator.pop(
         context,
         _code.text.trim().isNotEmpty || !_configured
