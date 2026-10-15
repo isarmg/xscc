@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, macos-15]
+        os: [ubuntu-24.04, windows-2025, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -51,3 +51,36 @@ jobs:
       - run: cargo fmt -p xscc -p xscc-native-management -- --check
       - run: cargo clippy --locked -p xscc -p xscc-native-management --all-targets -- -D warnings
       - run: cargo test --locked -p xscc -p xscc-native-management
+  mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: aarch64-linux-android
+          - os: macos-26
+            target: aarch64-apple-ios
+    runs-on: ${{ matrix.os }}
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        if: matrix.target == 'aarch64-linux-android'
+        id: ndk
+        with:
+          ndk-version: r30
+      - name: Configure Android C compiler
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          echo "CC_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+      - run: cargo clippy --locked -p xscc -p xscc-native-management --target ${{ matrix.target }} --all-targets -- -D warnings

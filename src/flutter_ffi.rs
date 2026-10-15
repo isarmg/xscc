@@ -27,23 +27,29 @@ use std::{
 pub type SessionID = uuid::Uuid;
 
 pub fn main_managed_available() -> SyncReturn<bool> {
-    SyncReturn(cfg!(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    start_option_status_sync();
+    SyncReturn(cfg!(feature = "managed"))
 }
 
-pub async fn main_managed_request(request: String) -> String {
-    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+pub fn main_managed_initialize(directory: String) -> String {
+    #[cfg(all(feature = "managed", any(target_os = "android", target_os = "ios")))]
     {
-        let result = async {
-            if request.len() > 8192 { hbb_common::bail!("Management request is too large"); }
-            let request: crate::management::Request = serde_json::from_str(&request)?;
-            crate::management::rpc(request).await
-        }.await;
-        return match result {
-            Ok(value) => serde_json::json!({"value":value}).to_string(),
+        return match crate::management::initialize_mobile(directory) {
+            Ok(()) => "{}".into(),
             Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
         };
     }
-    #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+    #[cfg(not(all(feature = "managed", any(target_os = "android", target_os = "ios"))))]
+    { let _ = directory; "{}".into() }
+}
+
+pub fn main_managed_request(request: String) -> String {
+    #[cfg(feature = "managed")]
+    {
+        return crate::management::request_from_ui(request);
+    }
+    #[cfg(not(feature = "managed"))]
     {
         let _ = request;
         r#"{"error":"Native management is unavailable in this build"}"#.into()

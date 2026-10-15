@@ -311,18 +311,23 @@ class _ManagedSettingsState extends State<_ManagedSettings> {
                 decoration: const InputDecoration(labelText: '实例授权码'),
               ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _addresses,
-              minLines: 2,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: '被控端连接地址',
-                hintText: 'host.example.com:21118',
-                helperText: '每行一个，最多 4 个。留空则自动上报本机地址。',
+            if (isDesktop)
+              TextField(
+                controller: _addresses,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: '被控端连接地址',
+                  hintText: 'host.example.com:21118',
+                  helperText: '每行一个，最多 4 个。留空则自动上报本机地址。',
+                ),
               ),
-            ),
             const SizedBox(height: 12),
-            const Text('实例角色和允许连接的主机由服务端网页设置。画面、编码和硬件选项在控制端会话内选择。'),
+            Text(
+              isDesktop
+                  ? '实例角色和允许连接的主机由服务端网页设置。画面、编码和硬件选项在控制端会话内选择。'
+                  : '请绑定控制端实例。允许连接的被控主机在服务端网页设置。',
+            ),
             if (_error != null)
               Text(
                 _error!,

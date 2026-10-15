@@ -7040,6 +7040,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite 0.30.0",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -8784,7 +8785,7 @@ dependencies = [
 [[package]]
 name = "xscs-protocol"
 version = "2.0.0-dev"
-source = "git+https://github.com/isarmg/xscs.git?rev=b07460b4f83d97b222212d62c28a5c330ad0a3e5#b07460b4f83d97b222212d62c28a5c330ad0a3e5"
+source = "git+https://github.com/isarmg/xscs.git?rev=e57cdaad4c701aef63afacf1b200c48011358603#e57cdaad4c701aef63afacf1b200c48011358603"
 dependencies = [
  "hex",
  "schemars",

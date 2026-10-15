@@ -930,6 +930,8 @@ pub fn get_login_device_info_json() -> String {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::main(flavor = "current_thread")]
 async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc::Data>) {
+    #[cfg(feature = "managed")]
+    crate::management::attach_ui_runtime();
     #[cfg(not(feature = "flutter"))]
     let mut key_confirmed = false;
     let mut rx = rx;

@@ -1,4 +1,6 @@
-use super::{owner, rpc, Request, SessionPermit, MANAGER};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use super::{owner, MANAGER};
+use super::{rpc, Request, SessionPermit};
 use crate::client::{Client, Interface};
 use hbb_common::{
     anyhow::Context,
@@ -9,6 +11,7 @@ use hbb_common::{
     tcp::FramedStream,
     ResultType,
 };
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use xscc::protocol::InstanceRole;
 use xscc_native_management::{
     manager::Target,
@@ -29,6 +32,7 @@ async fn receive(stream: &mut Stream) -> ResultType<WireMessage> {
     Ok(serde_json::from_slice(&packet)?)
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn accept(
     stream: &mut Stream,
     host_key: &[u8],

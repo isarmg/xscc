@@ -32,6 +32,8 @@ pub enum EnrollmentError {
     BindingMismatch,
     #[error("invalid management response")]
     Protocol,
+    #[error("this platform supports controller instances only")]
+    RoleUnsupported,
 }
 
 type Result<T> = std::result::Result<T, EnrollmentError>;
@@ -170,6 +172,11 @@ impl EnrollmentClient {
             return Err(EnrollmentError::ExistingBinding);
         }
         let pairing = self.pairing(authorization_code).await?;
+        if cfg!(any(target_os = "android", target_os = "ios"))
+            && pairing.role != Some(protocol::InstanceRole::Controller)
+        {
+            return Err(EnrollmentError::RoleUnsupported);
+        }
         let mut random = Zeroizing::new([0u8; 32]);
         SysRng
             .try_fill_bytes(random.as_mut())
@@ -329,6 +336,8 @@ struct PairingRequest<'a> {
 struct Pairing {
     manager_id: Uuid,
     device_id: Uuid,
+    #[serde(default)]
+    role: Option<protocol::InstanceRole>,
 }
 #[derive(Serialize)]
 struct EnrollmentRequest<'a> {

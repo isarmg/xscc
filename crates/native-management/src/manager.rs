@@ -249,6 +249,9 @@ impl NativeManager {
         })
     }
     pub fn grant(&self, permit: &SessionPermit, role: InstanceRole) -> Result<SessionKey> {
+        if cfg!(any(target_os = "android", target_os = "ios")) && role != InstanceRole::Controller {
+            return Err(Error::Denied);
+        }
         let policy = self.policy().ok_or(Error::Unavailable)?;
         let (own, other) = if role == InstanceRole::Controller {
             (&permit.controller, &permit.controlled)
@@ -510,6 +513,10 @@ fn capabilities() -> Result<Capabilities> {
         ClientOs::WindowsX86_64
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         ClientOs::MacosAarch64
+    } else if cfg!(all(target_os = "ios", target_arch = "aarch64")) {
+        ClientOs::IosAarch64
+    } else if cfg!(all(target_os = "android", target_arch = "aarch64")) {
+        ClientOs::AndroidAarch64
     } else {
         return Err(Error::Unavailable);
     };

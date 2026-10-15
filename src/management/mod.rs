@@ -2,29 +2,74 @@
 pub use xscc_native_management::{binding_store as store, enrollment};
 
 mod transport;
-pub(crate) use transport::{accept, check_controller, connect};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) use transport::accept;
+pub(crate) use transport::{check_controller, connect};
+#[cfg(any(target_os = "android", target_os = "ios"))]
+mod mobile;
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) use mobile::start_runtime as initialize_mobile;
 pub use xscc_native_management::{
     manager::{Reply, Request},
     session::SessionPermit,
 };
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use async_trait::async_trait;
-use hbb_common::{bail, log, tokio, ResultType};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use hbb_common::log;
+use hbb_common::{bail, tokio, ResultType};
 use std::sync::{Arc, OnceLock};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use xscc::{
     host::{HostError, RustDeskHost},
     protocol::{
         Backend, DiagnosticSnapshot, ExecutionMode, HostAddress, InstanceRole, IntegrationState,
     },
 };
+#[cfg(any(target_os = "android", target_os = "ios"))]
+use xscc_native_management::manager::NativeManager;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use xscc_native_management::{
     manager::{NativeHost, NativeManager},
     private_fs::default_directory,
 };
 
 static MANAGER: OnceLock<Result<Arc<NativeManager>, ()>> = OnceLock::new();
+static UI_RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 
+pub(crate) fn attach_ui_runtime() {
+    let _ = UI_RUNTIME.set(tokio::runtime::Handle::current());
+}
+
+// FRB 1.x runs normal exports on worker threads and does not await Rust futures.
+pub(crate) fn request_from_ui(input: String) -> String {
+    let reply = |error: &str| serde_json::json!({"error":error}).to_string();
+    if input.len() > 8192 {
+        return reply("Management request is too large");
+    }
+    let Ok(request) = serde_json::from_str::<Request>(&input) else {
+        return reply("Invalid management request");
+    };
+    let Some(runtime) = UI_RUNTIME.get() else {
+        return reply("Native management runtime is initializing");
+    };
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn(async move {
+        let value = match rpc(request).await {
+            Ok(value) => serde_json::json!({"value":value}).to_string(),
+            Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
+        };
+        let _ = sender.send(value);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(55))
+        .unwrap_or_else(|_| reply("Native management request timed out"))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 struct Host;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[async_trait]
 impl RustDeskHost for Host {
     async fn diagnostics(&self) -> Result<DiagnosticSnapshot, HostError> {
@@ -40,6 +85,7 @@ impl RustDeskHost for Host {
         })
     }
 }
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[async_trait]
 impl NativeHost for Host {
     async fn addresses(&self, configured: &[HostAddress]) -> Vec<HostAddress> {
@@ -82,6 +128,7 @@ impl NativeHost for Host {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn start() {
     let opened = tokio::task::spawn_blocking(|| {
         NativeManager::open(default_directory().map_err(|_| ())?, Arc::new(Host)).map_err(|_| ())
@@ -111,6 +158,7 @@ fn owner() -> ResultType<&'static Arc<NativeManager>> {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn permits_host(permit: Option<&SessionPermit>) -> bool {
     if MANAGER.get().is_none() {
         return permit.is_none();
@@ -123,6 +171,7 @@ pub(crate) fn permits_host(permit: Option<&SessionPermit>) -> bool {
     })
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn shutdown() {
     if let Ok(manager) = owner() {
         if let Err(error) = manager.shutdown().await {
@@ -131,6 +180,7 @@ pub(crate) async fn shutdown() {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn handle(request: Request) -> Reply {
     match owner() {
         Ok(manager) => manager.handle(request).await,
@@ -138,6 +188,7 @@ pub(crate) async fn handle(request: Request) -> Reply {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
     let timeout = if matches!(
         &request,
@@ -157,5 +208,15 @@ pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
             _ => bail!("Invalid management response"),
         },
         _ => bail!("Native management response unavailable"),
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
+    let reply = owner()?.handle(request).await;
+    match (reply.value, reply.error) {
+        (Some(value), None) => Ok(value),
+        (_, Some(error)) => bail!("{error}"),
+        _ => bail!("Invalid management response"),
     }
 }

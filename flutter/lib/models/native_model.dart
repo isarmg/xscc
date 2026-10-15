@@ -237,6 +237,11 @@ class PlatformFFI {
         appDir: _dir,
         customClientConfig: '',
       );
+      if ((isAndroid || isIOS) && _ffiBind.mainManagedAvailable()) {
+        final storage = await getApplicationSupportDirectory();
+        await storage.create(recursive: true);
+        await _ffiBind.mainManagedInitialize(directory: storage.path);
+      }
     } catch (e) {
       debugPrintStack(label: 'initialize failed: $e');
     }

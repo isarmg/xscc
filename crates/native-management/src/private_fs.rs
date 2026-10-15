@@ -128,7 +128,11 @@ mod platform {
     }
     pub fn check_parent(path: &Path) -> io::Result<()> {
         let m = fs::symlink_metadata(path)?;
-        if !m.is_dir() || m.uid() != uid() || m.mode() & 0o022 != 0 {
+        let writable = m.mode() & 0o022;
+        let safe_group = cfg!(any(target_os = "android", target_os = "ios"))
+            && writable == 0o020
+            && m.gid() == unsafe { libc::getegid() };
+        if !m.is_dir() || m.uid() != uid() || (writable != 0 && !safe_group) {
             return Err(invalid());
         }
         Ok(())

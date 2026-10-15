@@ -111,14 +111,14 @@ impl<T: InvokeUiSession> Remote<T> {
         }
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
-        #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(feature = "managed")]
         let (result, managed_permit) = match crate::management::connect(
             &self.handler.get_id(), conn_type, self.handler.clone(),
         ).await {
             Ok((stream, key, kind, permit)) => (Ok((stream, key, kind)), permit),
             Err(error) => (Err(error), None),
         };
-        #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+        #[cfg(not(feature = "managed"))]
         let result = Client::start(
             &self.handler.get_id(),
             conn_type,
@@ -136,9 +136,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 let is_secured = peer.is_secured();
                 self.handler
                     .set_connection_type(is_secured, direct, stream_type); // flutter -> connection_ready
-                #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                #[cfg(feature = "managed")]
                 let identity_verified = managed_permit.is_some();
-                #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+                #[cfg(not(feature = "managed"))]
                 let identity_verified = false;
                 if !is_secured || (!identity_verified && !client::confirm_direct_identity(
                     &self.handler, &mut self.receiver, &pk,
@@ -207,7 +207,7 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         _ = status_timer.tick() => {
-                            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                            #[cfg(feature = "managed")]
                             if !crate::management::check_controller(managed_permit.as_ref()).await {
                                 self.send_close_reason(&mut peer, "Management authorization expired").await;
                                 self.handler.on_establish_connection_error("Management authorization expired".to_owned());
