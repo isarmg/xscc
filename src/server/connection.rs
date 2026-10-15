@@ -268,6 +268,8 @@ pub struct Connection {
     timer: crate::RustDeskInterval,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    managed_permit: Option<crate::management::SessionPermit>,
     // The place among the unauthorized connections; given back at authorization.
     unauthorized_id: Option<UnauthorizedID>,
     require_2fa: Option<totp_rs::TOTP>,
@@ -432,6 +434,8 @@ impl Connection {
             timer: crate::rustdesk_interval(time::interval(SEC30)),
             tx_to_cm,
             authorized: false,
+            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+            managed_permit: meta.managed_permit,
             unauthorized_id: Some(unauthorized),
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
@@ -789,6 +793,12 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                    if !crate::management::permits_host(conn.managed_permit.as_ref()) {
+                        conn.send_close_reason_no_retry("Management authorization expired").await;
+                        conn.on_close("management authorization expired", true).await;
+                        break;
+                    }
                     #[cfg(windows)]
                     conn.portable_check();
                     raii::AuthedConnID::check_wake_lock_on_setting_changed();
@@ -1876,7 +1886,11 @@ impl Connection {
             }
             self.stream.set_send_timeout(SEND_TIMEOUT_VIDEO);
 
-            if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id()
+            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+            let managed_target = self.managed_permit.as_ref().is_some_and(|permit| lr.username == format!("managed:{}", permit.controlled.device_id));
+            #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+            let managed_target = false;
+            if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id() && !managed_target
             {
                 self.send_login_error(LOGIN_MSG_OFFLINE)
                     .await;

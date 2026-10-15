@@ -10,7 +10,7 @@ compile_error!("Supported targets: Windows/Linux x86_64 and macOS/iOS/Android AR
 #[cfg(any(test, not(target_os = "linux")))]
 mod audio_resampler;
 mod keyboard;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
 pub mod management;
 /// cbindgen:ignore
 pub mod platform;

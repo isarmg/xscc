@@ -74,6 +74,8 @@ type ConnMap = HashMap<i32, ConnInner>;
 pub struct ConnectionMeta {
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    pub managed_permit: Option<crate::management::SessionPermit>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -162,6 +164,17 @@ pub async fn create_tcp_connection(
     if !stream.is_secured() {
         bail!("Encrypted direct handshake is required");
     }
+
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    let meta = {
+        let mut meta = meta;
+        meta.managed_permit = tokio::select! {
+            result = crate::management::accept(&mut stream, &signing_public) => result?,
+            _ = unauthorized.evicted() => bail!("Unauthenticated connection evicted"),
+        };
+        stream.set_max_packet_length(MAX_UNAUTHORIZED_MESSAGE);
+        meta
+    };
 
     #[cfg(target_os = "macos")]
     {
@@ -449,6 +462,8 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         crate::platform::try_kill_broker();
         #[cfg(feature = "hwcodec")]
         scrap::hwcodec::start_check_process();
+        #[cfg(feature = "managed")]
+        crate::management::start().await;
         crate::DirectServer::start_all().await;
     } else {
         match crate::ipc::connect(1000, "").await {

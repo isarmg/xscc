@@ -17,6 +17,7 @@ on:
   push:
     branches:
       - master
+      - feat/management-prep
     paths-ignore:
       - ".github/**"
       - "docs/**"

@@ -5,19 +5,20 @@
 ```text
 xscc/
   Cargo.toml / Cargo.lock     统一的原生应用工作区
-  src/                       原生应用，包括 management 注册/存储基础
+  src/                       原生应用，包括 management 进程适配层
   libs/                      共享协议、直接传输、捕获等
   flutter/                   原生应用 UI
   crates/management/
     Cargo.toml               包名 xscc，Apache-2.0
     src/ / tests/             已有内嵌管理库与测试
+  crates/native-management/   原生管理生命周期、存储和会话证明
   .github/workflows/         应用构建和管理库验证
   LICENCE                    来源应用许可证
 ```
 
 应用的 Cargo 包名仍为 `rustdesk`，避免改变原生桥接、打包和平台工程现有约定。其 xscc 依赖指向 `crates/management`，不再从 GitHub 获取另一份管理库。根目录工作区和 Cargo.lock 同时包含应用与管理库；公共管理协议继续固定 xscs 的 Git revision。
 
-本轮只做代码归并、路径和构建清单适配，不更改原生运行行为。来源快照已有的直接加密传输、主控串流偏好、注册和受保护绑定存储基础保留；完整管理任务生命周期、授权列表接入和原生会话执行仍按验收计划推进。硬件、编码、画质等设置由主控端选择。
+首次归并提交 `f8458ed` 只做代码归并、路径和构建清单适配，不更改原生运行行为。来源快照已有的直接加密传输、主控串流偏好、注册和受保护绑定存储基础保留；完整管理任务生命周期、授权列表接入和原生会话执行仍按验收计划推进。硬件、编码、画质等设置由主控端选择。
 
 ## 验证与构建
 
@@ -40,7 +41,7 @@ cargo test --locked -p base --lib
 
 应用原有 README 保存在 `docs/upstream-rustdesk-README.md`，许可证和第三方声明保留原样。`rustdesk-source.json` 是一次性来源归属记录，不包含后续同步或构建依赖。
 
-## 本轮变更范围
+## 首次归并变更范围
 
 - `Cargo.toml`：将应用的 xscc Git 依赖改为 `crates/management` 路径，并把管理库加入工作区，保证同仓库版本一起构建。
 - `Cargo.lock`：统一应用和管理库锁定依赖，去除外部 xscc 源记录，纳入管理库测试依赖；async-trait 对齐管理库原先的 0.1.92，以通过 Rust 1.99 严格 Clippy。
@@ -49,4 +50,4 @@ cargo test --locked -p base --lib
 - 原管理库 `src/`、`tests/`、`Cargo.toml`、`LICENSE-APACHE` 移到 `crates/management/`，运行逻辑和测试内容不变。
 - README、来源记录和管理库开发/验收文档随目录变更更新，来源应用 README 原样保存。
 
-未改动原生应用运行代码、管理库运行代码或原生运行路径的行为；本次不新增会话鉴权、串流选项或硬件控制功能。
+以上描述首次归并提交。后续桌面管理接入已完成生命周期、列表和会话证明，具体路径及回归范围见 [原生管理接入](native-management.md)。硬件和串流选项仍由原生控制端选择。

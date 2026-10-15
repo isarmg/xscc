@@ -1,4 +1,4 @@
-name: Embedded management library
+name: Native management
 on:
   push:
     branches: [main, feat/management-prep]
@@ -48,6 +48,6 @@ jobs:
         with:
           toolchain: 1.99.0
           components: rustfmt,clippy
-      - run: cargo fmt -p xscc -- --check
-      - run: cargo clippy --locked -p xscc --all-targets -- -D warnings
-      - run: cargo test --locked -p xscc
+      - run: cargo fmt -p xscc -p xscc-native-management -- --check
+      - run: cargo clippy --locked -p xscc -p xscc-native-management --all-targets -- -D warnings
+      - run: cargo test --locked -p xscc -p xscc-native-management

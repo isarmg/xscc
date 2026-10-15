@@ -21,7 +21,8 @@ use_samplerate = ["samplerate", "libsamplerate-sys"]
 use_rubato = ["rubato"]
 use_dasp = ["dasp"]
 flutter = ["flutter_rust_bridge"]
-default = ["use_dasp", "flutter"]
+default = ["use_dasp", "flutter", "managed"]
+managed = ["dep:xscc-native-management"]
 hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
 mediacodec = ["scrap/mediacodec"]
@@ -83,6 +84,7 @@ ringbuf = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 xscc = { path = "crates/management", version = "=2.0.0-dev" }
+xscc-native-management = { path = "crates/native-management", optional = true }
 zeroize = "1.9.1"
 mac_address = "1.1"
 sys-locale = "0.3"
@@ -193,7 +195,7 @@ android_logger = "0.13"
 jni = "0.21"
 
 [workspace]
-members = ["crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
+members = ["crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
 exclude = ["vdi/host"]
 
 [patch.crates-io]

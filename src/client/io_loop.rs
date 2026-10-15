@@ -111,13 +111,21 @@ impl<T: InvokeUiSession> Remote<T> {
         }
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
-        match Client::start(
+        #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+        let (result, managed_permit) = match crate::management::connect(
+            &self.handler.get_id(), conn_type, self.handler.clone(),
+        ).await {
+            Ok((stream, key, kind, permit)) => (Ok((stream, key, kind)), permit),
+            Err(error) => (Err(error), None),
+        };
+        #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+        let result = Client::start(
             &self.handler.get_id(),
             conn_type,
             self.handler.clone(),
         )
-        .await
-        {
+        .await;
+        match result {
             Ok((mut peer, pk, stream_type)) => {
                 let direct = true;
                 self.handler
@@ -128,9 +136,13 @@ impl<T: InvokeUiSession> Remote<T> {
                 let is_secured = peer.is_secured();
                 self.handler
                     .set_connection_type(is_secured, direct, stream_type); // flutter -> connection_ready
-                if !is_secured || !client::confirm_direct_identity(
+                #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                let identity_verified = managed_permit.is_some();
+                #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+                let identity_verified = false;
+                if !is_secured || (!identity_verified && !client::confirm_direct_identity(
                     &self.handler, &mut self.receiver, &pk,
-                ).await {
+                ).await) {
                     self.send_close_reason(&mut peer, "Device identity was not trusted").await;
                     self.handle_disconnected(round);
                     return;
@@ -195,6 +207,12 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         _ = status_timer.tick() => {
+                            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                            if !crate::management::check_controller(managed_permit.as_ref()).await {
+                                self.send_close_reason(&mut peer, "Management authorization expired").await;
+                                self.handler.on_establish_connection_error("Management authorization expired".to_owned());
+                                break;
+                            }
                             if self.handler.is_restarting_remote_device()
                                 && last_recv_time.elapsed() >= RESTART_REMOTE_DEVICE_NO_DATA_TIMEOUT
                             {

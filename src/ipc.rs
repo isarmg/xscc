@@ -61,6 +61,8 @@ use ipc_auth::{
     should_allow_everyone_create_on_windows,
 };
 pub(crate) use ipc_auth::verify_management_service_peer;
+#[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+pub(crate) use ipc_auth::verify_managed_owner;
 #[cfg(target_os = "linux")]
 pub(crate) use ipc_auth::{
     ensure_peer_executable_matches_current_by_fd, is_allowed_service_peer_uid,
@@ -214,6 +216,10 @@ pub enum DataPortableService {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum Data {
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    Managed(crate::management::Request),
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    ManagedReply(crate::management::Reply),
     Login {
         id: i32,
 
@@ -590,6 +596,13 @@ impl Drop for CheckIfRestart {
 
 async fn handle(data: Data, stream: &mut Connection) {
     match data {
+        #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+        Data::Managed(request) => {
+            let reply = if ipc_auth::authorize_managed_client(stream).is_ok() {
+                crate::management::handle(request).await
+            } else { crate::management::Reply::error("Management IPC identity verification failed") };
+            allow_err!(stream.send(&Data::ManagedReply(reply)).await);
+        }
         Data::SystemInfo(_) => {
             let info = format!(
                 "log_path: {}, config: {}, username: {}",
@@ -609,6 +622,8 @@ async fn handle(data: Data, stream: &mut Connection) {
             allow_err!(stream.send(&Data::MouseMoveTime(t)).await);
         }
         Data::Close => {
+            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+            crate::management::shutdown().await;
             log::info!("Receive close message");
             if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
                 #[cfg(not(target_os = "android"))]

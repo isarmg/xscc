@@ -16,18 +16,18 @@ xscc 是 RustDesk 的库依赖，不是独立 agent。`xscs_protocol` 通过 `xs
 
 通过 `Capabilities` 声明 `backend = rustdesk`、`execution_mode = embedded` 和实际平台。构建 `Executor::new_with_capabilities(binding, capabilities, native_host, native_journal)` 并持有 `Arc`。
 
-`ManagerConnection::new` 只接受受保护绑定配置中的 WSS 地址和独立 credential。调用其异步 `run(binding, capabilities, executor, health_receiver, shutdown_receiver)`；宿主用 HealthObservation 上报带采集时间的诊断观察与 addresses（IP/域名及端口）。只给被控端上报真实可连接地址，最多四个；控制端始终发送空地址数组。观察超过 30 秒后撤回地址，正常心跳每 15 秒上报一次，服务端在 45 秒或离线后停止向控制端提供旧地址。无须新的 runtime、独立服务、IPC 或 Flutter bridge。
+`ManagerConnection::new` 只接受受保护绑定配置中的 WSS 地址和独立 credential。调用其异步 `run(binding, capabilities, executor, health_receiver, shutdown_receiver)`；宿主用 HealthObservation 上报带采集时间的诊断观察与 addresses（IP/域名及端口）。只给被控端上报真实可连接地址，最多四个；控制端始终发送空地址数组。观察超过 30 秒后撤回地址，正常心跳每 15 秒上报一次，服务端在 45 秒或离线后停止向控制端提供旧地址。无须新的 runtime 或独立服务。桌面 GUI 通过已有原生 IPC 与管理后台交互。
 
 当前合同只允许 `ReadDiagnostics`；结果在宿主 journal 中先持久化，Server 提交后返回指纹与报告摘要，校验后才能压缩。WSS 中断不会取消已开始的执行，重连补交同一结果。RustDesk 的配置、对等连接认证和媒体链路继续由 RustDesk 自己持有。
 
-本分支不提供 enrollment UI、平台存储实现或 RustDesk 启动 hook；这些必须在稳定版本集成时实现并通过原生验收。
+桌面原生宿主的具体实现位于 `crates/native-management` 和 `src/management`，包含 enrollment UI、平台存储和启动/正常关闭 hook，见 [原生管理接入](native-management.md)。`crates/management` 继续独立于媒体实现。
 
 ## 控制权限观察
 
 在调用 run() 前订阅 `let policy = connection.access_policy();`。服务端在 Hello 后及每 5 秒更新自己的角色与直接授权对端；控制端看到获准控制的被控端及最新地址，被控端看到获准接入的控制端。HTTP `/xscc/v2/access` 也可使用已绑定的 Bearer 凭据获取同样的快照；不要使用管理员会话。
 
-宿主通过 `policy.borrow().as_ref().and_then(|observation| observation.policy())` 获取当前仍在租约内的列表，或用 `AccessObservation::permits(&peer_binding)` 检查已认证的完整安装绑定。每次使用都必须检查；不能缓存一次 true 作为永久许可。30 秒租约使用单调时钟，断线、撤销和退出清空观察，过期副本也返回无效。列表不含凭据，默认无授权，未绑定和已撤销实例不下发。授权在实例两侧是同一份关系，实例更换凭据后安装绑定更新。
+宿主通过 `policy.borrow().as_ref().and_then(|observation| observation.policy())` 获取当前仍在租约内的列表，或用 `AccessObservation::permits(&peer_binding)` 检查已认证的完整安装绑定。每次使用都必须检查；不能缓存一次 true 作为永久许可。30 秒租约使用单调时钟，断线、撤销和退出清空观察，过期副本也返回无效。策略含后台专用的配对证明密钥，不能直接传给 GUI；默认无授权，未绑定和已撤销实例不下发。授权在实例两侧是同一份关系，实例更换凭据后安装绑定更新。
 
-管理授权不是原生会话身份证明。稳定后的 RustDesk 接入必须把加密验证的对端身份绑定到 manager_id/device_id/installation_id，不能信任来源 IP 或自报 UUID；拒绝无有效授权的新会话，并关闭被撤销的既有会话。本库不实现 RustDesk 的密钥证明、连接 hook 或会话强制关闭。
+原生管理适配层在已有加密握手之后验证双方的配对证明，绑定 manager_id/device_id/installation_id、随机数和实际主机公钥；拒绝无有效授权的新会话，并关闭被撤销的既有会话。`crates/management` 仅提供租约观察；具体证明和连接 hook 位于原生管理库及应用适配层。
 
 硬件设备、编码器、编码格式、画质、帧率由 RustDesk 主控端选择并与被控端协商，xscc 不接受服务端远程修改这些设置的任务。

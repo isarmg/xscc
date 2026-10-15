@@ -31,6 +31,37 @@ use windows::Win32::{
     System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId},
 };
 
+#[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+pub(crate) fn verify_managed_owner(stream: &ConnectionTmpl<parity_tokio_ipc::ConnectionClient>) -> ResultType<()> {
+    #[cfg(unix)]
+    {
+        if stream.peer_uid() != Some(unsafe { libc::geteuid() }) { bail!("Management owner UID mismatch"); }
+        ensure_peer_executable_matches_current_by_pid_opt(stream.peer_pid(), "")
+    }
+    #[cfg(windows)]
+    {
+        let mut pid = 0;
+        unsafe { GetNamedPipeServerProcessId(HANDLE(stream.inner.get_ref().as_raw_handle()), &mut pid) }?;
+        xscc_native_management::private_fs::verify_process_owner(pid)?;
+        ensure_peer_executable_matches_current_by_pid_opt(Some(pid), "")
+    }
+}
+
+#[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+pub(crate) fn authorize_managed_client(stream: &Connection) -> ResultType<()> {
+    #[cfg(unix)]
+    {
+        if stream.peer_uid() != Some(unsafe { libc::geteuid() }) { bail!("Management client UID mismatch"); }
+        ensure_peer_executable_matches_current_by_pid_opt(stream.peer_pid(), "")
+    }
+    #[cfg(windows)]
+    {
+        let pid = stream.peer_pid().ok_or_else(|| anyhow::anyhow!("Management client PID unavailable"))?;
+        xscc_native_management::private_fs::verify_process_owner(pid)?;
+        ensure_peer_executable_matches_current_by_pid_opt(Some(pid), "")
+    }
+}
+
 /// Verify the connected privileged owner before sending management credentials.
 /// This does not select an owner, authorize enrollment, or change ordinary IPC.
 pub(crate) fn verify_management_service_peer(

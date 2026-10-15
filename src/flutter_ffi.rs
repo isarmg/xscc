@@ -26,6 +26,30 @@ use std::{
 
 pub type SessionID = uuid::Uuid;
 
+pub fn main_managed_available() -> SyncReturn<bool> {
+    SyncReturn(cfg!(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))
+}
+
+pub async fn main_managed_request(request: String) -> String {
+    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    {
+        let result = async {
+            if request.len() > 8192 { hbb_common::bail!("Management request is too large"); }
+            let request: crate::management::Request = serde_json::from_str(&request)?;
+            crate::management::rpc(request).await
+        }.await;
+        return match result {
+            Ok(value) => serde_json::json!({"value":value}).to_string(),
+            Err(error) => serde_json::json!({"error":error.to_string()}).to_string(),
+        };
+    }
+    #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+    {
+        let _ = request;
+        r#"{"error":"Native management is unavailable in this build"}"#.into()
+    }
+}
+
 lazy_static::lazy_static! {
     static ref TEXTURE_RENDER_KEY: Arc<AtomicI32> = Arc::new(AtomicI32::new(0));
 }

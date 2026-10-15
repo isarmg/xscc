@@ -1,14 +1,12 @@
-use hbb_common::{
-    rand::{rngs::OsRng, RngCore},
-    thiserror,
-};
+use rand::{TryRng, rngs::SysRng};
 use reqwest::{
-    header::{HeaderValue, AUTHORIZATION},
-    redirect::Policy,
     Client, Response, StatusCode,
+    header::{AUTHORIZATION, HeaderValue},
+    redirect::Policy,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
+use thiserror;
 use url::Url;
 use uuid::Uuid;
 use xscc::protocol::{self, Binding};
@@ -173,7 +171,7 @@ impl EnrollmentClient {
         }
         let pairing = self.pairing(authorization_code).await?;
         let mut random = Zeroizing::new([0u8; 32]);
-        OsRng
+        SysRng
             .try_fill_bytes(random.as_mut())
             .map_err(|_| EnrollmentError::Unavailable)?;
         let saved = SavedBinding::restore(
@@ -226,6 +224,31 @@ impl EnrollmentClient {
             return Err(EnrollmentError::BindingMismatch);
         }
         self.submit(store, &saved, authorization_code).await
+    }
+
+    pub async fn unbind(&self, saved: &SavedBinding) -> Result<()> {
+        let raw = Zeroizing::new(format!("Bearer {}", saved.credential()));
+        let mut header =
+            HeaderValue::from_str(raw.as_str()).map_err(|_| EnrollmentError::Configuration)?;
+        header.set_sensitive(true);
+        let response = self
+            .http
+            .post(self.server.endpoint(protocol::UNBIND_PATH))
+            .header(AUTHORIZATION, header)
+            .send()
+            .await
+            .map_err(|_| EnrollmentError::Unavailable)?;
+        if response.status() == StatusCode::NO_CONTENT
+            || (response.status() == StatusCode::UNAUTHORIZED
+                && response
+                    .headers()
+                    .get("x-error-code")
+                    .is_some_and(|h| h.as_bytes() == b"unauthorized"))
+        {
+            Ok(())
+        } else {
+            Err(EnrollmentError::Rejected)
+        }
     }
 
     async fn load<S: BindingStore>(&self, store: &S) -> Result<SavedBinding> {

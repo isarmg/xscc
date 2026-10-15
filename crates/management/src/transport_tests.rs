@@ -274,6 +274,7 @@ fn permission_observations_expire_and_replacements_invalidate_copies() {
         peers: vec![AccessPeer {
             binding: peer.clone(),
             name: "Controller".into(),
+            session_key: SessionKey::from_bytes([7; 32]),
             role: InstanceRole::Controller,
             online: true,
             addresses: vec![],

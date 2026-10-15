@@ -21,7 +21,7 @@ tokio = { version = "~1.53.2", features = ["macros", "rt", "sync", "time", "net"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 url = "2"
 zeroize = "1.9.1"
-xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "2bf023c22a92783b85171be6e61014120bd480f3", version = "=2.0.0-dev" }
+xscs-protocol = { git = "https://github.com/isarmg/xscs.git", rev = "b07460b4f83d97b222212d62c28a5c330ad0a3e5", version = "=2.0.0-dev" }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }
