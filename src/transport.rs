@@ -4,7 +4,14 @@ use crate::{
     host::RustDeskHost,
 };
 use futures_util::{SinkExt, StreamExt, stream::FuturesUnordered};
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     net::TcpStream,
     sync::watch,
@@ -22,8 +29,9 @@ use tokio_tungstenite::{
 use url::Url;
 
 use xscs_protocol::{
-    Binding, Capabilities, ClientMessage, DiagnosticSnapshot, MAX_MESSAGE_BYTES, ManagerMessage,
-    Report, WEBSOCKET_SUBPROTOCOL, decode_manager_message,
+    AccessPolicy, Binding, Capabilities, ClientMessage, DiagnosticSnapshot, HostAddress,
+    InstanceRole, MAX_MESSAGE_BYTES, ManagerMessage, Report, WEBSOCKET_SUBPROTOCOL,
+    decode_manager_message,
 };
 use zeroize::Zeroizing;
 
@@ -73,7 +81,43 @@ pub enum TransportError {
 #[derive(Clone, Default)]
 pub struct HealthObservation {
     pub diagnostics: Option<DiagnosticSnapshot>,
+    pub addresses: Vec<HostAddress>,
     pub observed_at: Option<Instant>,
+}
+
+/// A connection-local permission lease. Every use must check freshness.
+#[derive(Clone)]
+pub struct AccessObservation {
+    policy: AccessPolicy,
+    received_at: Instant,
+    current: Arc<AtomicBool>,
+}
+impl AccessObservation {
+    pub fn policy(&self) -> Option<&AccessPolicy> {
+        (self.current.load(Ordering::Acquire)
+            && self.received_at.elapsed() < Duration::from_millis(self.policy.valid_for_ms))
+        .then_some(&self.policy)
+    }
+    /// `peer` must come from authenticated RustDesk peer identity, never its source IP.
+    pub fn permits(&self, peer: &Binding) -> bool {
+        self.policy()
+            .is_some_and(|policy| policy.peers.iter().any(|p| &p.binding == peer))
+    }
+}
+struct PolicySession<'a>(&'a watch::Sender<Option<AccessObservation>>);
+fn publish_policy(
+    sender: &watch::Sender<Option<AccessObservation>>,
+    next: Option<AccessObservation>,
+) {
+    if let Some(current) = sender.borrow().as_ref() {
+        current.current.store(false, Ordering::Release);
+    }
+    sender.send_replace(next);
+}
+impl Drop for PolicySession<'_> {
+    fn drop(&mut self) {
+        publish_policy(self.0, None);
+    }
 }
 
 /// The endpoint must come from protected local provisioning, never from an inbound task.
@@ -81,6 +125,7 @@ pub struct HealthObservation {
 pub struct ManagerConnection {
     endpoint: Url,
     credential: Zeroizing<String>,
+    access: watch::Sender<Option<AccessObservation>>,
 }
 
 impl ManagerConnection {
@@ -98,7 +143,14 @@ impl ManagerConnection {
         Ok(Self {
             endpoint,
             credential,
+            access: watch::channel(None).0,
         })
+    }
+
+    /// Subscribe before run(). Disconnect, revocation and shutdown clear this value.
+    /// A retained observation expires even when the receiver is no longer polled.
+    pub fn access_policy(&self) -> watch::Receiver<Option<AccessObservation>> {
+        self.access.subscribe()
     }
 
     async fn connect(&self) -> Result<Socket, TransportError> {
@@ -229,6 +281,8 @@ impl ManagerConnection {
         health: &watch::Receiver<HealthObservation>,
         execution: &mut ExecutionState,
     ) -> Result<(), TransportError> {
+        publish_policy(&self.access, None);
+        let _policy_session = PolicySession(&self.access);
         send(
             &mut socket,
             ClientMessage::Hello {
@@ -272,6 +326,10 @@ impl ManagerConnection {
                     match frame {
                         Message::Text(text) => match decode_manager_message(text.as_bytes()).map_err(|_| TransportError::Protocol)? {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
+                            ManagerMessage::AccessPolicy { policy } => {
+                                policy.validate(binding).map_err(|_| TransportError::Protocol)?;
+                                publish_policy(&self.access, Some(AccessObservation { policy: *policy, received_at: Instant::now(), current: Arc::new(AtomicBool::new(true)) }));
+                            }
                             ManagerMessage::ResultAccepted { operation_id, fingerprint, report_digest, finalized } => {
                                 if receipt_requires_commit(execution.completed.get(&operation_id), superseded.get(&operation_id), &fingerprint, &report_digest, finalized)? {
                                     let executor = executor.clone();
@@ -326,7 +384,10 @@ impl ManagerConnection {
                     }
                     let diagnostics = if fresh { observation.diagnostics.filter(|snapshot| last_snapshot.as_ref() != Some(snapshot)) } else { None };
                     if let Some(snapshot) = &diagnostics { last_snapshot = Some(snapshot.clone()); }
-                    send(&mut socket, ClientMessage::Heartbeat { diagnostics }).await?;
+                    let controlled = self.access.borrow().as_ref().and_then(AccessObservation::policy).is_some_and(|p| p.role == InstanceRole::Controlled);
+                    let addresses = if fresh && controlled { observation.addresses } else { Vec::new() };
+                    xscs_protocol::validate_addresses(&addresses).map_err(|_| TransportError::Configuration)?;
+                    send(&mut socket, ClientMessage::Heartbeat { diagnostics, addresses }).await?;
                     send_frame(&mut socket, Message::Ping(Vec::new().into())).await?;
                 },
             }

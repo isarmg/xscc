@@ -128,6 +128,13 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
         )
         .unwrap();
         let (_health, receiver) = watch::channel(HealthObservation::default());
+        let mut access_receiver = connection.access_policy();
+        let policy = AccessPolicy {
+            binding: binding.clone(),
+            role: InstanceRole::Controller,
+            valid_for_ms: ACCESS_LEASE_MS,
+            peers: vec![],
+        };
         let (client, mut peer) = sockets().await;
         let first = tokio::spawn(async move {
             let mut state = ExecutionState::default();
@@ -148,6 +155,25 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
             receive(&mut peer).await,
             ClientMessage::Hello { .. }
         ));
+        transmit(
+            &mut peer,
+            ManagerMessage::AccessPolicy {
+                policy: Box::new(policy),
+            },
+        )
+        .await;
+        timeout(Duration::from_secs(1), async {
+            loop {
+                access_receiver.changed().await.unwrap();
+                if access_receiver.borrow().is_some() {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let retained = access_receiver.borrow().clone().unwrap();
+        assert!(retained.policy().is_some());
         let expires = (std::time::SystemTime::now() + Duration::from_secs(10))
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -162,14 +188,14 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
             },
         )
         .await;
-        assert!(matches!(
-            receive(&mut peer).await,
-            ClientMessage::Progress { .. }
-        ));
+        // Execute may arrive after the first heartbeat; observe actual host entry
+        // instead of requiring a periodic Progress frame before its 10s budget.
         started.notified().await;
         drop(peer);
         let (mut state, connection, binding, caps, executor, receiver) = first.await.unwrap();
         assert!(state.active.is_some());
+        assert!(access_receiver.borrow().is_none());
+        assert!(retained.policy().is_none());
         release.notify_one();
         let (client, mut peer) = sockets().await;
         let second = tokio::spawn(async move {
@@ -224,6 +250,176 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
                 .acknowledged
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    })
+    .await
+    .unwrap();
+}
+
+#[test]
+fn permission_observations_expire_and_replacements_invalidate_copies() {
+    let binding = Binding {
+        manager_id: uuid::Uuid::new_v4(),
+        device_id: uuid::Uuid::new_v4(),
+        installation_id: uuid::Uuid::new_v4(),
+    };
+    let peer = Binding {
+        manager_id: binding.manager_id,
+        device_id: uuid::Uuid::new_v4(),
+        installation_id: uuid::Uuid::new_v4(),
+    };
+    let policy = AccessPolicy {
+        binding,
+        role: InstanceRole::Controlled,
+        valid_for_ms: ACCESS_LEASE_MS,
+        peers: vec![AccessPeer {
+            binding: peer.clone(),
+            name: "Controller".into(),
+            role: InstanceRole::Controller,
+            online: true,
+            addresses: vec![],
+        }],
+    };
+    let observation = AccessObservation {
+        policy,
+        received_at: Instant::now(),
+        current: Arc::new(AtomicBool::new(true)),
+    };
+    assert!(observation.permits(&peer));
+    let wrong = Binding {
+        installation_id: uuid::Uuid::new_v4(),
+        ..peer.clone()
+    };
+    assert!(!observation.permits(&wrong));
+    let expired = AccessObservation {
+        received_at: Instant::now() - Duration::from_millis(ACCESS_LEASE_MS),
+        ..observation.clone()
+    };
+    assert!(!expired.permits(&peer));
+    let (sender, _receiver) = watch::channel(Some(observation.clone()));
+    publish_policy(&sender, None);
+    assert!(!observation.permits(&peer));
+}
+
+#[tokio::test]
+async fn address_heartbeats_follow_role_and_observation_freshness() {
+    async fn scenario(role: InstanceRole, fresh: bool) {
+        let binding = Binding {
+            manager_id: uuid::Uuid::new_v4(),
+            device_id: uuid::Uuid::new_v4(),
+            installation_id: uuid::Uuid::new_v4(),
+        };
+        let caps = Capabilities {
+            protocol: PROTOCOL.into(),
+            client_version: "test".into(),
+            os: ClientOs::LinuxX86_64,
+            backend: Backend::Rustdesk,
+            execution_mode: ExecutionMode::Embedded,
+            diagnostics: true,
+        };
+        let executor = Arc::new(Executor::new_with_capabilities(
+            binding.clone(),
+            caps.clone(),
+            Host {
+                started: Arc::new(Notify::new()),
+                release: Arc::new(Notify::new()),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            Facts::default(),
+        ));
+        let connection = ManagerConnection::new(
+            "wss://manager.example/xscc/v2/connect",
+            Zeroizing::new("a".repeat(64)),
+        )
+        .unwrap();
+        let access = connection.access_policy();
+        let addresses = vec![HostAddress {
+            host: "host.example.com".into(),
+            port: 21118,
+        }];
+        let (_health, receiver) = watch::channel(HealthObservation {
+            diagnostics: None,
+            addresses: addresses.clone(),
+            observed_at: Some(
+                Instant::now()
+                    - if fresh {
+                        Duration::ZERO
+                    } else {
+                        Duration::from_secs(31)
+                    },
+            ),
+        });
+        let (client, mut peer) = sockets().await;
+        let policy = AccessPolicy {
+            binding: binding.clone(),
+            role,
+            valid_for_ms: ACCESS_LEASE_MS,
+            peers: vec![],
+        };
+        let running = tokio::spawn(async move {
+            connection
+                .session_connected(
+                    client,
+                    &binding,
+                    &caps,
+                    executor,
+                    &receiver,
+                    &mut ExecutionState::default(),
+                )
+                .await
+        });
+        // Drain the initial heartbeat, which precedes a role supplied by xscs.
+        loop {
+            let frame = peer.next().await.unwrap().unwrap();
+            if let Message::Text(text) = frame
+                && matches!(
+                    serde_json::from_str::<ClientMessage>(&text).unwrap(),
+                    ClientMessage::Heartbeat { .. }
+                )
+            {
+                break;
+            }
+        }
+        transmit(
+            &mut peer,
+            ManagerMessage::AccessPolicy {
+                policy: Box::new(policy),
+            },
+        )
+        .await;
+        loop {
+            match peer.next().await.unwrap().unwrap() {
+                Message::Text(text) => {
+                    if let ClientMessage::Heartbeat {
+                        addresses: actual, ..
+                    } = serde_json::from_str(&text).unwrap()
+                    {
+                        assert_eq!(
+                            actual,
+                            if fresh && role == InstanceRole::Controlled {
+                                addresses
+                            } else {
+                                vec![]
+                            }
+                        );
+                        break;
+                    }
+                }
+                Message::Ping(bytes) => {
+                    peer.send(Message::Pong(bytes)).await.unwrap();
+                }
+                _ => {}
+            }
+        }
+        transmit(&mut peer, ManagerMessage::Revoked {}).await;
+        assert_eq!(running.await.unwrap(), Err(TransportError::Revoked));
+        assert!(access.borrow().is_none());
+    }
+    timeout(Duration::from_secs(25), async {
+        tokio::join!(
+            scenario(InstanceRole::Controlled, true),
+            scenario(InstanceRole::Controller, true),
+            scenario(InstanceRole::Controlled, false)
+        );
     })
     .await
     .unwrap();
