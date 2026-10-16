@@ -44,9 +44,13 @@ installed.
 The workflow has `contents: read`, needs no signing credentials, and cannot
 publish a Release. NSIS 3.11 comes from the Chocolatey registry. Rust 1.99.0 and
 existing action pins follow the repository. Windows Server 2025 is a build and
-installer-smoke runner, **not Windows 11 runtime acceptance**. Host service
-registration/start is not tested by this workflow; no service or network listener
-is started in CI. Unavailable pinned dependencies must fail the build, not cause
+installer-smoke runner, **not Windows 11 runtime acceptance**. The separately authorized host smoke test installs and starts only its dedicated
+LocalSystem service on the disposable runner, keeps it unbound, verifies its
+SCM path/account, then uninstalls it and checks identity/unknown-file retention.
+It supplies no server address or credentials and makes no connection to a user
+device. It does not change firewall or security settings. Identity read failures
+are reported without changing ACLs; TCP observations are not a packet-level
+proof of zero external traffic. Unavailable pinned dependencies must fail the build, not cause
 silent version switching or removal of `--locked`.
 
 Both installers and archives include the application's unchanged `LICENCE`,
