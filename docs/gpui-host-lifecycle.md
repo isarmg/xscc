@@ -55,3 +55,10 @@ PIDs; existing IPC tests cover executable mismatches. Installed service/UI tests
 must verify a non-administrator client is rejected, a different executable is
 rejected, service restarts preserve UUID, and an unbound/revoked host rejects both
 legacy and managed session attempts.
+
+The desktop UI remains Windows 11 x64 only. Native stdout codec diagnostics and
+explicit background service commands additionally accept an x64 Windows Server
+kernel with NT 10.0 build 22000 or newer (not domain controllers), so disposable
+Server 2025 CI runners can verify these headless paths. This is not desktop,
+GPU-performance, or remote-streaming certification for Windows Server. Both paths
+retain safe DLL search initialization; no CI environment-variable bypass is used.

@@ -5,7 +5,7 @@ pub fn is_host() -> bool {
     cfg!(feature = "gpui-host")
 }
 
-fn prepare() -> Result<(), String> {
+fn prepare(_headless: bool) -> Result<(), String> {
     *config::APP_NAME.write().unwrap() = if is_host() {
         "XSCC Host"
     } else {
@@ -22,14 +22,21 @@ fn prepare() -> Result<(), String> {
         return Err("Native initialization failed".into());
     }
     #[cfg(windows)]
-    if !crate::platform::windows::bootstrap() {
-        return Err("Windows 11 x64 initialization failed".into());
+    {
+        let ready = if _headless {
+            crate::platform::windows::bootstrap_native_headless()
+        } else {
+            crate::platform::windows::bootstrap()
+        };
+        if !ready {
+            return Err("Windows platform initialization failed".into());
+        }
     }
     Ok(())
 }
 
 pub fn initialize() -> Result<(), String> {
-    prepare()?;
+    prepare(false)?;
     #[cfg(all(windows, feature = "gpui-host"))]
     {
         windows_host::installed_executable().map_err(|e| e.to_string())?;
@@ -67,7 +74,7 @@ pub fn handle_background_command() -> bool {
                 std::process::exit(2);
             }
             #[cfg(windows)]
-            if !crate::platform::windows::bootstrap() {
+            if !crate::platform::windows::bootstrap_native_headless() {
                 eprintln!("Windows codec probe initialization failed");
                 std::process::exit(1);
             }
@@ -88,7 +95,7 @@ pub fn handle_background_command() -> bool {
     ) {
         return false;
     }
-    if let Err(error) = prepare() {
+    if let Err(error) = prepare(true) {
         eprintln!("{error}");
         std::process::exit(1);
     }

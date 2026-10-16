@@ -226,6 +226,30 @@ extern "C"
         return rustdesk_supported_windows() ? TRUE : FALSE;
     }
 
+    BOOL get_windows_headless_platform(DWORD *major, DWORD *minor, DWORD *build,
+                                       BYTE *product, USHORT *native_machine)
+    {
+        const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+        const auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (!ntdll || !kernel32)
+            return FALSE;
+        using GetVersion = LONG(WINAPI*)(OSVERSIONINFOEXW*);
+        using GetMachine = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
+        const auto get_version = reinterpret_cast<GetVersion>(GetProcAddress(ntdll, "RtlGetVersion"));
+        const auto get_machine = reinterpret_cast<GetMachine>(GetProcAddress(kernel32, "IsWow64Process2"));
+        OSVERSIONINFOEXW version = {};
+        version.dwOSVersionInfoSize = sizeof(version);
+        USHORT process_machine = 0;
+        if (!get_version || !get_machine || get_version(&version) != 0 ||
+            !get_machine(GetCurrentProcess(), &process_machine, native_machine))
+            return FALSE;
+        *major = version.dwMajorVersion;
+        *minor = version.dwMinorVersion;
+        *build = version.dwBuildNumber;
+        *product = version.wProductType;
+        return TRUE;
+    }
+
     bool is_windows_server()
     {
         return IsWindowsServer();

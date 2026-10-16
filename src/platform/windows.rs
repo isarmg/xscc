@@ -29,7 +29,7 @@ use std::{
     time::{Duration, Instant},
 };
 use wallpaper;
-#[cfg(not(debug_assertions))]
+#[cfg(any(not(debug_assertions), feature = "gpui-session"))]
 use winapi::um::libloaderapi::{LoadLibraryExW, LOAD_LIBRARY_SEARCH_USER_DIRS};
 use winapi::{
     ctypes::c_void,
@@ -565,6 +565,14 @@ extern "C" {
     fn selectInputDesktop() -> BOOL;
     fn inputDesktopSelected() -> BOOL;
     fn is_supported_windows() -> BOOL;
+    #[cfg(feature = "gpui-session")]
+    fn get_windows_headless_platform(
+        major: &mut DWORD,
+        minor: &mut DWORD,
+        build: &mut DWORD,
+        product: &mut u8,
+        native_machine: &mut u16,
+    ) -> BOOL;
     fn is_windows_server() -> BOOL;
     fn handleMask(
         out: *mut u8,
@@ -2073,7 +2081,44 @@ pub fn bootstrap() -> bool {
     }
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(feature = "gpui-session")]
+fn gpui_headless_platform_supported(
+    major: u32,
+    minor: u32,
+    build: u32,
+    product: u8,
+    native: u16,
+) -> bool {
+    use winapi::um::winnt::{IMAGE_FILE_MACHINE_AMD64, VER_NT_SERVER, VER_NT_WORKSTATION};
+    major == 10
+        && minor == 0
+        && build >= 22000
+        && matches!(product, VER_NT_WORKSTATION | VER_NT_SERVER)
+        && native == IMAGE_FILE_MACHINE_AMD64
+}
+
+/// Only native diagnostic/service commands may run on a compatible Server kernel.
+/// The desktop bootstrap above deliberately retains the Windows 11 workstation policy.
+#[cfg(feature = "gpui-session")]
+pub(crate) fn bootstrap_native_headless() -> bool {
+    let (mut major, mut minor, mut build, mut product, mut native) = (0, 0, 0, 0, 0);
+    let valid = unsafe {
+        get_windows_headless_platform(
+            &mut major,
+            &mut minor,
+            &mut build,
+            &mut product,
+            &mut native,
+        )
+    } != FALSE;
+    if !valid || !gpui_headless_platform_supported(major, minor, build, product, native) {
+        eprintln!("Native background commands require an x64 Windows NT 10.0 workstation or server, build 22000 or newer.");
+        return false;
+    }
+    set_safe_load_dll()
+}
+
+#[cfg(any(not(debug_assertions), feature = "gpui-session"))]
 fn set_safe_load_dll() -> bool {
     if !unsafe { set_default_dll_directories() } {
         return false;
@@ -2090,7 +2135,7 @@ fn set_safe_load_dll() -> bool {
 }
 
 // https://docs.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-setdefaultdlldirectories
-#[cfg(not(debug_assertions))]
+#[cfg(any(not(debug_assertions), feature = "gpui-session"))]
 unsafe fn set_default_dll_directories() -> bool {
     let module = LoadLibraryExW(
         wide_string("Kernel32.dll").as_ptr(),
@@ -4479,6 +4524,25 @@ pub(super) fn get_pids_with_first_arg_by_wmic<S1: AsRef<str>, S2: AsRef<str>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "gpui-session")]
+    #[test]
+    fn gpui_headless_platform_retains_build_architecture_and_product_limits() {
+        use winapi::um::winnt::{
+            IMAGE_FILE_MACHINE_AMD64, IMAGE_FILE_MACHINE_ARM64, VER_NT_DOMAIN_CONTROLLER,
+            VER_NT_SERVER, VER_NT_WORKSTATION,
+        };
+        for (build, product, native, allowed) in [
+            (22000, VER_NT_WORKSTATION, IMAGE_FILE_MACHINE_AMD64, true),
+            (26100, VER_NT_SERVER, IMAGE_FILE_MACHINE_AMD64, true),
+            (20348, VER_NT_SERVER, IMAGE_FILE_MACHINE_AMD64, false),
+            (19045, VER_NT_WORKSTATION, IMAGE_FILE_MACHINE_AMD64, false),
+            (26100, VER_NT_DOMAIN_CONTROLLER, IMAGE_FILE_MACHINE_AMD64, false),
+            (26100, VER_NT_SERVER, IMAGE_FILE_MACHINE_ARM64, false),
+        ] {
+            assert_eq!(gpui_headless_platform_supported(10, 0, build, product, native), allowed);
+        }
+    }
 
     #[test]
     fn vbs_files_use_utf16le_with_bom_and_crlf() {
