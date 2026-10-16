@@ -30,7 +30,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libvulkan-dev libasound2-dev
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libvulkan-dev libasound2-dev libvpx-dev libaom-dev libyuv-dev libclang-dev ffmpeg xvfb xdotool mesa-vulkan-drivers
       - name: Formatting
         run: cargo fmt --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml -- --check
       - name: Compile and lint actual prototype
@@ -39,6 +39,30 @@ jobs:
         run: cargo test --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
       - name: Build executable
         run: cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
+      - name: Linux decoder and input validation
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          SLINT_WGPU_CPU: "1"
+          WGPU_BACKEND: vulkan
+        run: |
+          mkdir -p "$RUNNER_TEMP/xscc-codec-pc"
+          python3 - <<'PY'
+          import os, pathlib, subprocess
+          multiarch = subprocess.check_output(['gcc', '-print-multiarch'], text=True).strip()
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xscc-codec-pc/libyuv.pc'
+          path.write_text(f'prefix=/usr\nlibdir=/usr/lib/{multiarch}\nincludedir=/usr/include\nName: libyuv\nDescription: system libyuv\nVersion: 0.0.0\nLibs: -L/usr/lib/{multiarch} -lyuv -lstdc++\nCflags: -I/usr/include\n')
+          PY
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/xscc-codec-pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --features xscc-codec
+          ffmpeg -hide_banner -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -an -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -g 60 -pix_fmt yuv420p -f ivf "$RUNNER_TEMP/xscc-test.ivf"
+          xvfb-run -a env -u WAYLAND_DISPLAY python3 experiments/check-x11.py --framework ${{ matrix.framework }} --exe experiments/${{ matrix.framework }}-validation/target/debug/xscc-${{ matrix.framework }}-validation --ivf "$RUNNER_TEMP/xscc-test.ivf" --output "$RUNNER_TEMP/${{ matrix.framework }}-input"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && runner.os == 'Linux'
+        with:
+          name: ${{ matrix.framework }}-linux-runtime-evidence
+          path: ${{ runner.temp }}/${{ matrix.framework }}-input/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.framework }}-${{ matrix.os }}
@@ -81,5 +105,18 @@ jobs:
         run: |
           echo "CC_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "RANLIB=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/xscc-android-tools"
+          ln -s "${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib" "$RUNNER_TEMP/xscc-android-tools/aarch64-linux-android-ranlib"
+          echo "$RUNNER_TEMP/xscc-android-tools" >> "$GITHUB_PATH"
       - name: Check actual prototype for mobile target
         run: cargo check --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --target ${{ matrix.target }}
+      - name: Link native mobile probe
+        shell: bash
+        run: |
+          if [ '${{ matrix.framework }}' = slint ] && [ '${{ matrix.platform }}' = android ]; then
+            cargo build --locked --manifest-path experiments/slint-validation/Cargo.toml --target ${{ matrix.target }} --lib
+          else
+            cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --target ${{ matrix.target }}
+          fi

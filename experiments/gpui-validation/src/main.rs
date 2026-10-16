@@ -107,8 +107,6 @@ struct Probe {
     stats: Arc<Mutex<Measurements>>,
     frame: Option<Arc<RenderImage>>,
     manager: Option<Arc<NativeManager>>,
-    started: Instant,
-    seconds: u64,
 }
 impl Probe {
     fn pointer(&mut self, position: Point<Pixels>, kind: i32, button: i32) {
@@ -164,9 +162,6 @@ impl Render for Probe {
             } else {
                 self.stats.lock().unwrap().error = Some("invalid RGBA frame dimensions".into());
             }
-        }
-        if self.started.elapsed().as_secs() >= self.seconds {
-            cx.quit();
         }
         let summary = {
             let stats = self.stats.lock().unwrap();
@@ -258,6 +253,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_stats = stats.clone();
     let app_manager = manager.clone();
     gpui_platform::application().run(move |cx: &mut App| {
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+        cx.spawn(async move |cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(options.seconds))
+                .await;
+            if cx.update(|cx| cx.quit()).is_err() {
+                eprintln!("validation application closed before its timeout");
+            }
+        })
+        .detach();
         let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
         let result = cx.open_window(
             WindowOptions {
@@ -280,8 +290,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         stats: app_stats.clone(),
                         frame: None,
                         manager: app_manager,
-                        started,
-                        seconds: options.seconds,
                     }
                 })
             },
