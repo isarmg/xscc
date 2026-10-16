@@ -1,0 +1,133 @@
+name: GPUI Windows beta candidates
+on:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - 'experiments/gpui-validation/**'
+      - 'experiments/shared/**'
+      - 'src/gpui*'
+      - 'src/client.rs'
+      - 'src/client/**'
+      - 'src/ipc.rs'
+      - 'src/server/**'
+      - 'src/platform/**'
+      - 'src/ipc/**'
+      - 'src/management/**'
+      - 'src/ui_session_interface.rs'
+      - 'libs/**'
+      - 'crates/**'
+      - 'src/host*'
+      - 'src/lib.rs'
+      - 'src/core_main.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'packaging/gpui-windows/**'
+      - '.github/workflows/gpui-windows-beta.yml'
+      - '.github/scripts/*gpui*'
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: 'Candidate version, e.g. 0.1.0-beta.1 (does not create a tag or release)'
+        required: true
+        default: '0.1.0-beta.1'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: gpui-windows-preview-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  candidate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: controller
+            features: live-session
+            core_features: use_dasp,gpui-session
+          - role: host
+            features: native-host
+            core_features: use_dasp,gpui-host
+    runs-on: windows-2025
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-${{ matrix.role }}
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
+      PACKAGE_ROLE: ${{ matrix.role }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.1' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate candidate label
+        run: |
+          if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
+            throw 'Expected a numeric version such as 0.1.0-beta.1'
+          }
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt,clippy
+      - name: Set up pinned native codec dependencies
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+          doNotCache: false
+      - name: Build pinned native dependencies (no driver installation)
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT/installed"
+          if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
+          $clang = Join-Path $env:ProgramFiles 'LLVM/bin'
+          if (-not (Test-Path "$clang/libclang.dll")) { throw 'Runner LLVM/libclang is missing' }
+          "LIBCLANG_PATH=$clang" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Check formatting
+        run: cargo fmt --manifest-path experiments/gpui-validation/Cargo.toml -- --check
+      - name: Lint Windows preview
+        run: cargo clippy --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+      - name: Test Windows preview
+        run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
+      - name: Test native session and host regression coverage
+        run: cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features ${{ matrix.core_features }} --target x86_64-pc-windows-msvc gpui
+      - name: Test managed IPC peer authorization
+        run: cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features ${{ matrix.core_features }} --target x86_64-pc-windows-msvc ipc::auth::tests
+      - name: Build standalone release executable
+        run: cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --bin xscc-gpui-validation --target x86_64-pc-windows-msvc
+      - name: Verify existing elevated runner token for host CLI
+        if: matrix.role == 'host'
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Host CLI requires an already elevated runner token; this workflow will not bypass UAC'
+          }
+      - name: Smoke test command line
+        run: |
+          & "$env:CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/xscc-gpui-validation.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw 'Executable help smoke test failed' }
+      - name: Install NSIS compiler
+        run: |
+          choco install nsis --version=3.11 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+      - name: Assemble unsigned packages and integrity manifest
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: ./.github/scripts/package-gpui-windows.ps1
+      - name: Smoke test per-user installer and uninstaller
+        if: matrix.role == 'controller'
+        run: ./.github/scripts/test-gpui-installer.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.1' }}-windows11-x86_64-unsigned
+          path: dist/${{ matrix.role }}/*
+          if-no-files-found: error
+          retention-days: 30

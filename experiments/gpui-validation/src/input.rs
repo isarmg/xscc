@@ -27,6 +27,27 @@ pub fn key(key: &Keystroke, down: bool) -> Option<Message> {
     };
     let control = match key.key.as_str() {
         "enter" => Some(ControlKey::Return),
+        "home" => Some(ControlKey::Home),
+        "end" => Some(ControlKey::End),
+        "pageup" => Some(ControlKey::PageUp),
+        "pagedown" => Some(ControlKey::PageDown),
+        "insert" => Some(ControlKey::Insert),
+        "control" | "ctrl" => Some(ControlKey::Control),
+        "alt" => Some(ControlKey::Alt),
+        "shift" => Some(ControlKey::Shift),
+        "super" | "cmd" | "meta" => Some(ControlKey::Meta),
+        "f1" => Some(ControlKey::F1),
+        "f2" => Some(ControlKey::F2),
+        "f3" => Some(ControlKey::F3),
+        "f4" => Some(ControlKey::F4),
+        "f5" => Some(ControlKey::F5),
+        "f6" => Some(ControlKey::F6),
+        "f7" => Some(ControlKey::F7),
+        "f8" => Some(ControlKey::F8),
+        "f9" => Some(ControlKey::F9),
+        "f10" => Some(ControlKey::F10),
+        "f11" => Some(ControlKey::F11),
+        "f12" => Some(ControlKey::F12),
         "escape" => Some(ControlKey::Escape),
         "backspace" => Some(ControlKey::Backspace),
         "delete" => Some(ControlKey::Delete),
@@ -102,10 +123,74 @@ pub fn pointer(
     Some(message)
 }
 
+#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+pub fn wheel(x: i32, y: i32, trackpad: bool, modifiers: gpui::Modifiers) -> Option<Message> {
+    if x == 0 && y == 0 {
+        return None;
+    }
+    let mut message = Message::new();
+    message.set_mouse_event(MouseEvent {
+        mask: if trackpad {
+            input::MOUSE_TYPE_TRACKPAD
+        } else {
+            input::MOUSE_TYPE_WHEEL
+        },
+        x: x.clamp(-120, 120),
+        y: y.clamp(-120, 120),
+        modifiers: [
+            ControlKey::Control,
+            ControlKey::Alt,
+            ControlKey::Shift,
+            ControlKey::Meta,
+        ]
+        .into_iter()
+        .zip([
+            modifiers.control,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+        ])
+        .filter_map(|(key, enabled)| enabled.then_some(key.into()))
+        .collect(),
+        ..Default::default()
+    });
+    Some(message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use protobuf::Message as _;
+    #[test]
+    fn function_keys_and_wheel_use_native_protocol() {
+        let event = key(
+            &Keystroke {
+                key: "f12".into(),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(event.key_event().control_key(), ControlKey::F12);
+        let event = wheel(
+            0,
+            1,
+            false,
+            gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(event.mouse_event().mask, input::MOUSE_TYPE_WHEEL);
+        assert_eq!(event.mouse_event().y, 1);
+        assert_eq!(
+            event.mouse_event().modifiers,
+            vec![ControlKey::Shift.into()]
+        );
+        assert!(wheel(0, 0, false, Default::default()).is_none());
+    }
+
     #[test]
     fn same_contained_coordinates_and_wire_modifiers_as_slint() {
         let message = pointer(500.0, 400.0, (1000.0, 800.0), (1920, 1080), 1, 1).unwrap();

@@ -1,4 +1,10 @@
+#[cfg(all(target_os = "windows", feature = "live-session"))]
+mod client;
 mod input;
+mod options;
+#[cfg(all(target_os = "windows", feature = "live-session"))]
+mod text_field;
+use options::Options;
 #[path = "../../shared/management.rs"]
 mod management;
 #[path = "../../shared/video.rs"]
@@ -15,7 +21,6 @@ use std::{
     cell::Cell,
     fs::OpenOptions,
     io::Write,
-    path::PathBuf,
     rc::Rc,
     sync::{Arc, Mutex},
     time::Instant,
@@ -23,59 +28,6 @@ use std::{
 use xscc_native_management::manager::NativeManager;
 
 const REVISION: &str = "28d0a3547f16b9609b301b48ab363bfca649c864";
-
-struct Options {
-    width: u32,
-    height: u32,
-    fps: u32,
-    seconds: u64,
-    ivf: Option<PathBuf>,
-    report: Option<PathBuf>,
-    state_dir: Option<PathBuf>,
-}
-impl Options {
-    fn parse() -> Result<Self, Box<dyn std::error::Error>> {
-        let mut result = Self {
-            width: 1280,
-            height: 720,
-            fps: 60,
-            seconds: 15,
-            ivf: None,
-            report: None,
-            state_dir: None,
-        };
-        let mut arguments = std::env::args().skip(1);
-        while let Some(key) = arguments.next() {
-            if key == "--help" {
-                println!(
-                    "xscc-gpui-validation [--width N] [--height N] [--fps N] [--seconds 1..600] [--ivf VP9.ivf] [--state-dir /absolute/private/path] [--report new.json]"
-                );
-                std::process::exit(0);
-            }
-            let value = arguments.next().ok_or("each option requires a value")?;
-            match key.as_str() {
-                "--width" => result.width = value.parse()?,
-                "--height" => result.height = value.parse()?,
-                "--fps" => result.fps = value.parse()?,
-                "--seconds" => result.seconds = value.parse()?,
-                "--ivf" => result.ivf = Some(value.into()),
-                "--report" => result.report = Some(value.into()),
-                "--state-dir" => result.state_dir = Some(value.into()),
-                _ => return Err(format!("unknown option: {key}").into()),
-            }
-        }
-        if result.width == 0
-            || result.width > 3840
-            || result.height == 0
-            || result.height > 2160
-            || !(1..=120).contains(&result.fps)
-            || !(1..=600).contains(&result.seconds)
-        {
-            return Err("invalid dimensions, FPS, or duration".into());
-        }
-        Ok(result)
-    }
-}
 
 #[derive(Default)]
 struct Measurements {
@@ -107,6 +59,7 @@ struct Probe {
     stats: Arc<Mutex<Measurements>>,
     frame: Option<Arc<RenderImage>>,
     manager: Option<Arc<NativeManager>>,
+    diagnostic: bool,
 }
 impl Probe {
     fn pointer(&mut self, position: Point<Pixels>, kind: i32, button: i32) {
@@ -138,7 +91,9 @@ impl Probe {
 }
 impl Render for Probe {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.request_animation_frame();
+        if self.diagnostic {
+            window.request_animation_frame();
+        }
         self.stats.lock().unwrap().render_calls += 1;
         let frame = self.mailbox.lock().unwrap().frame.take();
         if let Some(mut frame) = frame {
@@ -207,13 +162,14 @@ impl Render for Probe {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, _| view.key(&event.keystroke, true)))
             .on_key_up(cx.listener(|view, event: &KeyUpEvent, _, _| view.key(&event.keystroke, false)))
-            .child("GPUI validation · local input observation")
+            .child(if self.diagnostic { "GPUI diagnostics · local input observation" } else { "XSCC GPUI · development preview" })
             .child(summary).child(native)
             .children(peers)
             .child(div().id("video").relative().w_full().flex_1().min_h(px(200.0)).bg(rgb(0))
                 .on_mouse_down(MouseButton::Left, cx.listener(|view, event: &MouseDownEvent, window, cx| { view.focus.focus(window, cx); view.pointer(event.position, 1, 1); }))
                 .on_mouse_up(MouseButton::Left, cx.listener(|view, event: &MouseUpEvent, _, _| view.pointer(event.position, 2, 1)))
                 .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, _| view.pointer(event.position, 0, 0)))
+                .children((!self.diagnostic).then_some(div().p_4().child("Remote sessions are not connected in this preview. Use --diagnostic for the local rendering test.")))
                 .children(self.frame.as_ref().map(|image| img(ImageSource::Render(image.clone())).size_full().object_fit(ObjectFit::Contain)))
                 .child(canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {}).absolute().top_0().left_0().size_full()))
             .child("No remote input is sent. Hardware decode, IME, touch, and complete sessions require separate acceptance.")
@@ -221,11 +177,19 @@ impl Render for Probe {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(all(target_os = "windows", feature = "live-session"))]
+    if librustdesk::gpui_session::handle_background_command() {
+        return Ok(());
+    }
     let options = Options::parse()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()?;
+    #[cfg(all(target_os = "windows", feature = "live-session"))]
+    if !options.diagnostic {
+        return client::run(&runtime);
+    }
     let manager = options
         .state_dir
         .as_ref()
@@ -240,13 +204,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let mailbox = Arc::new(Mutex::new(video::Mailbox::default()));
-    let source = video::Source::start(
-        mailbox.clone(),
-        options.width,
-        options.height,
-        options.fps,
-        options.ivf.as_deref(),
-    )?;
+    let source = if options.diagnostic {
+        Some(video::Source::start(
+            mailbox.clone(),
+            options.width,
+            options.height,
+            options.fps,
+            options.ivf.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let stats = Arc::new(Mutex::new(Measurements::default()));
     let started = Instant::now();
     let app_mailbox = mailbox.clone();
@@ -259,19 +227,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .detach();
-        cx.spawn(async move |cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(options.seconds))
-                .await;
-            cx.update(|cx| cx.quit());
-        })
-        .detach();
+        if let Some(seconds) = options.seconds {
+            cx.spawn(async move |cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(seconds))
+                    .await;
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
+        }
         let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
         let result = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("xscc — GPUI validation".into()),
+                    title: Some(
+                        if options.diagnostic {
+                            "xscc — GPUI validation"
+                        } else {
+                            "xscc — GPUI development preview"
+                        }
+                        .into(),
+                    ),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -288,6 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         stats: app_stats.clone(),
                         frame: None,
                         manager: app_manager,
+                        diagnostic: options.diagnostic,
                     }
                 })
             },
@@ -318,7 +296,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report = serde_json::json!({
         "schema": 1, "framework": "gpui", "revision": REVISION, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
         "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-        "renderer": "platform-gpu", "source": if options.ivf.is_some() { "xscc-vp9-software-decoder" } else { "synthetic-cpu-rgba" },
+        "renderer": "platform-gpu", "mode": if options.diagnostic { "diagnostic" } else { "preview" },
+        "source": if !options.diagnostic { "none" } else if options.ivf.is_some() { "xscc-vp9-software-decoder" } else { "synthetic-cpu-rgba" },
         "requested_size": [options.width, options.height], "requested_fps": options.fps,
         "elapsed_seconds": elapsed, "source_frames": frames.produced, "mailbox_replacements": frames.replaced,
         "submitted_frames": stats.submitted, "submitted_fps": stats.submitted as f64 / elapsed,
@@ -337,7 +316,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .write_all(&bytes)?;
     }
     println!("{}", String::from_utf8(bytes)?);
-    if stats.error.is_some() || stats.submitted < 2 {
+    if stats.error.is_some() || (options.diagnostic && stats.submitted < 2) {
         return Err("GPUI validation failed; inspect the JSON report".into());
     }
     Ok(())

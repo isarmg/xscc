@@ -1,0 +1,123 @@
+# GPUI Windows beta packaging / Windows beta 打包
+
+## Scope / 范围
+
+The independent `GPUI Windows beta candidates` workflow builds two variants of
+`experiments/gpui-validation` for `x86_64-pc-windows-msvc`:
+
+- Controller: `--features live-session`, packaged as `xscc-controller.exe`.
+- Host: `--features native-host`, packaged as `xscc-host.exe`.
+
+Each variant uses an isolated Cargo target directory. Both use the original
+`xscc-gpui-validation` binary target before packaging. The workflow never calls
+Flutter, Dart, the old RustDesk installer, driver installers, signing services,
+or update-feed publishers. Existing workflows are unchanged. Native libraries use the root vcpkg manifest and pinned revision, matching the
+existing Windows native dependency set. The app builds without hwcodec/vram
+features; no driver is installed.
+
+控制端和被控端分别打包；候选构建成功不代表真实串流、Windows 11 图形或服务验收通过。
+禁止把测试图案、仅能打开的窗口或通过 --help 的程序宣传为完整远程桌面。
+
+## Produce candidates / 构建候选包
+
+1. Commit the intended source and confirm its SHA on GitHub. A push on
+   `feat/management-prep` touching the workflow's bounded paths builds candidates
+   with label `0.1.0-beta.1`; build-info identifies the exact revision.
+2. Alternatively run `workflow_dispatch` on the intended ref with an explicit
+   label such as `0.1.0-beta.2`. Labels name packages only; they do not change crate
+   versions, create tags or publish. GitHub may require a manual workflow to be
+   present on the default branch; the bounded push trigger covers initial setup.
+3. Require both matrix jobs to pass: formatting, Clippy, unit tests, release
+   build, executable `--help`, AMD64 PE/signature checks, NSIS build and upload.
+   The controller also gets silent install/uninstall smoke checks on the CI
+   server, including uninstall registration and unknown-file preservation.
+4. Each artifact contains its unsigned installer, portable ZIP, `SHA256SUMS.txt`,
+   `build-info.json` and README. JSON records role, source SHA, lockfile hash and
+   exact build run. Verify hashes before installation; hashes are not signatures.
+
+The workflow has `contents: read`, needs no signing credentials, and cannot
+publish a Release. NSIS 3.11 comes from the Chocolatey registry. Rust 1.99.0 and
+existing action pins follow the repository. Windows Server 2025 is a build and
+installer-smoke runner, **not Windows 11 runtime acceptance**. Host service
+registration/start is not tested by this workflow; no service or network listener
+is started in CI. Unavailable pinned dependencies must fail the build, not cause
+silent version switching or removal of `--locked`.
+
+## Runtime dependency evidence / 运行库依赖
+
+The Windows target explicitly sets `-C target-feature=+crt-static` for both
+variants, in addition to static vcpkg libraries. Packaging records MSVC
+`dumpbin /DEPENDENTS` output in `dependencies.txt` and fails if the executable
+imports a VC++ redistributable runtime such as VCRUNTIME or MSVCP. No redistributable,
+driver or arbitrary DLL is silently downloaded or installed on the user's device.
+This direct-import inspection is not proof that every dynamically loaded graphics
+library is available; actual clean Windows 11 startup remains a release gate.
+
+## Installer behavior / 安装行为
+
+Both packages check x86_64 architecture and OS build >= 22000. Supported runtime
+is Windows 11; the installer smoke runner is not a supported end-user target.
+Both are unsigned, preserve identity/configuration on removal, and have no driver,
+firewall, security-policy or update-feed modifications.
+
+Controller:
+- Normal-user installation under `%LOCALAPPDATA%\Programs\XSCC-Controller`.
+- Current-user Start menu shortcut and HKCU Apps uninstall registration.
+- No service registration or administrator request.
+
+Host:
+- Administrator installer under `%ProgramFiles%\XSCC-Host`.
+- Dedicated `XSCC Host` LocalSystem service via `--install-service-only`; its
+  service process uses `--service`/`--server`. Host UI requires administrator
+  approval via its embedded executable manifest.
+- All-users Start menu shortcut and HKLM Apps uninstall registration.
+- Uninstall calls only `--uninstall-service-only` before removing known files.
+  On failure files remain for diagnosis. Service-owned identity is preserved.
+- This first beta requires uninstall before reinstall/upgrade to avoid overwriting
+  a running service binary. A pre-existing host executable blocks installation.
+- The host portable ZIP is an inspection/manual-distribution artifact, not a
+  promise of functional unelevated or service-free host operation.
+
+Do not disable security controls to bypass unsigned-publisher warnings. No
+publisher identity or signed-build claim is made.
+
+## Promotion gate / 发布门槛
+
+Before publishing a remote-streaming beta, retain evidence for the exact SHA and
+artifacts covering:
+
+- Clean Windows 11 x86_64 controller install/uninstall as a standard user.
+- Host administrator install, dedicated service identity/path, correct service
+  start/stop/removal and retained identity after reinstall.
+- GUI rendering and clean exit on actual Windows graphics hardware; default
+  startup must not silently present a diagnostic pattern as remote content.
+- Genuine authenticated peer connection, decoded remote frames and actual
+  keyboard/pointer delivery between controller and host.
+- Rejection, timeout and disconnect states shown honestly, with recovery tested.
+- No unrequested listener, privilege grant, driver or firewall/security changes.
+- Clean-machine runtime DLL inventory and third-party license/source review.
+- No credentials/private state in artifacts, diagnostics or release notes.
+
+CI build success is not a substitute for these runtime checks. List unvalidated
+features explicitly, including audio, clipboard, file transfer, elevated desktop,
+hardware codecs and unattended access, rather than implying they work.
+
+After the release owner approves the verified scope, create a new immutable tag
+at the tested SHA (suggested `gpui-v0.1.0-beta.1`) and a GitHub **prerelease**, not
+latest/stable. Attach both role artifacts from the same successful candidate run,
+including hashes/build metadata and source link. State `Windows 11 x86_64 /
+unsigned / beta` and actual validation limits. Never overwrite tags or mix source
+revisions. This workflow does not automate publication or create placeholders.
+
+## Existing paths / 现有路径
+
+At checkout `6227e14efbae64de9cfbef32d5cd6e046a6258b4`, the GPUI crate is named
+`xscc-gpui-validation` at `0.1.0`; the fetched repository tag is `v1.0.0`.
+These are distinct from the main management crates' `2.0.0-dev` version.
+The legacy RustDesk Windows pipeline uses Flutter, per-machine MSI custom
+actions and optional `SIGN_BASE_URL`/`SIGN_SECRET_KEY` signing. Their presence
+in YAML does not establish that valid signing credentials are configured.
+This preview does not reuse that pipeline or make a signed-build claim.
+
+NSIS references: [normal-user execution level](https://nsis.sourceforge.io/Reference/RequestExecutionLevel)
+and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html).

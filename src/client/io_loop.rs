@@ -1323,7 +1323,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 if pixelbuffer {
                     handler.on_rgba(display, data);
                 } else {
-                    #[cfg(all(feature = "vram", feature = "flutter"))]
+                    #[cfg(feature = "vram")]
                     handler.on_texture(display, _texture);
                 }
             },

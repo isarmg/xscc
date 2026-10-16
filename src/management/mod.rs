@@ -160,6 +160,10 @@ fn owner() -> ResultType<&'static Arc<NativeManager>> {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn permits_host(permit: Option<&SessionPermit>) -> bool {
+    #[cfg(feature = "gpui-host")]
+    if permit.is_none() {
+        return false;
+    }
     if MANAGER.get().is_none() {
         return permit.is_none();
     }
@@ -218,5 +222,13 @@ pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
         (Some(value), None) => Ok(value),
         (_, Some(error)) => bail!("{error}"),
         _ => bail!("Invalid management response"),
+    }
+}
+
+#[cfg(all(test, feature = "gpui-host"))]
+mod host_tests {
+    #[test]
+    fn host_never_permits_a_session_without_management_authorization() {
+        assert!(!super::permits_host(None));
     }
 }

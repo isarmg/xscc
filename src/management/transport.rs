@@ -40,10 +40,16 @@ pub(crate) async fn accept(
     // Startup initializes the owner before opening the native listener. Unit tests and an
     // application built without a configured binding retain the direct transport path.
     if MANAGER.get().is_none() {
+        #[cfg(feature = "gpui-host")]
+        bail!("Host management owner is unavailable");
+        #[cfg(not(feature = "gpui-host"))]
         return Ok(None);
     }
     let manager = owner()?;
     if !manager.configured() {
+        #[cfg(feature = "gpui-host")]
+        bail!("Bind XSCC Host before accepting connections");
+        #[cfg(not(feature = "gpui-host"))]
         return Ok(None);
     }
     stream.set_max_packet_length(4096);
@@ -91,6 +97,9 @@ pub(crate) async fn connect(
         .and_then(serde_json::Value::as_bool)
         != Some(true)
     {
+        if peer.starts_with("managed:") {
+            bail!("Managed authorization is unavailable");
+        }
         let (stream, key, kind) = Client::start(peer, conn_type, interface).await?;
         return Ok((stream, key, kind, None));
     }

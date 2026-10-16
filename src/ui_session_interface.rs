@@ -22,7 +22,7 @@ use hbb_common::{
     SessionID, Stream,
 };
 use rdev::{Event, EventType::*, KeyCode};
-#[cfg(all(feature = "vram", feature = "flutter"))]
+#[cfg(feature = "vram")]
 use std::ffi::c_void;
 use std::{
     collections::HashMap,
@@ -1350,7 +1350,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn portable_service_running(&self, running: bool);
     fn get_rgba(&self, display: usize) -> *const u8;
     fn next_rgba(&self, display: usize);
-    #[cfg(all(feature = "vram", feature = "flutter"))]
+    #[cfg(feature = "vram")]
     fn on_texture(&self, display: usize, texture: *mut c_void);
     fn set_multiple_windows_session(&self, sessions: Vec<WindowsSession>);
     fn set_current_display(&self, disp_idx: i32);

@@ -24,6 +24,10 @@ pub use platform::{
 mod server;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use self::server::*;
+#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
+pub mod gpui_session;
+#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
+pub mod gpui_host;
 mod client;
 mod lan;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

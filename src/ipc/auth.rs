@@ -42,6 +42,9 @@ pub(crate) fn verify_managed_owner(stream: &ConnectionTmpl<parity_tokio_ipc::Con
     {
         let mut pid = 0;
         unsafe { GetNamedPipeServerProcessId(HANDLE(stream.inner.get_ref().as_raw_handle()), &mut pid) }?;
+        #[cfg(feature = "gpui-host")]
+        crate::gpui_host::windows_host::verify_owner(pid)?;
+        #[cfg(not(feature = "gpui-host"))]
         xscc_native_management::private_fs::verify_process_owner(pid)?;
         ensure_peer_executable_matches_current_by_pid_opt(Some(pid), "")
     }
@@ -57,6 +60,9 @@ pub(crate) fn authorize_managed_client(stream: &Connection) -> ResultType<()> {
     #[cfg(windows)]
     {
         let pid = stream.peer_pid().ok_or_else(|| anyhow::anyhow!("Management client PID unavailable"))?;
+        #[cfg(feature = "gpui-host")]
+        crate::gpui_host::windows_host::verify_client(pid)?;
+        #[cfg(not(feature = "gpui-host"))]
         xscc_native_management::private_fs::verify_process_owner(pid)?;
         ensure_peer_executable_matches_current_by_pid_opt(Some(pid), "")
     }

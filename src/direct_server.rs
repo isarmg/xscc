@@ -27,7 +27,7 @@ impl DirectServer {
             std::future::pending::<()>().await;
             return;
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(all(target_os = "windows", not(feature = "gpui-host")))]
         if crate::platform::is_installed() && crate::is_server() {
             crate::updater::start_auto_update();
         }

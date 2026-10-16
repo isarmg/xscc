@@ -1897,6 +1897,17 @@ impl Connection {
                 return false;
             }
 
+            #[cfg(feature = "gpui-host")]
+            {
+                if !managed_target || !crate::management::permits_host(self.managed_permit.as_ref()) {
+                    self.send_login_error("Managed authorization is required").await;
+                    return false;
+                }
+                // The server-issued permit is the host application's sole admission authority.
+                self.require_2fa = None;
+                return self.send_logon_response_and_keep_alive().await;
+            }
+
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             self.try_start_cm_ipc();
 
