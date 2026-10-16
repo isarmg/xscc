@@ -263,9 +263,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(options.seconds))
                 .await;
-            if cx.update(|cx| cx.quit()).is_err() {
-                eprintln!("validation application closed before its timeout");
-            }
+            cx.update(|cx| cx.quit());
         })
         .detach();
         let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
