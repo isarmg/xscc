@@ -164,7 +164,8 @@ impl ManagementPanel {
 }
 
 impl Render for ManagementPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme::palette(window.appearance());
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
         let status_text = self
             .status
@@ -218,8 +219,8 @@ impl Render for ManagementPanel {
             .flex_col()
             .gap_3()
             .p_3()
-            .bg(rgb(theme::PAGE))
-            .text_color(rgb(theme::TEXT))
+            .bg(rgb(palette.page))
+            .text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
             .child(if self.host {
@@ -252,8 +253,8 @@ impl Render for ManagementPanel {
                             .px_3()
                             .py_1()
                             .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(theme::ACCENT))
+                            .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(palette.accent))
                             .cursor_pointer()
                             .child("刷新状态")
                             .on_click(cx.listener(|view, _, _, cx| {
@@ -268,8 +269,8 @@ impl Render for ManagementPanel {
                                 .px_3()
                                 .py_1()
                                 .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(theme::DANGER))
+                            .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(palette.danger))
                                 .cursor_pointer()
                                 .child(if self.confirm_unbind {
                                     "确认解绑并关闭连接"
@@ -292,7 +293,7 @@ impl Render for ManagementPanel {
                             div()
                                 .id("cancel-unbind")
                                 .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                                .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
+                                .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
                                 .px_3()
                                 .py_1()
                                 .cursor_pointer()
@@ -310,8 +311,8 @@ impl Render for ManagementPanel {
                     .child("设置新的上报访问地址（两项留空恢复自动；仅替换上报地址，不修改监听、路由或防火墙）")
                     .child(div().flex().gap_2().child(self.address_host.clone()).child(self.address_port.clone()))
                     .when(configured, |section| section.child(div().id("save-address").px_3().py_1().relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(theme::ACCENT)).cursor_pointer()
+                            .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(palette.accent)).cursor_pointer()
                         .child(if self.action_pending { "正在保存…" } else { "保存上报地址 / 留空恢复自动" })
                         .on_click(cx.listener(|view, _, _, cx| view.save_address(cx)))))
                     .when(!configured, |section| section.child("绑定实例时将一并提交以上地址。")))
@@ -331,8 +332,8 @@ impl Render for ManagementPanel {
                                 .px_3()
                                 .py_2()
                                 .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                                .child(theme::surface(rgb(theme::ACCENT), None, theme::CONTROL_EXTENT))
-                                .text_color(rgb(theme::PAGE))
+                                .child(theme::surface(rgb(palette.accent), None, theme::CONTROL_EXTENT))
+                                .text_color(rgb(palette.page))
                                 .cursor_pointer()
                                 .child(if !self.initialized || self.action_pending {
                                     "正在绑定…"
@@ -366,8 +367,8 @@ impl Render for ManagementPanel {
                             .px_3()
                             .py_2()
                             .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                            .child(theme::surface(rgb(theme::PANEL), None, theme::PANEL_EXTENT))
-                            .text_color(rgb(if available { theme::ACCENT } else { theme::MUTED }))
+                            .child(theme::surface(rgb(palette.panel), None, theme::PANEL_EXTENT))
+                            .text_color(rgb(if available { palette.accent } else { palette.muted }))
                             .child(format!(
                                 "{} · {}{}",
                                 peer.name,
@@ -405,8 +406,8 @@ impl Render for ManagementPanel {
                                     .px_3()
                                     .py_1()
                                     .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                                    .child(theme::surface(rgb(if self.video_state.target_fps == target { theme::ACCENT } else { theme::PANEL }), None, theme::CONTROL_EXTENT))
-                                    .text_color(rgb(if self.video_state.target_fps == target { theme::PAGE } else { theme::TEXT }))
+                                    .child(theme::surface(rgb(if self.video_state.target_fps == target { palette.accent } else { palette.panel }), None, theme::CONTROL_EXTENT))
+                                    .text_color(rgb(if self.video_state.target_fps == target { palette.page } else { palette.text }))
                                     .child(target.value().to_string())
                                     .when(self.video_state.connected, |button| {
                                         button.cursor_pointer().on_click(cx.listener(
@@ -427,8 +428,8 @@ impl Render for ManagementPanel {
                         .px_3()
                         .py_1()
                         .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(theme::DANGER))
+                            .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(palette.danger))
                         .cursor_pointer()
                         .child("断开 / 取消连接")
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -450,6 +451,7 @@ struct Client {
 
 impl Render for Client {
     fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme::palette(window.appearance());
         // Cached views require a definite viewport; panel content scrolls within it.
         let panel_width = (f32::from(window.viewport_size().width) * 0.38).min(420.0);
         div()
@@ -457,8 +459,8 @@ impl Render for Client {
             .flex()
             .gap_3()
             .p_4()
-            .bg(rgb(theme::PAGE))
-            .text_color(rgb(theme::TEXT))
+            .bg(rgb(palette.page))
+            .text_color(rgb(palette.text))
             .font_family(self.font.clone())
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
@@ -521,6 +523,9 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                 ..Default::default()
             },
             |window, cx| {
+                window
+                    .observe_window_appearance(|window, _| window.refresh())
+                    .detach();
                 let video = cx.new(|cx| RemoteVideo::new(handle.clone(), window, cx));
                 let video_state = video.read(cx).state();
                 let font: gpui::SharedString = if window

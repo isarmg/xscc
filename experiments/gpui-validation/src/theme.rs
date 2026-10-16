@@ -1,14 +1,47 @@
-// XCSS content-blocks dark palette and Mac mini contour, pinned to:
+// XCSS content-blocks palettes and Mac mini contour, pinned to:
 // https://github.com/isarmg/xcss/tree/d0a41861d949f2b0626249b25a35f562fb59b592/web/admin-ui
-use gpui::{Bounds, IntoElement, PathBuilder, Pixels, Rgba, canvas, fill, point, prelude::*, px};
+use gpui::{
+    Bounds, IntoElement, PathBuilder, Pixels, Rgba, WindowAppearance, canvas, fill, point,
+    prelude::*, px,
+};
 
-pub const PAGE: u32 = 0x151a1d;
-pub const PANEL: u32 = 0x252c31;
-pub const TEXT: u32 = 0xedf2f4;
-pub const MUTED: u32 = 0xa4b0b7;
-pub const ACCENT: u32 = 0x5fa8c8;
-pub const DANGER: u32 = 0xff8a92;
-pub const BORDER: u32 = 0x354047;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    pub page: u32,
+    pub panel: u32,
+    pub text: u32,
+    pub muted: u32,
+    pub accent: u32,
+    pub danger: u32,
+    pub border: u32,
+}
+
+pub const LIGHT: Palette = Palette {
+    page: 0xffffff,
+    panel: 0xf2f2f2,
+    text: 0x1f1f1f,
+    muted: 0x5f5f5f,
+    accent: 0x444444,
+    danger: 0xa73d46,
+    border: 0xe3e3e3,
+};
+pub const DARK: Palette = Palette {
+    page: 0x151a1d,
+    panel: 0x252c31,
+    text: 0xedf2f4,
+    muted: 0xa4b0b7,
+    accent: 0x5fa8c8,
+    danger: 0xff8a92,
+    border: 0x354047,
+};
+
+pub fn palette(appearance: WindowAppearance) -> Palette {
+    match appearance {
+        WindowAppearance::Light | WindowAppearance::VibrantLight => LIGHT,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => DARK,
+    }
+}
+
 pub const CONTROL_EXTENT: f32 = 27.;
 pub const PANEL_EXTENT: f32 = 42.;
 pub const CONTROL_HEIGHT: f32 = 44.;
@@ -109,6 +142,13 @@ pub fn surface(color: Rgba, border: Option<Rgba>, extent: f32) -> impl IntoEleme
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn palette_follows_system_appearance() {
+        assert_eq!(palette(WindowAppearance::Light), LIGHT);
+        assert_eq!(palette(WindowAppearance::VibrantLight), LIGHT);
+        assert_eq!(palette(WindowAppearance::Dark), DARK);
+        assert_eq!(palette(WindowAppearance::VibrantDark), DARK);
+    }
     #[test]
     fn polygon_error_stays_below_quarter_pixel_at_largest_extent() {
         let max_second_derivative = CONTROLS

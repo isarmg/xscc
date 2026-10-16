@@ -457,6 +457,7 @@ impl Focusable for TextField {
 
 impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme::palette(window.appearance());
         let focused = self.focus.is_focused(window);
         div()
             .w_full()
@@ -467,17 +468,17 @@ impl Render for TextField {
             .relative()
             .min_h(px(theme::CONTROL_HEIGHT))
             .child(theme::surface(
-                rgb(theme::PANEL),
+                rgb(palette.panel),
                 Some(rgb(if focused {
-                    theme::ACCENT
+                    palette.accent
                 } else {
-                    theme::BORDER
+                    palette.border
                 })),
                 theme::CONTROL_EXTENT,
             ))
             .px_3()
             .py(px(10.))
-            .text_color(rgb(theme::TEXT))
+            .text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
             .overflow_hidden()
@@ -514,6 +515,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
     let prepaint_field = field.clone();
     canvas(
         move |bounds, window, cx| {
+            let palette = theme::palette(window.appearance());
             let field = prepaint_field.read(cx);
             let style = window.text_style();
             let text: SharedString = if field.content.is_empty() {
@@ -527,7 +529,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                 len: text.len(),
                 font: style.font(),
                 color: if field.content.is_empty() {
-                    rgb(theme::MUTED).into()
+                    rgb(palette.muted).into()
                 } else {
                     style.color
                 },
@@ -589,7 +591,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                         point(origin_x + cursor_x, bounds.top()),
                         size(px(2.), bounds.size.height),
                     ),
-                    rgb(theme::ACCENT),
+                    rgb(palette.accent),
                 )
             });
             let selection = (focused && !field.selection.is_empty()).then(|| {
@@ -601,7 +603,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                         point(start.min(end), bounds.top()),
                         point(start.max(end), bounds.bottom()),
                     ),
-                    rgba((theme::ACCENT << 8) | 0x55),
+                    rgba((palette.accent << 8) | 0x55),
                 )
             });
             FieldPaint {

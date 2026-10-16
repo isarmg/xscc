@@ -448,6 +448,7 @@ impl Render for RemoteVideo {
             .relative()
             .size_full()
             .bg(rgb(0))
+            .text_color(rgb(crate::theme::DARK.muted))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 if view.focus.is_focused(window) && view.key(&event.keystroke, true) {
