@@ -123,6 +123,8 @@ jobs:
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::hwcodec::tests"
       - name: Build standalone release executable
         run: cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --bin xscc-gpui-validation --target x86_64-pc-windows-msvc
+      - name: Prepare and verify final application manifest
+        run: ./.github/scripts/prepare-gpui-manifest.ps1
       - name: Verify existing elevated runner token for host CLI
         if: matrix.role == 'host'
         run: |

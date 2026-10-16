@@ -71,6 +71,18 @@ stdout/stderr: `--help`, rejection of the probe without `--stdout`, and one vali
 `RUSTDESK_HWCODEC_CONFIG=` JSON record. The codec probe has a 45-second external
 timeout; an empty capability list is valid and is not evidence of real GPU support.
 
+## Windows manifest ownership
+
+The pinned GPUI platform embeds the single application manifest, including DPI,
+heap, compatibility and common-controls settings. The application build script
+must not embed a second MANIFEST#1 resource. After linking, the Windows release
+workflow uses the SDK manifest tool to change only the host's execution level to
+`requireAdministrator`; controller remains `asInvoker`. It re-extracts and checks
+all manifest content before CLI smoke, hashing or packaging. A validation failure
+blocks the candidate. An unprepared development host executable must be launched
+from an already elevated session; the actual host installer ships the verified
+administrator manifest.
+
 ## Runtime dependency evidence / 运行库依赖
 
 The Windows target explicitly sets `-C target-feature=+crt-static` for both
