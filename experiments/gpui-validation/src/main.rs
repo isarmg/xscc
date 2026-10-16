@@ -12,6 +12,8 @@ mod options;
 #[cfg(all(target_os = "windows", feature = "live-session"))]
 mod presentation;
 #[cfg(all(target_os = "windows", feature = "live-session"))]
+mod remote_video;
+#[cfg(all(target_os = "windows", feature = "live-session"))]
 mod text_field;
 #[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
 mod theme;
@@ -189,7 +191,7 @@ impl Render for Probe {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(all(target_os = "windows", feature = "live-session"))]
-    if librustdesk::gpui_session::handle_background_command() {
+    if librustdesk::gpui_host::handle_background_command() {
         return Ok(());
     }
     let options = Options::parse()?;

@@ -22,6 +22,29 @@ retains only the latest pending frame. Coalesced frame/session notifications wak
 the UI; the two-second management refresh is independent of video presentation.
 Hardware codec negotiation does not imply direct GPU-texture presentation.
 
+## Native UI architecture / 原生界面架构
+
+- `client.rs` owns the window layout and management panel. The controller places
+  its scrollable management panel beside the video viewport; the host uses the
+  full window for management. GPUI caches the panel independently of video frames.
+- `remote_video.rs` owns the active session, connection generation, input state,
+  focus handling and frame notifications. It publishes management-facing state
+  only for session changes, commands and errors. Closing the view releases input
+  and disconnects its session.
+- `presentation.rs` owns UI-thread image resources. The session mailbox retains
+  the latest pending frame; no history of decoded frames is accumulated.
+- `gpui_management.rs` exposes typed status and binding commands. It decodes the
+  existing owner's responses, so a successful command supplies the updated status
+  without an immediate second RPC. Authorization remains in the management owner
+  and transport; the interface does not accept a caller-supplied transport address or permit.
+- `gpui_session.rs` adapts native media and input; `gpui_host.rs` owns process and
+  service startup. Both applications continue using the existing native runtime.
+
+Video notifications invalidate the video view and thin window layout. The cached
+management panel is rebuilt for its own state, input or viewport changes, rather
+than for each decoded frame. This boundary reduces UI work without changing the
+decoder, transport or CPU-to-GPU upload path.
+
 控制端和被控端分别打包；候选构建成功不代表真实串流、Windows 11 图形或服务验收通过。
 禁止把测试图案、仅能打开的窗口或通过 --help 的程序宣传为完整远程桌面。
 

@@ -10,7 +10,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, RwLock,
 };
-pub use xscc_native_management::manager::Request;
+use xscc_native_management::manager::Request;
 
 #[derive(Debug)]
 pub struct Frame {
@@ -192,15 +192,11 @@ impl Drop for SessionHandle {
     }
 }
 
-pub async fn management_request(request: Request) -> ResultType<serde_json::Value> {
-    crate::management::rpc(request).await
-}
-
 pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
     let device_id = uuid::Uuid::parse_str(device_id)?;
     // Resolve through the existing authenticated owner. Never accept an address or identity
     // asserted by the UI; the transport resolves again immediately before the handshake.
-    management_request(Request::Target { device_id }).await?;
+    crate::management::rpc(Request::Target { device_id }).await?;
     let handler = Handler::default();
     handler.event(SessionEvent::Connecting);
     let session = Session {
@@ -230,14 +226,6 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
         handler.0.updates.notify_one();
     });
     Ok(SessionHandle { session })
-}
-
-// Startup hooks are kept separate from the session adapter for the native role entry points.
-pub fn initialize() -> Result<(), String> {
-    crate::gpui_host::initialize()
-}
-pub fn handle_background_command() -> bool {
-    crate::gpui_host::handle_background_command()
 }
 
 impl InvokeUiSession for Handler {

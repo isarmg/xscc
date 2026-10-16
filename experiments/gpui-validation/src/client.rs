@@ -1,41 +1,33 @@
 use crate::{
-    input,
-    presentation::VideoPresentation,
+    remote_video::{RemoteVideo, VideoState},
     text_field::{self, TextField},
     theme,
 };
-use base::message_proto::Message;
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FocusHandle, ImageSource, IntoElement, KeyDownEvent,
-    KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
-    Point, Render, ScrollDelta, ScrollWheelEvent, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, canvas, div, img, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, IntoElement, Render, StyleRefinement, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
-use librustdesk::gpui_session::{self, InputCommand, SessionEvent, SessionHandle, TargetFps};
+use librustdesk::{
+    gpui_host,
+    gpui_management::{self, Command, Status},
+    gpui_session::TargetFps,
+};
 use std::{
-    cell::Cell,
-    collections::HashMap,
-    rc::Rc,
     sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 use xscc::protocol::InstanceRole;
-use xscc_native_management::manager::{Request, Status};
 
 enum Reply {
     Status(Result<Status, String>),
-    Action(Result<(), String>),
-    Connect(u64, Result<SessionHandle, String>),
-    SessionClosed(u64),
+    Action(Result<Status, String>),
 }
 
-struct Client {
-    font: gpui::SharedString,
+struct ManagementPanel {
     runtime: tokio::runtime::Handle,
     sender: mpsc::Sender<Reply>,
     receiver: mpsc::Receiver<Reply>,
     wake: Arc<tokio::sync::Notify>,
-    session_updates: Option<tokio::task::JoinHandle<()>>,
     server: Entity<TextField>,
     password: Entity<TextField>,
     address_host: Entity<TextField>,
@@ -47,25 +39,13 @@ struct Client {
     action_pending: bool,
     confirm_unbind: bool,
     notice: String,
-    session: Option<SessionHandle>,
-    connecting: bool,
-    generation: u64,
-    connected: bool,
-    keyboard_allowed: bool,
-    target_fps: TargetFps,
-    focus: FocusHandle,
-    bounds: Rc<Cell<Bounds<Pixels>>>,
-    extent: (u32, u32),
-    origin: (i32, i32),
-    video: VideoPresentation,
-    keys: HashMap<String, Message>,
-    buttons: HashMap<i32, Message>,
-    scroll_remainder: (f32, f32),
+    video: Entity<RemoteVideo>,
+    video_state: VideoState,
     _subscriptions: Vec<Subscription>,
     _tasks: Vec<gpui::Task<()>>,
 }
 
-impl Client {
+impl ManagementPanel {
     fn refresh(&mut self) {
         if !self.initialized || self.status_pending || self.action_pending {
             return;
@@ -74,16 +54,15 @@ impl Client {
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.runtime.spawn(async move {
-            let result = gpui_session::management_request(Request::Status {})
+            let result = gpui_management::status()
                 .await
-                .map_err(|error| error.to_string())
-                .and_then(|value| serde_json::from_value(value).map_err(|error| error.to_string()));
+                .map_err(|error| error.to_string());
             let _ = sender.send(Reply::Status(result));
             wake.notify_one();
         });
     }
 
-    fn action(&mut self, request: Request) {
+    fn action(&mut self, request: Command) {
         if !self.initialized || self.action_pending {
             return;
         }
@@ -93,9 +72,8 @@ impl Client {
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.runtime.spawn(async move {
-            let result = gpui_session::management_request(request)
+            let result = gpui_management::execute(request)
                 .await
-                .map(|_| ())
                 .map_err(|error| error.to_string());
             let _ = sender.send(Reply::Action(result));
             wake.notify_one();
@@ -130,7 +108,7 @@ impl Client {
         };
         self.password
             .update(cx, |field, cx| field.clear(window, cx));
-        self.action(Request::Enroll {
+        self.action(Command::Enroll {
             server,
             authorization_code,
             addresses,
@@ -146,88 +124,23 @@ impl Client {
             self.address_host.read(cx).value(),
             self.address_port.read(cx).value(),
         ) {
-            Ok(addresses) => self.action(Request::SetAddresses { addresses }),
+            Ok(addresses) => self.action(Command::SetAddresses { addresses }),
             Err(error) => self.notice = error,
         }
         cx.notify();
     }
 
-    fn connect(&mut self, device_id: String) {
-        if self.host || self.action_pending || self.connecting || self.session.is_some() {
+    fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host || self.action_pending {
             return;
         }
-        self.generation = self.generation.wrapping_add(1);
-        let generation = self.generation;
-        self.connecting = true;
-        self.video.invalidate();
-        self.notice = "正在验证授权并连接…".into();
-        let sender = self.sender.clone();
-        let wake = self.wake.clone();
-        self.runtime.spawn(async move {
-            let result = gpui_session::connect(&device_id)
-                .await
-                .map_err(|error| error.to_string());
-            if let Err(error) = sender.send(Reply::Connect(generation, result))
-                && let Reply::Connect(_, Ok(session)) = error.0
-            {
-                session.disconnect();
-            }
-            wake.notify_one();
-        });
-    }
-
-    fn release_input(&mut self) {
-        let Some(session) = &self.session else {
-            self.keys.clear();
-            self.buttons.clear();
-            return;
-        };
-        for (_, mut message) in self.keys.drain() {
-            message.mut_key_event().down = false;
-            message.mut_key_event().press = false;
-            message.mut_key_event().modifiers.clear();
-            if let Err(error) = session.send_input(InputCommand::Key(message.key_event().clone())) {
-                self.notice = error.to_string();
-            }
-        }
-        for (_, mut message) in self.buttons.drain() {
-            let event = message.mut_mouse_event();
-            event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
-            if let Err(error) =
-                session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
-            {
-                self.notice = error.to_string();
-            }
-        }
-    }
-
-    fn disconnect(&mut self) {
-        self.release_input();
-        if let Some(task) = self.session_updates.take() {
-            task.abort();
-        }
-        self.generation = self.generation.wrapping_add(1);
-        if let Some(session) = self.session.take() {
-            session.disconnect();
-        }
-        self.connecting = false;
-        self.connected = false;
-        self.keyboard_allowed = false;
-        self.scroll_remainder = (0.0, 0.0);
-        self.extent = (0, 0);
-        self.origin = (0, 0);
-        self.video.invalidate();
-        self.notice = "已断开连接。".into();
+        self.video
+            .update(cx, |video, cx| video.connect(device_id, window, cx));
     }
 
     fn consume_updates(&mut self) {
-        if !self.initialized {
-            return;
-        }
-        let mut closed_generation = None;
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
-                Reply::SessionClosed(generation) => closed_generation = Some(generation),
                 Reply::Status(result) => {
                     self.status_pending = false;
                     match result {
@@ -237,214 +150,21 @@ impl Client {
                 }
                 Reply::Action(result) => {
                     self.action_pending = false;
-                    self.notice = match result {
-                        Ok(()) => "管理请求完成。".into(),
-                        Err(error) => error,
-                    };
-                    self.refresh();
-                }
-                Reply::Connect(generation, result) => {
-                    if generation != self.generation {
-                        if let Ok(session) = result {
-                            session.disconnect();
-                        }
-                        continue;
-                    }
-                    self.connecting = false;
                     match result {
-                        Ok(session) => {
-                            let updates = session.updates();
-                            let wake = self.wake.clone();
-                            let sender = self.sender.clone();
-                            self.session_updates = Some(self.runtime.spawn(async move {
-                                loop {
-                                    let active = updates.wait().await;
-                                    if !active {
-                                        let _ = sender.send(Reply::SessionClosed(generation));
-                                    }
-                                    wake.notify_one();
-                                    if !active {
-                                        break;
-                                    }
-                                }
-                            }));
-                            self.session = Some(session);
+                        Ok(status) => {
+                            self.status = Some(status);
+                            self.notice = "管理请求完成。".into();
                         }
                         Err(error) => self.notice = error,
                     }
                 }
             }
         }
-        let events = self
-            .session
-            .as_ref()
-            .map(|session| session.drain_events())
-            .unwrap_or_default();
-        for event in events {
-            match event {
-                SessionEvent::Connecting => self.notice = "正在连接…".into(),
-                SessionEvent::Connected => {
-                    self.connected = true;
-                    self.notice = "已连接；点击画面后发送键鼠。切换窗口会释放已按下的键。".into();
-                    self.set_target_fps(self.target_fps);
-                }
-                SessionEvent::Disconnected => {
-                    self.disconnect();
-                    break;
-                }
-                SessionEvent::Error(error) => {
-                    self.disconnect();
-                    self.notice = error;
-                    break;
-                }
-                SessionEvent::Permission { name, enabled } => {
-                    if name == "keyboard" {
-                        if !enabled {
-                            self.release_input();
-                        }
-                        self.keyboard_allowed = enabled;
-                    }
-                }
-                SessionEvent::Display {
-                    x,
-                    y,
-                    width: _,
-                    height: _,
-                } => {
-                    self.release_input();
-                    self.origin = (x, y);
-                }
-            }
-        }
-        if closed_generation == Some(self.generation) && self.session.is_some() {
-            self.disconnect();
-        }
-    }
-
-    fn set_target_fps(&mut self, target: TargetFps) {
-        if !self.connected {
-            return;
-        }
-        let Some(session) = &self.session else {
-            return;
-        };
-        match session.set_target_fps(target) {
-            Ok(()) => {
-                self.target_fps = target;
-                self.notice = format!(
-                    "已请求目标 {} FPS；实际帧率取决于主机、网络和显示能力。",
-                    target.value()
-                );
-            }
-            Err(error) => self.notice = error.to_string(),
-        }
-    }
-
-    fn key(&mut self, key: &gpui::Keystroke, down: bool) {
-        if !self.connected || !self.keyboard_allowed {
-            return;
-        }
-        let Some(message) = input::key(key, down) else {
-            return;
-        };
-        if let Some(session) = &self.session {
-            if let Err(error) = session.send_input(InputCommand::Key(message.key_event().clone())) {
-                self.notice = error.to_string();
-                return;
-            }
-            if down {
-                self.keys.insert(key.key.clone(), message);
-            } else {
-                self.keys.remove(&key.key);
-            }
-        }
-    }
-
-    fn wheel(&mut self, event: &ScrollWheelEvent) {
-        if !self.connected || !self.keyboard_allowed {
-            return;
-        }
-        let (x, y, trackpad) = match event.delta {
-            ScrollDelta::Lines(delta) => (delta.x, delta.y, false),
-            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
-        };
-        self.scroll_remainder.0 += x;
-        self.scroll_remainder.1 += y;
-        let x = self.scroll_remainder.0.trunc() as i32;
-        let y = self.scroll_remainder.1.trunc() as i32;
-        self.scroll_remainder.0 -= x as f32;
-        self.scroll_remainder.1 -= y as f32;
-        if let Some(message) = input::wheel(x, y, trackpad, event.modifiers)
-            && let Some(session) = &self.session
-            && let Err(error) =
-                session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
-        {
-            self.notice = error.to_string();
-        }
-    }
-
-    fn pointer(&mut self, position: Point<Pixels>, kind: i32, button: i32) {
-        if !self.connected || !self.keyboard_allowed {
-            return;
-        }
-        let bounds = self.bounds.get();
-        let message = input::pointer(
-            f32::from(position.x - bounds.origin.x),
-            f32::from(position.y - bounds.origin.y),
-            (bounds.size.width.into(), bounds.size.height.into()),
-            self.extent,
-            kind,
-            button,
-        );
-        // A release outside the letterboxed frame still releases the held button.
-        let already_absolute = message.is_none();
-        let message = message.or_else(|| {
-            (kind == 2)
-                .then(|| self.buttons.get(&button).cloned())
-                .flatten()
-        });
-        if let Some(mut message) = message {
-            let event = message.mut_mouse_event();
-            if kind == 2 {
-                event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
-            }
-            // Stored press messages already include the display origin.
-            if !already_absolute {
-                event.x = event.x.saturating_add(self.origin.0);
-                event.y = event.y.saturating_add(self.origin.1);
-            }
-            if let Some(session) = &self.session {
-                if let Err(error) =
-                    session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
-                {
-                    self.notice = error.to_string();
-                    return;
-                }
-                if kind == 1 {
-                    self.buttons.insert(button, message);
-                }
-                if kind == 2 {
-                    self.buttons.remove(&button);
-                }
-            }
-        }
     }
 }
 
-impl Drop for Client {
-    fn drop(&mut self) {
-        self.disconnect();
-    }
-}
-
-impl Render for Client {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame = self.session.as_ref().and_then(SessionHandle::take_frame);
-        match self.video.update(frame, window) {
-            Ok(Some(extent)) => self.extent = extent,
-            Ok(None) => {}
-            Err(error) => self.notice = error,
-        }
+impl Render for ManagementPanel {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
         let status_text = self
             .status
@@ -463,7 +183,6 @@ impl Render for Client {
             .as_ref()
             .map(|status| status.peers.as_slice())
             .unwrap_or_default();
-        let bounds = self.bounds.clone();
         let current_addresses = self
             .status
             .as_ref()
@@ -488,18 +207,19 @@ impl Render for Client {
         });
         let can_connect = correct_role
             && !self.host
-            && !self.connecting
-            && self.session.is_none()
+            && !self.video_state.connecting
+            && !self.video_state.has_session
             && !self.action_pending;
         div()
+            .id("management-panel")
             .size_full()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_3()
-            .p_4()
+            .p_3()
             .bg(rgb(theme::PAGE))
             .text_color(rgb(theme::TEXT))
-            .font_family(self.font.clone())
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
             .child(if self.host {
@@ -558,8 +278,8 @@ impl Render for Client {
                                 })
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     if view.confirm_unbind {
-                                        view.disconnect();
-                                        view.action(Request::Unbind {});
+                                        view.video.update(cx, |video, cx| video.disconnect(cx));
+                                        view.action(Command::Unbind);
                                     } else {
                                         view.confirm_unbind = true;
                                     }
@@ -657,18 +377,18 @@ impl Render for Client {
                             .when(available, |row| {
                                 row.cursor_pointer().on_click(cx.listener(
                                     move |view, _, window, cx| {
-                                        view.connect(id.clone());
-                                        view.focus.focus(window, cx);
+                                        view.connect(id.clone(), window, cx);
                                         cx.notify();
                                     },
                                 ))
                             })
                     })),
             )
-            .when(!self.host && self.session.is_some(), |root| {
+            .when(!self.host && self.video_state.has_session, |root| {
                 root.child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .gap_2()
                         .child("请求目标 FPS（非实测）：")
                         .children(
@@ -685,13 +405,13 @@ impl Render for Client {
                                     .px_3()
                                     .py_1()
                                     .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
-                                    .child(theme::surface(rgb(if self.target_fps == target { theme::ACCENT } else { theme::PANEL }), None, theme::CONTROL_EXTENT))
-                                    .text_color(rgb(if self.target_fps == target { theme::PAGE } else { theme::TEXT }))
+                                    .child(theme::surface(rgb(if self.video_state.target_fps == target { theme::ACCENT } else { theme::PANEL }), None, theme::CONTROL_EXTENT))
+                                    .text_color(rgb(if self.video_state.target_fps == target { theme::PAGE } else { theme::TEXT }))
                                     .child(target.value().to_string())
-                                    .when(self.connected, |button| {
+                                    .when(self.video_state.connected, |button| {
                                         button.cursor_pointer().on_click(cx.listener(
                                             move |view, _, _, cx| {
-                                                view.set_target_fps(target);
+                                                view.video.update(cx, |video, cx| video.request_fps(target, cx));
                                                 cx.notify();
                                             },
                                         ))
@@ -700,7 +420,7 @@ impl Render for Client {
                         ),
                 )
             })
-            .when(self.connecting || self.session.is_some(), |root| {
+            .when(self.video_state.connecting || self.video_state.has_session, |root| {
                 root.child(
                     div()
                         .id("disconnect")
@@ -712,100 +432,62 @@ impl Render for Client {
                         .cursor_pointer()
                         .child("断开 / 取消连接")
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.disconnect();
+                            view.video.update(cx, |video, cx| video.disconnect(cx));
                             cx.notify();
                         })),
-                )
-            })
-            .when(!self.host, |root| {
-                root.child(
-                    div()
-                        .id("remote-video")
-                        .relative()
-                        .w_full()
-                        .flex_1()
-                        .min_h(px(180.0))
-                        .bg(rgb(0))
-                        .track_focus(&self.focus)
-                        .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, _| {
-                            if view.focus.is_focused(window) {
-                                view.key(&event.keystroke, true);
-                            }
-                        }))
-                        .on_key_up(cx.listener(|view, event: &KeyUpEvent, window, _| {
-                            if view.focus.is_focused(window) {
-                                view.key(&event.keystroke, false);
-                            }
-                        }))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|view, event: &MouseDownEvent, window, cx| {
-                                view.focus.focus(window, cx);
-                                view.pointer(event.position, 1, 1);
-                            }),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|view, event: &MouseUpEvent, _, _| {
-                                view.pointer(event.position, 2, 1)
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(|view, event: &MouseUpEvent, _, _| {
-                                view.pointer(event.position, 2, 1)
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(|view, event: &MouseDownEvent, window, cx| {
-                                view.focus.focus(window, cx);
-                                view.pointer(event.position, 1, 2);
-                            }),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Right,
-                            cx.listener(|view, event: &MouseUpEvent, _, _| {
-                                view.pointer(event.position, 2, 2)
-                            }),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Right,
-                            cx.listener(|view, event: &MouseUpEvent, _, _| {
-                                view.pointer(event.position, 2, 2)
-                            }),
-                        )
-                        .on_scroll_wheel(
-                            cx.listener(|view, event: &ScrollWheelEvent, _, _| view.wheel(event)),
-                        )
-                        .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, _| {
-                            view.pointer(event.position, 0, 0)
-                        }))
-                        .children(self.video.image().map(|frame| {
-                            img(ImageSource::Render(frame.clone()))
-                                .size_full()
-                                .object_fit(ObjectFit::Contain)
-                        }))
-                        .children(
-                            self.video.image()
-                                .is_none()
-                                .then_some(div().p_4().child("尚无远程画面")),
-                        )
-                        .child(
-                            canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full(),
-                        ),
                 )
             })
             .child("Beta：按实际能力协商硬件编解码，当前为 CPU 帧上传；零拷贝、多屏切换、音频、剪贴板和远程输入法尚未验收。")
     }
 }
 
+struct Client {
+    font: gpui::SharedString,
+    host: bool,
+    management: Entity<ManagementPanel>,
+    video: Entity<RemoteVideo>,
+}
+
+impl Render for Client {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        // Cached views require a definite viewport; panel content scrolls within it.
+        let panel_width = (f32::from(window.viewport_size().width) * 0.38).min(420.0);
+        div()
+            .size_full()
+            .flex()
+            .gap_3()
+            .p_4()
+            .bg(rgb(theme::PAGE))
+            .text_color(rgb(theme::TEXT))
+            .font_family(self.font.clone())
+            .text_size(px(theme::BODY_SIZE))
+            .line_height(px(theme::LINE_HEIGHT))
+            .child(
+                div()
+                    .h_full()
+                    .flex_shrink_0()
+                    .when(!self.host, |panel| panel.w(px(panel_width)))
+                    .when(self.host, |panel| panel.w_full())
+                    .child(
+                        self.management
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+            )
+            .when(!self.host, |root| {
+                root.child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_w(px(0.0))
+                        .child(self.video.clone()),
+                )
+            })
+    }
+}
+
 pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::Error>> {
-    let initialization = gpui_session::initialize();
+    let initialization = gpui_host::initialize();
     let initialized = initialization.is_ok();
     let initial_notice = initialization.err().unwrap_or_else(|| "正在初始化…".into());
     let startup_error = Arc::new(Mutex::new(None::<String>));
@@ -824,6 +506,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
         let result = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(if host { 440.0 } else { 800.0 }), px(480.0))),
                 titlebar: Some(TitlebarOptions {
                     title: Some(
                         if host {
@@ -838,26 +521,36 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                 ..Default::default()
             },
             |window, cx| {
-                cx.new(|cx| {
+                let video = cx.new(|cx| RemoteVideo::new(handle.clone(), window, cx));
+                let video_state = video.read(cx).state();
+                let font: gpui::SharedString = if window
+                    .text_system()
+                    .all_font_names()
+                    .iter()
+                    .any(|name| name == "Sarmg Maple")
+                {
+                    "Sarmg Maple"
+                } else {
+                    "Consolas"
+                }
+                .into();
+                let management = cx.new(|cx| {
                     let (sender, receiver) = mpsc::channel();
-                    let focus = cx.focus_handle();
-                    let subscriptions = vec![
-                        cx.on_blur(&focus, window, |view: &mut Client, _, _| {
-                            view.release_input()
-                        }),
-                        cx.observe_window_activation(window, |view: &mut Client, window, _| {
-                            if !window.is_window_active() {
-                                view.release_input();
-                            }
-                        }),
-                    ];
+                    let subscriptions = vec![cx.subscribe(
+                        &video,
+                        |view: &mut ManagementPanel, _, state: &VideoState, cx| {
+                            view.video_state = state.clone();
+                            view.notice = state.notice.clone();
+                            cx.notify();
+                        },
+                    )];
                     let wake = Arc::new(tokio::sync::Notify::new());
                     let ui_wake = wake.clone();
                     let update_task = cx.spawn(async move |view, cx| {
                         loop {
                             ui_wake.notified().await;
                             if view
-                                .update(cx, |view: &mut Client, cx| {
+                                .update(cx, |view: &mut ManagementPanel, cx| {
                                     view.consume_updates();
                                     cx.notify();
                                 })
@@ -870,7 +563,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     let management_task = cx.spawn(async move |view, cx| {
                         loop {
                             if view
-                                .update(cx, |view: &mut Client, _| view.refresh())
+                                .update(cx, |view: &mut ManagementPanel, _| view.refresh())
                                 .is_err()
                             {
                                 break;
@@ -878,23 +571,11 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             cx.background_executor().timer(Duration::from_secs(2)).await;
                         }
                     });
-                    Client {
-                        font: if window
-                            .text_system()
-                            .all_font_names()
-                            .iter()
-                            .any(|name| name == "Sarmg Maple")
-                        {
-                            "Sarmg Maple"
-                        } else {
-                            "Consolas"
-                        }
-                        .into(),
+                    ManagementPanel {
                         runtime: handle,
                         sender,
                         receiver,
                         wake,
-                        session_updates: None,
                         server: cx.new(|cx| TextField::new("HTTPS 服务端地址", false, cx)),
                         password: cx.new(|cx| TextField::new("实例密码", true, cx)),
                         address_host: cx
@@ -907,23 +588,17 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         action_pending: false,
                         confirm_unbind: false,
                         notice: initial_notice,
-                        session: None,
-                        connecting: false,
-                        generation: 0,
-                        connected: false,
-                        keyboard_allowed: false,
-                        target_fps: TargetFps::Fps60,
-                        focus,
-                        bounds: Rc::new(Cell::new(Bounds::default())),
-                        extent: (0, 0),
-                        origin: (0, 0),
-                        video: VideoPresentation::default(),
-                        keys: HashMap::new(),
-                        buttons: HashMap::new(),
-                        scroll_remainder: (0.0, 0.0),
+                        video: video.clone(),
+                        video_state,
                         _subscriptions: subscriptions,
                         _tasks: vec![update_task, management_task],
                     }
+                });
+                cx.new(|_| Client {
+                    font,
+                    host,
+                    management,
+                    video,
                 })
             },
         );
@@ -937,31 +612,4 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
         return Err(error.into());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replies_before_ui_wait_coalesce_without_losing_terminal_reply() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let wake = tokio::sync::Notify::new();
-            let (sender, receiver) = mpsc::channel();
-            sender.send(Reply::Action(Ok(()))).unwrap();
-            wake.notify_one();
-            sender.send(Reply::SessionClosed(7)).unwrap();
-            wake.notify_one();
-            tokio::time::timeout(Duration::from_millis(100), wake.notified())
-                .await
-                .unwrap();
-            assert!(matches!(receiver.try_recv(), Ok(Reply::Action(Ok(())))));
-            assert!(matches!(receiver.try_recv(), Ok(Reply::SessionClosed(7))));
-            assert!(receiver.try_recv().is_err());
-        });
-    }
 }

@@ -28,6 +28,8 @@ pub use self::server::*;
 pub mod gpui_session;
 #[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
 pub mod gpui_host;
+#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
+pub mod gpui_management;
 mod client;
 mod lan;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
