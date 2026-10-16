@@ -76,8 +76,11 @@ timeout; an empty capability list is valid and is not evidence of real GPU suppo
 The pinned GPUI platform embeds the single application manifest, including DPI,
 heap, compatibility and common-controls settings. The application build script
 must not embed a second MANIFEST#1 resource. After linking, the Windows release
-workflow uses the SDK manifest tool to change only the host's execution level to
-`requireAdministrator`; controller remains `asInvoker`. It re-extracts and checks
+workflow adds the required top-level `XSCC.Application.controller` /
+`XSCC.Application.host` identity (`win32`, `amd64`), using the beta version's four
+numeric components (each 0–65535). GPUI omits this application identity. The SDK
+manifest tool also changes the host's execution level to `requireAdministrator`;
+controller remains `asInvoker`. It re-extracts and checks
 all manifest content before CLI smoke, hashing or packaging. A validation failure
 blocks the candidate. An unprepared development host executable must be launched
 from an already elevated session; the actual host installer ships the verified
