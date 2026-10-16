@@ -1,0 +1,338 @@
+mod input;
+#[path = "../../shared/management.rs"]
+mod management;
+#[path = "../../shared/video.rs"]
+mod video;
+
+use gpui::{
+    App, AppContext, Bounds, Context, FocusHandle, ImageSource, IntoElement, KeyDownEvent,
+    KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    Point, Render, RenderImage, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div,
+    img, prelude::*, px, rgb, size,
+};
+use protobuf::Message as _;
+use std::{
+    cell::Cell,
+    fs::OpenOptions,
+    io::Write,
+    path::PathBuf,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+use xscc_native_management::manager::NativeManager;
+
+const REVISION: &str = "28d0a3547f16b9609b301b48ab363bfca649c864";
+
+struct Options {
+    width: u32,
+    height: u32,
+    fps: u32,
+    seconds: u64,
+    ivf: Option<PathBuf>,
+    report: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+}
+impl Options {
+    fn parse() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut result = Self {
+            width: 1280,
+            height: 720,
+            fps: 60,
+            seconds: 15,
+            ivf: None,
+            report: None,
+            state_dir: None,
+        };
+        let mut arguments = std::env::args().skip(1);
+        while let Some(key) = arguments.next() {
+            if key == "--help" {
+                println!(
+                    "xscc-gpui-validation [--width N] [--height N] [--fps N] [--seconds 1..600] [--ivf VP9.ivf] [--state-dir /absolute/private/path] [--report new.json]"
+                );
+                std::process::exit(0);
+            }
+            let value = arguments.next().ok_or("each option requires a value")?;
+            match key.as_str() {
+                "--width" => result.width = value.parse()?,
+                "--height" => result.height = value.parse()?,
+                "--fps" => result.fps = value.parse()?,
+                "--seconds" => result.seconds = value.parse()?,
+                "--ivf" => result.ivf = Some(value.into()),
+                "--report" => result.report = Some(value.into()),
+                "--state-dir" => result.state_dir = Some(value.into()),
+                _ => return Err(format!("unknown option: {key}").into()),
+            }
+        }
+        if result.width == 0
+            || result.width > 3840
+            || result.height == 0
+            || result.height > 2160
+            || !(1..=120).contains(&result.fps)
+            || !(1..=600).contains(&result.seconds)
+        {
+            return Err("invalid dimensions, FPS, or duration".into());
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Default)]
+struct Measurements {
+    submitted: u64,
+    render_calls: u64,
+    inputs: u64,
+    key_down: u64,
+    key_up: u64,
+    pointer_events: u64,
+    source_to_submit_ms: Vec<f64>,
+    error: Option<String>,
+}
+impl Measurements {
+    fn record(&mut self, message: &base::message_proto::Message) {
+        match message
+            .write_to_bytes()
+            .and_then(|bytes| base::message_proto::Message::parse_from_bytes(&bytes))
+        {
+            Ok(_) => self.inputs += 1,
+            Err(error) => self.error = Some(format!("input serialization: {error}")),
+        }
+    }
+}
+struct Probe {
+    focus: FocusHandle,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    extent: (u32, u32),
+    mailbox: Arc<Mutex<video::Mailbox>>,
+    stats: Arc<Mutex<Measurements>>,
+    frame: Option<Arc<RenderImage>>,
+    manager: Option<Arc<NativeManager>>,
+    started: Instant,
+    seconds: u64,
+}
+impl Probe {
+    fn pointer(&mut self, position: Point<Pixels>, kind: i32, button: i32) {
+        let bounds = self.bounds.get();
+        if let Some(message) = input::pointer(
+            f32::from(position.x - bounds.origin.x),
+            f32::from(position.y - bounds.origin.y),
+            (bounds.size.width.into(), bounds.size.height.into()),
+            self.extent,
+            kind,
+            button,
+        ) {
+            let mut stats = self.stats.lock().unwrap();
+            stats.record(&message);
+            stats.pointer_events += 1;
+        }
+    }
+    fn key(&mut self, key: &gpui::Keystroke, down: bool) {
+        if let Some(message) = input::key(key, down) {
+            let mut stats = self.stats.lock().unwrap();
+            stats.record(&message);
+            if down {
+                stats.key_down += 1;
+            } else {
+                stats.key_up += 1;
+            }
+        }
+    }
+}
+impl Render for Probe {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.request_animation_frame();
+        self.stats.lock().unwrap().render_calls += 1;
+        let frame = self.mailbox.lock().unwrap().frame.take();
+        if let Some(mut frame) = frame {
+            for pixel in frame.rgba.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            let pixels = image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba);
+            if let Some(pixels) = pixels {
+                let image = Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]));
+                if let Some(previous) = self.frame.replace(image)
+                    && let Err(error) = window.drop_image(previous)
+                {
+                    self.stats.lock().unwrap().error = Some(error.to_string());
+                }
+                self.extent = (frame.width, frame.height);
+                let mut stats = self.stats.lock().unwrap();
+                stats.submitted += 1;
+                stats
+                    .source_to_submit_ms
+                    .push(frame.ready.elapsed().as_secs_f64() * 1000.0);
+            } else {
+                self.stats.lock().unwrap().error = Some("invalid RGBA frame dimensions".into());
+            }
+        }
+        if self.started.elapsed().as_secs() >= self.seconds {
+            cx.quit();
+        }
+        let summary = {
+            let stats = self.stats.lock().unwrap();
+            format!(
+                "Frames submitted: {} · input messages: {}",
+                stats.submitted, stats.inputs
+            )
+        };
+        let native = self
+            .manager
+            .as_ref()
+            .map(|manager| {
+                let status = manager.status();
+                format!(
+                    "Isolated management: {} · {:?} · {} allowed peers",
+                    status.phase,
+                    status.role,
+                    status.peers.len()
+                )
+            })
+            .unwrap_or_else(|| "Management disabled; use an isolated --state-dir".into());
+        let peers = self
+            .manager
+            .as_ref()
+            .map(|manager| {
+                manager
+                    .status()
+                    .peers
+                    .into_iter()
+                    .map(|peer| {
+                        format!(
+                            "{} · {:?} · {}",
+                            peer.name,
+                            peer.role,
+                            if peer.online { "online" } else { "offline" }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let bounds = self.bounds.clone();
+        div().id("probe").size_full().flex().flex_col().gap_3().p_4().bg(rgb(0x101923)).text_color(rgb(0xe9f1f8))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _, _| view.key(&event.keystroke, true)))
+            .on_key_up(cx.listener(|view, event: &KeyUpEvent, _, _| view.key(&event.keystroke, false)))
+            .child("GPUI validation · local input observation")
+            .child(summary).child(native)
+            .children(peers)
+            .child(div().id("video").relative().w_full().flex_1().min_h(px(200.0)).bg(rgb(0))
+                .on_mouse_down(MouseButton::Left, cx.listener(|view, event: &MouseDownEvent, window, cx| { view.focus.focus(window, cx); view.pointer(event.position, 1, 1); }))
+                .on_mouse_up(MouseButton::Left, cx.listener(|view, event: &MouseUpEvent, _, _| view.pointer(event.position, 2, 1)))
+                .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, _| view.pointer(event.position, 0, 0)))
+                .children(self.frame.as_ref().map(|image| img(ImageSource::Render(image.clone())).size_full().object_fit(ObjectFit::Contain)))
+                .child(canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {}).absolute().size_full()))
+            .child("No remote input is sent. Hardware decode, IME, touch, and complete sessions require separate acceptance.")
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let options = Options::parse()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    let manager = options
+        .state_dir
+        .as_ref()
+        .map(|path| management::open(path))
+        .transpose()?;
+    if let Some(manager) = &manager {
+        let active = manager.clone();
+        runtime.spawn(async move {
+            if let Err(error) = active.resume().await {
+                eprintln!("isolated management resume failed: {error}");
+            }
+        });
+    }
+    let mailbox = Arc::new(Mutex::new(video::Mailbox::default()));
+    let source = video::Source::start(
+        mailbox.clone(),
+        options.width,
+        options.height,
+        options.fps,
+        options.ivf.as_deref(),
+    )?;
+    let stats = Arc::new(Mutex::new(Measurements::default()));
+    let started = Instant::now();
+    let app_mailbox = mailbox.clone();
+    let app_stats = stats.clone();
+    let app_manager = manager.clone();
+    gpui_platform::application().run(move |cx: &mut App| {
+        let bounds = Bounds::centered(None, size(px(1000.0), px(760.0)), cx);
+        let result = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("xscc — GPUI validation".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    focus.focus(window, cx);
+                    Probe {
+                        focus,
+                        bounds: Rc::new(Cell::new(Bounds::default())),
+                        extent: (options.width, options.height),
+                        mailbox: app_mailbox,
+                        stats: app_stats.clone(),
+                        frame: None,
+                        manager: app_manager,
+                        started,
+                        seconds: options.seconds,
+                    }
+                })
+            },
+        );
+        if let Err(error) = result {
+            app_stats.lock().unwrap().error = Some(error.to_string());
+            cx.quit();
+        }
+        cx.activate(true);
+    });
+    drop(source);
+    if let Some(manager) = manager {
+        runtime.block_on(manager.shutdown())?;
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let mut stats = stats.lock().unwrap();
+    let frames = mailbox.lock().unwrap();
+    if let Some(error) = &frames.error {
+        stats.error = Some(error.clone());
+    }
+    stats.source_to_submit_ms.sort_by(f64::total_cmp);
+    let percentile = |p: f64| {
+        stats
+            .source_to_submit_ms
+            .get(((stats.source_to_submit_ms.len().saturating_sub(1)) as f64 * p) as usize)
+            .copied()
+    };
+    let report = serde_json::json!({
+        "schema": 1, "framework": "gpui", "revision": REVISION, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+        "build_profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "renderer": "platform-gpu", "source": if options.ivf.is_some() { "xscc-vp9-software-decoder" } else { "synthetic-cpu-rgba" },
+        "requested_size": [options.width, options.height], "requested_fps": options.fps,
+        "elapsed_seconds": elapsed, "source_frames": frames.produced, "mailbox_replacements": frames.replaced,
+        "submitted_frames": stats.submitted, "submitted_fps": stats.submitted as f64 / elapsed,
+        "render_callbacks": stats.render_calls,
+        "source_ready_to_submit_ms": {"p50": percentile(0.5), "p95": percentile(0.95), "p99": percentile(0.99)},
+        "input_messages": stats.inputs, "key_down": stats.key_down, "key_up": stats.key_up, "pointer_events": stats.pointer_events,
+        "error": stats.error, "replacement_ready": false,
+        "unverified": ["physical GPU decoding and native texture interop", "display scanout latency", "authenticated remote session and input injection", "IME and touch", "five-platform physical-device acceptance"]
+    });
+    let bytes = serde_json::to_vec_pretty(&report)?;
+    if let Some(path) = options.report {
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(&bytes)?;
+    }
+    println!("{}", String::from_utf8(bytes)?);
+    if stats.error.is_some() || stats.submitted < 2 {
+        return Err("GPUI validation failed; inspect the JSON report".into());
+    }
+    Ok(())
+}

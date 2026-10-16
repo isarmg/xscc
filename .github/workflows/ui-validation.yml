@@ -1,0 +1,85 @@
+name: UI framework validation
+on:
+  push:
+    branches: [feat/management-prep]
+    paths: ["experiments/**", ".github/workflows/ui-validation.yml"]
+  pull_request:
+    paths: ["experiments/**", ".github/workflows/ui-validation.yml"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-26]
+        framework: [slint, gpui]
+    runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          components: rustfmt,clippy
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libvulkan-dev libasound2-dev
+      - name: Formatting
+        run: cargo fmt --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml -- --check
+      - name: Compile and lint actual prototype
+        run: cargo clippy --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --all-targets -- -D warnings
+      - name: Wire input tests
+        run: cargo test --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
+      - name: Build executable
+        run: cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.framework }}-${{ matrix.os }}
+          path: |
+            experiments/${{ matrix.framework }}-validation/target/debug/xscc-${{ matrix.framework }}-validation
+            experiments/${{ matrix.framework }}-validation/target/debug/xscc-${{ matrix.framework }}-validation.exe
+          if-no-files-found: error
+  mobile:
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [slint, gpui]
+        platform: [ios, android]
+        include:
+          - platform: ios
+            target: aarch64-apple-ios
+            os: macos-26
+          - platform: android
+            target: aarch64-linux-android
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: ${{ matrix.target }}
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        if: matrix.target == 'aarch64-linux-android'
+        id: ndk
+        with:
+          ndk-version: r30
+      - name: Android toolchain
+        if: matrix.target == 'aarch64-linux-android'
+        shell: bash
+        run: |
+          echo "CC_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
+      - name: Check actual prototype for mobile target
+        run: cargo check --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --target ${{ matrix.target }}

@@ -1,0 +1,87 @@
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export component ProbeWindow inherits Window {
+    title: "xscc — Slint validation";
+    preferred-width: 1000px;
+    preferred-height: 760px;
+    background: #101923;
+    in property <image> frame;
+    in property <string> status: "Initializing";
+    in property <string> native-summary: "Management disabled; use an isolated --state-dir";
+    in property <[string]> peers;
+    in-out property <string> server;
+    in-out property <string> enrollment-code;
+    callback enroll(string, string);
+    callback retry();
+    callback keyboard(string, bool, bool, bool, bool, bool);
+    callback pointer(float, float, float, float, int, int);
+    callback text-edited();
+    callback second-window();
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        Text { text: "Slint validation · local input observation"; color: #e9f1f8; font-size: 21px; }
+        Text { text: root.status; color: #9ecbff; wrap: word-wrap; }
+        Text { text: root.native-summary; color: #d9e2ec; wrap: word-wrap; }
+        HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+            LineEdit { text <=> root.server; placeholder-text: "https://server.example"; }
+            LineEdit { text <=> root.enrollment-code; placeholder-text: "Enrollment code"; input-type: password; }
+            Button { text: "Bind probe"; clicked => { root.enroll(root.server, root.enrollment-code); } }
+            Button { text: "Retry"; clicked => { root.retry(); } }
+        }
+        ScrollView {
+            height: 68px;
+            VerticalLayout {
+                for peer in root.peers : Text { text: peer; color: #d9e2ec; }
+            }
+        }
+        surface := Rectangle {
+            background: #000;
+            clip: true;
+            min-height: 200px;
+            vertical-stretch: 1;
+            Image { width: parent.width; height: parent.height; source: root.frame; image-fit: contain; }
+            keyboard := FocusScope {
+                width: parent.width;
+                height: parent.height;
+                key-pressed(event) => {
+                    root.keyboard(event.text, true, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+                    accept
+                }
+                key-released(event) => {
+                    root.keyboard(event.text, false, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta);
+                    accept
+                }
+                touch := TouchArea {
+                    width: parent.width;
+                    height: parent.height;
+                    moved => { root.pointer(self.mouse-x / 1px, self.mouse-y / 1px, surface.width / 1px, surface.height / 1px, 0, 0); }
+                    pointer-event(event) => {
+                        keyboard.focus();
+                        if (event.kind == PointerEventKind.down || event.kind == PointerEventKind.up) {
+                            root.pointer(self.mouse-x / 1px, self.mouse-y / 1px, surface.width / 1px, surface.height / 1px,
+                                event.kind == PointerEventKind.down ? 1 : 2,
+                                event.button == PointerEventButton.left ? 1 : event.button == PointerEventButton.right ? 2 : event.button == PointerEventButton.middle ? 3 : 0);
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+            LineEdit { placeholder-text: "IME / paste check — contents are not logged"; edited => { root.text-edited(); } }
+            Button { text: "Second window"; clicked => { root.second-window(); } }
+        }
+        Text { text: "No remote input is sent. Hardware decoding and complete remote sessions require separate acceptance."; color: #c8ad70; wrap: word-wrap; }
+    }
+}
+
+export component SecondaryWindow inherits Window {
+    title: "xscc — secondary Slint window";
+    preferred-width: 400px;
+    preferred-height: 240px;
+    Text { text: "Move this window across displays to check DPI and focus."; wrap: word-wrap; }
+}

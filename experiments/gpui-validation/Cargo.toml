@@ -1,0 +1,36 @@
+[package]
+name = "xscc-gpui-validation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+
+[features]
+xscc-codec = ["dep:scrap"]
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "28d0a3547f16b9609b301b48ab363bfca649c864", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "28d0a3547f16b9609b301b48ab363bfca649c864", default-features = false, features = ["font-kit", "wayland", "x11"] }
+base = { path = "../../libs/base" }
+xscc = { path = "../../crates/management" }
+xscc-native-management = { path = "../../crates/native-management" }
+async-trait = "0.1"
+tokio = { version = "~1.53.2", features = ["rt-multi-thread", "sync", "time"] }
+serde_json = "1"
+protobuf = "3.7"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+scrap = { path = "../../libs/scrap", optional = true, features = ["linux-pkg-config"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
+[patch.crates-io]
+tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
+
+[profile.dev]
+debug = 0
