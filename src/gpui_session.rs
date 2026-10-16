@@ -21,6 +21,25 @@ pub struct Frame {
     pub rgba: Vec<u8>,
 }
 
+/// Requested cadence; the host and transport retain their capability and QoS limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetFps {
+    Fps30,
+    Fps60,
+    Fps90,
+    Fps120,
+}
+impl TargetFps {
+    pub fn value(self) -> i32 {
+        match self {
+            Self::Fps30 => 30,
+            Self::Fps60 => 60,
+            Self::Fps90 => 90,
+            Self::Fps120 => 120,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     Connecting,
@@ -95,6 +114,25 @@ impl SessionHandle {
         let Some(sender) = sender.as_ref() else {
             bail!("Session is disconnected");
         };
+        sender
+            .send(Data::Message(message))
+            .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
+    }
+    pub fn set_target_fps(&self, target: TargetFps) -> ResultType<()> {
+        let mailbox = &self.session.ui_handler.0;
+        if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
+            bail!("Session is not connected");
+        }
+        let sender = self.session.sender.read().unwrap();
+        let Some(sender) = sender.as_ref() else {
+            bail!("Session is disconnected");
+        };
+        let message = self
+            .session
+            .lc
+            .write()
+            .unwrap()
+            .set_custom_fps(target.value(), false);
         sender
             .send(Data::Message(message))
             .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
@@ -352,5 +390,47 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not connected"));
+    }
+    #[test]
+    fn target_fps_requires_connected_session_and_sends_only_requested_option() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        assert!(handle.set_target_fps(TargetFps::Fps60).is_err());
+        assert!(receiver.try_recv().is_err());
+        handle
+            .session
+            .ui_handler
+            .0
+            .connected
+            .store(true, Ordering::Release);
+        for target in [
+            TargetFps::Fps30,
+            TargetFps::Fps60,
+            TargetFps::Fps90,
+            TargetFps::Fps120,
+        ] {
+            handle.set_target_fps(target).unwrap();
+            let Data::Message(message) = receiver.try_recv().unwrap() else {
+                panic!("Expected option message");
+            };
+            let Some(message::Union::Misc(misc)) = message.union else {
+                panic!("Expected misc message");
+            };
+            let Some(misc::Union::Option(option)) = misc.union else {
+                panic!("Expected FPS option");
+            };
+            assert_eq!(
+                option,
+                OptionMessage {
+                    custom_fps: target.value(),
+                    ..Default::default()
+                }
+            );
+        }
+        handle.disconnect();
+        assert!(handle.set_target_fps(TargetFps::Fps120).is_err());
     }
 }

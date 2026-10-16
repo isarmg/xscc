@@ -22,9 +22,7 @@ impl Options {
         let mut arguments = arguments.into_iter();
         while let Some(key) = arguments.next() {
             if key == "--help" {
-                println!(
-                    "xscc-gpui-validation [--diagnostic] [--width N] [--height N] [--fps N] [--seconds 1..600] [--ivf VP9.ivf] [--state-dir /absolute/private/path] [--report new.json]"
-                );
+                println!("{}", help_text());
                 std::process::exit(0);
             }
             if key == "--diagnostic" {
@@ -78,12 +76,44 @@ impl Default for Options {
     }
 }
 
+fn help_text() -> String {
+    let (name, normal) = if cfg!(feature = "native-host") {
+        (
+            "XSCC Host Beta",
+            "xscc-host.exe\nOpen the installed host as administrator to bind its instance and configure its system service.",
+        )
+    } else if cfg!(feature = "live-session") {
+        (
+            "XSCC Controller Beta",
+            "xscc-controller.exe\nBind a controller instance, then connect only to hosts on its server-authorized list.",
+        )
+    } else {
+        ("XSCC GPUI diagnostics", "xscc-gpui-validation --diagnostic")
+    };
+    format!(
+        "{name}\n\nNormal use:\n  {normal}\n\nDiagnostics (local test frames, not a remote session):\n  --diagnostic [--width N] [--height N] [--fps 1..120] [--seconds 1..600]\n  [--ivf VP9.ivf] [--state-dir /absolute/private/path] [--report new.json]\nDebug and diagnostic-only builds retain console output; release application output can be redirected to a pipe.\n  --help  Show this help"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<Options, Box<dyn std::error::Error>> {
         Options::from_args(args.iter().map(|arg| (*arg).to_owned()))
+    }
+
+    #[test]
+    fn help_distinguishes_normal_use_from_local_diagnostics() {
+        let help = help_text();
+        assert!(help.contains("Normal use:"));
+        assert!(help.contains("not a remote session"));
+        assert!(help.find("Normal use:").unwrap() < help.find("Diagnostics (").unwrap());
+        if cfg!(feature = "native-host") {
+            assert!(help.contains("XSCC Host Beta"));
+        } else if cfg!(feature = "live-session") {
+            assert!(help.contains("XSCC Controller Beta"));
+        }
     }
 
     #[test]

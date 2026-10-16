@@ -1,5 +1,12 @@
+#![cfg_attr(
+    all(target_os = "windows", feature = "live-session", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 #[cfg(all(target_os = "windows", feature = "live-session"))]
 mod client;
+#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+mod host_address;
 mod input;
 mod options;
 #[cfg(all(target_os = "windows", feature = "live-session"))]

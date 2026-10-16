@@ -9,7 +9,7 @@ use gpui::{
     Point, Render, RenderImage, ScrollDelta, ScrollWheelEvent, Subscription, TitlebarOptions,
     Window, WindowBounds, WindowOptions, canvas, div, img, prelude::*, px, rgb, size,
 };
-use librustdesk::gpui_session::{self, SessionEvent, SessionHandle};
+use librustdesk::gpui_session::{self, SessionEvent, SessionHandle, TargetFps};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -32,6 +32,8 @@ struct Client {
     receiver: mpsc::Receiver<Reply>,
     server: Entity<TextField>,
     password: Entity<TextField>,
+    address_host: Entity<TextField>,
+    address_port: Entity<TextField>,
     host: bool,
     initialized: bool,
     status: Option<Status>,
@@ -45,6 +47,7 @@ struct Client {
     generation: u64,
     connected: bool,
     keyboard_allowed: bool,
+    target_fps: TargetFps,
     focus: FocusHandle,
     bounds: Rc<Cell<Bounds<Pixels>>>,
     extent: (u32, u32),
@@ -102,13 +105,42 @@ impl Client {
             cx.notify();
             return;
         }
+        let addresses = if self.host {
+            match crate::host_address::parse(
+                self.address_host.read(cx).value(),
+                self.address_port.read(cx).value(),
+            ) {
+                Ok(addresses) => addresses,
+                Err(error) => {
+                    self.notice = error;
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            Vec::new()
+        };
         self.password
             .update(cx, |field, cx| field.clear(window, cx));
         self.action(Request::Enroll {
             server,
             authorization_code,
-            addresses: Vec::new(),
+            addresses,
         });
+        cx.notify();
+    }
+
+    fn save_address(&mut self, cx: &mut Context<Self>) {
+        if !self.host || !self.initialized || self.action_pending {
+            return;
+        }
+        match crate::host_address::parse(
+            self.address_host.read(cx).value(),
+            self.address_port.read(cx).value(),
+        ) {
+            Ok(addresses) => self.action(Request::SetAddresses { addresses }),
+            Err(error) => self.notice = error,
+        }
         cx.notify();
     }
 
@@ -220,6 +252,7 @@ impl Client {
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接；点击画面后发送键鼠。切换窗口会释放已按下的键。".into();
+                    self.set_target_fps(self.target_fps);
                 }
                 SessionEvent::Disconnected => {
                     self.disconnect();
@@ -251,6 +284,25 @@ impl Client {
         }
         if Instant::now() >= self.next_status {
             self.refresh();
+        }
+    }
+
+    fn set_target_fps(&mut self, target: TargetFps) {
+        if !self.connected {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        match session.set_target_fps(target) {
+            Ok(()) => {
+                self.target_fps = target;
+                self.notice = format!(
+                    "已请求目标 {} FPS；实际帧率取决于主机、网络和显示能力。",
+                    target.value()
+                );
+            }
+            Err(error) => self.notice = error.to_string(),
         }
     }
 
@@ -397,6 +449,22 @@ impl Render for Client {
             .map(|status| status.peers.clone())
             .unwrap_or_default();
         let bounds = self.bounds.clone();
+        let current_addresses = self
+            .status
+            .as_ref()
+            .map(|status| {
+                if status.addresses.is_empty() {
+                    "自动采集本机地址".into()
+                } else {
+                    status
+                        .addresses
+                        .iter()
+                        .map(|address| format!("{} / 端口 {}", address.host, address.port))
+                        .collect::<Vec<_>>()
+                        .join("，")
+                }
+            })
+            .unwrap_or_else(|| "正在读取…".into());
         let correct_role = self.status.as_ref().is_some_and(|status| {
             matches!(
                 (&status.role, self.host),
@@ -492,6 +560,16 @@ impl Render for Client {
                         )
                     }),
             )
+            .when(self.host && self.initialized, |root| {
+                root.child(div().flex().flex_col().gap_2()
+                    .child(format!("当前上报访问地址：{current_addresses}"))
+                    .child("设置新的上报访问地址（两项留空恢复自动；仅替换上报地址，不修改监听、路由或防火墙）")
+                    .child(div().flex().gap_2().child(self.address_host.clone()).child(self.address_port.clone()))
+                    .when(configured, |section| section.child(div().id("save-address").px_3().py_1().bg(rgb(0x23435b)).cursor_pointer()
+                        .child(if self.action_pending { "正在保存…" } else { "保存上报地址 / 留空恢复自动" })
+                        .on_click(cx.listener(|view, _, _, cx| view.save_address(cx)))))
+                    .when(!configured, |section| section.child("绑定实例时将一并提交以上地址。")))
+            })
             .when(!configured && self.initialized, |root| {
                 root.child(
                     div()
@@ -560,6 +638,43 @@ impl Render for Client {
                             })
                     })),
             )
+            .when(!self.host && self.session.is_some(), |root| {
+                root.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child("请求目标 FPS（非实测）：")
+                        .children(
+                            [
+                                TargetFps::Fps30,
+                                TargetFps::Fps60,
+                                TargetFps::Fps90,
+                                TargetFps::Fps120,
+                            ]
+                            .into_iter()
+                            .map(|target| {
+                                div()
+                                    .id(("target-fps", target.value() as usize))
+                                    .px_3()
+                                    .py_1()
+                                    .bg(if self.target_fps == target {
+                                        rgb(0x235e87)
+                                    } else {
+                                        rgb(0x23435b)
+                                    })
+                                    .child(target.value().to_string())
+                                    .when(self.connected, |button| {
+                                        button.cursor_pointer().on_click(cx.listener(
+                                            move |view, _, _, cx| {
+                                                view.set_target_fps(target);
+                                                cx.notify();
+                                            },
+                                        ))
+                                    })
+                            }),
+                        ),
+                )
+            })
             .when(self.connecting || self.session.is_some(), |root| {
                 root.child(
                     div()
@@ -658,7 +773,7 @@ impl Render for Client {
                         ),
                 )
             })
-            .child("Beta：CPU 帧上传；硬解零拷贝、多屏切换、音频、剪贴板和远程输入法尚未验收。")
+            .child("Beta：按实际能力协商硬件编解码，当前为 CPU 帧上传；零拷贝、多屏切换、音频、剪贴板和远程输入法尚未验收。")
     }
 }
 
@@ -731,6 +846,9 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         receiver,
                         server: cx.new(|cx| TextField::new("HTTPS 服务端地址", false, cx)),
                         password: cx.new(|cx| TextField::new("实例密码", true, cx)),
+                        address_host: cx
+                            .new(|cx| TextField::new("新的域名或 IP（不含端口）", false, cx)),
+                        address_port: cx.new(|cx| TextField::new("端口（默认 21118）", false, cx)),
                         host,
                         initialized,
                         status: None,
@@ -744,6 +862,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         generation: 0,
                         connected: false,
                         keyboard_allowed: false,
+                        target_fps: TargetFps::Fps60,
                         focus,
                         bounds: Rc::new(Cell::new(Bounds::default())),
                         extent: (0, 0),

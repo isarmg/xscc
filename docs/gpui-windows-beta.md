@@ -12,8 +12,9 @@ Each variant uses an isolated Cargo target directory. Both use the original
 `xscc-gpui-validation` binary target before packaging. The workflow never calls
 Flutter, Dart, the old RustDesk installer, driver installers, signing services,
 or update-feed publishers. Existing workflows are unchanged. Native libraries use the root vcpkg manifest and pinned revision, matching the
-existing Windows native dependency set. The app builds without hwcodec/vram
-features; no driver is installed.
+existing Windows native dependency set. Actual codec capability depends on the
+machine and selected build features; no zero-copy claim is made and no driver is
+installed.
 
 控制端和被控端分别打包；候选构建成功不代表真实串流、Windows 11 图形或服务验收通过。
 禁止把测试图案、仅能打开的窗口或通过 --help 的程序宣传为完整远程桌面。
@@ -31,8 +32,13 @@ features; no driver is installed.
    build, executable `--help`, AMD64 PE/signature checks, NSIS build and upload.
    The controller also gets silent install/uninstall smoke checks on the CI
    server, including uninstall registration and unknown-file preservation.
-4. Each artifact contains its unsigned installer, portable ZIP, `SHA256SUMS.txt`,
-   `build-info.json` and README. JSON records role, source SHA, lockfile hash and
+4. Each artifact contains its unsigned installer and a ZIP: controller uses
+   `*-portable.zip`, host uses `*-files.zip` (file archive, installation required).
+   External metadata, README, dependency inventory and checksum filenames all
+   have the same role/version/platform prefix as the installer, so both artifacts
+   can be attached to one Release without filename collisions. Inside each package,
+   `build-info.json`, `README.txt` and `dependencies.txt` retain their short names.
+   JSON records role, source SHA, lockfile hash and
    exact build run. Verify hashes before installation; hashes are not signatures.
 
 The workflow has `contents: read`, needs no signing credentials, and cannot
@@ -42,6 +48,18 @@ installer-smoke runner, **not Windows 11 runtime acceptance**. Host service
 registration/start is not tested by this workflow; no service or network listener
 is started in CI. Unavailable pinned dependencies must fail the build, not cause
 silent version switching or removal of `--locked`.
+
+Both installers and archives include the application's unchanged `LICENCE`,
+`THIRD_PARTY_NOTICES.txt` and the full upstream `GPUI-LICENSE-APACHE.txt` from
+pinned Zed commit `28d0a3547f16b9609b301b48ab363bfca649c864`. The notice identifies
+the adapted text-input example and XSCC's changes. These notices do not assert
+that all dependencies use one license; broader dependency review remains a gate.
+The host matrix explicitly tests `management::host_tests` in addition to native
+GPUI and IPC authorization tests. With hardware codec support enabled, CI also
+runs `client::hwcodec::tests` and checks the release executable through redirected
+stdout/stderr: `--help`, rejection of the probe without `--stdout`, and one valid
+`RUSTDESK_HWCODEC_CONFIG=` JSON record. The codec probe has a 45-second external
+timeout; an empty capability list is valid and is not evidence of real GPU support.
 
 ## Runtime dependency evidence / 运行库依赖
 
@@ -75,8 +93,8 @@ Host:
   On failure files remain for diagnosis. Service-owned identity is preserved.
 - This first beta requires uninstall before reinstall/upgrade to avoid overwriting
   a running service binary. A pre-existing host executable blocks installation.
-- The host portable ZIP is an inspection/manual-distribution artifact, not a
-  promise of functional unelevated or service-free host operation.
+- The host `*-files.zip` is only a file archive. Use its setup installer; the
+  executable requires the protected installation path and dedicated SCM service.
 
 Do not disable security controls to bypass unsigned-publisher warnings. No
 publisher identity or signed-build claim is made.

@@ -9,7 +9,7 @@ publish = false
 [workspace]
 
 [features]
-live-session = ["dep:librustdesk"]
+live-session = ["dep:librustdesk", "librustdesk/hwcodec"]
 native-host = ["live-session", "librustdesk/gpui-host"]
 xscc-codec = ["dep:scrap"]
 

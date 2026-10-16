@@ -1,0 +1,27 @@
+XSCC GPUI beta: third-party attribution
+
+The application license is provided separately in LICENCE. Third-party
+components retain their own licenses; this notice does not relicense them.
+
+GPUI and the GPUI text-input example
+Copyright 2022 - 2025 Zed Industries, Inc.
+License: Apache License, Version 2.0
+The complete upstream license and copyright notice are included in
+GPUI-LICENSE-APACHE.txt.
+
+Upstream repository: https://github.com/zed-industries/zed
+Pinned source revision: 28d0a3547f16b9609b301b48ab363bfca649c864
+License source:
+https://github.com/zed-industries/zed/blob/28d0a3547f16b9609b301b48ab363bfca649c864/crates/gpui/LICENSE-APACHE
+Example source:
+https://github.com/zed-industries/zed/blob/28d0a3547f16b9609b301b48ab363bfca649c864/crates/gpui/examples/input.rs
+
+The XSCC file experiments/gpui-validation/src/text_field.rs adapts this
+example. XSCC modifications include bounded single-line editing, protected
+secret fields, and caret scrolling. The original upstream authors do not
+endorse this application.
+
+This file records GPUI/example attribution. Other Rust and native dependencies
+retain their respective licenses and notices; it is not an assertion that all
+third-party components share the application license or Apache-2.0. Review the
+pinned Cargo.lock and vcpkg dependencies when preparing a redistribution.

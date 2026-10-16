@@ -9,6 +9,7 @@ on:
       - 'src/client.rs'
       - 'src/client/**'
       - 'src/ipc.rs'
+      - 'src/server.rs'
       - 'src/server/**'
       - 'src/platform/**'
       - 'src/ipc/**'
@@ -44,10 +45,10 @@ jobs:
         include:
           - role: controller
             features: live-session
-            core_features: use_dasp,gpui-session
+            core_features: use_dasp,gpui-session,hwcodec
           - role: host
             features: native-host
-            core_features: use_dasp,gpui-host
+            core_features: use_dasp,gpui-host,hwcodec
     runs-on: windows-2025
     timeout-minutes: 180
     defaults:
@@ -94,9 +95,14 @@ jobs:
       - name: Test Windows preview
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test native session and host regression coverage
-        run: cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features ${{ matrix.core_features }} --target x86_64-pc-windows-msvc gpui
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
       - name: Test managed IPC peer authorization
-        run: cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features ${{ matrix.core_features }} --target x86_64-pc-windows-msvc ipc::auth::tests
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"
+      - name: Test host management authorization policy
+        if: matrix.role == 'host'
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::host_tests"
+      - name: Test native codec probe parser and failure handling
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::hwcodec::tests"
       - name: Build standalone release executable
         run: cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --bin xscc-gpui-validation --target x86_64-pc-windows-msvc
       - name: Verify existing elevated runner token for host CLI
@@ -107,10 +113,9 @@ jobs:
           if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             throw 'Host CLI requires an already elevated runner token; this workflow will not bypass UAC'
           }
-      - name: Smoke test command line
-        run: |
-          & "$env:CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/xscc-gpui-validation.exe" --help
-          if ($LASTEXITCODE -ne 0) { throw 'Executable help smoke test failed' }
+      - name: Smoke test release CLI and bounded hardware codec probe
+        timeout-minutes: 3
+        run: ./.github/scripts/test-gpui-codec-probe.ps1
       - name: Install NSIS compiler
         run: |
           choco install nsis --version=3.11 --yes --no-progress

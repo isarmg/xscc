@@ -52,7 +52,28 @@ pub fn initialize() -> Result<(), String> {
     }
 }
 
+#[cfg(any(feature = "hwcodec", test))]
+fn is_stdout_codec_probe(arguments: &[String]) -> bool {
+    arguments == ["--check-hwcodec-config", "--stdout"]
+}
+
 pub fn handle_background_command() -> bool {
+    #[cfg(feature = "hwcodec")]
+    {
+        let arguments: Vec<String> = std::env::args().skip(1).collect();
+        if arguments.first().map(String::as_str) == Some("--check-hwcodec-config") {
+            if !is_stdout_codec_probe(&arguments) {
+                eprintln!("Hardware codec probe requires only --check-hwcodec-config --stdout");
+                std::process::exit(2);
+            }
+            println!(
+                "{}{}",
+                crate::client::hwcodec::OUTPUT_PREFIX,
+                scrap::hwcodec::check_available_hwcodec()
+            );
+            return true;
+        }
+    }
     let Some(argument) = std::env::args().nth(1) else {
         return false;
     };
@@ -276,5 +297,31 @@ mod tests {
     #[test]
     fn rejects_unverifiable_configuration_client() {
         assert!(super::windows_host::verify_client(u32::MAX).is_err());
+    }
+}
+
+#[cfg(test)]
+mod codec_probe_tests {
+    use super::is_stdout_codec_probe;
+
+    #[test]
+    fn native_codec_probe_accepts_only_explicit_stdout_mode() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert!(is_stdout_codec_probe(&args(&[
+            "--check-hwcodec-config",
+            "--stdout"
+        ])));
+        assert!(!is_stdout_codec_probe(&args(&["--check-hwcodec-config"])));
+        assert!(!is_stdout_codec_probe(&args(&[
+            "--check-hwcodec-config",
+            "--stdout",
+            "--server"
+        ])));
+        assert!(!is_stdout_codec_probe(&args(&["--server", "--stdout"])));
     }
 }

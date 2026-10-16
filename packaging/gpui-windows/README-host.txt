@@ -1,27 +1,22 @@
-XSCC Host Windows beta candidate (unsigned)
+XSCC 被控端 beta
 
-Target: Windows 11 x86_64. This is the separate controlled-device host package.
-The installer requires administrator approval and registers the XSCC Host
-Windows service running as LocalSystem. Host UI also requires administrator
-approval. The service owns host identity/configuration; controller installs
-use a separate per-user application and do not register this service.
+用途：让已授权的控制端连接这台电脑。支持 Windows 11 x86_64。
 
-Install location: %ProgramFiles%\XSCC-Host. Start XSCC Host from the Start menu.
-No drivers, firewall rules or security-policy changes are installed. Do not
-expose an unauthenticated host or disable security controls to test the beta.
-Close the host UI before upgrading or uninstalling. Uninstall stops/removes
-only the dedicated service and installed package files, preserving identity
-and configuration. Do not manually delete service state during an upgrade.
+开始使用
+1. 以管理员批准运行被控端 setup.exe，安装到 %ProgramFiles%\XSCC-Host。
+   安装程序创建 XSCC Host 系统服务；从开始菜单打开 XSCC Host 时也需管理员批准。
+   files.zip 只是文件归档，不能代替安装或作为便携应用运行。
+2. 在 xscs 创建 controlled（被控端）实例，取得该实例的“密码”。
+3. 在应用中输入 xscs 的 HTTPS 服务端地址和实例密码，完成绑定。
+4. 填写控制端可到达的域名/IP 和端口并保存；两项留空则自动上报本机地址。
+   此设置只更新上报地址。跨网络所需的端口转发或网络路由需由部署者另外配置。
+5. 在 xscs 授权对应 controller 实例，然后由控制端从授权列表发起连接。
 
-This is an unsigned beta candidate. Windows may warn about an unknown
-publisher. SHA256SUMS.txt verifies integrity, not publisher identity. See
-build-info.json for the exact source and CI run. A successful CI package build
-is not evidence of Windows 11 graphics, real peer streaming or service runtime
-acceptance; review the release's explicit validation and limitations first.
+卸载前关闭应用。卸载会移除专用服务并保留身份与配置；此版升级需先卸载再安装。
+如需解除绑定，请先在应用中执行解绑。实际硬件能力由机器决定，不承诺零拷贝。
 
-The package includes AGPL-3.0 LICENCE; corresponding source is linked in
-build-info.json. Do not evaluate unvalidated builds with sensitive sessions.
+本包未签名，Windows 可能显示未知发布者提示。
+Windows 11 真机联调尚未完成，具体验证结果以对应 Release 说明为准。
 
-The build requests static MSVC CRT linkage. dependencies.txt records direct DLL
-imports; it does not replace clean-machine graphics/runtime acceptance. No
-Visual Studio installation or unverified DLL downloads should be assumed.
+构建来源见 build-info.json；校验文件为包外带角色前缀的 *-SHA256SUMS.txt。
+更多说明见对应源码版本的 docs/gpui-windows-beta.md。

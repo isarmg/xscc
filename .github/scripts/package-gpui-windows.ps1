@@ -37,6 +37,8 @@ if (($dependencies | Out-String) -match '(?im)^\s*(VCRUNTIME|MSVCP|CONCRT|VCOMP)
 }
 Copy-Item $exe (Join-Path $payload $name)
 Copy-Item "$root/LICENCE" $payload
+Copy-Item "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" $payload
+Copy-Item "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/$readme" (Join-Path $payload 'README.txt')
 $metadata = [ordered]@{
     package_version = $env:PACKAGE_VERSION
@@ -60,14 +62,16 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installer)) { throw 'Installer buil
 if ((Get-AuthenticodeSignature $installer).Status -ne 'NotSigned') {
     throw 'Unsigned build path received an unexpected installer signature'
 }
-Compress-Archive -Path $payload -DestinationPath (Join-Path $out "$stem-portable.zip") -Force
-Copy-Item (Join-Path $payload 'build-info.json') $out
-Copy-Item (Join-Path $payload 'README.txt') $out
-Copy-Item (Join-Path $payload 'dependencies.txt') $out
-Get-ChildItem $out -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
+$archiveKind = if ($role -eq 'host') { 'files' } else { 'portable' }
+Compress-Archive -Path $payload -DestinationPath (Join-Path $out "$stem-$archiveKind.zip") -Force
+foreach ($file in @('build-info.json', 'README.txt', 'dependencies.txt')) {
+    Copy-Item (Join-Path $payload $file) (Join-Path $out "$stem-$file")
+}
+$checksums = "$stem-SHA256SUMS.txt"
+Get-ChildItem $out -File | Where-Object Name -ne $checksums | Sort-Object Name | ForEach-Object {
     $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $($_.Name)"
-} | Set-Content (Join-Path $out 'SHA256SUMS.txt') -Encoding ascii
+} | Set-Content (Join-Path $out $checksums) -Encoding ascii
 @"
 ### GPUI $role beta candidate built
 
