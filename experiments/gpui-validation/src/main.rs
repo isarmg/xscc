@@ -9,8 +9,8 @@ mod client;
 mod host_address;
 mod input;
 mod options;
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
-mod pacing;
+#[cfg(all(target_os = "windows", feature = "live-session"))]
+mod presentation;
 #[cfg(all(target_os = "windows", feature = "live-session"))]
 mod text_field;
 use options::Options;

@@ -17,8 +17,17 @@ pub struct Frame {
     pub display: usize,
     pub width: u32,
     pub height: u32,
-    /// Tightly packed RGBA8. This beta copies decoded CPU pixels, not a GPU texture.
-    pub rgba: Vec<u8>,
+    /// Bytes per row, always width * 4 for the packed BGRA8 payload.
+    pub stride: usize,
+    /// Owned CPU pixels. The decoder can reuse its buffer after this copy returns.
+    pub bgra: Vec<u8>,
+}
+
+/// Input-only commands; authentication and other protocol messages are not representable.
+#[derive(Clone, Debug)]
+pub enum InputCommand {
+    Key(KeyEvent),
+    Mouse(MouseEvent),
 }
 
 /// Requested cadence; the host and transport retain their capability and QoS limits.
@@ -64,6 +73,7 @@ struct Mailbox {
     connected: AtomicBool,
     keyboard: AtomicBool,
     closed: AtomicBool,
+    updates: tokio::sync::Notify,
 }
 impl Default for Mailbox {
     fn default() -> Self {
@@ -73,6 +83,7 @@ impl Default for Mailbox {
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
             closed: AtomicBool::new(false),
+            updates: tokio::sync::Notify::new(),
         }
     }
 }
@@ -81,6 +92,22 @@ struct Handler(Arc<Mailbox>);
 impl Handler {
     fn event(&self, event: SessionEvent) {
         self.0.events.force_push(event);
+        self.0.updates.notify_one();
+    }
+}
+
+/// One logical UI consumer. Notifications coalesce; payloads stay in the session mailbox.
+pub struct SessionUpdates(Arc<Mailbox>);
+impl SessionUpdates {
+    /// Drain pending events/frames after every wake, including the final false result.
+    /// False means the session is closed and the consumer should stop waiting.
+    pub async fn wait(&self) -> bool {
+        let notified = self.0.updates.notified();
+        if self.0.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        notified.await;
+        !self.0.closed.load(Ordering::Acquire)
     }
 }
 
@@ -88,14 +115,22 @@ pub struct SessionHandle {
     session: Session<Handler>,
 }
 impl SessionHandle {
+    pub fn updates(&self) -> SessionUpdates {
+        SessionUpdates(self.session.ui_handler.0.clone())
+    }
     pub fn take_frame(&self) -> Option<Frame> {
-        self.session.ui_handler.0.frame.pop()
+        let mailbox = &self.session.ui_handler.0;
+        if mailbox.closed.load(Ordering::Acquire) {
+            mailbox.frame.pop();
+            return None;
+        }
+        mailbox.frame.pop()
     }
     pub fn drain_events(&self) -> Vec<SessionEvent> {
         let queue = &self.session.ui_handler.0.events;
         (0..64).filter_map(|_| queue.pop()).collect()
     }
-    pub fn send(&self, message: Message) -> ResultType<()> {
+    pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
         let mailbox = &self.session.ui_handler.0;
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
             bail!("Session is not connected");
@@ -103,12 +138,10 @@ impl SessionHandle {
         if !mailbox.keyboard.load(Ordering::Acquire) {
             bail!("Remote input permission is disabled");
         }
-        // The native surface exposes input only; it cannot inject login or trust decisions.
-        if !matches!(
-            message.union.as_ref(),
-            Some(message::Union::KeyEvent(_)) | Some(message::Union::MouseEvent(_))
-        ) {
-            bail!("Unsupported native input message");
+        let mut message = Message::new();
+        match input {
+            InputCommand::Key(event) => message.set_key_event(event),
+            InputCommand::Mouse(event) => message.set_mouse_event(event),
         }
         let sender = self.session.sender.read().unwrap();
         let Some(sender) = sender.as_ref() else {
@@ -149,6 +182,8 @@ impl SessionHandle {
             .connected
             .store(false, Ordering::Release);
         self.session.close();
+        self.session.ui_handler.0.frame.pop();
+        self.session.ui_handler.0.updates.notify_one();
     }
 }
 impl Drop for SessionHandle {
@@ -189,9 +224,10 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
         let mut remote = Remote::new(running, receiver, sender);
         remote.io_loop(round).await;
         handler.0.connected.store(false, Ordering::Release);
-        handler.0.closed.store(true, Ordering::Release);
         handler.0.frame.pop();
         handler.event(SessionEvent::Disconnected);
+        handler.0.closed.store(true, Ordering::Release);
+        handler.0.updates.notify_one();
     });
     Ok(SessionHandle { session })
 }
@@ -210,7 +246,11 @@ impl InvokeUiSession for Handler {
             return;
         }
         if let Some(frame) = copy_frame(display, image) {
+            if self.0.closed.load(Ordering::Acquire) {
+                return;
+            }
             self.0.frame.force_push(frame);
+            self.0.updates.notify_one();
         }
     }
     fn set_display(&self, x: i32, y: i32, width: i32, height: i32, _: bool, _: f64) {
@@ -310,24 +350,25 @@ fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
     if image.raw.len() < stride.checked_mul(image.h)? {
         return None;
     }
-    let mut rgba = Vec::with_capacity(row.checked_mul(image.h)?);
+    let mut bgra = Vec::with_capacity(row.checked_mul(image.h)?);
     for source in image.raw.chunks_exact(stride).take(image.h) {
-        rgba.extend_from_slice(&source[..row]);
+        bgra.extend_from_slice(&source[..row]);
     }
     match image.fmt {
-        scrap::ImageFormat::ARGB => {
-            for pixel in rgba.chunks_exact_mut(4) {
+        scrap::ImageFormat::ABGR => {
+            for pixel in bgra.chunks_exact_mut(4) {
                 pixel.swap(0, 2);
             }
         }
-        scrap::ImageFormat::ABGR => {}
+        scrap::ImageFormat::ARGB => {}
         scrap::ImageFormat::Raw => return None,
     }
     Some(Frame {
         display,
         width: image.w as u32,
         height: image.h as u32,
-        rgba,
+        stride: row,
+        bgra,
     })
 }
 
@@ -335,7 +376,7 @@ fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
 mod tests {
     use super::*;
     #[test]
-    fn bgra_is_converted_and_padding_removed() {
+    fn bgra_keeps_channels_and_removes_padding() {
         let image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255, 0, 0, 0, 0, 4, 5, 6, 255, 0, 0, 0, 0],
             w: 1,
@@ -343,14 +384,22 @@ mod tests {
             fmt: scrap::ImageFormat::ARGB,
             align: 8,
         };
+        let frame = copy_frame(0, &image).unwrap();
+        assert_eq!((frame.width, frame.height, frame.stride), (1, 2, 4));
+        assert_eq!(frame.bgra, vec![1, 2, 3, 255, 4, 5, 6, 255]);
+        let rgba = scrap::ImageRgb {
+            fmt: scrap::ImageFormat::ABGR,
+            ..image
+        };
         assert_eq!(
-            copy_frame(0, &image).unwrap().rgba,
+            copy_frame(0, &rgba).unwrap().bgra,
             vec![3, 2, 1, 255, 6, 5, 4, 255]
         );
     }
-    #[test]
-    fn latest_frame_replaces_old_frame_without_waiting() {
+    #[tokio::test]
+    async fn latest_frame_replaces_old_frame_without_waiting() {
         let handler = Handler::default();
+        let updates = SessionUpdates(handler.0.clone());
         let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255],
             w: 1,
@@ -361,35 +410,48 @@ mod tests {
         handler.on_rgba(0, &mut image);
         image.raw[0] = 9;
         handler.on_rgba(0, &mut image);
-        assert_eq!(handler.0.frame.pop().unwrap().rgba[0], 9);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), updates.wait())
+                .await
+                .unwrap()
+        );
+        assert_eq!(handler.0.frame.pop().unwrap().bgra[2], 9);
         assert!(handler.0.frame.pop().is_none());
     }
     #[test]
-    fn native_surface_rejects_login_and_input_after_disconnect() {
+    fn typed_input_preserves_key_order_and_rejects_disconnected_input() {
         let handle = SessionHandle {
             session: Session::default(),
         };
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
         handle
             .session
             .ui_handler
             .0
             .connected
             .store(true, Ordering::Release);
-        let mut login = Message::new();
-        login.set_login_request(LoginRequest::default());
-        assert!(handle
-            .send(login)
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported"));
+        for down in [true, false] {
+            handle
+                .send_input(InputCommand::Key(KeyEvent {
+                    down,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        for down in [true, false] {
+            let Data::Message(message) = receiver.try_recv().unwrap() else {
+                panic!("Expected key message");
+            };
+            let Some(message::Union::KeyEvent(key)) = message.union else {
+                panic!("Expected key input");
+            };
+            assert_eq!(key.down, down);
+        }
         handle.disconnect();
-        let mut key = Message::new();
-        key.set_key_event(KeyEvent::default());
         assert!(handle
-            .send(key)
-            .unwrap_err()
-            .to_string()
-            .contains("not connected"));
+            .send_input(InputCommand::Key(KeyEvent::default()))
+            .is_err());
     }
     #[test]
     fn target_fps_requires_connected_session_and_sends_only_requested_option() {
@@ -432,5 +494,42 @@ mod tests {
         }
         handle.disconnect();
         assert!(handle.set_target_fps(TargetFps::Fps120).is_err());
+    }
+    #[tokio::test]
+    async fn updates_coalesce_before_waiting_and_wake_on_close() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let updates = handle.updates();
+        handle.session.ui_handler.event(SessionEvent::Connecting);
+        handle.session.ui_handler.event(SessionEvent::Connected);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), updates.wait())
+                .await
+                .unwrap()
+        );
+        assert_eq!(handle.drain_events().len(), 2);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), updates.wait())
+                .await
+                .is_err()
+        );
+        let close = async {
+            tokio::task::yield_now().await;
+            handle.disconnect();
+        };
+        let (open, ()) = tokio::join!(updates.wait(), close);
+        assert!(!open);
+        assert!(!updates.wait().await);
+        // A decoder callback that arrives after close cannot restore the image.
+        let mut image = scrap::ImageRgb {
+            raw: vec![1, 2, 3, 255],
+            w: 1,
+            h: 1,
+            fmt: scrap::ImageFormat::ARGB,
+            align: 1,
+        };
+        handle.session.ui_handler.on_rgba(0, &mut image);
+        assert!(handle.take_frame().is_none());
     }
 }

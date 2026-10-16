@@ -16,6 +16,12 @@ existing Windows native dependency set. Actual codec capability depends on the
 machine and selected build features; no zero-copy claim is made and no driver is
 installed.
 
+The current presentation path copies decoded pixels into an owned, packed BGRA8
+frame (explicit row stride), then uploads it through GPUI's image renderer. It
+retains only the latest pending frame. Coalesced frame/session notifications wake
+the UI; the two-second management refresh is independent of video presentation.
+Hardware codec negotiation does not imply direct GPU-texture presentation.
+
 控制端和被控端分别打包；候选构建成功不代表真实串流、Windows 11 图形或服务验收通过。
 禁止把测试图案、仅能打开的窗口或通过 --help 的程序宣传为完整远程桌面。
 
