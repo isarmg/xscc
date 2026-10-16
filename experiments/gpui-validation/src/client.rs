@@ -158,10 +158,10 @@ impl Client {
             let result = gpui_session::connect(&device_id)
                 .await
                 .map_err(|error| error.to_string());
-            if let Err(error) = sender.send(Reply::Connect(generation, result)) {
-                if let Reply::Connect(_, Ok(session)) = error.0 {
-                    session.disconnect();
-                }
+            if let Err(error) = sender.send(Reply::Connect(generation, result))
+                && let Reply::Connect(_, Ok(session)) = error.0
+            {
+                session.disconnect();
             }
         });
     }
@@ -340,12 +340,11 @@ impl Client {
         let y = self.scroll_remainder.1.trunc() as i32;
         self.scroll_remainder.0 -= x as f32;
         self.scroll_remainder.1 -= y as f32;
-        if let Some(message) = input::wheel(x, y, trackpad, event.modifiers) {
-            if let Some(session) = &self.session {
-                if let Err(error) = session.send(message) {
-                    self.notice = error.to_string();
-                }
-            }
+        if let Some(message) = input::wheel(x, y, trackpad, event.modifiers)
+            && let Some(session) = &self.session
+            && let Err(error) = session.send(message)
+        {
+            self.notice = error.to_string();
         }
     }
 
@@ -404,10 +403,10 @@ impl Drop for Client {
 impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.clear_frame {
-            if let Some(frame) = self.frame.take() {
-                if let Err(error) = window.drop_image(frame) {
-                    self.notice = error.to_string();
-                }
+            if let Some(frame) = self.frame.take()
+                && let Err(error) = window.drop_image(frame)
+            {
+                self.notice = error.to_string();
             }
             self.clear_frame = false;
         }
@@ -422,10 +421,10 @@ impl Render for Client {
             }
             if let Some(pixels) = image::RgbaImage::from_raw(frame.width, frame.height, rgba) {
                 let next = Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]));
-                if let Some(previous) = self.frame.replace(next) {
-                    if let Err(error) = window.drop_image(previous) {
-                        self.notice = error.to_string();
-                    }
+                if let Some(previous) = self.frame.replace(next)
+                    && let Err(error) = window.drop_image(previous)
+                {
+                    self.notice = error.to_string();
                 }
                 self.extent = (frame.width, frame.height);
             }

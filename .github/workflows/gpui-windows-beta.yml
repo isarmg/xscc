@@ -78,13 +78,31 @@ jobs:
         with:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: 9e593bb18ea69cc5095e012465dcd675a822ed0d
-          doNotCache: false
+          doNotCache: true
+      - name: Restore native dependency binary archives
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-files-Windows-2025-x64-windows-static-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
       - name: Build pinned native dependencies (no driver installation)
+        id: native-dependencies
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+          VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
         run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/vcpkg-binary-cache" | Out-Null
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT/installed"
           if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
+      - name: Save successful native dependency binary archives
+        # One writer per matrix; GitHub cache entries are immutable if another run saved first.
+        if: matrix.role == 'controller' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Configure native binding generator
+        run: |
           $clang = Join-Path $env:ProgramFiles 'LLVM/bin'
           if (-not (Test-Path "$clang/libclang.dll")) { throw 'Runner LLVM/libclang is missing' }
           "LIBCLANG_PATH=$clang" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append

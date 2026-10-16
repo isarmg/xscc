@@ -290,7 +290,7 @@ impl TextField {
         }
     }
 
-    fn from_utf16(&self, range: Range<usize>) -> Range<usize> {
+    fn range_from_utf16(&self, range: Range<usize>) -> Range<usize> {
         let start = utf16_to_utf8(&self.content, range.start.min(range.end));
         let end = utf16_to_utf8(&self.content, range.start.max(range.end));
         start..end
@@ -303,7 +303,7 @@ impl TextField {
 
     fn replace(&mut self, range: Option<Range<usize>>, text: &str) -> Range<usize> {
         let range = range
-            .map(|range| self.from_utf16(range))
+            .map(|range| self.range_from_utf16(range))
             .or_else(|| self.marked.clone())
             .unwrap_or_else(|| self.selection.clone());
         let available = MAX_BYTES.saturating_sub(self.content.len() - range.len());
@@ -325,7 +325,7 @@ impl EntityInputHandler for TextField {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.from_utf16(range);
+        let range = self.range_from_utf16(range);
         *actual = Some(self.to_utf16(range.clone()));
         // Native selection services must not be able to copy the underlying secret either.
         Some(if self.secret {
@@ -353,7 +353,7 @@ impl EntityInputHandler for TextField {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.selection = self.from_utf16(range);
+        self.selection = self.range_from_utf16(range);
         self.reversed = false;
         window.notify_text_selection_changed(&self.focus);
         cx.notify();
@@ -414,7 +414,7 @@ impl EntityInputHandler for TextField {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let line = self.last_line.as_ref()?;
-        let range = self.from_utf16(range);
+        let range = self.range_from_utf16(range);
         let x = bounds.left() - self.scroll_x;
         let start = x + line.x_for_index(self.display_offset(range.start));
         let end = x + line.x_for_index(self.display_offset(range.end));
