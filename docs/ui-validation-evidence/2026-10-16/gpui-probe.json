@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "framework": "gpui",
+  "revision": "28d0a3547f16b9609b301b48ab363bfca649c864",
+  "os": "linux",
+  "arch": "x86_64",
+  "build_profile": "debug",
+  "renderer": "platform-gpu",
+  "source": "xscc-vp9-software-decoder",
+  "requested_size": [
+    1280,
+    720
+  ],
+  "requested_fps": 60,
+  "elapsed_seconds": 18.156725586,
+  "source_frames": 951,
+  "mailbox_replacements": 781,
+  "submitted_frames": 169,
+  "submitted_fps": 9.307845690541793,
+  "render_callbacks": 169,
+  "source_ready_to_submit_ms": {
+    "p50": 54.783069,
+    "p95": 96.213719,
+    "p99": 101.503068
+  },
+  "input_messages": 11,
+  "key_down": 4,
+  "key_up": 4,
+  "pointer_events": 3,
+  "error": null,
+  "replacement_ready": false,
+  "unverified": [
+    "physical GPU decoding and native texture interop",
+    "display scanout latency",
+    "authenticated remote session and input injection",
+    "IME and touch",
+    "five-platform physical-device acceptance"
+  ]
+}

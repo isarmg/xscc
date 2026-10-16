@@ -2,6 +2,29 @@
 
 本轮并列验证两个框架，最终选型由用户决定。现有 Flutter 应用继续作为功能基线；本轮不自动替换。
 
+## 2026-10-16 首轮实测
+
+最终代码验证提交为 `0f66dffc04478ad30a393101ce8f0365182ae177`，对应 [GitHub 验证任务](https://github.com/isarmg/xscc/actions/runs/38849936670)。10 个任务中 9 个通过；唯一失败项为 [GPUI Android](https://github.com/isarmg/xscc/actions/runs/38849936670/job/116808693727)，编译报错 `gpui_platform::current_platform` 预期返回 `Rc<dyn Platform>`，Android 条件下实际为空函数体。检查如实保留为失败，不通过跳过检查或空实现宣称支持；其余平台独立执行。
+
+| 目标 | Slint | GPUI | 验证层级 |
+| --- | --- | --- | --- |
+| Linux amd64 | 通过 | 通过 | 编译、Clippy、单元测试、Xvfb VP9 回放和输入检查 |
+| macOS 26 Apple Silicon | 通过 | 通过 | 编译、Clippy、单元测试、可执行文件链接 |
+| Windows amd64 | 通过 | 通过 | Windows Server 2025 runner 编译、Clippy、测试及链接；Windows 11 未实测 |
+| iOS 26 ARM64 | 通过 | 通过 | 设备目标交叉编译及原生链接；未打包签名或安装到设备 |
+| Android ARM64/API 29 | 通过 | 阻塞 | Slint 原生 `.so` 编译链接；GPUI 官方平台入口编译失败 |
+
+Linux 两者均通过现有 VP9 软件解码器回放、窗口缩放、键鼠消息序列化及实际窗口输入检查。Slint 记录 4 次按下、4 次释放、2 次指针事件；GPUI 为 4、4、3，均正常退出且报告无错误。两者在独立 CI job 中运行，帧数和提交耗时只能作为功能诊断，不能用于公平性能排名。
+
+原始证据保留在仓库，方便在 CI 附件过期后核对：
+
+| 原型 | 回放报告 | 输入检查 | 自身窗口截图 |
+| --- | --- | --- | --- |
+| Slint | [JSON](ui-validation-evidence/2026-10-16/slint-probe.json) | [JSON](ui-validation-evidence/2026-10-16/slint-input-check.json) | [PNG](ui-validation-evidence/2026-10-16/slint-window.png) |
+| GPUI | [JSON](ui-validation-evidence/2026-10-16/gpui-probe.json) | [JSON](ui-validation-evidence/2026-10-16/gpui-input-check.json) | [PNG](ui-validation-evidence/2026-10-16/gpui-window.png) |
+
+本轮尚未满足替换验收。五平台真机运行、硬解纹理共享、完整远程会话、中文输入法/移动端触摸和长时间稳定性仍待验证。GPUI 若要覆盖既定 Android 控制端，必须另行提供平台实现或评估其他适配，当前固定的官方源码不能直接覆盖五个平台。
+
 ## 范围与版本
 
 - Slint 固定 `1.18.1`，使用 Winit/Android 原生后端，分别验证软件绘制与 FemtoVG/WGPU 纹理路径。
@@ -31,6 +54,8 @@ Slint 提供第二窗口和输入法观察框。GPUI 当前原型的输入法、
 - `submitted_fps` 是提交率，不是屏幕实际显示帧率；`render_callbacks` 也不是显示扫描完成次数。
 - `SLINT_WGPU_CPU=1` 配合 Mesa Lavapipe 只能验证软件 Vulkan 接口路径。JSON 记录实际 Slint adapter 和是否允许 CPU adapter。
 - 本机为 Debian/WSL，目前未发现 `/dev/dri` 或 `/dev/dxg`。即使图形测试通过，也不能据此宣告物理 GPU/硬解可靠。
+- Slint 的固定版本在检测到 WSL 时主动选择 X11，即使同时编入 Wayland。本机去掉 `DISPLAY` 后因此无法启动，不能把普通 WSLg 启动算成 Slint 原生 Wayland 已通过。GPUI 已在去掉 `DISPLAY` 后完成启动，并观察到 `xdg_surface`/`wl_surface` 协议调用；这仍属于软件 GPU 冒烟验证。
+- 本机 Wayland 记录来自早期诊断构建的合成帧；仓库固化的最终提交证据来自 Xvfb VP9 回放。两者不能合并称为最终提交的 Wayland VP9/输入验收。
 
 ## 构建与运行
 
@@ -52,6 +77,17 @@ python3 experiments/compare-ui.py \
 可选 VP9 路径需 Linux 下的 `--features xscc-codec`，以及 libvpx/libaom/libyuv 开发依赖；如发行版不提供 `libyuv.pc`，需为该已安装库提供正确的 pkg-config 元数据。两者必须用相同文件和构建配置运行。
 
 Slint 单独运行支持 `--renderer software`、`--snapshot new.png`；这两个选项属于诊断手段，不用于宣称其 GPU 性能优于 GPUI。
+
+自动键鼠检查必须使用专用 Xvfb；脚本按进程 ID 与窗口名称共同匹配窗口，仅截取原型自身的窗口。它检查按下/释放及指针消息计数，同时触发一次窗口缩放，不将 X11 的结果算作 Wayland 输入验收。
+
+```sh
+xvfb-run -a env -u WAYLAND_DISPLAY SLINT_WGPU_CPU=1 \
+  python3 experiments/check-x11.py --framework slint \
+  --exe experiments/slint-validation/target/debug/xscc-slint-validation \
+  --output /tmp/xscc-slint-input-new
+```
+
+GPUI 使用同一命令，将 `slint` 改为 `gpui`。使用 `--ivf /path/to/test.ivf` 时，二进制必须启用 `xscc-codec`。检查通过只证明本地框架事件能转换为现有协议消息，没有向远端发送事件，也没有验证输入法、滚轮或移动端触摸。
 
 ## 正式选型前的验收
 

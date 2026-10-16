@@ -1,0 +1,45 @@
+{
+  "adapter": "llvmpipe (LLVM 20.1.2, 256 bits) / Cpu / Vulkan",
+  "arch": "x86_64",
+  "build_profile": "debug",
+  "cpu_adapters_allowed": true,
+  "elapsed_seconds": 15.195818399,
+  "error": null,
+  "framework": "slint",
+  "input_messages": 10,
+  "key_down": 4,
+  "key_up": 4,
+  "mailbox_replacements": 765,
+  "os": "linux",
+  "planar_texture_import_rejected": true,
+  "pointer_events": 2,
+  "render_callbacks": 54,
+  "renderer": "wgpu",
+  "replacement_ready": false,
+  "requested_fps": 60,
+  "requested_size": [
+    1280,
+    720
+  ],
+  "rgba_texture_import": true,
+  "schema": 1,
+  "secondary_windows": 0,
+  "slint": "1.18.1",
+  "snapshot_saved": false,
+  "source": "xscc-vp9-software-decoder",
+  "source_frames": 821,
+  "source_ready_to_submit_ms": {
+    "p50": 33.1806,
+    "p95": 45.453919,
+    "p99": 46.986909
+  },
+  "submitted_fps": 3.553609195774122,
+  "submitted_frames": 54,
+  "text_edits": 0,
+  "unverified": [
+    "physical GPU decoding and native texture interop",
+    "display scanout latency",
+    "authenticated remote session and input injection",
+    "five-platform physical-device acceptance"
+  ]
+}
