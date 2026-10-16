@@ -500,8 +500,7 @@ impl<T: InvokeUiSession> Remote<T> {
         if !self.peer_info.is_support_virtual_display() {
             return;
         }
-        let lc = self.handler.lc.read().unwrap();
-        let displays = lc.get_option("virtual-display");
+        let displays = self.handler.lc.read().unwrap().get_option("virtual-display");
         for d in displays.split(',') {
             if let Ok(index) = d.parse::<i32>() {
                 let mut misc = Misc::new();
@@ -518,11 +517,13 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     async fn send_toggle_privacy_mode_msg(&self, peer: &mut Stream) {
-        let lc = self.handler.lc.read().unwrap();
-        if lc.version >= hbb_common::get_version_number("1.2.4")
-            && lc.get_toggle_option("privacy-mode")
-        {
-            let impl_key = lc.get_option("privacy-mode-impl-key");
+        let impl_key = {
+            let lc = self.handler.lc.read().unwrap();
+            (lc.version >= hbb_common::get_version_number("1.2.4")
+                && lc.get_toggle_option("privacy-mode"))
+                .then(|| lc.get_option("privacy-mode-impl-key"))
+        };
+        if let Some(impl_key) = impl_key {
             if impl_key == crate::privacy_mode::PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY
                 && !self.peer_info.is_support_virtual_display()
             {

@@ -826,17 +826,21 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     ];
                     cx.spawn(async move |view, cx| {
                         loop {
-                            let active = view.update(cx, |view: &mut Client, cx| {
+                            let interval = view.update(cx, |view: &mut Client, cx| {
                                 view.poll();
                                 cx.notify();
-                                view.session.is_some()
+                                crate::pacing::poll_interval(if view.connected {
+                                    Some(view.target_fps.value() as u32)
+                                } else if view.connecting || view.session.is_some() {
+                                    Some(60)
+                                } else {
+                                    None
+                                })
                             });
-                            let Ok(active) = active else {
+                            let Ok(interval) = interval else {
                                 break;
                             };
-                            cx.background_executor()
-                                .timer(Duration::from_millis(if active { 16 } else { 250 }))
-                                .await;
+                            cx.background_executor().timer(interval).await;
                         }
                     })
                     .detach();

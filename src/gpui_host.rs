@@ -66,6 +66,11 @@ pub fn handle_background_command() -> bool {
                 eprintln!("Hardware codec probe requires only --check-hwcodec-config --stdout");
                 std::process::exit(2);
             }
+            #[cfg(windows)]
+            if !crate::platform::windows::bootstrap() {
+                eprintln!("Windows codec probe initialization failed");
+                std::process::exit(1);
+            }
             println!(
                 "{}{}",
                 crate::client::hwcodec::OUTPUT_PREFIX,
