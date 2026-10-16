@@ -2,6 +2,7 @@ use crate::{
     input,
     presentation::VideoPresentation,
     text_field::{self, TextField},
+    theme,
 };
 use base::message_proto::Message;
 use gpui::{
@@ -29,6 +30,7 @@ enum Reply {
 }
 
 struct Client {
+    font: gpui::SharedString,
     runtime: tokio::runtime::Handle,
     sender: mpsc::Sender<Reply>,
     receiver: mpsc::Receiver<Reply>,
@@ -459,7 +461,7 @@ impl Render for Client {
         let peers = self
             .status
             .as_ref()
-            .map(|status| status.peers.clone())
+            .map(|status| status.peers.as_slice())
             .unwrap_or_default();
         let bounds = self.bounds.clone();
         let current_addresses = self
@@ -495,8 +497,11 @@ impl Render for Client {
             .flex_col()
             .gap_3()
             .p_4()
-            .bg(rgb(0x101923))
-            .text_color(rgb(0xe9f1f8))
+            .bg(rgb(theme::PAGE))
+            .text_color(rgb(theme::TEXT))
+            .font_family(self.font.clone())
+            .text_size(px(theme::BODY_SIZE))
+            .line_height(px(theme::LINE_HEIGHT))
             .child(if self.host {
                 "XSCC 被控端 · Windows beta"
             } else {
@@ -526,7 +531,9 @@ impl Render for Client {
                             .id("refresh")
                             .px_3()
                             .py_1()
-                            .bg(rgb(0x23435b))
+                            .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(theme::ACCENT))
                             .cursor_pointer()
                             .child("刷新状态")
                             .on_click(cx.listener(|view, _, _, cx| {
@@ -540,7 +547,9 @@ impl Render for Client {
                                 .id("unbind")
                                 .px_3()
                                 .py_1()
-                                .bg(rgb(0x633434))
+                                .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(theme::DANGER))
                                 .cursor_pointer()
                                 .child(if self.confirm_unbind {
                                     "确认解绑并关闭连接"
@@ -562,6 +571,8 @@ impl Render for Client {
                         row.child(
                             div()
                                 .id("cancel-unbind")
+                                .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                                .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
                                 .px_3()
                                 .py_1()
                                 .cursor_pointer()
@@ -578,7 +589,9 @@ impl Render for Client {
                     .child(format!("当前上报访问地址：{current_addresses}"))
                     .child("设置新的上报访问地址（两项留空恢复自动；仅替换上报地址，不修改监听、路由或防火墙）")
                     .child(div().flex().gap_2().child(self.address_host.clone()).child(self.address_port.clone()))
-                    .when(configured, |section| section.child(div().id("save-address").px_3().py_1().bg(rgb(0x23435b)).cursor_pointer()
+                    .when(configured, |section| section.child(div().id("save-address").px_3().py_1().relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(theme::ACCENT)).cursor_pointer()
                         .child(if self.action_pending { "正在保存…" } else { "保存上报地址 / 留空恢复自动" })
                         .on_click(cx.listener(|view, _, _, cx| view.save_address(cx)))))
                     .when(!configured, |section| section.child("绑定实例时将一并提交以上地址。")))
@@ -597,7 +610,9 @@ impl Render for Client {
                                 .id("enroll")
                                 .px_3()
                                 .py_2()
-                                .bg(rgb(0x235e87))
+                                .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                                .child(theme::surface(rgb(theme::ACCENT), None, theme::CONTROL_EXTENT))
+                                .text_color(rgb(theme::PAGE))
                                 .cursor_pointer()
                                 .child(if !self.initialized || self.action_pending {
                                     "正在绑定…"
@@ -618,9 +633,10 @@ impl Render for Client {
             .child(
                 div()
                     .id("peers")
+                    .flex().flex_col().gap_2()
                     .max_h(px(150.0))
                     .overflow_y_scroll()
-                    .children(peers.into_iter().map(|peer| {
+                    .children(peers.iter().map(|peer| {
                         let id = peer.binding.device_id.to_string();
                         let available = can_connect
                             && peer.online
@@ -629,11 +645,9 @@ impl Render for Client {
                             .id(gpui::SharedString::from(id.clone()))
                             .px_3()
                             .py_2()
-                            .bg(if available {
-                                rgb(0x23435b)
-                            } else {
-                                rgb(0x1a2b39)
-                            })
+                            .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(theme::PANEL), None, theme::PANEL_EXTENT))
+                            .text_color(rgb(if available { theme::ACCENT } else { theme::MUTED }))
                             .child(format!(
                                 "{} · {}{}",
                                 peer.name,
@@ -670,11 +684,9 @@ impl Render for Client {
                                     .id(("target-fps", target.value() as usize))
                                     .px_3()
                                     .py_1()
-                                    .bg(if self.target_fps == target {
-                                        rgb(0x235e87)
-                                    } else {
-                                        rgb(0x23435b)
-                                    })
+                                    .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                                    .child(theme::surface(rgb(if self.target_fps == target { theme::ACCENT } else { theme::PANEL }), None, theme::CONTROL_EXTENT))
+                                    .text_color(rgb(if self.target_fps == target { theme::PAGE } else { theme::TEXT }))
                                     .child(target.value().to_string())
                                     .when(self.connected, |button| {
                                         button.cursor_pointer().on_click(cx.listener(
@@ -694,7 +706,9 @@ impl Render for Client {
                         .id("disconnect")
                         .px_3()
                         .py_1()
-                        .bg(rgb(0x633434))
+                        .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(theme::PANEL), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(theme::DANGER))
                         .cursor_pointer()
                         .child("断开 / 取消连接")
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -865,6 +879,17 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         }
                     });
                     Client {
+                        font: if window
+                            .text_system()
+                            .all_font_names()
+                            .iter()
+                            .any(|name| name == "Sarmg Maple")
+                        {
+                            "Sarmg Maple"
+                        } else {
+                            "Consolas"
+                        }
+                        .into(),
                         runtime: handle,
                         sender,
                         receiver,

@@ -1,6 +1,7 @@
 // Native input integration adapted from Zed's GPUI input example (Apache-2.0):
 // https://github.com/zed-industries/zed/blob/28d0a3547f16b9609b301b48ab363bfca649c864/crates/gpui/examples/input.rs
 // XSCC adds bounded single-line editing, protected secret fields and caret scrolling.
+use crate::theme;
 use gpui::{
     App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent,
@@ -463,19 +464,22 @@ impl Render for TextField {
             .key_context("XsccTextField")
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
-            .bg(rgb(0x101923))
-            .border_1()
-            .border_color(if focused {
-                rgb(0x60a5fa)
-            } else {
-                rgb(0x364352)
-            })
-            .rounded_md()
+            .relative()
+            .min_h(px(theme::CONTROL_HEIGHT))
+            .child(theme::surface(
+                rgb(theme::PANEL),
+                Some(rgb(if focused {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER
+                })),
+                theme::CONTROL_EXTENT,
+            ))
             .px_3()
-            .py_2()
-            .text_color(rgb(0xe5edf5))
-            .text_size(px(14.))
-            .line_height(px(22.))
+            .py(px(10.))
+            .text_color(rgb(theme::TEXT))
+            .text_size(px(theme::BODY_SIZE))
+            .line_height(px(theme::LINE_HEIGHT))
             .overflow_hidden()
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
@@ -523,7 +527,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                 len: text.len(),
                 font: style.font(),
                 color: if field.content.is_empty() {
-                    rgb(0x8b9aae).into()
+                    rgb(theme::MUTED).into()
                 } else {
                     style.color
                 },
@@ -585,7 +589,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                         point(origin_x + cursor_x, bounds.top()),
                         size(px(2.), bounds.size.height),
                     ),
-                    rgb(0x93c5fd),
+                    rgb(theme::ACCENT),
                 )
             });
             let selection = (focused && !field.selection.is_empty()).then(|| {
@@ -597,7 +601,7 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
                         point(start.min(end), bounds.top()),
                         point(start.max(end), bounds.bottom()),
                     ),
-                    rgba(0x60a5fa55),
+                    rgba((theme::ACCENT << 8) | 0x55),
                 )
             });
             FieldPaint {

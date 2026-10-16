@@ -128,7 +128,7 @@ impl SessionHandle {
     }
     pub fn drain_events(&self) -> Vec<SessionEvent> {
         let queue = &self.session.ui_handler.0.events;
-        (0..64).filter_map(|_| queue.pop()).collect()
+        (0..64).map_while(|_| queue.pop()).collect()
     }
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
         let mailbox = &self.session.ui_handler.0;
@@ -338,6 +338,9 @@ impl InvokeUiSession for Handler {
 }
 
 fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
+    if matches!(image.fmt, scrap::ImageFormat::Raw) {
+        return None;
+    }
     if image.w == 0 || image.h == 0 || image.w > 16384 || image.h > 16384 {
         return None;
     }
@@ -395,6 +398,11 @@ mod tests {
             copy_frame(0, &rgba).unwrap().bgra,
             vec![3, 2, 1, 255, 6, 5, 4, 255]
         );
+        let raw = scrap::ImageRgb {
+            fmt: scrap::ImageFormat::Raw,
+            ..rgba
+        };
+        assert!(copy_frame(0, &raw).is_none());
     }
     #[tokio::test]
     async fn latest_frame_replaces_old_frame_without_waiting() {

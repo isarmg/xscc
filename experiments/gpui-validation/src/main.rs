@@ -13,6 +13,8 @@ mod options;
 mod presentation;
 #[cfg(all(target_os = "windows", feature = "live-session"))]
 mod text_field;
+#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+mod theme;
 use options::Options;
 #[path = "../../shared/management.rs"]
 mod management;
