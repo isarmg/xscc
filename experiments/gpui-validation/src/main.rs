@@ -215,7 +215,7 @@ impl Render for Probe {
                 .on_mouse_up(MouseButton::Left, cx.listener(|view, event: &MouseUpEvent, _, _| view.pointer(event.position, 2, 1)))
                 .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, _| view.pointer(event.position, 0, 0)))
                 .children(self.frame.as_ref().map(|image| img(ImageSource::Render(image.clone())).size_full().object_fit(ObjectFit::Contain)))
-                .child(canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {}).absolute().size_full()))
+                .child(canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {}).absolute().top_0().left_0().size_full()))
             .child("No remote input is sent. Hardware decode, IME, touch, and complete sessions require separate acceptance.")
     }
 }
