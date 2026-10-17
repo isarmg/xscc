@@ -431,8 +431,22 @@ impl InvokeUiSession for Handler {
                 available: display.online && display.width > 0 && display.height > 0,
             })
             .collect();
-        self.0.monitors.write().unwrap().list = list.clone();
+        let pending_unavailable = {
+            let mut monitors = self.0.monitors.write().unwrap();
+            let pending_unavailable = monitors.pending.is_some_and(|pending| {
+                !list
+                    .iter()
+                    .any(|monitor| monitor.index == pending && monitor.available)
+            });
+            monitors.list = list.clone();
+            pending_unavailable
+        };
         self.event(SessionEvent::Monitors(list));
+        if pending_unavailable {
+            self.event(SessionEvent::Error(
+                "Requested display disconnected. Reconnect and select an available display.".into(),
+            ));
+        }
     }
     fn set_platform_additions(&self, _: &str) {}
     fn on_connected(&self, _: ConnType) {}
@@ -598,6 +612,35 @@ mod tests {
             assert_eq!(message.misc().capture_displays().set, vec![1]);
         }
         assert!(handle.switch_monitor(0).is_err());
+    }
+
+    #[test]
+    fn removed_pending_monitor_reports_failure_without_resuming_input() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let handler = &handle.session.ui_handler;
+        let online = DisplayInfo {
+            width: 1,
+            height: 1,
+            online: true,
+            ..Default::default()
+        };
+        handler.set_peer_info(&PeerInfo {
+            displays: vec![online.clone(), online.clone(), online.clone()],
+            ..Default::default()
+        });
+        handle.switch_monitor(2).unwrap();
+        handler.set_displays(&vec![online.clone(), online, DisplayInfo::default()]);
+        assert!(handle.drain_events().iter().any(|event| matches!(
+            event, SessionEvent::Error(message) if message == "Requested display disconnected. Reconnect and select an available display."
+        )));
+        assert!(handle
+            .send_input(InputCommand::Key(KeyEvent::default()))
+            .is_err());
+        assert!(handle.switch_monitor(1).is_err());
     }
 
     #[test]
