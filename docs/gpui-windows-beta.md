@@ -99,7 +99,11 @@ silent version switching or removal of `--locked`.
 
 Both installers and archives include the application's unchanged `LICENCE`,
 `THIRD_PARTY_NOTICES.txt` and the full upstream `GPUI-LICENSE-APACHE.txt` from
-pinned Zed commit `28d0a3547f16b9609b301b48ab363bfca649c864`. The notice identifies
+the vendored GPUI source originating at Zed commit
+`28d0a3547f16b9609b301b48ab363bfca649c864`. XSCC maintains it independently in
+`vendor/gpui`; application dependencies resolve to local paths. The experimental
+Windows surface implementation does not change the production CPU-backed decoder
+frame path. The notice identifies
 the adapted text-input example and XSCC's changes. These notices do not assert
 that all dependencies use one license; broader dependency review remains a gate.
 The host matrix explicitly tests `management::host_tests` in addition to native

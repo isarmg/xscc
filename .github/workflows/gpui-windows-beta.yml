@@ -4,6 +4,7 @@ on:
     branches: [feat/management-prep]
     paths:
       - 'experiments/gpui-validation/**'
+      - 'vendor/gpui/**'
       - 'experiments/shared/**'
       - 'src/gpui*'
       - 'src/client.rs'

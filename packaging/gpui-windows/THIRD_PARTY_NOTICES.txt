@@ -10,7 +10,10 @@ The complete upstream license and copyright notice are included in
 GPUI-LICENSE-APACHE.txt.
 
 Upstream repository: https://github.com/zed-industries/zed
-Pinned source revision: 28d0a3547f16b9609b301b48ab363bfca649c864
+Original upstream source revision: 28d0a3547f16b9609b301b48ab363bfca649c864
+Maintained source: vendor/gpui in this XSCC source revision.
+XSCC modifications include an experimental Windows immutable shared-surface
+renderer and WARP pixel test; the production decoder remains CPU-backed.
 License source:
 https://github.com/zed-industries/zed/blob/28d0a3547f16b9609b301b48ab363bfca649c864/crates/gpui/LICENSE-APACHE
 Example source:

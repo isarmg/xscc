@@ -1,16 +1,18 @@
 # GPUI Windows shared-surface integration proof
 
-Status: an **opt-in, Windows-target type-checked experimental patch**, not enabled by XSCC's Cargo
-manifest, production frame path, or beta packaging. The isolated CI is configured
-to build the proof and run one private WARP pixel test. No successful runtime
-execution of that new test has yet been established. It applies to GPUI commit
-`28d0a3547f16b9609b301b48ab363bfca649c864` only. Source applicability, Rust formatting, and the actual Windows GNU target
-type-check passed on Linux. No native Windows/MSVC link, display, or hardware
-validation is claimed. Do not ship this patch as a performance improvement.
+Status: an **experimental surface implementation maintained in `vendor/gpui`**.
+XSCC builds that local source directly; the production decoder/frame path remains
+CPU-backed and does not publish these experimental surfaces. The isolated CI
+builds the example and runs one private WARP pixel test. No successful runtime
+execution of that test has yet been established. The source originated at Zed
+commit `28d0a3547f16b9609b301b48ab363bfca649c864`; provenance and licenses are
+retained in `vendor/gpui`. Previous Windows GNU cross-checks passed before
+vendoring. No native Windows/MSVC link, display, or hardware validation is
+claimed. Do not advertise this implementation as a performance improvement.
 
 ## Exact upstream gap and route
 
-At this revision:
+At the original upstream revision:
 
 - `crates/gpui/src/elements/surface.rs`: `SurfaceSource` only carries Apple's
   `CVPixelBuffer`; `surface()` is Apple-only.
@@ -20,7 +22,7 @@ At this revision:
   without drawing anything.
 
 The existing scene already batches surfaces in paint order with content masks.
-The patch extends those points with an owned immutable BGRA texture, imports it
+The maintained implementation extends those points with an owned immutable BGRA texture, imports it
 onto the renderer's own device, and draws it through a separate instance of the
 existing polychrome sprite shader pipeline. The separate instance avoids
 clobbering ordinary atlas-sprite buffers. Only opaque video pixels are supported;
@@ -76,24 +78,22 @@ boundary, not transmute wrappers or rely on matching interface names.
 
 ## Reproduce on Windows 11 x64
 
-Use a full, clean, disposable checkout at the exact pinned commit. Do not modify a
-Cargo cache checkout. Rust 1.99.0 and MSVC Windows build tools must already be
-available. Run from XSCC's repository root:
+Rust 1.99.0 and MSVC Windows build tools must already be available.
+Run directly from XSCC's repository root; no separate checkout or patch is needed:
 
 ```powershell
-# Read-only source applicability check.
-./experiments/windows-texture-bridge/gpui-surface/check.ps1 -GpuiCheckout C:\work\gpui-proof
+# Type-check the maintained example.
+./experiments/windows-texture-bridge/gpui-surface/check.ps1
 
-# Apply to that disposable checkout, type-check and build the actual GPUI example.
-./experiments/windows-texture-bridge/gpui-surface/check.ps1 -GpuiCheckout C:\work\gpui-proof -Mode Build
+# Type-check and build the actual GPUI example.
+./experiments/windows-texture-bridge/gpui-surface/check.ps1 -Mode Build
 
-# After Build, run from the now-patched checkout. Do not rerun the clean-tree script.
-cd C:\work\gpui-proof
-cargo +1.99.0 run --locked -p gpui --example windows_shared_surface
+# Type-check, build, and launch the example.
+./experiments/windows-texture-bridge/gpui-surface/check.ps1 -Mode Run
 ```
 
-Alternatively `-Mode Run` combines apply, check, build, and launch in one invocation
-on a fresh clean checkout. Cargo may fetch build dependencies. It does not install drivers or alter system settings.
+The commands use `vendor/gpui/Cargo.lock`. Cargo may fetch locked build
+dependencies. They do not install drivers or alter system settings.
 
 The presentation example intentionally requires physical adapter 0 and never
 falls back to WARP. GPUI independently selects its first usable adapter; mismatch
@@ -118,23 +118,23 @@ Check these observable cases; do not record PASS merely because a window opened:
 This is a manual display acceptance check, not a screenshot assertion, frame-rate
 benchmark, leak certification, or device-loss test. The isolated `.github/workflows/gpui-windows-surface.yml` runs **Build**, builds
 the private test binary, then runs exactly one WARP draw test on Windows 2025
-with Rust 1.99.0 and a separate exact-revision Zed checkout. It
-is restricted to pushes on `feat/management-prep` touching this proof or that
+with Rust 1.99.0 against the maintained `vendor/gpui` workspace. It
+is restricted to pushes on `feat/management-prep` touching this proof, the vendored source, or that
 workflow, uses read-only repository permissions, and never launches the GUI.
 Its existence is not evidence of a successful CI run. Real presentation
-acceptance needs a Windows physical-GPU session. Do not change the production beta workflow for this
-proof. A native Windows build is the next gate before maintaining a fork revision.
+acceptance needs a Windows physical-GPU session. The beta workflow also builds the vendored source, but its production decoder
+remains CPU-backed. A native Windows build remains a validation gate.
 
 ## Private WARP shader-pixel test
 
-The patch adds exactly one test,
+The maintained implementation includes exactly one surface test,
 `directx_renderer::windows_surface_tests::windows_surface_warp_draw_pixels`,
 inside the private Windows renderer. It explicitly creates two distinct WARP
 software devices on the same adapter. It does not create an HWND, swapchain,
 DirectComposition target, or visible window. Missing WARP or any GPU/API failure
 fails the test; it never silently skips.
 
-The fixture calls the actual patched `draw_surfaces()` and existing `draw_quads()`
+The fixture calls the actual maintained `draw_surfaces()` and existing `draw_quads()`
 with real shader pipelines and a standalone BGRA render target. An odd-width
 9×5 source is copied once into an immutable shared publication. Its two surface
 clones remain after the original publication/producer handles are dropped. The
@@ -149,7 +149,7 @@ The workflow first lists the exact test and requires exactly one matching entry;
 then it executes that exact name, so a misspelled filter cannot produce a green
 zero-test result. `--features test-support` is needed for upstream test-only
 `PlatformWindow::render_to_image` trait declarations to agree across crates.
-To inspect and run it manually from the patched checkout:
+To inspect and run it manually from `vendor/gpui`:
 
 ```powershell
 $TestName = 'directx_renderer::windows_surface_tests::windows_surface_warp_draw_pixels'
@@ -165,7 +165,23 @@ latency, device recovery, or production readiness. The physical-adapter example
 remains unchanged and separate. This test has been cross-type-checked and linted,
 not executed on Windows yet.
 
-## Authoring checks performed
+## Vendored-source integration checks
+
+- The source import was verified against the applied original patch before the
+  duplicate patch file was removed. The example and private WARP test now live
+  directly in the maintained source tree.
+- The application lockfile changed only by removing the 20 former Zed Git source
+  entries. Package versions, checksums, and dependency edges are unchanged.
+- Full all-platform application metadata resolves with `--offline --locked` once
+  the locked dependency cache is populated; all 20 GPUI path packages resolve
+  inside `vendor/gpui`.
+- On Linux, the application passed `cargo check --offline --locked --all-targets`,
+  `cargo test --offline --locked` (13 tests), and `cargo clippy --offline --locked
+  --all-targets`, using its manifest and Rust 1.99.0. The existing seven
+  non-Windows dead-code warnings remain. Application formatting and workflow
+  YAML parsing also passed. These do not establish Windows execution.
+
+## Historical pre-vendoring authoring checks
 
 - `git apply --check` against a full clean checkout at the exact pinned commit:
   passed.

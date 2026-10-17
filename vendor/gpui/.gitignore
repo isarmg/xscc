@@ -1,0 +1,6 @@
+# Preserve GPUI example assets despite XSCC's root image exclusions.
+!/crates/gpui/examples/image/*.png
+!/crates/gpui/examples/image/*.jpg
+!/crates/gpui/examples/image/*.svg
+!/crates/gpui/examples/svg/
+!/crates/gpui/examples/svg/*

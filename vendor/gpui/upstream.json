@@ -1,0 +1,49 @@
+{
+  "upstream_repository": "https://github.com/zed-industries/zed",
+  "upstream_commit": "28d0a3547f16b9609b301b48ab363bfca649c864",
+  "maintenance": "Independently maintained XSCC source; no build-time GPUI checkout or patch application.",
+  "workspace_members": [
+    "crates/bench_metrics",
+    "crates/collections",
+    "crates/gpui",
+    "crates/gpui_apple",
+    "crates/gpui_ios",
+    "crates/gpui_linux",
+    "crates/gpui_macos",
+    "crates/gpui_macros",
+    "crates/gpui_platform",
+    "crates/gpui_shared_string",
+    "crates/gpui_util",
+    "crates/gpui_web",
+    "crates/gpui_wgpu",
+    "crates/gpui_windows",
+    "crates/http_client",
+    "crates/http_client_tls",
+    "crates/path",
+    "crates/refineable",
+    "crates/refineable/derive_refineable",
+    "crates/reqwest_client",
+    "crates/scheduler",
+    "crates/sum_tree",
+    "crates/util",
+    "crates/util_macros",
+    "crates/zlog",
+    "crates/ztracing",
+    "crates/ztracing_macro",
+    "tooling/perf"
+  ],
+  "source_changes_from_upstream": [
+    "crates/gpui/Cargo.toml",
+    "crates/gpui/examples/windows_shared_surface.rs",
+    "crates/gpui/src/elements/surface.rs",
+    "crates/gpui/src/scene.rs",
+    "crates/gpui/src/window.rs",
+    "crates/gpui_windows/src/directx_renderer.rs",
+    "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs"
+  ],
+  "asset_directories": [
+    "assets/fonts/ibm-plex-sans",
+    "assets/fonts/lilex"
+  ],
+  "source_archive_policy": "Selected transitive path-dependency closure, including dev dependencies and all referenced target backends; no editor application or Git metadata."
+}

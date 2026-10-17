@@ -28,7 +28,7 @@ Linux 两者均通过现有 VP9 软件解码器回放、窗口缩放、键鼠消
 ## 范围与版本
 
 - Slint 固定 `1.18.1`，使用 Winit/Android 原生后端，分别验证软件绘制与 FemtoVG/WGPU 纹理路径。
-- GPUI 固定 Zed 上游提交 `28d0a3547f16b9609b301b48ab363bfca649c864`。不使用落后于上游源码的 crates.io `0.2.2` 包评估当前能力。
+- GPUI 源自 Zed 上游提交 `28d0a3547f16b9609b301b48ab363bfca649c864`，现由 XSCC 在 `vendor/gpui` 独立维护，通过本地路径依赖构建。不使用落后于上游源码的 crates.io `0.2.2` 包评估当前能力。
 - 两套原型均固定 `libc 0.2.189`：首次 iOS 检查发现 `0.2.190` 将 dyld 声明限定为 macOS，而共享 `backtrace` 仍在 iOS 调用，导致编译失败。此约束仅在实验 workspace 中，不改变正式应用的依赖。
 - 两套程序分别位于 `experiments/slint-validation`、`experiments/gpui-validation`，各自独立 Cargo workspace/lockfile，不接入正式应用构建。
 - 两者复用 `experiments/shared/video.rs` 的测试图案、单帧邮箱与可选 VP9 回放，以及相同的 `NativeManager` 实现；键鼠事件编码为现有 `base::message_proto::Message` 后再解码检查。

@@ -198,7 +198,7 @@ jni = "0.21"
 
 [workspace]
 members = ["crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vdi/host"]
+exclude = ["vdi/host", "vendor/gpui"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone
