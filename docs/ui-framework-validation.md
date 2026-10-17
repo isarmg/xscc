@@ -2,6 +2,8 @@
 
 本轮并列验证两个框架，最终选型由用户决定。现有 Flutter 应用继续作为功能基线；本轮不自动替换。
 
+当前 CI 范围（2026-10-17）：GPUI facade 尚无可运行的 Android 平台后端，框架比较矩阵暂不构建此组合；保留 Slint Android、GPUI iOS 及全部桌面编译和测试。该排除不代表 GPUI Android 验收通过，也不改变现有 Flutter Android 应用。GPUI 现仅编入 Wayland，旧 Xvfb/X11 窗口回放步骤仅继续用于 Slint；GPUI 保留编译、Clippy、单元测试及 Linux codec 构建。本比较 workflow 不覆盖 GPUI 的真实 Wayland 窗口、渲染与输入，仍需独立真机验收。下列首轮失败记录仍保留。
+
 ## 2026-10-16 首轮实测
 
 最终代码验证提交为 `0f66dffc04478ad30a393101ce8f0365182ae177`，对应 [GitHub 验证任务](https://github.com/isarmg/xscc/actions/runs/38849936670)。10 个任务中 9 个通过；唯一失败项为 [GPUI Android](https://github.com/isarmg/xscc/actions/runs/38849936670/job/116808693727)，编译报错 `gpui_platform::current_platform` 预期返回 `Rc<dyn Platform>`，Android 条件下实际为空函数体。检查如实保留为失败，不通过跳过检查或空实现宣称支持；其余平台独立执行。

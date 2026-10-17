@@ -39,7 +39,7 @@ jobs:
         run: cargo test --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
       - name: Build executable
         run: cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml
-      - name: Linux decoder and input validation
+      - name: Linux codec build and applicable X11 runtime validation
         if: runner.os == 'Linux'
         shell: bash
         env:
@@ -55,10 +55,14 @@ jobs:
           PY
           export PKG_CONFIG_PATH="$RUNNER_TEMP/xscc-codec-pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
           cargo build --locked --manifest-path experiments/${{ matrix.framework }}-validation/Cargo.toml --features xscc-codec
-          ffmpeg -hide_banner -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -an -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -g 60 -pix_fmt yuv420p -f ivf "$RUNNER_TEMP/xscc-test.ivf"
-          xvfb-run -a env -u WAYLAND_DISPLAY python3 experiments/check-x11.py --framework ${{ matrix.framework }} --exe experiments/${{ matrix.framework }}-validation/target/debug/xscc-${{ matrix.framework }}-validation --ivf "$RUNNER_TEMP/xscc-test.ivf" --output "$RUNNER_TEMP/${{ matrix.framework }}-input"
+          if [ '${{ matrix.framework }}' = slint ]; then
+            ffmpeg -hide_banner -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -an -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -g 60 -pix_fmt yuv420p -f ivf "$RUNNER_TEMP/xscc-test.ivf"
+            xvfb-run -a env -u WAYLAND_DISPLAY python3 experiments/check-x11.py --framework ${{ matrix.framework }} --exe experiments/${{ matrix.framework }}-validation/target/debug/xscc-${{ matrix.framework }}-validation --ivf "$RUNNER_TEMP/xscc-test.ivf" --output "$RUNNER_TEMP/${{ matrix.framework }}-input"
+          else
+            echo 'GPUI: codec build and unit tests only. This X11 comparison harness does not validate native Wayland windows, rendering or input; physical-device acceptance remains required.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always() && runner.os == 'Linux'
+        if: always() && runner.os == 'Linux' && matrix.framework == 'slint'
         with:
           name: ${{ matrix.framework }}-linux-runtime-evidence
           path: ${{ runner.temp }}/${{ matrix.framework }}-input/
@@ -76,6 +80,10 @@ jobs:
       matrix:
         framework: [slint, gpui]
         platform: [ios, android]
+        # The native GPUI facade has no Android platform backend yet.
+        exclude:
+          - framework: gpui
+            platform: android
         include:
           - platform: ios
             target: aarch64-apple-ios

@@ -4,7 +4,7 @@ use base::{
 };
 use gpui::Keystroke;
 
-#[cfg(any(target_os = "windows", feature = "live-session"))]
+#[cfg(any(all(target_os = "windows", test), feature = "live-session"))]
 pub fn key_identity(key: &Keystroke, mapper: &dyn gpui::PlatformKeyboardMapper) -> String {
     mapper
         .map_key_equivalent(key.clone(), false)
@@ -163,7 +163,7 @@ pub fn release_key(pressed: &Message) -> Message {
     message
 }
 
-#[cfg(any(feature = "live-session", test))]
+#[cfg(feature = "live-session")]
 pub fn modifier_keys(modifiers: gpui::Modifiers) -> Vec<protobuf::EnumOrUnknown<ControlKey>> {
     [
         ControlKey::Control,
