@@ -93,6 +93,7 @@ impl SessionView {
         let lifecycle = cx.on_app_lifecycle(move |phase, cx| {
             if matches!(phase, AppLifecyclePhase::Inactive) {
                 let _ = weak.update(cx, |view, cx| {
+                    view.release_input();
                     if let Some(session) = &view.session {
                         if let Err(error) = session.set_audio_enabled(false) {
                             view.notice = error.to_string();
@@ -264,6 +265,16 @@ impl SessionView {
                     y,
                 ),
                 Output::Up(x, y) => (input::MOUSE_TYPE_UP | (input::MOUSE_BUTTON_LEFT << 3), x, y),
+                Output::RightDown(x, y) => (
+                    input::MOUSE_TYPE_DOWN | (input::MOUSE_BUTTON_RIGHT << 3),
+                    x,
+                    y,
+                ),
+                Output::RightUp(x, y) => (
+                    input::MOUSE_TYPE_UP | (input::MOUSE_BUTTON_RIGHT << 3),
+                    x,
+                    y,
+                ),
                 Output::Scroll(x, y) => (input::MOUSE_TYPE_TRACKPAD, x, y),
             };
             if let Err(error) = session.send_input(InputCommand::Mouse(MouseEvent {
@@ -322,6 +333,7 @@ impl SessionView {
             TouchPhase::Ended => Phase::Ended,
             TouchPhase::Cancelled => Phase::Cancelled,
         };
+        let was_armed = self.touch.right_click_armed();
         let output = self.touch.event(
             event.id.0,
             phase,
@@ -329,7 +341,7 @@ impl SessionView {
             geometry,
         );
         self.send_outputs(output);
-        if self.touch.pending() {
+        if self.touch.pending() || was_armed != self.touch.right_click_armed() {
             cx.notify();
         }
     }
@@ -763,6 +775,33 @@ impl Render for SessionView {
                         )
                     }),
             )
+            .when(input_allowed, |view| {
+                view.child(
+                    div()
+                        .id("one-shot-right-click")
+                        .min_h(px(44.))
+                        .p_3()
+                        .bg(rgb(palette.panel))
+                        .child(if self.touch.right_click_armed() {
+                            "右键已准备：轻点画面（点击此处取消）"
+                        } else {
+                            "下一次轻点使用右键"
+                        })
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            let cancel = view.touch.right_click_armed();
+                            view.release_input();
+                            if let Some(control) = &view.keyboard_control {
+                                control.cancel();
+                            }
+                            window.dismiss_virtual_keyboard();
+                            view.focus.focus(window, cx);
+                            if !cancel && view.input_allowed() && !view.touch.arm_right_click() {
+                                view.notice = "请先松开画面上的触点。".into();
+                            }
+                            cx.notify();
+                        })),
+                )
+            })
             .children(self.keyboard.clone())
             .child(
                 div()

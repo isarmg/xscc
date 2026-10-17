@@ -50,6 +50,8 @@ pub enum Output {
     Down(i32, i32),
     Up(i32, i32),
     Scroll(i32, i32),
+    RightDown(i32, i32),
+    RightUp(i32, i32),
 }
 #[derive(Default)]
 pub struct TouchInput {
@@ -60,8 +62,20 @@ pub struct TouchInput {
     pending_move: Option<(i32, i32)>,
     scroll: Point,
     blocked: bool,
+    right_click: bool,
 }
 impl TouchInput {
+    pub fn arm_right_click(&mut self) -> bool {
+        if !self.contacts.is_empty() {
+            return false;
+        }
+        self.right_click = true;
+        true
+    }
+    pub fn right_click_armed(&self) -> bool {
+        self.right_click
+    }
+
     pub fn pending(&self) -> bool {
         self.pending_move.is_some() || self.scroll.0.abs() >= 1. || self.scroll.1.abs() >= 1.
     }
@@ -86,6 +100,7 @@ impl TouchInput {
         output
     }
     pub fn cancel(&mut self) -> Vec<Output> {
+        self.right_click = false;
         self.blocked = true;
         self.pending_move = None;
         self.scroll = Point::default();
@@ -120,6 +135,9 @@ impl TouchInput {
                 if geometry.map(point, false).is_none() {
                     output.extend(self.cancel());
                 }
+                if self.right_click && self.contacts.len() > 1 {
+                    output.extend(self.cancel());
+                }
                 if self.contacts.len() == 2 {
                     output.extend(self.flush());
                     output.extend(self.pressed.take().map(|(x, y)| Output::Up(x, y)));
@@ -138,6 +156,16 @@ impl TouchInput {
                 }
                 if !point.0.is_finite() || !point.1.is_finite() {
                     return self.cancel();
+                }
+                if self.right_click {
+                    if geometry.map(point, false).is_none()
+                        || self
+                            .start
+                            .is_none_or(|start| (point.0 - start.0).hypot(point.1 - start.1) >= 8.)
+                    {
+                        output.extend(self.cancel());
+                    }
+                    return output;
                 }
                 if self.contacts.len() == 2 {
                     // Each finger contributes half of the centroid delta. Bound queued work.
@@ -175,11 +203,12 @@ impl TouchInput {
                             .is_some_and(|start| (point.0 - start.0).hypot(point.1 - start.1) < 8.)
                             && let Some((x, y)) = geometry.map(point, false)
                         {
-                            output.extend([
-                                Output::Move(x, y),
-                                Output::Down(x, y),
-                                Output::Up(x, y),
-                            ]);
+                            output.push(Output::Move(x, y));
+                            if self.right_click {
+                                output.extend([Output::RightDown(x, y), Output::RightUp(x, y)]);
+                            } else {
+                                output.extend([Output::Down(x, y), Output::Up(x, y)]);
+                            }
                         }
                     } else {
                         output.extend(self.flush());
@@ -279,5 +308,64 @@ mod tests {
         assert!(i.event(5, Phase::Started, Point(50., 80.), g).is_empty());
         assert!(i.event(5, Phase::Ended, Point(50., 80.), g).is_empty());
         assert!(i.event(4, Phase::Ended, Point(70., 80.), g).is_empty());
+    }
+    #[test]
+    fn one_shot_right_click_is_balanced_and_next_tap_is_left() {
+        let mut input = TouchInput::default();
+        let g = geometry();
+        assert!(input.arm_right_click());
+        assert!(input.right_click_armed());
+        assert!(
+            input
+                .event(1, Phase::Started, Point(50., 80.), g)
+                .is_empty()
+        );
+        assert!(!input.arm_right_click());
+        assert_eq!(
+            input.event(1, Phase::Ended, Point(50., 80.), g),
+            vec![
+                Output::Move(-150, 40),
+                Output::RightDown(-150, 40),
+                Output::RightUp(-150, 40)
+            ]
+        );
+        assert!(!input.right_click_armed());
+        input.event(2, Phase::Started, Point(50., 80.), g);
+        assert_eq!(
+            input.event(2, Phase::Ended, Point(50., 80.), g),
+            vec![
+                Output::Move(-150, 40),
+                Output::Down(-150, 40),
+                Output::Up(-150, 40)
+            ]
+        );
+    }
+
+    #[test]
+    fn right_click_rejects_bars_drag_multitouch_cancel_and_reset() {
+        let g = geometry();
+        for scenario in 0..6 {
+            let mut input = TouchInput::default();
+            assert!(input.arm_right_click());
+            let start = if scenario == 0 {
+                Point(50., 20.)
+            } else {
+                Point(50., 80.)
+            };
+            assert!(input.event(1, Phase::Started, start, g).is_empty());
+            let out = match scenario {
+                0 => vec![],
+                1 => input.event(1, Phase::Moved, Point(70., 80.), g),
+                2 => input.event(2, Phase::Started, Point(60., 80.), g),
+                3 => input.event(1, Phase::Cancelled, Point(50., 80.), g),
+                4 => input.cancel(),
+                _ => input.reset(),
+            };
+            assert!(out.is_empty());
+            assert!(!input.right_click_armed());
+            assert!(input.event(1, Phase::Ended, Point(50., 80.), g).is_empty());
+            assert!(input.event(2, Phase::Ended, Point(60., 80.), g).is_empty());
+            assert!(input.flush().is_empty());
+        }
     }
 }

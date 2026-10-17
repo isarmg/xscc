@@ -43,7 +43,12 @@ IPC, host listener, capture, additional binding store or QUIC feature is enabled
 The UI defaults to direct touch: tap to left-click, move one finger beyond the
 threshold to drag, and move two fingers to scroll. A second finger releases an
 active drag; cancellation or a third finger cancels the gesture. There is no
-right-click, hardware-keyboard integration, inertial scrolling or clipboard integration.
+full hardware-keyboard integration, inertial scrolling or clipboard integration.
+An explicit one-shot right-click button arms the next valid single-finger tap.
+Black bars, dragging, multiple fingers and cancellation produce no right-click;
+focus loss, background, permission loss and display changes clear the armed state.
+After that one-shot gesture, subsequent taps use normal left-click behavior. Device acceptance
+for this interaction is still pending.
 The visible view-only switch releases input and reconnects with input disabled on
 the wire. The root adapter's existing `connect` API remains view-only; only the
 explicit `connect_touch` entry enables pointer input. The app uses the explicit

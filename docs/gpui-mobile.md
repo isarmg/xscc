@@ -65,7 +65,10 @@ switching releases input and reconnects with input disabled. The root `connect`
 entry remains view-only. Software-keyboard commits and a control-key bar use a separate explicit keyboard
 capability. Preedit stays local; macOS/Windows allow native Unicode while Linux
 allows only printable ASCII plus separate control keys. No clipboard fallback,
-complete hardware-keyboard integration, right-click or inertial scrolling is added.
+complete hardware-keyboard integration or inertial scrolling is added.
+Right-click is an explicit one-shot next-tap action, cancelled by dragging, black
+bars, multiple fingers or lifecycle/input-permission changes; device validation
+remains open.
 Unmodified non-repeating Enter/Tab events also support Android IME actions; the
 identical hardware control events are accepted without claiming full hardware input. Native build success and real-device first-frame/revocation tests
 remain separate acceptance gates. No physical-device streaming is claimed.
