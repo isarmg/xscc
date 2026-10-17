@@ -1,0 +1,58 @@
+name: Experimental GPUI Windows surface WARP proof
+on:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - 'experiments/windows-texture-bridge/gpui-surface/**'
+      - '.github/workflows/gpui-windows-surface.yml'
+permissions:
+  contents: read
+jobs:
+  compile-surface-proof:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-surface-proof
+      RUSTUP_AUTO_INSTALL: '0'
+    steps:
+      - name: Check out experiment
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: xscc
+          persist-credentials: false
+      - name: Check out exact GPUI source in a separate disposable repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: zed-industries/zed
+          ref: 28d0a3547f16b9609b301b48ab363bfca649c864
+          path: gpui-proof
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: x86_64-pc-windows-msvc
+      - name: Apply and build the real GPUI integration example (no GUI run)
+        run: |
+          Write-Host 'Compile-only experimental surface proof. No display, physical-GPU, decoder, latency, or zero-copy validation is claimed.'
+          & ./xscc/experiments/windows-texture-bridge/gpui-surface/check.ps1 -GpuiCheckout "$env:GITHUB_WORKSPACE/gpui-proof" -Mode Build
+      - name: Build the private WARP draw test without running it
+        working-directory: gpui-proof
+        run: |
+          cargo +1.99.0 test --locked -p gpui_windows --features test-support --lib --no-run
+          if ($LASTEXITCODE -ne 0) { throw "WARP test build failed with exit code $LASTEXITCODE" }
+      - name: Verify actual GPUI WARP shader pixels (not physical GPU or presentation)
+        working-directory: gpui-proof
+        timeout-minutes: 2
+        run: |
+          $TestName = 'directx_renderer::windows_surface_tests::windows_surface_warp_draw_pixels'
+          $Listed = & cargo +1.99.0 test --locked -p gpui_windows --features test-support --lib $TestName -- --exact --list 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "WARP test discovery failed with exit code $LASTEXITCODE" }
+          $Listed | ForEach-Object { Write-Host $_ }
+          $Found = @($Listed | Where-Object { "$_" -eq "$($TestName): test" })
+          if ($Found.Count -ne 1) { throw "Expected exactly one named WARP test, found $($Found.Count)" }
+          Write-Host 'WARP software-rendered importer/shader/clipping/opacity/replay pixel verification only; no HWND, swapchain, physical GPU, decoder or presentation claim.'
+          cargo +1.99.0 test --locked -p gpui_windows --features test-support --lib $TestName -- --exact --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "WARP draw test failed with exit code $LASTEXITCODE" }

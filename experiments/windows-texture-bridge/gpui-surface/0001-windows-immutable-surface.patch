@@ -1,0 +1,900 @@
+diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
+index f6616c8..7467edb 100644
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -150,6 +150,8 @@ libc.workspace = true
+ 
+ [target.'cfg(target_os = "windows")'.dependencies]
+ windows = { workspace = true, features = [
++    "Win32_Graphics_Direct3D11",
++    "Win32_Graphics_Dxgi_Common",
+     "Win32_System_Power",
+     "Win32_System_RemoteDesktop",
+     "Win32_System_WindowsProgramming",
+@@ -288,3 +290,7 @@ path = "examples/view_example/view_example_main.rs"
+ [[example]]
+ name = "toggle_headless"
+ path = "examples/toggle_headless.rs"
++
++[[example]]
++name = "windows_shared_surface"
++path = "examples/windows_shared_surface.rs"
+diff --git a/crates/gpui/examples/windows_shared_surface.rs b/crates/gpui/examples/windows_shared_surface.rs
+new file mode 100644
+index 0000000..303565a
+--- /dev/null
++++ b/crates/gpui/examples/windows_shared_surface.rs
+@@ -0,0 +1,205 @@
++//! Opt-in synthetic shared-texture integration proof, not a video benchmark.
++#[cfg(not(target_os = "windows"))]
++fn main() {
++    panic!("This integration example requires Windows; no GPU test was performed");
++}
++
++#[cfg(target_os = "windows")]
++fn main() -> anyhow::Result<()> {
++    windows_example::run()
++}
++
++#[cfg(target_os = "windows")]
++mod windows_example {
++    use anyhow::{Context as _, Result, ensure};
++    use gpui::{
++        App, Bounds, Context, MouseButton, Window, WindowBounds, WindowOptions, WindowsSurface,
++        div, prelude::*, px, rgb, size, surface,
++    };
++    use gpui_platform::application;
++    use windows::{
++        Win32::{
++            Foundation::HMODULE,
++            Graphics::{
++                Direct3D::{D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0},
++                Direct3D11::*,
++                Dxgi::{Common::*, *},
++            },
++        },
++        core::Interface,
++    };
++
++    struct Proof {
++        frames: [WindowsSurface; 2],
++        alternate: bool,
++    }
++
++    impl Render for Proof {
++        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
++            div().size_full().bg(rgb(0x222222)).p_8().child(
++                div()
++                    .relative()
++                    .w(px(400.))
++                    .h(px(210.))
++                    .overflow_hidden()
++                    .child(
++                        surface(self.frames[usize::from(self.alternate)].clone())
++                            .absolute()
++                            .left(px(-30.))
++                            .top(px(-15.))
++                            .w(px(460.))
++                            .h(px(240.)),
++                    )
++                    .child(
++                        div()
++                            .absolute()
++                            .left(px(280.))
++                            .top(px(140.))
++                            .w(px(100.))
++                            .h(px(50.))
++                            .opacity(0.5)
++                            .child(
++                                surface(self.frames[usize::from(self.alternate)].clone())
++                                    .size_full(),
++                            ),
++                    )
++                    .child(
++                        div()
++                            .absolute()
++                            .left(px(30.))
++                            .top(px(35.))
++                            .size(px(85.))
++                            .bg(rgb(if self.alternate { 0xffff00 } else { 0xff00ff }))
++                            .on_mouse_down(
++                                MouseButton::Left,
++                                cx.listener(|this, _, _, cx| {
++                                    this.alternate = !this.alternate;
++                                    cx.notify();
++                                }),
++                            ),
++                    ),
++            )
++        }
++    }
++
++    pub fn run() -> Result<()> {
++        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1()? };
++        let adapter = unsafe { factory.EnumAdapters1(0)? };
++        let desc = unsafe { adapter.GetDesc1()? };
++        ensure!(
++            desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0,
++            "this presentation proof requires a physical adapter; no WARP fallback"
++        );
++        eprintln!(
++            "Producer adapter={} LUID={:08x}:{:08x}",
++            String::from_utf16_lossy(&desc.Description).trim_end_matches('\0'),
++            desc.AdapterLuid.HighPart,
++            desc.AdapterLuid.LowPart
++        );
++        let adapter: IDXGIAdapter = adapter.cast()?;
++        let mut device = None;
++        let mut context = None;
++        unsafe {
++            D3D11CreateDevice(
++                &adapter,
++                D3D_DRIVER_TYPE_UNKNOWN,
++                HMODULE::default(),
++                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
++                Some(&[D3D_FEATURE_LEVEL_11_0]),
++                D3D11_SDK_VERSION,
++                Some(&mut device),
++                None,
++                Some(&mut context),
++            )?;
++        }
++        let device = device.context("no producer device")?;
++        let context = context.context("no producer context")?;
++        let frames = [
++            publish_frame(&device, &context, 0)?,
++            publish_frame(&device, &context, 1)?,
++        ];
++        eprintln!("Published two immutable 257x129 BGRA frames with one GPU isolation copy each.");
++        eprintln!(
++            "Click the colored foreground square repeatedly. It must stay above the changing pattern."
++        );
++        eprintln!(
++            "Resize, cover/uncover, minimize/restore, and move between DPI scales. No automatic PASS is claimed."
++        );
++        application().run(move |cx: &mut App| {
++            let bounds = Bounds::centered(None, size(px(520.), px(350.)), cx);
++            cx.open_window(
++                WindowOptions {
++                    window_bounds: Some(WindowBounds::Windowed(bounds)),
++                    ..Default::default()
++                },
++                |_, cx| {
++                    cx.new(|_| Proof {
++                        frames,
++                        alternate: false,
++                    })
++                },
++            )
++            .expect("open integration proof window");
++            cx.activate(true);
++        });
++        Ok(())
++    }
++
++    fn publish_frame(
++        device: &ID3D11Device,
++        context: &ID3D11DeviceContext,
++        phase: u8,
++    ) -> Result<WindowsSurface> {
++        let width = 257;
++        let height = 129;
++        let pixels: Vec<u8> = (0..height)
++            .flat_map(|y| {
++                (0..width).flat_map(move |x| {
++                    if (x / 16 + y / 16 + u32::from(phase)) % 2 == 0 {
++                        [255, 50, 0, 255]
++                    } else {
++                        [0, 200, 255, 255]
++                    }
++                })
++            })
++            .collect();
++        let desc = D3D11_TEXTURE2D_DESC {
++            Width: width,
++            Height: height,
++            MipLevels: 1,
++            ArraySize: 1,
++            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
++            SampleDesc: DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Usage: D3D11_USAGE_DEFAULT,
++            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
++            ..Default::default()
++        };
++        let mut producer = None;
++        unsafe { device.CreateTexture2D(&desc, None, Some(&mut producer))? };
++        let producer = producer.context("no producer texture")?;
++        unsafe {
++            context.UpdateSubresource(&producer, 0, None, pixels.as_ptr().cast(), width * 4, 0)
++        };
++        let mut bridge = None;
++        let shared_desc = D3D11_TEXTURE2D_DESC {
++            BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
++            MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
++            ..desc
++        };
++        unsafe { device.CreateTexture2D(&shared_desc, None, Some(&mut bridge))? };
++        let bridge = bridge.context("no shared texture")?;
++        let mutex: IDXGIKeyedMutex = bridge.cast()?;
++        let status = unsafe { (mutex.vtable().AcquireSync)(mutex.as_raw(), 0, 0) };
++        ensure!(status.0 == 0, "producer AcquireSync failed: {status:?}");
++        unsafe {
++            context.CopyResource(&bridge, &producer);
++            context.Flush();
++            mutex.ReleaseSync(1)?;
++        }
++        // This function retains no mutable aliases; every published texture is unique.
++        unsafe { WindowsSurface::from_published_texture(bridge) }
++    }
++}
+diff --git a/crates/gpui/src/elements/surface.rs b/crates/gpui/src/elements/surface.rs
+index acd2932..549916e 100644
+--- a/crates/gpui/src/elements/surface.rs
++++ b/crates/gpui/src/elements/surface.rs
+@@ -11,6 +11,9 @@ use refineable::Refineable;
+ /// A source of a surface's content.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum SurfaceSource {
++    /// An immutable, keyed-mutex shared BGRA texture.
++    #[cfg(target_os = "windows")]
++    Windows(WindowsSurface),
+     /// A CoreVideo image buffer
+     #[cfg(any(target_os = "macos", target_os = "ios"))]
+     Surface(CFRetained<CVPixelBuffer>),
+@@ -23,6 +26,79 @@ impl From<CFRetained<CVPixelBuffer>> for SurfaceSource {
+     }
+ }
+ 
++/// An immutable BGRA texture published by a D3D11 producer.
++///
++/// Experimental: the renderer imports this texture on every draw.
++#[cfg(target_os = "windows")]
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct WindowsSurface {
++    texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
++    width: u32,
++    height: u32,
++}
++
++#[cfg(target_os = "windows")]
++impl WindowsSurface {
++    /// Retain a published, immutable shared texture.
++    ///
++    /// # Safety
++    /// The producer must own the texture independently of decoder output slots,
++    /// finish submitting its writes, Flush, and ReleaseSync(1) before this call.
++    /// No caller may write this texture again or acquire its keyed mutex while
++    /// any clone of this surface exists. The renderer repeatedly acquires and
++    /// releases key 1; it does not return a mutable slot to the producer.
++    /// BGRA pixels must be opaque SDR values (alpha 255 for every pixel).
++    pub unsafe fn from_published_texture(
++        texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
++    ) -> anyhow::Result<Self> {
++        use windows::{
++            Win32::Graphics::{
++                Direct3D11::*,
++                Dxgi::{Common::*, IDXGIKeyedMutex},
++            },
++            core::Interface,
++        };
++        let mut desc = D3D11_TEXTURE2D_DESC::default();
++        unsafe { texture.GetDesc(&mut desc) };
++        anyhow::ensure!(desc.Width > 0 && desc.Height > 0, "empty surface");
++        anyhow::ensure!(
++            desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM
++                && desc.MipLevels == 1
++                && desc.ArraySize == 1
++                && desc.SampleDesc.Count == 1
++                && desc.SampleDesc.Quality == 0
++                && desc.Usage == D3D11_USAGE_DEFAULT
++                && desc.CPUAccessFlags == 0
++                && desc.BindFlags & D3D11_BIND_SHADER_RESOURCE.0 as u32 != 0
++                && desc.MiscFlags == D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
++            "surface must be legacy keyed-mutex shared, single-slice BGRA8 DEFAULT shader resource"
++        );
++        let _: IDXGIKeyedMutex = texture.cast()?;
++        Ok(Self {
++            texture,
++            width: desc.Width,
++            height: desc.Height,
++        })
++    }
++
++    /// The retained immutable producer texture; do not mutate it.
++    pub fn texture(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D {
++        &self.texture
++    }
++
++    /// Pixel dimensions of the source texture.
++    pub fn dimensions(&self) -> (u32, u32) {
++        (self.width, self.height)
++    }
++}
++
++#[cfg(target_os = "windows")]
++impl From<WindowsSurface> for SurfaceSource {
++    fn from(value: WindowsSurface) -> Self {
++        Self::Windows(value)
++    }
++}
++
+ /// A surface element.
+ pub struct Surface {
+     source: SurfaceSource,
+@@ -31,7 +107,7 @@ pub struct Surface {
+ }
+ 
+ /// Create a new surface element.
+-#[cfg(any(target_os = "macos", target_os = "ios"))]
++#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+ pub fn surface(source: impl Into<SurfaceSource>) -> Surface {
+     Surface {
+         source: source.into(),
+@@ -103,6 +179,12 @@ impl Element for Surface {
+         _: &mut App,
+     ) {
+         match &self.source {
++            #[cfg(target_os = "windows")]
++            SurfaceSource::Windows(surface) => {
++                let (width, height) = surface.dimensions();
++                let size = crate::size(width.into(), height.into());
++                window.paint_surface(self.object_fit.get_bounds(bounds, size), surface.clone());
++            }
+             #[cfg(any(target_os = "macos", target_os = "ios"))]
+             SurfaceSource::Surface(surface) => {
+                 let size = crate::size(
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index be37813..8f46588 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -766,6 +766,10 @@ impl From<PolychromeSprite> for Primitive {
+ #[derive(Clone, Debug)]
+ #[allow(missing_docs)]
+ pub struct PaintSurface {
++    #[cfg(target_os = "windows")]
++    pub opacity: f32,
++    #[cfg(target_os = "windows")]
++    pub windows_surface: crate::WindowsSurface,
+     pub order: DrawOrder,
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 33fa14b..bf55ee1 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5185,6 +5185,26 @@ impl Window {
+         });
+     }
+ 
++    /// Paint an immutable Windows shared texture in normal scene order.
++    #[cfg(target_os = "windows")]
++    pub fn paint_surface(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        windows_surface: crate::WindowsSurface,
++    ) {
++        self.invalidator.debug_assert_paint();
++        let bounds = self.snap_bounds(bounds);
++        let content_mask = self.snapped_content_mask();
++        let opacity = self.element_opacity();
++        self.next_frame.scene.insert_primitive(crate::PaintSurface {
++            order: 0,
++            bounds,
++            content_mask,
++            opacity,
++            windows_surface,
++        });
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         for frame_index in 0..data.frame_count() {
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 98a13f3..b3edea4 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -92,12 +92,14 @@ struct DirectXRenderPipelines {
+     mono_sprites: PipelineState<MonochromeSprite>,
+     subpixel_sprites: PipelineState<SubpixelSprite>,
+     poly_sprites: PipelineState<PolychromeSprite>,
++    surface_sprites: PipelineState<PolychromeSprite>,
+ }
+ 
+ struct DirectXGlobalElements {
+     global_params_buffer: Option<ID3D11Buffer>,
+     batch_params_buffer: Option<ID3D11Buffer>,
+     sampler: Option<ID3D11SamplerState>,
++    surface_sampler: Option<ID3D11SamplerState>,
+ }
+ 
+ struct Annotation<'a>(&'a ID3DUserDefinedAnnotation);
+@@ -817,6 +819,88 @@ impl DirectXRenderer {
+         if surfaces.is_empty() {
+             return Ok(());
+         }
++        let devices = self.devices.as_ref().context("devices missing")?;
++        let target_luid = unsafe { devices.adapter.GetDesc1()? }.AdapterLuid;
++        for surface in surfaces {
++            let source = surface.windows_surface.texture();
++            let producer: IDXGIDevice = unsafe { source.GetDevice()? }.cast()?;
++            let source_luid = unsafe { producer.GetAdapter()?.GetDesc()? }.AdapterLuid;
++            anyhow::ensure!(
++                source_luid.HighPart == target_luid.HighPart
++                    && source_luid.LowPart == target_luid.LowPart,
++                "surface adapter mismatch"
++            );
++            let resource: IDXGIResource = source.cast()?;
++            let handle = unsafe { resource.GetSharedHandle()? };
++            // Legacy handles are resource-owned; never CloseHandle here.
++            let mut imported: Option<ID3D11Texture2D> = None;
++            unsafe { devices.device.OpenSharedResource(handle, &mut imported)? };
++            let imported = imported.context("no imported surface texture")?;
++            let mutex: IDXGIKeyedMutex = imported.cast()?;
++            let mut view = None;
++            unsafe {
++                devices
++                    .device
++                    .CreateShaderResourceView(&imported, None, Some(&mut view))?
++            };
++            // Diagnostic-only bounded wait; production needs nonblocking acquisition and redraw scheduling.
++            // windows-rs treats positive WAIT_TIMEOUT/WAIT_ABANDONED as success.
++            let status = unsafe { (mutex.vtable().AcquireSync)(mutex.as_raw(), 1, 2000) };
++            anyhow::ensure!(status.0 == 0, "surface AcquireSync failed: {status:?}");
++            let draw_result = (|| -> Result<()> {
++                let (width, height) = surface.windows_surface.dimensions();
++                let sprite = PolychromeSprite {
++                    order: surface.order,
++                    pad: 0,
++                    grayscale: false.into(),
++                    opacity: surface.opacity,
++                    bounds: surface.bounds,
++                    content_mask: surface.content_mask,
++                    corner_radii: Corners::default(),
++                    tile: AtlasTile {
++                        texture_id: AtlasTextureId {
++                            index: 0,
++                            kind: AtlasTextureKind::Polychrome,
++                        },
++                        tile_id: TileId(0),
++                        padding: 0,
++                        bounds: Bounds {
++                            origin: Point::default(),
++                            size: size(DevicePixels(width as i32), DevicePixels(height as i32)),
++                        },
++                    },
++                };
++                self.pipelines.surface_sprites.update_buffer(
++                    &devices.device,
++                    &devices.device_context,
++                    slice::from_ref(&sprite),
++                )?;
++                self.pipelines.surface_sprites.draw_range_with_texture(
++                    &devices.device_context,
++                    slice::from_ref(&view),
++                    self.globals
++                        .batch_params_buffer
++                        .as_ref()
++                        .context("batch params missing")?,
++                    slice::from_ref(&self.globals.surface_sampler),
++                    0,
++                    1,
++                )
++            })();
++            unsafe {
++                devices
++                    .device_context
++                    .VSSetShaderResources(0, Some(&[None]));
++                devices
++                    .device_context
++                    .PSSetShaderResources(0, Some(&[None]));
++                devices.device_context.Flush();
++            }
++            // Release even when buffer preparation failed after acquisition.
++            let release_result = unsafe { mutex.ReleaseSync(1) };
++            release_result.context("surface ReleaseSync failed")?;
++            draw_result?;
++        }
+         Ok(())
+     }
+ 
+@@ -1007,6 +1091,13 @@ impl DirectXRenderPipelines {
+             mono_sprites,
+             subpixel_sprites,
+             poly_sprites,
++            surface_sprites: PipelineState::new(
++                device,
++                "surface_sprite_pipeline",
++                ShaderModule::PolychromeSprite,
++                1,
++                create_blend_state(device)?,
++            )?,
+         })
+     }
+ }
+@@ -1061,6 +1152,21 @@ impl DirectXGlobalElements {
+             global_params_buffer,
+             batch_params_buffer,
+             sampler,
++            surface_sampler: {
++                let desc = D3D11_SAMPLER_DESC {
++                    Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
++                    AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
++                    AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
++                    AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
++                    MaxAnisotropy: 1,
++                    ComparisonFunc: D3D11_COMPARISON_ALWAYS,
++                    MaxLOD: D3D11_FLOAT32_MAX,
++                    ..Default::default()
++                };
++                let mut sampler = None;
++                unsafe { device.CreateSamplerState(&desc, Some(&mut sampler))? };
++                sampler
++            },
+         })
+     }
+ }
+@@ -2068,3 +2174,7 @@ mod dxgi {
+         ))
+     }
+ }
++
++#[cfg(test)]
++#[path = "directx_renderer_windows_surface_tests.rs"]
++mod windows_surface_tests;
+diff --git a/crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs b/crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs
+new file mode 100644
+index 0000000..7829221
+--- /dev/null
++++ b/crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs
+@@ -0,0 +1,348 @@
++use super::{
++    DirectXAtlas, DirectXGlobalElements, DirectXRenderPipelines, DirectXRenderer,
++    DirectXRendererDevices, FontInfo, GlobalParams, set_rasterizer_state, update_buffer,
++};
++use anyhow::{Context, Result};
++use gpui::{
++    BorderStyle, Bounds, ContentMask, Corners, Edges, PaintSurface, Quad, ScaledPixels,
++    WindowsSurface, point, rgb, size, transparent_black,
++};
++use std::{
++    slice,
++    sync::Arc,
++    thread,
++    time::{Duration, Instant},
++};
++use windows::{
++    Win32::{
++        Foundation::{HMODULE, HWND},
++        Graphics::{
++            Direct3D::*,
++            Direct3D11::*,
++            Dxgi::{Common::*, *},
++        },
++    },
++    core::Interface,
++};
++
++fn warp_device() -> Result<DirectXRendererDevices> {
++    let mut device = None;
++    let mut context = None;
++    unsafe {
++        D3D11CreateDevice(
++            None,
++            D3D_DRIVER_TYPE_WARP,
++            HMODULE::default(),
++            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
++            Some(&[D3D_FEATURE_LEVEL_11_0]),
++            D3D11_SDK_VERSION,
++            Some(&mut device),
++            None,
++            Some(&mut context),
++        )?;
++    }
++    let device = device.context("WARP returned no device")?;
++    let dxgi: IDXGIDevice = device.cast()?;
++    let adapter: IDXGIAdapter1 = unsafe { dxgi.GetAdapter()? }.cast()?;
++    let desc = unsafe { adapter.GetDesc1()? };
++    anyhow::ensure!(
++        desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
++        "expected WARP software adapter"
++    );
++    Ok(DirectXRendererDevices {
++        dxgi_factory: unsafe { adapter.GetParent()? },
++        adapter,
++        device,
++        device_context: context.context("WARP returned no context")?,
++        dxgi_device: Some(dxgi),
++        annotation: None,
++    })
++}
++
++fn texture(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> Result<ID3D11Texture2D> {
++    let mut result = None;
++    unsafe { device.CreateTexture2D(desc, None, Some(&mut result))? };
++    result.context("no texture")
++}
++
++fn publish_pattern(producer: &DirectXRendererDevices) -> Result<WindowsSurface> {
++    let desc = D3D11_TEXTURE2D_DESC {
++        Width: 9,
++        Height: 5,
++        MipLevels: 1,
++        ArraySize: 1,
++        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
++        SampleDesc: DXGI_SAMPLE_DESC {
++            Count: 1,
++            Quality: 0,
++        },
++        Usage: D3D11_USAGE_DEFAULT,
++        BindFlags: (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET).0 as u32,
++        ..Default::default()
++    };
++    let pixels: Vec<u8> = (0..5)
++        .flat_map(|_| {
++            (0..9).flat_map(|x| {
++                if x < 4 {
++                    [0, 0, 255, 255]
++                } else {
++                    [0, 255, 0, 255]
++                }
++            })
++        })
++        .collect();
++    let source = texture(&producer.device, &desc)?;
++    unsafe {
++        producer
++            .device_context
++            .UpdateSubresource(&source, 0, None, pixels.as_ptr().cast(), 36, 0)
++    };
++    let shared = texture(
++        &producer.device,
++        &D3D11_TEXTURE2D_DESC {
++            MiscFlags: D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32,
++            ..desc
++        },
++    )?;
++    let mutex: IDXGIKeyedMutex = shared.cast()?;
++    let status = unsafe { (mutex.vtable().AcquireSync)(mutex.as_raw(), 0, 0) };
++    anyhow::ensure!(status.0 == 0, "producer AcquireSync failed: {status:?}");
++    unsafe {
++        producer.device_context.CopyResource(&shared, &source);
++        producer.device_context.Flush();
++        mutex.ReleaseSync(1)?;
++        // The bridge is independent of source and is never mutated after publication.
++        WindowsSurface::from_published_texture(shared)
++    }
++}
++
++fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
++    Bounds {
++        origin: point(ScaledPixels(x), ScaledPixels(y)),
++        size: size(ScaledPixels(width), ScaledPixels(height)),
++    }
++}
++
++fn read_pixels(
++    device: &ID3D11Device,
++    context: &ID3D11DeviceContext,
++    target: &ID3D11Texture2D,
++) -> Result<Vec<u8>> {
++    let mut desc = D3D11_TEXTURE2D_DESC::default();
++    unsafe { target.GetDesc(&mut desc) };
++    let staging = texture(
++        device,
++        &D3D11_TEXTURE2D_DESC {
++            Usage: D3D11_USAGE_STAGING,
++            BindFlags: 0,
++            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
++            ..desc
++        },
++    )?;
++    unsafe {
++        context.CopyResource(&staging, target);
++        context.Flush();
++    }
++    let deadline = Instant::now() + Duration::from_secs(2);
++    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
++    loop {
++        match unsafe {
++            context.Map(
++                &staging,
++                0,
++                D3D11_MAP_READ,
++                D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
++                Some(&mut mapped),
++            )
++        } {
++            Ok(()) => break,
++            Err(error) if error.code() == DXGI_ERROR_WAS_STILL_DRAWING => {
++                anyhow::ensure!(Instant::now() < deadline, "WARP readback timed out");
++                thread::sleep(Duration::from_millis(1));
++            }
++            Err(error) => return Err(error.into()),
++        }
++    }
++    let result = (|| -> Result<Vec<u8>> {
++        let row_bytes = desc.Width as usize * 4;
++        anyhow::ensure!(
++            !mapped.pData.is_null() && mapped.RowPitch as usize >= row_bytes,
++            "invalid mapping"
++        );
++        let mut pixels = vec![0; row_bytes * desc.Height as usize];
++        for y in 0..desc.Height as usize {
++            unsafe {
++                std::ptr::copy_nonoverlapping(
++                    mapped.pData.cast::<u8>().add(y * mapped.RowPitch as usize),
++                    pixels.as_mut_ptr().add(y * row_bytes),
++                    row_bytes,
++                );
++            }
++        }
++        Ok(pixels)
++    })();
++    unsafe { context.Unmap(&staging, 0) };
++    result
++}
++
++#[test]
++fn windows_surface_warp_draw_pixels() -> Result<()> {
++    let producer = warp_device()?;
++    let devices = warp_device()?;
++    anyhow::ensure!(
++        producer.device != devices.device,
++        "producer and consumer must be distinct devices"
++    );
++    let source_luid = unsafe { producer.adapter.GetDesc1()? }.AdapterLuid;
++    let target_luid = unsafe { devices.adapter.GetDesc1()? }.AdapterLuid;
++    anyhow::ensure!(
++        source_luid.HighPart == target_luid.HighPart && source_luid.LowPart == target_luid.LowPart,
++        "WARP adapter mismatch"
++    );
++    let published = publish_pattern(&producer)?;
++    drop(producer);
++    let surfaces = [
++        PaintSurface {
++            order: 0,
++            bounds: bounds(2., 2., 18., 10.),
++            content_mask: ContentMask {
++                bounds: bounds(4., 4., 12., 6.),
++            },
++            opacity: 0.5,
++            windows_surface: published.clone(),
++        },
++        PaintSurface {
++            order: 0,
++            bounds: bounds(22., 2., 8., 10.),
++            content_mask: ContentMask {
++                bounds: bounds(0., 0., 32., 24.),
++            },
++            opacity: 1.,
++            windows_surface: published.clone(),
++        },
++    ];
++    drop(published);
++    let target = texture(
++        &devices.device,
++        &D3D11_TEXTURE2D_DESC {
++            Width: 32,
++            Height: 24,
++            MipLevels: 1,
++            ArraySize: 1,
++            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
++            SampleDesc: DXGI_SAMPLE_DESC {
++                Count: 1,
++                Quality: 0,
++            },
++            Usage: D3D11_USAGE_DEFAULT,
++            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
++            ..Default::default()
++        },
++    )?;
++    let mut target_view = None;
++    unsafe {
++        devices
++            .device
++            .CreateRenderTargetView(&target, None, Some(&mut target_view))?
++    };
++    let target_view = target_view.context("no target view")?;
++    let mut renderer = DirectXRenderer {
++        hwnd: HWND::default(),
++        atlas: Arc::new(DirectXAtlas::new(&devices.device, &devices.device_context)),
++        globals: DirectXGlobalElements::new(&devices.device)?,
++        pipelines: DirectXRenderPipelines::new(&devices.device)?,
++        devices: Some(devices.clone()),
++        resources: None,
++        direct_composition: None,
++        font_info: &FontInfo {
++            gamma_ratios: [1.; 4],
++            grayscale_enhanced_contrast: 0.,
++            subpixel_enhanced_contrast: 0.,
++            is_bgr: false,
++        },
++        width: 32,
++        height: 24,
++        skip_draws: false,
++    };
++    let context = &devices.device_context;
++    set_rasterizer_state(&devices.device, context)?;
++    update_buffer(
++        context,
++        renderer
++            .globals
++            .global_params_buffer
++            .as_ref()
++            .context("missing globals")?,
++        &[GlobalParams {
++            viewport_size: [32., 24.],
++            ..Default::default()
++        }],
++    )?;
++    unsafe {
++        context.OMSetRenderTargets(Some(&[Some(target_view.clone())]), None);
++        context.RSSetViewports(Some(&[D3D11_VIEWPORT {
++            Width: 32.,
++            Height: 24.,
++            MaxDepth: 1.,
++            ..Default::default()
++        }]));
++        context.VSSetConstantBuffers(
++            0,
++            Some(slice::from_ref(&renderer.globals.global_params_buffer)),
++        );
++        context.VSSetConstantBuffers(
++            1,
++            Some(slice::from_ref(&renderer.globals.batch_params_buffer)),
++        );
++        context.PSSetConstantBuffers(
++            0,
++            Some(slice::from_ref(&renderer.globals.global_params_buffer)),
++        );
++    }
++    let foreground = Quad {
++        order: 1,
++        border_style: BorderStyle::Solid,
++        bounds: bounds(6., 5., 4., 4.),
++        content_mask: ContentMask {
++            bounds: bounds(0., 0., 32., 24.),
++        },
++        background: rgb(0x00ff00).into(),
++        border_color: transparent_black(),
++        corner_radii: Corners::default(),
++        border_widths: Edges::default(),
++    };
++    renderer
++        .pipelines
++        .quad_pipeline
++        .update_buffer(&devices.device, context, &[foreground])?;
++    for _ in 0..3 {
++        unsafe { context.ClearRenderTargetView(&target_view, &[0., 0., 1., 1.]) };
++        // Deliberate call order checks shader composition, not Scene batching or presentation.
++        renderer.draw_surfaces(&surfaces)?;
++        renderer.draw_quads(0, 1)?;
++        let pixels = read_pixels(&devices.device, context, &target)?;
++        for (x, y, expected) in [
++            (0, 0, [255, 0, 0, 255]),
++            (3, 5, [255, 0, 0, 255]),
++            (17, 5, [255, 0, 0, 255]),
++            (5, 3, [255, 0, 0, 255]),
++            (5, 10, [255, 0, 0, 255]),
++            (5, 5, [128, 0, 128, 255]),
++            (14, 5, [128, 128, 0, 255]),
++            (7, 6, [0, 255, 0, 255]),
++            (24, 6, [0, 0, 255, 255]),
++            (28, 6, [0, 255, 0, 255]),
++        ] {
++            let offset = (y * 32 + x) * 4;
++            for channel in 0..4 {
++                assert!(
++                    pixels[offset + channel].abs_diff(expected[channel]) <= 1,
++                    "pixel ({x},{y}) channel {channel}: actual {:?}, expected {expected:?}",
++                    &pixels[offset..offset + 4]
++                );
++            }
++        }
++    }
++    unsafe { devices.device.GetDeviceRemovedReason()? };
++    Ok(())
++}
