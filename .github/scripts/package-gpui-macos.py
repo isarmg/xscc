@@ -47,15 +47,19 @@ def validate_native_output(architectures, header, load_commands, dependencies):
     if architectures.strip() != "arm64":
         raise ValueError("Expected an arm64-only executable")
     # otool also prints dylib versions; only inspect deployment-version commands.
-    deployment_blocks = re.findall(r"cmd LC_(?:BUILD_VERSION|VERSION_MIN_MACOSX)\n(.*?)(?=Load command|\Z)", load_commands, re.S)
+    deployment_blocks = re.findall(r"cmd LC_(BUILD_VERSION|VERSION_MIN_MACOSX)\n(.*?)(?=Load command|\Z)", load_commands, re.S)
     if len(deployment_blocks) != 1:
         raise ValueError("Expected exactly one macOS deployment version")
-    block = deployment_blocks[0]
+    command, block = deployment_blocks[0]
     if "platform" in block and not re.search(r"platform\s+(?:1|macos|MACOS)\s", block):
         raise ValueError("Expected a macOS executable")
-    minimums = re.findall(r"^\s*(?:minos|version)\s+(\d+)\.(\d+)(?:\.\d+)?\s*$", block, re.M)
-    if len(minimums) != 1 or tuple(map(int, minimums[0])) != (26, 0):
-        raise ValueError("Build with MACOSX_DEPLOYMENT_TARGET=26.0")
+    # LC_BUILD_VERSION's tool records also contain `version` (the linker version).
+    field = "minos" if command == "BUILD_VERSION" else "version"
+    minimums = re.findall(rf"^[ \t]*{field}[ \t]+(\S+)[ \t]*$", block, re.M)
+    version = re.fullmatch(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", minimums[0]) if len(minimums) == 1 else None
+    if version is None or tuple(int(part or 0) for part in version.groups()) != (26, 0, 0):
+        raise ValueError(f"Build with MACOSX_DEPLOYMENT_TARGET=26.0; "
+                         f"LC_{command} reports {field}={minimums!r}. Deployment command:\n{block.strip()}")
     for line in dependencies.splitlines()[1:]:
         path = line.strip().split(" (", 1)[0]
         if path and not path.startswith(("/System/Library/", "/usr/lib/")):

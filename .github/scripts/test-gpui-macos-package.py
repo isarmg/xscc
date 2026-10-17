@@ -14,6 +14,8 @@ LOAD = """Load command 1
     minos 26.0
       sdk 26.0
    ntools 1
+     tool LD
+  version 1230.1
 Load command 2
       cmd LC_LOAD_DYLIB
 """
@@ -41,6 +43,18 @@ class MacOSPackageTests(unittest.TestCase):
                                   ("arm64", "EXECUTE", LOAD.replace("platform 1", "platform 2"))):
             with self.assertRaises(ValueError):
                 PACKAGE.validate_native_output(arch, header, load, DEPS)
+
+    def test_deployment_version_formats_and_linker_version_are_distinct(self):
+        for minimum in ("26", "26.0", "26.0.0"):
+            with self.subTest(minimum=minimum):
+                PACKAGE.validate_native_output("arm64", "EXECUTE", LOAD.replace("minos 26.0", f"minos {minimum}"), DEPS)
+                legacy = f"Load command 1\n cmd LC_VERSION_MIN_MACOSX\n cmdsize 16\n version {minimum}\n sdk 26.0\n"
+                PACKAGE.validate_native_output("arm64", "EXECUTE", legacy, DEPS)
+        for minimum in ("14.0", "26.1", "26.0.1", "27", "invalid"):
+            with self.subTest(minimum=minimum), self.assertRaises(ValueError) as raised:
+                PACKAGE.validate_native_output("arm64", "EXECUTE", LOAD.replace("minos 26.0", f"minos {minimum}"), DEPS)
+            self.assertIn(f"minos=['{minimum}']", str(raised.exception))
+            self.assertIn("version 1230.1", str(raised.exception))
 
     def test_unbundled_native_libraries_fail_before_packaging(self):
         for path in ("/opt/homebrew/lib/libvpx.dylib", "@rpath/libavcodec.dylib", "@executable_path/libopus.dylib"):
