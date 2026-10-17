@@ -19,7 +19,7 @@ $env:XSCC_TEST_LAN_BIND = '192.168.1.20:21119'
 & '.\xscc-host.exe' --test-lan-host
 ```
 
-Windows 使用当前进程权限，不经过已安装的 SYSTEM 服务。普通 Host 界面不会因为设置了该变量而打开测试监听。
+Windows 使用当前进程权限，不经过已安装的 SYSTEM 服务。普通 Host 界面不会因为设置了该变量而打开测试监听。测试命令会打开独立控制台窗口显示监听地址和风险提示；关闭该窗口即可结束测试进程和监听。
 
 Linux Wayland：
 

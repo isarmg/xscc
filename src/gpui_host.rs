@@ -97,6 +97,8 @@ pub fn handle_background_command() -> bool {
     };
     #[cfg(all(feature = "test-lan-direct", feature = "gpui-host"))]
     if argument == "--test-lan-host" {
+        #[cfg(windows)]
+        crate::platform::windows::alloc_console();
         let result = (|| -> hbb_common::ResultType<()> {
             prepare(true).map_err(hbb_common::anyhow::Error::msg)?;
             let address = crate::test_lan::configured_bind()?;
