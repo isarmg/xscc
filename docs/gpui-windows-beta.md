@@ -45,6 +45,21 @@ management panel is rebuilt for its own state, input or viewport changes, rather
 than for each decoded frame. This boundary reduces UI work without changing the
 decoder, transport or CPU-to-GPU upload path.
 
+## Controls / 操作
+
+在绑定表单中使用 Tab / Shift+Tab 切换输入框，Enter 提交。绑定后从服务端
+授权列表选择主机；连接失败时查看连接提示，管理服务离线时可重新连接服务端。
+
+点击远程画面后发送键鼠，Ctrl+Alt+Enter 切换窗口全屏。切换窗口或断开连接
+会释放已按下的键鼠。此版本仍使用文本/快捷键输入，不等同于游戏所需的原始扫描码捕获。
+
+多屏主机可在“屏幕”栏切换。切换期间暂停输入，收到主机确认后显示新画面；
+若主机未响应，可断开后重新连接。画面按窗口比例缩放，不会修改主机分辨率。
+
+状态栏区分目标 FPS 和解码输出 FPS。接收吞吐包括协议流量，网络往返来自
+现有探测；这些数值不代表实际显示帧率或端到端操作延迟。音频沿用原生播放
+路径，仍需在 Windows 控制端和被控端上验证实际播放。
+
 控制端和被控端分别打包；候选构建成功不代表真实串流、Windows 11 图形或服务验收通过。
 禁止把测试图案、仅能打开的窗口或通过 --help 的程序宣传为完整远程桌面。
 
