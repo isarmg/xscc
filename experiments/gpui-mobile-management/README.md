@@ -1,6 +1,6 @@
 # XSCC GPUI mobile management preview
 
-This is an **iOS 26 / iPadOS 26 ARM64 preview**. The default build remains
+This is an **iOS 26 / iPadOS 26 / Android API29+ ARM64 preview**. The default build remains
 management-only. The explicit `mobile-session` build adds the software-decoded screen and direct-touch
 session slice; device connection and first-frame acceptance are still required. It is a separate application with bundle identifier
 `org.sarmg.xscc.gpui.preview`; the delivered Flutter applications remain unchanged.
@@ -62,10 +62,11 @@ frame consumption checks current authorization. Server revocation also closes th
 native transport through its existing periodic permit check. Returning to the
 foreground does not automatically reconnect the screen session.
 
-This management application is iOS-only. The separate
-[Android backend smoke slice](../../packaging/gpui-android/README.md) is an
-experimental GameActivity rendering/touch/lifecycle implementation. Its separate
-acceptance status is documented there; it does not share this iOS session UI. Software decode is the initial media path; no hardware
+Android uses the same Panel and NativeManager through the Android-only cdylib
+entry; the existing iOS binary entry is unchanged. Android currently includes
+management only, with no screen, audio or remote-input session. The separate
+[Android backend smoke slice](../../packaging/gpui-android/README.md) remains an
+offline regression baseline. Software decode is the initial iOS media path; no hardware
 decoding, zero-copy performance or successful device first frame is claimed here.
 
 ## Build and verification
@@ -112,3 +113,25 @@ unsupported app platform rather than opening a production binding store.
 No real server enrollment or physical-device test has been performed by the local
 source checks. Compilation, packaging and physical execution must be reported
 separately.
+
+## Android management entry
+
+Build the `xscc_gpui_android_management` cdylib from this workspace with
+`--lib --no-default-features --features mobile-management --locked` through
+`cargo ndk -t arm64-v8a -p 29`. Packaging reuses the existing Android Activity,
+protected IME bridge and final-DEX privacy gates. The management flavor has
+INTERNET permission; the smoke flavor retains its no-network contract.
+
+The entry obtains its private directory only from AndroidApp.internal_data_path;
+it never uses HOME, a desktop configuration path, external storage or Flutter
+credentials. NativeManager creates the existing xscc-managed directory and owns
+the installation UUID, binding and runtime task. The appId is
+org.sarmg.xscc.gpui.preview, separate from both smoke and Flutter; each app has its
+own installation identity and requires its own server-authorized enrollment.
+Initial management activity follows the actual Android window focus/visibility;
+the shared lifecycle observer handles subsequent foreground/background changes.
+
+Android acceptance must verify protected text editing, first enrollment, policy
+list updates, restart preserving identity/binding, two-step unbind, and
+Home/resume/rotation. Successful cross-compilation and APK/privacy checks do not
+establish physical-device operation or a working remote-control session.

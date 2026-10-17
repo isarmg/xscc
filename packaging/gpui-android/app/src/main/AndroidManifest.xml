@@ -1,15 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <application
-        android:label="XSCC GPUI Smoke"
+        android:label="${appLabel}"
         android:theme="@style/SmokeTheme"
         android:allowBackup="false"
         android:extractNativeLibs="false">
         <activity
-            android:name=".SmokeActivity"
+            android:name="org.xscc.gpui.smoke.SmokeActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density">
-            <meta-data android:name="android.app.lib_name" android:value="xscc_gpui_android_smoke" />
+            <meta-data android:name="android.app.lib_name" android:value="${nativeLibrary}" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

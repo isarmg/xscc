@@ -6,6 +6,11 @@ rust-version = "1.99"
 license = "AGPL-3.0-only"
 publish = false
 
+[lib]
+name = "xscc_gpui_android_management"
+path = "src/android.rs"
+crate-type = ["cdylib"]
+
 [workspace]
 
 [features]
@@ -30,6 +35,10 @@ base = { path = "../../libs/base", optional = true }
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session"], optional = true }
 image = { version = "0.25", default-features = false, optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "=0.13.3"
+log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

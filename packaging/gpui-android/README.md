@@ -1,6 +1,6 @@
-# GPUI Android smoke candidate
+# GPUI Android candidates
 
-This separate ARM64/API 29+ APK exercises the experimental GPUI Android window,
+The ARM64/API 29+ smoke flavor exercises the experimental GPUI Android window,
 touch input and activity/surface lifecycle. It is not a remote-control client:
 no management login, remote stream, host service or network permission is added.
 It does not replace the Flutter beta (package: `org.xscc.gpui.smoke`).
@@ -52,3 +52,21 @@ and surviving sensitive log argument formats, and compares GameSDK class/member
 definitions with the unmodified Maven AAR. A missing JNI declaration or residual
 text-log format fails packaging. This gate must pass on the actual APK; rule text
 alone is not evidence. Physical-device IME behavior and logcat still need testing.
+
+
+## Management preview flavor
+
+The management flavor uses `org.sarmg.xscc.gpui.preview` and displays
+“XSCC GPUI 管理预览”. It builds the Android library from
+`experiments/gpui-mobile-management` with only `mobile-management`, reusing the
+native management UI. This first preview does not include remote streaming or
+desktop hosting. Server login/device management still require physical-device
+acceptance against the intended server.
+
+The two flavors share the IME bridge, source privacy patch and all final DEX,
+JNI, signature and 16 KB gates. Smoke has no Internet permission; management
+adds only Internet. Each may use its exact application-ID-scoped AndroidX
+signature permission for non-exported receivers. Backup remains disabled.
+There are no recording, storage or accessibility permissions, and no Flutter
+credential migration. Each package uses its own Android private application
+storage. These APKs remain disposable-debug-key previews.

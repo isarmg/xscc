@@ -48,6 +48,34 @@ class AlignmentTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, "ZIP entry is not 16 KB"):
                             module.verify(apk)
 
+    def test_permission_modes_are_explicit(self):
+        package = "org.sarmg.xscc.gpui.preview"
+        badging = ("package: name='" + package + "'\nsdkVersion:'29'\n"
+                   "targetSdkVersion:'36'\nnative-code: 'arm64-v8a'\n"
+                   "uses-permission: name='android.permission.INTERNET'\n")
+        tree = "A: android:allowBackup(0x01010280)=(type 0x12)0x0"
+        module.check_manifest(badging, tree, package, "management")
+        with self.assertRaisesRegex(ValueError, "Unexpected permissions"):
+            module.check_manifest(badging, tree, package, "smoke")
+        with self.assertRaisesRegex(ValueError, "Unexpected permissions"):
+            module.check_manifest(badging + "uses-permission: name='android.permission.RECORD_AUDIO'\n",
+                                  tree, package, "management")
+
+    def test_internal_permission_requires_exact_signature_and_backup_disabled(self):
+        package = "org.xscc.gpui.smoke"
+        permission = package + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+        badging = ("package: name='" + package + "'\nsdkVersion:'29'\n"
+                   "targetSdkVersion:'36'\nnative-code: 'arm64-v8a'\n"
+                   "uses-permission: name='" + permission + "'\n")
+        tree = ('E: permission (line=1)\n A: android:name(0x01010003)="' + permission +
+                '"\n A: android:protectionLevel(0x01010009)=(type 0x11)0x2\n'
+                'E: application (line=2)\n A: android:allowBackup(0x01010280)=(type 0x12)0x0')
+        module.check_manifest(badging, tree)
+        with self.assertRaisesRegex(ValueError, "signature"):
+            module.check_manifest(badging, tree.replace("(type 0x11)0x2", "(type 0x11)0x0"))
+        with self.assertRaisesRegex(ValueError, "backup"):
+            module.check_manifest(badging, tree.replace("(type 0x12)0x0", "(type 0x12)0xffffffff"))
+
 
 if __name__ == "__main__":
     unittest.main()

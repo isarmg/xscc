@@ -39,8 +39,13 @@ impl Panel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        #[cfg(target_os = "android")]
+        let active =
+            _window.is_window_active() && _window.visibility() == gpui::WindowVisibility::Visible;
+        #[cfg(not(target_os = "android"))]
+        let active = true;
         let (commands, receiver) = tokio::sync::mpsc::channel(1);
-        let (lifecycle_sender, lifecycle_receiver) = tokio::sync::watch::channel(true);
+        let (lifecycle_sender, lifecycle_receiver) = tokio::sync::watch::channel(active);
         let (events, incoming) = mpsc::channel();
         let wake = Arc::new(tokio::sync::Notify::new());
         runtime.spawn(management::run(
@@ -94,7 +99,7 @@ impl Panel {
             code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
             status: None,
             initialized: false,
-            active: true,
+            active,
             busy: false,
             confirm_unbind: false,
             notice: "正在读取本机绑定…".into(),

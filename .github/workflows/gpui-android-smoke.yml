@@ -1,9 +1,12 @@
-name: GPUI Android native smoke
+name: GPUI Android native candidates
 on:
   push:
     branches: [feat/management-prep]
     paths:
       - 'experiments/gpui-android-smoke/**'
+      - 'experiments/gpui-mobile-management/**'
+      - 'crates/management/**'
+      - 'crates/native-management/**'
       - 'vendor/gpui/**'
       - 'packaging/gpui-android/**'
       - '.github/workflows/gpui-android-smoke.yml'
@@ -25,6 +28,26 @@ jobs:
   android:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: smoke
+            variant: Smoke
+            workspace: experiments/gpui-android-smoke
+            library: xscc_gpui_android_smoke
+            package: org.xscc.gpui.smoke
+          - flavor: management
+            variant: Management
+            workspace: experiments/gpui-mobile-management
+            library: xscc_gpui_android_management
+            package: org.sarmg.xscc.gpui.preview
+    env:
+      FLAVOR: ${{ matrix.flavor }}
+      VARIANT: ${{ matrix.variant }}
+      WORKSPACE: ${{ matrix.workspace }}
+      NATIVE_LIBRARY: ${{ matrix.library }}
+      APPLICATION_ID: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -63,11 +86,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          workspaces: experiments/gpui-android-smoke
-          prefix-key: gpui-android-smoke-r30
+          workspaces: ${{ matrix.workspace }}
+          prefix-key: gpui-android-${{ matrix.flavor }}-r30
           cache-on-failure: true
 
-      - name: Cross-compile the real GPUI smoke library
+      - name: Cross-compile the selected GPUI library
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
@@ -75,10 +98,20 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
-          mkdir -p packaging/gpui-android/app/src/main/jniLibs
-          cd experiments/gpui-android-smoke
-          cargo ndk -t arm64-v8a --platform 29 -o ../../packaging/gpui-android/app/src/main/jniLibs build --release --locked
-          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"             ../../packaging/gpui-android/app/src/main/jniLibs/arm64-v8a/
+          JNI_LIBS="$GITHUB_WORKSPACE/packaging/gpui-android/app/src/$FLAVOR/jniLibs"
+          mkdir -p "$JNI_LIBS"
+          cd "$WORKSPACE"
+          FEATURES=()
+          if [ "$FLAVOR" = management ]; then
+            FEATURES=(--no-default-features --features mobile-management)
+            cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}' > "$RUNNER_TEMP/management-dependencies.txt"
+            if grep -Eq '^(rustdesk|scrap|enigo|clipboard) v' "$RUNNER_TEMP/management-dependencies.txt"; then
+              echo "Unexpected media/host dependency in management-only preview" >&2
+              exit 1
+            fi
+          fi
+          cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI_LIBS/arm64-v8a/"
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
@@ -98,7 +131,7 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Assemble disposable-debug-key release APK
-        run: gradle --no-daemon -p packaging/gpui-android :app:assembleRelease
+        run: gradle --no-daemon -p packaging/gpui-android :app:assemble${VARIANT}Release
 
       - name: Verify actual APK and package evidence
         id: verify-apk
@@ -106,61 +139,54 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
-          APK=packaging/gpui-android/app/build/outputs/apk/release/app-release.apk
+          APK="packaging/gpui-android/app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk"
           TOOLS="$ANDROID_HOME/build-tools/36.0.0"
           mkdir -p dist/gpui-android
           "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee dist/gpui-android/signature.txt
           "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > dist/gpui-android/zip-alignment.txt
           "$TOOLS/aapt" dump badging "$APK" | tee dist/gpui-android/manifest-badging.txt
-          grep -q "package: name='org.xscc.gpui.smoke'" dist/gpui-android/manifest-badging.txt
-          grep -qx "sdkVersion:'29'" dist/gpui-android/manifest-badging.txt
-          grep -qx "targetSdkVersion:'36'" dist/gpui-android/manifest-badging.txt
-          grep -qx "native-code: 'arm64-v8a'" dist/gpui-android/manifest-badging.txt
+          "$TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > dist/gpui-android/manifest-tree.txt
           grep -q "launchable-activity: name='org.xscc.gpui.smoke.SmokeActivity'" dist/gpui-android/manifest-badging.txt
-          if grep -q "android.permission.INTERNET" dist/gpui-android/manifest-badging.txt; then
-            echo "Unexpected network permission in standalone smoke" >&2
-            exit 1
-          fi
-          python3 .github/scripts/verify-gpui-android-apk.py "$APK" | tee dist/gpui-android/native-validation.txt
-          unzip -p "$APK" lib/arm64-v8a/libxscc_gpui_android_smoke.so > "$RUNNER_TEMP/gpui-smoke.so"
+          python3 .github/scripts/verify-gpui-android-apk.py "$APK" --expected-package "$APPLICATION_ID" --expected-library "$NATIVE_LIBRARY" --permission-mode "$FLAVOR" --badging dist/gpui-android/manifest-badging.txt --manifest-tree dist/gpui-android/manifest-tree.txt | tee dist/gpui-android/native-validation.txt
+          unzip -p "$APK" "lib/arm64-v8a/lib$NATIVE_LIBRARY.so" > "$RUNNER_TEMP/gpui-smoke.so"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeTextChanged$' "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
           mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
           test "${#GAME_AARS[@]}" -eq 1
           python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" | tee dist/gpui-android/dex-privacy.txt
-          cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-smoke-${GITHUB_SHA:0:12}.apk"
+          cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
-          cp experiments/gpui-android-smoke/Cargo.lock dist/gpui-android/
-          printf 'commit=%s\nui=GPUI\nscope=window-touch-lifecycle-smoke\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA"             > dist/gpui-android/BUILD-INFO.txt
+          cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
+          printf 'commit=%s\nui=GPUI\nscope=%s-preview\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$FLAVOR"             > dist/gpui-android/BUILD-INFO.txt
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
 
       - name: Collect failed DEX privacy diagnostics (no installable APK)
         if: failure() && steps.verify-apk.outcome == 'failure'
         run: |
           set -euo pipefail
-          APK=packaging/gpui-android/app/build/outputs/apk/release/app-release.apk
+          APK="packaging/gpui-android/app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk"
           mkdir -p diagnostics/gpui-android
           unzip -j "$APK" 'classes*.dex' -d diagnostics/gpui-android
           for dex in diagnostics/gpui-android/classes*.dex; do
             "$ANDROID_HOME/build-tools/36.0.0/dexdump" -d "$dex" > "$dex.disassembly.txt"
           done
-          cp packaging/gpui-android/app/build/outputs/mapping/release/configuration.txt diagnostics/gpui-android/
-          cp packaging/gpui-android/app/build/outputs/mapping/release/mapping.txt diagnostics/gpui-android/
+          cp packaging/gpui-android/app/build/outputs/mapping/${FLAVOR}Release/configuration.txt diagnostics/gpui-android/
+          cp packaging/gpui-android/app/build/outputs/mapping/${FLAVOR}Release/mapping.txt diagnostics/gpui-android/
           printf 'commit=%s\npurpose=failed-privacy-gate-diagnostics-only\n' "$GITHUB_SHA" > diagnostics/gpui-android/BUILD-INFO.txt
 
       - name: Upload failed DEX diagnostics only
         if: failure() && steps.verify-apk.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: gpui-android-failed-dex-diagnostics-${{ github.sha }}
+          name: gpui-android-${{ matrix.flavor }}-failed-dex-diagnostics-${{ github.sha }}
           path: diagnostics/gpui-android/*
           if-no-files-found: error
           retention-days: 7
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-android-smoke-${{ github.sha }}
+          name: xscc-gpui-android-${{ matrix.flavor }}-${{ github.sha }}
           path: dist/gpui-android/*
           if-no-files-found: error
           retention-days: 14

@@ -24,6 +24,24 @@ android {
     sourceSets.main.java.srcDir '../vendor/game-text-input/src/main/java'
     namespace 'org.xscc.gpui.smoke'
     compileSdk 36
+    buildFeatures {
+        buildConfig = true
+    }
+    flavorDimensions 'client'
+    productFlavors {
+        smoke {
+            dimension 'client'
+            applicationId 'org.xscc.gpui.smoke'
+            buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_smoke"'
+            manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_smoke', appLabel: 'XSCC GPUI Smoke']
+        }
+        management {
+            dimension 'client'
+            applicationId 'org.sarmg.xscc.gpui.preview'
+            buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
+            manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC GPUI 管理预览']
+        }
+    }
 
     defaultConfig {
         applicationId 'org.xscc.gpui.smoke'

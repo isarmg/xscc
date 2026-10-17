@@ -11427,11 +11427,13 @@ dependencies = [
 name = "xscc-gpui-mobile-management"
 version = "0.1.0"
 dependencies = [
+ "android_logger",
  "async-trait",
  "base",
  "gpui_platform",
  "image 0.25.10",
  "libc",
+ "log",
  "objc2-foundation 0.3.2",
  "rustdesk",
  "tempfile",
