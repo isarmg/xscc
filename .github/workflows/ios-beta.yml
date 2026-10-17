@@ -53,7 +53,7 @@ jobs:
           key: mobile-vcpkg-macOS-arm64-ios-${{ steps.apple-toolchain.outputs.xcode-build }}-${{ steps.apple-toolchain.outputs.sdk }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
       - name: Build native codec dependencies
         id: native-dependencies
-        run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"'
+        run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --overlay-triplets="$GITHUB_WORKSPACE/res/vcpkg-triplets" --x-install-root="$VCPKG_ROOT/installed"'
       - name: Save successful native dependency binary archives
         if: steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
@@ -67,10 +67,14 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           prefix-key: rustdesk-lib-cache-ios
-          key: aarch64-apple-ios-${{ steps.apple-toolchain.outputs.xcode-build }}-${{ steps.apple-toolchain.outputs.sdk }}
+          key: aarch64-apple-ios-min26-${{ steps.apple-toolchain.outputs.xcode-build }}-${{ steps.apple-toolchain.outputs.sdk }}
           cache-on-failure: true
       - name: Build device Rust bridge
-        run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+        run: |
+          test "$(rustc --print deployment-target --target aarch64-apple-ios)" = "IPHONEOS_DEPLOYMENT_TARGET=26.0"
+          cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build unsigned device archive
         working-directory: flutter
         run: flutter build ipa --release --no-codesign
