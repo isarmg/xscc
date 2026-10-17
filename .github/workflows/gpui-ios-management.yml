@@ -54,6 +54,48 @@ jobs:
           python3 .github/scripts/test-gpui-ios-package.py
           mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
           brew install nasm
+      - name: Read-only simulator capability probe (not app acceptance)
+        continue-on-error: true
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, subprocess
+
+          def probe(args, decode=False):
+              try:
+                  result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+                  if result.returncode:
+                      return {'status': 'not_available', 'detail': result.stderr.strip()}
+                  value = json.loads(result.stdout) if decode else result.stdout.strip()
+                  return {'status': 'available', 'value': value}
+              except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+                  return {'status': 'probe_error', 'detail': str(error)}
+
+          swift = ('import Foundation; import Metal; '
+                   'let devices = MTLCopyAllDevices(); '
+                   'let report: [String: Any] = ["default_device_available": '
+                   'MTLCreateSystemDefaultDevice() != nil, "devices": devices.map { $0.name }]; '
+                   'let data = try JSONSerialization.data(withJSONObject: report); '
+                   'print(String(decoding: data, as: UTF8.self))')
+          report = {
+              'purpose': 'Environment evidence only; no simulator app was built, installed or tested',
+              'simulator_sdk': probe(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-version']),
+              'runtimes': probe(['xcrun', 'simctl', 'list', 'runtimes', '-j'], True),
+              'devices': probe(['xcrun', 'simctl', 'list', 'devices', 'available', '-j'], True),
+              'host_metal': probe(['xcrun', 'swift', '-e', swift], True),
+          }
+          runtimes = report['runtimes'].get('value', {}).get('runtimes', [])
+          report['ios26_runtime'] = 'available' if any(
+              r.get('isAvailable') and r.get('version', '').split('.')[0] == '26'
+              and '.iOS-' in r.get('identifier', '') for r in runtimes) else 'not_available'
+          if report['host_metal'].get('value', {}).get('default_device_available') is False:
+              report['host_metal']['status'] = 'not_available'
+          rendered = json.dumps(report, indent=2, ensure_ascii=False)
+          print(rendered)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Simulator capability preflight (not app acceptance)\n'
+                            'Host Metal availability does not prove simulator rendering.\n'
+                            '```json\n' + rendered + '\n```\n')
+          PYTHON
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
