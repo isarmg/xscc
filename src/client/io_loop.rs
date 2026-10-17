@@ -239,7 +239,9 @@ impl<T: InvokeUiSession> Remote<T> {
                             self.video_threads.iter().for_each(|(_, v)| {
                                 *v.frame_count.write().unwrap() = 0;
                             });
-                            self.fps_control(direct, fps.clone());
+                            if !self.fps_control(direct, fps.clone(), &mut peer).await {
+                                break;
+                            }
                             let chroma = self.chroma.read().unwrap().clone();
                             let chroma = match chroma {
                                 Some(Chroma::I444) => "4:4:4",
@@ -559,7 +561,7 @@ impl<T: InvokeUiSession> Remote<T> {
     // Currently, this function only considers decoding speed and queue length, not network delay.
     // The controlled end can consider auto fps as the maximum decoding fps.
     #[inline]
-    fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>) {
+    async fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>, peer: &mut Stream) -> bool {
         self.video_threads.iter_mut().for_each(|(k, v)| {
             let real_fps = real_fps_map.get(k).cloned().unwrap_or_default();
             if real_fps == 0 {
@@ -589,7 +591,7 @@ impl<T: InvokeUiSession> Remote<T> {
             .min()
             .flatten();
         let Some(min_decode_fps) = min_decode_fps else {
-            return;
+            return true;
         };
         let mut limited_fps = if direct {
             min_decode_fps * 9 / 10 // 30 got 27
@@ -650,7 +652,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler.lc.write().unwrap().last_auto_fps = Some(auto_fps);
             }
         }
-        // send refresh
+        let mut refresh_displays = Vec::new();
         for (display, thread) in self.video_threads.iter_mut() {
             let ctl = &mut thread.fps_control;
             let video_queue = thread.video_queue.read().unwrap();
@@ -661,12 +663,29 @@ impl<T: InvokeUiSession> Remote<T> {
             {
                 // Refresh causes client set_display, left frames cause flickering.
                 drop(video_queue);
-                self.handler.refresh_video(*display as _);
-                log::info!("Refresh display {} to reduce delay", display);
-                ctl.refresh_times += 1;
-                ctl.last_refresh_instant = Some(Instant::now());
+                if begin_congestion_refresh(&thread.discard_queue) {
+                    refresh_displays.push(*display);
+                    ctl.refresh_times += 1;
+                    ctl.last_refresh_instant = Some(Instant::now());
+                }
             }
         }
+        for display in refresh_displays {
+            if !self.send_congestion_refresh(peer, display).await {
+                return false;
+            }
+        }
+        true
+    }
+
+    async fn send_congestion_refresh(&mut self, peer: &mut Stream, display: usize) -> bool {
+        // Send in this loop: a queued UI refresh could invalidate a later recovery keyframe.
+        let message = client::LoginConfigHandler::refresh_display(display as _);
+        if let Err(error) = peer.send(&message).await {
+            self.handler.on_establish_connection_error(format!("{error:#}"));
+            return false;
+        }
+        true
     }
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
@@ -700,12 +719,10 @@ impl<T: InvokeUiSession> Remote<T> {
                             .send(MediaData::VideoFrame(Box::new(vf)))
                             .ok();
                     } else {
-                        let video_queue = thread.video_queue.read().unwrap();
-                        if video_queue.force_push(vf).is_some() {
-                            drop(video_queue);
-                            self.handler.refresh_video(display as _);
-                        } else {
-                            thread.video_sender.send(MediaData::VideoQueue).ok();
+                        if thread.queue_delta_frame(vf)
+                            && !self.send_congestion_refresh(peer, display).await
+                        {
+                            return false;
                         }
                     }
                 }
@@ -1508,10 +1525,85 @@ struct VideoThread {
     fps_control: FpsControl,
 }
 
+fn begin_congestion_refresh(discard_queue: &RwLock<bool>) -> bool {
+    let mut discard = discard_queue.write().unwrap();
+    let refresh = !*discard;
+    *discard = true;
+    refresh
+}
+
+impl VideoThread {
+    fn queue_delta_frame(&self, frame: VideoFrame) -> bool {
+        let queue = self.video_queue.read().unwrap();
+        // Synchronize invalidation with the decoder before removing a reference frame.
+        let mut discard = self.discard_queue.write().unwrap();
+        let overflow = queue.force_push(frame).is_some();
+        let refresh = overflow && !*discard;
+        if overflow {
+            *discard = true;
+        }
+        drop(discard);
+        drop(queue);
+        if !overflow {
+            self.video_sender.send(MediaData::VideoQueue).ok();
+        }
+        refresh
+    }
+}
+
 impl Drop for VideoThread {
     fn drop(&mut self) {
         // since channels are buffered, messages sent before the disconnect will still be properly received.
         *self.discard_queue.write().unwrap() = true;
+    }
+}
+
+#[cfg(test)]
+mod congestion_recovery_tests {
+    use super::*;
+
+    fn video_thread() -> (VideoThread, std::sync::mpsc::Receiver<MediaData>) {
+        let (video_sender, receiver) = std::sync::mpsc::channel();
+        (VideoThread {
+            video_queue: Arc::new(RwLock::new(ArrayQueue::new(1))),
+            video_sender,
+            decode_fps: Arc::new(RwLock::new(None)),
+            frame_count: Arc::new(RwLock::new(0)),
+            discard_queue: Arc::new(RwLock::new(false)),
+            fps_control: FpsControl::default(),
+        }, receiver)
+    }
+
+    #[test]
+    fn overflow_invalidates_reference_chain_before_requesting_refresh() {
+        let (thread, receiver) = video_thread();
+        assert!(!thread.queue_delta_frame(VideoFrame::new()));
+        assert!(matches!(receiver.try_recv(), Ok(MediaData::VideoQueue)));
+        assert!(thread.queue_delta_frame(VideoFrame::new()));
+        assert!(*thread.discard_queue.read().unwrap());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn congestion_requests_merge_until_decoder_accepts_keyframe() {
+        let (thread, _receiver) = video_thread();
+        assert!(begin_congestion_refresh(&thread.discard_queue));
+        assert!(!thread.queue_delta_frame(VideoFrame::new()));
+        assert!(!thread.queue_delta_frame(VideoFrame::new()));
+        assert!(!begin_congestion_refresh(&thread.discard_queue));
+        // This is the existing decoder's transition when it consumes MediaData::VideoFrame.
+        *thread.discard_queue.write().unwrap() = false;
+        assert!(thread.queue_delta_frame(VideoFrame::new()));
+    }
+
+    #[test]
+    fn congestion_recovery_does_not_invalidate_other_displays() {
+        let (first, _first_receiver) = video_thread();
+        let (second, _second_receiver) = video_thread();
+        assert!(!first.queue_delta_frame(VideoFrame::new()));
+        assert!(first.queue_delta_frame(VideoFrame::new()));
+        assert!(!*second.discard_queue.read().unwrap());
+        assert!(begin_congestion_refresh(&second.discard_queue));
     }
 }
 
