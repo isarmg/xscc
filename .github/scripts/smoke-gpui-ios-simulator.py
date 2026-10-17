@@ -45,6 +45,33 @@ def simulator_metadata(info):
     return info
 
 
+def launch_app(udid, bundle_id, phase, output, report):
+    def launch(prefix, retry=False):
+        args = ['xcrun', 'simctl', 'launch']
+        if retry:
+            args.append('--terminate-running-process')
+        return run(*args, f'--stdout={output / (prefix + ".stdout.log")}',
+                   f'--stderr={output / (prefix + ".stderr.log")}', udid, bundle_id)
+
+    try:
+        return launch(phase), phase
+    except subprocess.TimeoutExpired as error:
+        partial = '\n'.join(value.decode(errors='replace') if isinstance(value, bytes) else value
+                            for value in (error.stdout, error.stderr) if value)
+        app_output = any((output / (phase + suffix)).exists()
+                         and (output / (phase + suffix)).stat().st_size
+                         for suffix in ('.stdout.log', '.stderr.log'))
+        # Only retry a first launch with no PID or app output, never an app failure.
+        if (phase != 'first-launch' or re.search(r':\s*\d+\s*$', partial, re.MULTILINE)
+                or 'XSCC_GPUI_' in partial or app_output):
+            raise
+        report['first_attempt_timed_out'] = True
+        report['retried'] = True
+        report['first_attempt_timeout_seconds'] = error.timeout
+        prefix = phase + '-retry'
+        return launch(prefix, retry=True), prefix
+
+
 def smoke(binary, output):
     output.mkdir(parents=True, exist_ok=True)
     udid = None
@@ -75,18 +102,17 @@ def smoke(binary, output):
         run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=600)
         run('xcrun', 'simctl', 'install', udid, str(app), timeout=120)
         for phase in ('first-launch', 'relaunch'):
-            launch = run('xcrun', 'simctl', 'launch',
-                         f'--stdout={output / (phase + ".stdout.log")}',
-                         f'--stderr={output / (phase + ".stderr.log")}', udid, info['CFBundleIdentifier'])
+            launch, log_prefix = launch_app(udid, info['CFBundleIdentifier'], phase, output, report)
             pid = int(launch.rsplit(':', 1)[1].strip())
             time.sleep(8)
             run('xcrun', 'simctl', 'io', udid, 'screenshot', str(output / (phase + '.png')))
             os.kill(pid, 0)
-            stderr = (output / (phase + '.stderr.log')).read_text()
+            stderr = (output / (log_prefix + '.stderr.log')).read_text()
             for marker in ('XSCC_GPUI_LAUNCH_CALLBACK_REACHED', 'XSCC_GPUI_WINDOW_CREATED'):
                 if marker not in stderr:
                     raise ValueError(f'{phase}: missing lifecycle marker {marker}')
-            report[phase] = {'pid': pid, 'alive_after_seconds': 8, 'screenshot': phase + '.png'}
+            report[phase] = {'pid': pid, 'alive_after_seconds': 8, 'screenshot': phase + '.png',
+                             'log_prefix': log_prefix}
             run('xcrun', 'simctl', 'terminate', udid, info['CFBundleIdentifier'])
         report['result'] = 'installed_and_launched_twice; screenshots_require_review'
     except Exception as error:
