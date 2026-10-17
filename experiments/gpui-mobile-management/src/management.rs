@@ -18,6 +18,8 @@ pub enum Command {
 
 pub enum Event {
     Opened(Status),
+    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    SessionReady(Arc<NativeManager>),
     Status(Status),
     Action(Result<(), String>),
     Lifecycle(Result<(), String>),
@@ -61,7 +63,12 @@ pub fn application_directory() -> Result<PathBuf, String> {
 fn open(directory: PathBuf) -> Result<Arc<NativeManager>, String> {
     let root = PrivateDirectory::create(&directory, "xscc-managed")
         .map_err(|error| format!("Protected management storage unavailable: {error}"))?;
-    NativeManager::open(root, Arc::new(Controller)).map_err(|error| error.to_string())
+    let manager =
+        NativeManager::open(root, Arc::new(Controller)).map_err(|error| error.to_string())?;
+    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    librustdesk::platform::gpui_mobile::initialize(&directory, manager.clone())
+        .map_err(|error| error.to_string())?;
+    Ok(manager)
 }
 
 pub async fn run(
@@ -90,6 +97,8 @@ pub async fn run(
             return;
         }
     };
+    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    publish(Event::SessionReady(manager.clone()));
     publish(Event::Opened(manager.status()));
     let mut active = *lifecycle.borrow_and_update();
     if active {

@@ -1,3 +1,6 @@
+#[cfg(all(target_os = "ios", feature = "gpui-mobile-session", feature = "flutter"))]
+compile_error!("GPUI mobile sessions must be built without the Flutter feature");
+
 #[cfg(not(any(
     all(target_os = "windows", target_arch = "x86_64"),
     all(target_os = "linux", target_arch = "x86_64"),
@@ -24,7 +27,13 @@ pub use platform::{
 mod server;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use self::server::*;
-#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
+#[cfg(all(
+    feature = "gpui-session",
+    any(
+        not(any(target_os = "android", target_os = "ios")),
+        all(target_os = "ios", feature = "gpui-mobile-session")
+    )
+))]
 pub mod gpui_session;
 #[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
 pub mod gpui_host;
@@ -51,11 +60,11 @@ pub(crate) mod update_hash;
 mod manual_update;
 mod version;
 pub use version::*;
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
 mod bridge_generated;
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
 pub mod flutter;
-#[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
 pub mod flutter_ffi;
 use common::*;
 mod auth_2fa;

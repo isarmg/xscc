@@ -48,3 +48,15 @@ executor. Dedicated macOS/iOS CI must establish compile, test and link results f
 the exact revision; the preview README records the physical-device acceptance
 matrix. Simulator, packaging, host tests and device tests are different evidence.
 Neither a green build nor an unsigned IPA is a claim that remote control works.
+
+
+## First-frame follow-on (explicit `mobile-session` feature)
+
+The iOS preview now has an opt-in view-only session path. It links the existing
+Rust client with `gpui-mobile-session` and no default features, attaches the already
+opened manager, and reuses authorization, TCP login, software decode and the BGRA
+presentation helper. Desktop and Flutter cfg behavior is retained when this feature
+is off. The feature explicitly disables audio/input/clipboard in protocol options
+and locally; the UI offers screen selection and disconnect, without placeholder
+input controls. Native build success and real-device first-frame/revocation tests
+remain separate acceptance gates. No physical-device streaming is claimed.

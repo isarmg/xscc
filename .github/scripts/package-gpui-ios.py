@@ -50,7 +50,17 @@ def validate_binary(binary):
     return build
 
 
-def package(binary, output):
+def preview_capabilities(view_only):
+    return {
+        'management': True,
+        'software_video_preview': view_only,
+        'audio': False,
+        'remote_input': False,
+        'clipboard': False,
+    }
+
+
+def package(binary, output, view_only=False):
     require(binary.is_file(), 'Missing built device executable')
     template = Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist'
     info = plistlib.loads(template.read_bytes())
@@ -59,7 +69,8 @@ def package(binary, output):
     sha = os.environ.get('GITHUB_SHA') or command('git', 'rev-parse', 'HEAD')
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
-    name = f'xscc-gpui-management-{sha[:12]}-ios26-arm64-unsigned.ipa'
+    mode = 'view-only' if view_only else 'management'
+    name = f'xscc-gpui-{mode}-{sha[:12]}-ios26-arm64-unsigned.ipa'
     output.mkdir(parents=True, exist_ok=True)
     ipa = (output / name).resolve()
     with tempfile.TemporaryDirectory(prefix='xscc-gpui-ios-') as temporary:
@@ -88,16 +99,18 @@ def package(binary, output):
         'source_commit': sha, 'artifact': name, 'sha256': digest,
         'bundle_id': info['CFBundleIdentifier'], 'build': info['CFBundleVersion'],
         'platform': 'iOS/iPadOS 26 ARM64 physical device',
-        'scope': 'GPUI management preview: binding and authorized host list; no video session',
+        'scope': ('GPUI view-only preview: management and software video; not full remote control'
+                  if view_only else 'GPUI management preview: binding and authorized host list; no video session'),
+        'declared_capabilities': preview_capabilities(view_only),
         'signing': 'UNSIGNED: requires your own matching provisioning and app signature before installation',
         'verified': ['ARM64 device executable', 'minimum iOS 26.0', 'system dynamic dependencies', 'Payload layout'],
-        'not_verified': ['physical-device launch', 'management interaction on device', 'signing and provisioning'],
+        'not_verified': ['physical-device launch', 'management interaction on device', 'authorized remote connection and first video frame', 'signing and provisioning'],
         'xcode': command('xcodebuild', '-version'), 'macho_build': build,
     }, ensure_ascii=False, indent=2) + '\n')
     print(f'Prepared {ipa}; requires user signing before installation.')
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        raise SystemExit('Usage: package-gpui-ios.py DEVICE_EXECUTABLE OUTPUT_DIRECTORY')
-    package(Path(sys.argv[1]), Path(sys.argv[2]))
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != '--view-only'):
+        raise SystemExit('Usage: package-gpui-ios.py DEVICE_EXECUTABLE OUTPUT_DIRECTORY [--view-only]')
+    package(Path(sys.argv[1]), Path(sys.argv[2]), view_only=len(sys.argv) == 4)

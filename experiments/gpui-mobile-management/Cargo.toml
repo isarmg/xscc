@@ -11,7 +11,8 @@ publish = false
 [features]
 default = ["mobile-management"]
 mobile-management = []
-# The shared desktop appearance module uses this feature; this app has no media adapter.
+mobile-session = ["dep:librustdesk", "dep:image"]
+# This compatibility feature enables shared appearance only, never media.
 live-session = []
 
 [dependencies]
@@ -25,10 +26,15 @@ unicode-segmentation = "1.12"
 libc = "=0.2.189"
 
 [target.'cfg(target_os = "ios")'.dependencies]
+librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session"], optional = true }
+image = { version = "0.25", default-features = false, optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
 
 [profile.dev]
 debug = 0

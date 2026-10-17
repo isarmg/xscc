@@ -1,4 +1,4 @@
-name: GPUI iOS management preview
+name: GPUI iOS view-only preview
 on:
   workflow_dispatch:
   push:
@@ -10,6 +10,13 @@ on:
       - 'experiments/gpui-validation/src/theme.rs'
       - 'vendor/gpui/**'
       - 'crates/**'
+      - 'src/**'
+      - 'libs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'vcpkg.json'
+      - 'res/vcpkg/**'
+      - 'res/vcpkg-triplets/**'
       - 'packaging/gpui-ios/**'
       - '.github/scripts/*gpui-ios*'
       - '.github/workflows/gpui-ios-management.yml'
@@ -21,7 +28,11 @@ concurrency:
 jobs:
   device-preview:
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 180
+    env:
+      VCPKG_DEFAULT_TRIPLET: arm64-ios
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
+      VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -41,6 +52,8 @@ jobs:
           echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
           echo "xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/test-gpui-ios-package.py
+          mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+          brew install nasm
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: experiments/gpui-mobile-management
@@ -51,21 +64,42 @@ jobs:
         run: |
           cargo fmt --check
           cargo test --locked --bin xscc-gpui-mobile-management
+      - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+      - name: Restore native dependency binary archives
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mobile-vcpkg-macOS-arm64-ios-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+      - name: Build native codec dependencies
+        id: native-dependencies
+        run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --overlay-triplets="$GITHUB_WORKSPACE/res/vcpkg-triplets" --x-install-root="$VCPKG_ROOT/installed"'
+      - name: Save successful native dependency binary archives
+        if: steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Check and build native device application
         working-directory: experiments/gpui-mobile-management
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '26.0'
         run: |
           test "$(rustc --print deployment-target --target aarch64-apple-ios)" = 'IPHONEOS_DEPLOYMENT_TARGET=26.0'
-          cargo clippy --locked --target aarch64-apple-ios --bin xscc-gpui-mobile-management
-          cargo build --locked --release --target aarch64-apple-ios --bin xscc-gpui-mobile-management
+          cargo check --locked --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
+          cargo check --tests --locked --target aarch64-apple-ios --features mobile-session
+          cargo clippy --locked --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
+          cargo build --locked --release --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --view-only
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
-          echo 'Native GPUI management preview only: binding and host list, no video session. Unsigned IPA requires your own signing and provisioning. Physical-device launch and interaction remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Native GPUI view-only preview: management and software-decoded video. Audio, remote input and clipboard are disabled. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection and first-frame rendering remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-management-ios26-arm64-unsigned-${{ github.sha }}
+          name: xscc-gpui-view-only-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error

@@ -841,7 +841,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::CursorPosition(cp)) => {
                     self.handler.set_cursor_position(cp);
                 }
-                Some(message::Union::Clipboard(cb)) => {
+                Some(message::Union::Clipboard(cb)) if !cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) => {
                     let clipboard_allowed = {
                         let lc = self.handler.lc.read().unwrap();
                         !lc.disable_clipboard.v && !lc.view_only.v
@@ -879,7 +879,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         crate::clipboard::handle_msg_clipboard(cb);
                     }
                 }
-                Some(message::Union::MultiClipboards(mut _mcb)) => {
+                Some(message::Union::MultiClipboards(mut _mcb)) if !cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) => {
                     _mcb.clipboards.retain(|c| c.format.enum_value() == Ok(ClipboardFormat::Text));
                     if _mcb.clipboards.is_empty() {
                         return true;
@@ -928,7 +928,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
-                    Some(misc::Union::AudioFormat(f)) => {
+                    Some(misc::Union::AudioFormat(f)) if !cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) => {
                         self.audio_sender.send(MediaData::AudioFormat(f)).ok();
                     }
                     Some(misc::Union::PermissionInfo(p)) => {
@@ -1106,7 +1106,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::TestDelay(t)) => {
                     self.handler.handle_test_delay(t, peer).await;
                 }
-                Some(message::Union::AudioFrame(frame)) => {
+                Some(message::Union::AudioFrame(frame)) if !cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) => {
                     if !self.handler.lc.read().unwrap().disable_audio.v {
                         self.audio_sender
                             .send(MediaData::AudioFrame(Box::new(frame)))

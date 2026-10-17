@@ -153,6 +153,11 @@ pub(crate) async fn start() {
     }
 }
 
+#[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+pub(crate) fn attach_gpui_owner(manager: Arc<NativeManager>) -> ResultType<()> {
+    MANAGER.set(Ok(manager)).map_err(|_| hbb_common::anyhow::anyhow!("Native management owner is already initialized"))
+}
+
 fn owner() -> ResultType<&'static Arc<NativeManager>> {
     match MANAGER.get() {
         Some(Ok(manager)) => Ok(manager),

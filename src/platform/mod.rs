@@ -1,3 +1,6 @@
+#[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+pub mod gpui_mobile;
+
 #[cfg(target_os = "linux")]
 pub use linux::*;
 #[cfg(target_os = "macos")]

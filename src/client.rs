@@ -1461,6 +1461,9 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
+        // The first mobile GPUI session slice is explicitly view-only.
+        #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+        restrict_mobile_view_only(&mut msg);
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
@@ -2978,4 +2981,36 @@ mod direct_approval_tests {
         assert!(wait_direct_identity_decision(&mut rx, "current-round").await);
     }
 
+}
+
+#[cfg(any(test, all(target_os = "ios", feature = "gpui-mobile-session")))]
+fn restrict_mobile_view_only(options: &mut OptionMessage) {
+    options.disable_keyboard = BoolOption::Yes.into();
+    options.disable_audio = BoolOption::Yes.into();
+    options.disable_clipboard = BoolOption::Yes.into();
+    options.lock_after_session_end = BoolOption::No.into();
+    options.block_input = BoolOption::No.into();
+}
+
+#[cfg(test)]
+mod mobile_view_only_tests {
+    use super::*;
+
+    #[test]
+    fn wire_options_disable_side_channels_without_changing_video_cadence() {
+        let mut options = OptionMessage::new();
+        options.custom_fps = 30;
+        options.disable_keyboard = BoolOption::No.into();
+        options.disable_audio = BoolOption::No.into();
+        options.disable_clipboard = BoolOption::No.into();
+        options.lock_after_session_end = BoolOption::Yes.into();
+        options.block_input = BoolOption::Yes.into();
+        restrict_mobile_view_only(&mut options);
+        assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::Yes));
+        assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
+        assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
+        assert_eq!(options.lock_after_session_end.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.block_input.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.custom_fps, 30);
+    }
 }

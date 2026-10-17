@@ -1,5 +1,10 @@
 mod management;
 mod panel;
+#[cfg(all(target_os = "ios", feature = "mobile-session"))]
+#[path = "../../gpui-validation/src/presentation.rs"]
+mod presentation;
+#[cfg(all(target_os = "ios", feature = "mobile-session"))]
+mod session_view;
 #[path = "../../gpui-validation/src/text_field.rs"]
 mod text_field;
 #[path = "../../gpui-validation/src/theme.rs"]
@@ -17,8 +22,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.handle().clone();
     gpui::application().run(move |cx: &mut App| {
         text_field::init(cx);
-        if let Err(error) = cx.open_window(WindowOptions::default(), |_, cx| {
-            cx.new(|cx| panel::Panel::new(directory, handle, cx))
+        if let Err(error) = cx.open_window(WindowOptions::default(), |window, cx| {
+            cx.new(|cx| panel::Panel::new(directory, handle, window, cx))
         }) {
             eprintln!("Could not open the management preview: {error}");
             cx.quit();

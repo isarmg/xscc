@@ -26,6 +26,8 @@ pub struct Panel {
     busy: bool,
     confirm_unbind: bool,
     notice: String,
+    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    session: Entity<crate::session_view::SessionView>,
     _updates: gpui::Task<()>,
     _lifecycle: Subscription,
 }
@@ -34,6 +36,7 @@ impl Panel {
     pub fn new(
         directory: Result<PathBuf, String>,
         runtime: tokio::runtime::Handle,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let (commands, receiver) = tokio::sync::mpsc::channel(1);
@@ -52,7 +55,7 @@ impl Panel {
                 wake.notified().await;
                 if view
                     .update(cx, |view: &mut Self, cx| {
-                        view.consume();
+                        view.consume(cx);
                         cx.notify();
                     })
                     .is_err()
@@ -95,14 +98,21 @@ impl Panel {
             busy: false,
             confirm_unbind: false,
             notice: "正在读取本机绑定…".into(),
+            #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+            session: cx
+                .new(|cx| crate::session_view::SessionView::new(runtime.clone(), _window, cx)),
             _updates: updates,
             _lifecycle: lifecycle,
         }
     }
 
-    fn consume(&mut self) {
+    fn consume(&mut self, _cx: &mut Context<Self>) {
         while let Ok(event) = self.events.try_recv() {
             match event {
+                #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                Event::SessionReady(manager) => {
+                    self.session.update(_cx, |view, _| view.attach(manager))
+                }
                 Event::Opened(status) => {
                     self.initialized = true;
                     self.status = Some(status);
@@ -113,6 +123,9 @@ impl Panel {
                         status.peers.clear();
                     }
                     self.status = Some(status);
+                    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                    self.session
+                        .update(_cx, |view, cx| view.check_authorization(cx));
                 }
                 Event::Action(result) => {
                     self.busy = false;
@@ -137,10 +150,15 @@ impl Panel {
         self.initialized && self.active && !self.busy
     }
 
-    fn action(&mut self, command: Command) {
+    fn action(&mut self, command: Command, _cx: &mut Context<Self>) {
         if !self.enabled() {
             return;
         }
+        #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+        self.session.update(_cx, |view, cx| {
+            view.stop();
+            cx.notify();
+        });
         match self.commands.try_send(command) {
             Ok(()) => {
                 self.busy = true;
@@ -165,7 +183,7 @@ impl Panel {
         } else {
             self.code.update(cx, |field, cx| field.clear(window, cx));
             window.dismiss_virtual_keyboard();
-            self.action(Command::Enroll { server, code });
+            self.action(Command::Enroll { server, code }, cx);
         }
         cx.notify();
     }
@@ -206,7 +224,13 @@ impl Render for Panel {
                     .text_color(rgb(palette.muted))
                     .child("GPUI · 移动管理预览"),
             )
-            .child("此版本支持服务端绑定与设备列表，尚未接入远程画面、音频和输入。")
+            .child(
+                if cfg!(all(target_os = "ios", feature = "mobile-session")) {
+                    "远程画面预览：仅查看，音频、远程输入和剪贴板均已禁用。"
+                } else {
+                    "此版本支持服务端绑定与设备列表，尚未接入远程画面、音频和输入。"
+                },
+            )
             .child(self.server.clone())
             .child(self.code.clone())
             .child(
@@ -216,10 +240,14 @@ impl Render for Panel {
             .child(button("resume", "重新连接服务端").on_click(cx.listener(
                 |view, _, window, cx| {
                     window.dismiss_virtual_keyboard();
-                    view.action(Command::Resume);
+                    view.action(Command::Resume, cx);
                     cx.notify();
                 },
             )));
+        #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+        {
+            content = content.child(self.session.clone());
+        }
         if let Some(status) = &self.status {
             let state = match status.phase.as_str() {
                 "online" => "在线",
@@ -257,7 +285,7 @@ impl Render for Panel {
                         }
                         window.dismiss_virtual_keyboard();
                         if view.confirm_unbind {
-                            view.action(Command::Unbind);
+                            view.action(Command::Unbind, cx);
                         } else {
                             view.confirm_unbind = true;
                         }
@@ -288,6 +316,26 @@ impl Render for Panel {
                     ));
             }
             for peer in peers {
+                #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                if peer.online {
+                    let id = peer.binding.device_id.to_string();
+                    content = content.child(
+                        div()
+                            .id(gpui::SharedString::from(format!("view-{id}")))
+                            .min_h(px(44.))
+                            .p_3()
+                            .child(format!("查看 {} 的画面", peer.name))
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                if !view.enabled() {
+                                    return;
+                                }
+                                window.dismiss_virtual_keyboard();
+                                view.session
+                                    .update(cx, |session, cx| session.connect(id.clone(), cx));
+                            })),
+                    );
+                }
+
                 content = content.child(
                     div()
                         .relative()

@@ -11,6 +11,13 @@ spec.loader.exec_module(package)
 
 
 class DevicePreviewTests(unittest.TestCase):
+    def test_view_only_capabilities(self):
+        self.assertFalse(package.preview_capabilities(False)['software_video_preview'])
+        self.assertEqual(package.preview_capabilities(True), {
+            'management': True, 'software_video_preview': True,
+            'audio': False, 'remote_input': False, 'clipboard': False,
+        })
+
     def test_device_metadata(self):
         info = plistlib.loads((Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist').read_bytes())
         package.validate_metadata(info)

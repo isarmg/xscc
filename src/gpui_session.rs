@@ -185,6 +185,9 @@ impl SessionHandle {
         (0..64).map_while(|_| queue.pop()).collect()
     }
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
+        if cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) {
+            bail!("This mobile preview is view-only");
+        }
         let mailbox = &self.session.ui_handler.0;
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
             bail!("Session is not connected");
@@ -450,6 +453,8 @@ impl InvokeUiSession for Handler {
     fn is_multi_ui_session(&self) -> bool {
         false
     }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn clipboard(&self, _: String) {}
     fn set_cursor_data(&self, _: CursorData) {}
     fn set_cursor_id(&self, _: String) {}
     fn set_cursor_position(&self, _: CursorPosition) {}
@@ -556,6 +561,19 @@ fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disconnect_discards_queued_and_late_decoder_frames() {
+        let handle = SessionHandle { session: Session::default() };
+        let mut image = scrap::ImageRgb { raw: vec![1, 2, 3, 255], w: 1, h: 1, fmt: scrap::ImageFormat::ARGB, align: 1 };
+        handle.session.ui_handler.on_rgba(0, &mut image);
+        assert!(handle.take_frame().is_some());
+        handle.session.ui_handler.on_rgba(0, &mut image);
+        handle.disconnect();
+        assert!(handle.take_frame().is_none());
+        handle.session.ui_handler.on_rgba(0, &mut image);
+        assert!(handle.take_frame().is_none());
+    }
+
     #[test]
     fn bgra_keeps_channels_and_removes_padding() {
         let image = scrap::ImageRgb {
@@ -785,6 +803,11 @@ mod tests {
             .0
             .connected
             .store(true, Ordering::Release);
+        if cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) {
+            assert!(handle.send_input(InputCommand::Key(KeyEvent::default())).is_err());
+            assert!(receiver.try_recv().is_err());
+            return;
+        }
         for down in [true, false] {
             handle
                 .send_input(InputCommand::Key(KeyEvent {
