@@ -1,0 +1,22 @@
+[package]
+name = "xscc-gpui-android-smoke"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+
+[lib]
+name = "xscc_gpui_android_smoke"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+gpui = { package = "gpui_platform", path = "../../vendor/gpui/crates/gpui_platform", default-features = false }
+android_logger = "=0.13.3"
+log = "0.4"
+
+[profile.release]
+debug = 0
+strip = "debuginfo"

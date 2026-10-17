@@ -1,0 +1,5 @@
+<resources>
+    <style name="SmokeTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

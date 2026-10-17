@@ -323,6 +323,17 @@ impl TextField {
 }
 
 impl EntityInputHandler for TextField {
+    fn text_input_configuration(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> gpui::TextInputConfiguration {
+        gpui::TextInputConfiguration {
+            secure: self.secret,
+            ..Default::default()
+        }
+    }
+
     fn text_for_range(
         &mut self,
         range: Range<usize>,

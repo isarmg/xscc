@@ -1,7 +1,7 @@
 // XCSS content-blocks palettes and Mac mini contour, pinned to:
 // https://github.com/isarmg/xcss/tree/d0a41861d949f2b0626249b25a35f562fb59b592/web/admin-ui
 use gpui::WindowAppearance;
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 use gpui::{Bounds, IntoElement, PathBuilder, Pixels, Rgba, canvas, fill, point, prelude::*, px};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,14 +41,14 @@ pub fn palette(appearance: WindowAppearance) -> Palette {
     }
 }
 
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub const CONTROL_EXTENT: f32 = 27.;
 pub const PANEL_EXTENT: f32 = 42.;
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub const CONTROL_HEIGHT: f32 = 44.;
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub const BODY_SIZE: f32 = 16.;
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub const LINE_HEIGHT: f32 = 24.;
 
 // Evaluate the source degree-seven curve once at compile time. A 24-segment
@@ -90,7 +90,7 @@ const fn profile() -> [(f32, f32); 25] {
 }
 const PROFILE: [(f32, f32); 25] = profile();
 
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 fn outline(bounds: Bounds<Pixels>, extent: f32, stroke: bool) -> PathBuilder {
     let w = f32::from(bounds.size.width);
     let h = f32::from(bounds.size.height);
@@ -117,7 +117,7 @@ fn outline(bounds: Bounds<Pixels>, extent: f32, stroke: bool) -> PathBuilder {
     path
 }
 
-#[cfg(feature = "live-session")]
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub fn surface(color: Rgba, border: Option<Rgba>, extent: f32) -> impl IntoElement {
     canvas(
         |_, _, _| (),

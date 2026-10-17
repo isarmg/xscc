@@ -222,6 +222,10 @@ define_class!(
     }
 
     unsafe impl UITextInputTraits for TextInputView {
+        #[unsafe(method(isSecureTextEntry))]
+        fn is_secure_text_entry(&self) -> bool {
+            self.ivars().configuration.borrow().secure
+        }
         #[unsafe(method(keyboardType))]
         fn keyboard_type(&self) -> UIKeyboardType { UIKeyboardType::Default }
         #[unsafe(method(autocorrectionType))]
@@ -878,6 +882,7 @@ pub(super) mod tests {
         view.setMarkedText_selectedRange(Some(&text), NSRange::new(1, 2));
         view.unmarkText();
         view.set_configuration(&TextInputConfiguration {
+            secure: false,
             autocorrect: true,
             autocapitalize: Autocapitalize::Sentences,
             suggestions: true,
@@ -890,6 +895,16 @@ pub(super) mod tests {
         );
         assert_eq!(view.spellCheckingType(), UITextSpellCheckingType::Yes);
         assert_eq!(view.returnKeyType(), UIReturnKeyType::Search);
+        assert!(!view.isSecureTextEntry());
+        view.set_configuration(&TextInputConfiguration {
+            secure: true,
+            ..Default::default()
+        });
+        assert!(view.isSecureTextEntry());
+        assert_eq!(view.autocorrectionType(), UITextAutocorrectionType::No);
+        assert_eq!(view.spellCheckingType(), UITextSpellCheckingType::No);
+        view.set_configuration(&TextInputConfiguration::default());
+        assert!(!view.isSecureTextEntry());
         view.set_keyboard_visible(false);
         view.reconcile_text_input(sel!(reconcileTextInput));
         assert!(!view.canBecomeFirstResponder());

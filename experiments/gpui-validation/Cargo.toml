@@ -9,6 +9,7 @@ publish = false
 [workspace]
 
 [features]
+mobile-management = []
 live-session = ["dep:librustdesk", "librustdesk/hwcodec"]
 native-host = ["live-session", "librustdesk/gpui-host"]
 xscc-codec = ["dep:scrap"]

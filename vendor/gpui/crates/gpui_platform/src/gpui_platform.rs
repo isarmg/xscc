@@ -2,17 +2,23 @@
 
 pub use gpui::*;
 
+#[cfg(target_os = "android")]
+pub use gpui_android::{AndroidApp, application as android};
+
 use std::rc::Rc;
 
 /// Returns a background executor for the current platform.
+#[cfg(not(target_os = "android"))]
 pub fn background_executor() -> gpui::BackgroundExecutor {
     current_platform(true).background_executor()
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn application() -> gpui::Application {
     gpui::Application::with_platform(current_platform(false))
 }
 
+#[cfg(not(target_os = "android"))]
 pub fn headless() -> gpui::Application {
     gpui::Application::with_platform(current_platform(true))
 }
@@ -28,6 +34,7 @@ pub fn linux(allowed_modes: gpui::WindowingModes) -> gpui::Application {
 }
 
 /// Returns the default [`Platform`] for the current OS.
+#[cfg(not(target_os = "android"))]
 pub fn current_platform(headless: bool) -> Rc<dyn Platform> {
     #[cfg(target_os = "ios")]
     {

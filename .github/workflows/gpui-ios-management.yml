@@ -1,0 +1,71 @@
+name: GPUI iOS management preview
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - 'experiments/gpui-mobile-management/**'
+      - 'experiments/shared/**'
+      - 'experiments/gpui-validation/src/text_field.rs'
+      - 'experiments/gpui-validation/src/theme.rs'
+      - 'vendor/gpui/**'
+      - 'crates/**'
+      - 'packaging/gpui-ios/**'
+      - '.github/scripts/*gpui-ios*'
+      - '.github/workflows/gpui-ios-management.yml'
+permissions:
+  contents: read
+concurrency:
+  group: gpui-ios-management-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  device-preview:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.99.0'
+          targets: aarch64-apple-ios
+          components: rustfmt, clippy
+      - name: Verify source and device SDK
+        id: apple
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
+          echo "xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/test-gpui-ios-package.py
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: experiments/gpui-mobile-management
+          key: gpui-ios26-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}
+          cache-on-failure: true
+      - name: Check formatting and host management tests
+        working-directory: experiments/gpui-mobile-management
+        run: |
+          cargo fmt --check
+          cargo test --locked --bin xscc-gpui-mobile-management
+      - name: Check and build native device application
+        working-directory: experiments/gpui-mobile-management
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+        run: |
+          test "$(rustc --print deployment-target --target aarch64-apple-ios)" = 'IPHONEOS_DEPLOYMENT_TARGET=26.0'
+          cargo clippy --locked --target aarch64-apple-ios --bin xscc-gpui-mobile-management
+          cargo build --locked --release --target aarch64-apple-ios --bin xscc-gpui-mobile-management
+      - name: Validate and package unsigned preview
+        run: |
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios
+          cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
+          echo 'Native GPUI management preview only: binding and host list, no video session. Unsigned IPA requires your own signing and provisioning. Physical-device launch and interaction remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-gpui-management-ios26-arm64-unsigned-${{ github.sha }}
+          path: dist-gpui-ios/
+          if-no-files-found: error

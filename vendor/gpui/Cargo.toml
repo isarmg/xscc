@@ -5,6 +5,7 @@ members = [
     "crates/collections",
     "crates/gpui",
     "crates/gpui_apple",
+    "crates/gpui_android",
     "crates/gpui_ios",
     "crates/gpui_linux",
     "crates/gpui_macos",
@@ -65,6 +66,7 @@ foreign-types = "0.5"
 futures = "0.3.34"
 futures-concurrency = "7.7.1"
 gpui = { "path" = "crates/gpui", "default-features" = false }
+gpui_android = { "path" = "crates/gpui_android" }
 gpui_apple = { "path" = "crates/gpui_apple" }
 gpui_ios = { "path" = "crates/gpui_ios" }
 gpui_linux = { "path" = "crates/gpui_linux", "default-features" = false }

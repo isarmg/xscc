@@ -2493,6 +2493,8 @@ pub trait InputHandler: 'static {
 /// key presentation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextInputConfiguration {
+    /// Request the platform's protected password-entry keyboard session.
+    pub secure: bool,
     /// Whether the platform may automatically correct entered text.
     pub autocorrect: bool,
     /// How software keyboards automatically capitalize entered text.

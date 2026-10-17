@@ -1,0 +1,34 @@
+[package]
+name = "xscc-gpui-mobile-management"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+
+[features]
+default = ["mobile-management"]
+mobile-management = []
+# The shared desktop appearance module uses this feature; this app has no media adapter.
+live-session = []
+
+[dependencies]
+gpui = { package = "gpui_platform", path = "../../vendor/gpui/crates/gpui_platform", default-features = false, features = ["font-kit"] }
+xscc = { path = "../../crates/management" }
+xscc-native-management = { path = "../../crates/native-management" }
+async-trait = "0.1"
+tokio = { version = "~1.53.2", features = ["rt-multi-thread", "sync", "time", "macros"] }
+unicode-segmentation = "1.12"
+# Match the validated iOS framework dependency while backtrace uses dyld declarations.
+libc = "=0.2.189"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+debug = 0

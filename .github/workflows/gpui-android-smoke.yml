@@ -1,0 +1,122 @@
+name: GPUI Android native smoke
+on:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - 'experiments/gpui-android-smoke/**'
+      - 'vendor/gpui/**'
+      - 'packaging/gpui-android/**'
+      - '.github/workflows/gpui-android-smoke.yml'
+      - '.github/scripts/*gpui-android*'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gpui-android-smoke-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  RUST_VERSION: '1.99.0'
+  CARGO_NDK_VERSION: '4.1.2'
+  NDK_VERSION: r30
+  GRADLE_VERSION: '9.8.1'
+  GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Check source and package validation tests
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .github/scripts/test-gpui-android-apk.py
+
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev cmake ninja-build pkg-config
+
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779
+        id: ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: experiments/gpui-android-smoke
+          prefix-key: gpui-android-smoke-r30
+          cache-on-failure: true
+
+      - name: Cross-compile the real GPUI smoke library
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: '-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384'
+        run: |
+          set -euo pipefail
+          cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
+          mkdir -p packaging/gpui-android/app/src/main/jniLibs
+          cd experiments/gpui-android-smoke
+          cargo ndk -t arm64-v8a -p 29 -o ../../packaging/gpui-android/app/src/main/jniLibs build --release --locked
+          cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"             ../../packaging/gpui-android/app/src/main/jniLibs/arm64-v8a/
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '27'
+
+      - name: Install pinned Gradle and Android SDK components
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o "$RUNNER_TEMP/gradle.zip"
+          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Assemble disposable-debug-key release APK
+        run: gradle --no-daemon -p packaging/gpui-android :app:assembleRelease
+
+      - name: Verify actual APK and package evidence
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          APK=packaging/gpui-android/app/build/outputs/apk/release/app-release.apk
+          TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          mkdir -p dist/gpui-android
+          "$TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee dist/gpui-android/signature.txt
+          "$TOOLS/zipalign" -c -P 16 -v 4 "$APK" > dist/gpui-android/zip-alignment.txt
+          "$TOOLS/aapt" dump badging "$APK" | tee dist/gpui-android/manifest-badging.txt
+          grep -q "package: name='org.xscc.gpui.smoke'" dist/gpui-android/manifest-badging.txt
+          grep -qx "sdkVersion:'29'" dist/gpui-android/manifest-badging.txt
+          grep -qx "targetSdkVersion:'36'" dist/gpui-android/manifest-badging.txt
+          grep -qx "native-code: 'arm64-v8a'" dist/gpui-android/manifest-badging.txt
+          grep -q "launchable-activity: name='org.xscc.gpui.smoke.SmokeActivity'" dist/gpui-android/manifest-badging.txt
+          if grep -q "android.permission.INTERNET" dist/gpui-android/manifest-badging.txt; then
+            echo "Unexpected network permission in standalone smoke" >&2
+            exit 1
+          fi
+          python3 .github/scripts/verify-gpui-android-apk.py "$APK" | tee dist/gpui-android/native-validation.txt
+          cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-smoke-${GITHUB_SHA:0:12}.apk"
+          cp packaging/gpui-android/README.md dist/gpui-android/
+          cp experiments/gpui-android-smoke/Cargo.lock dist/gpui-android/
+          printf 'commit=%s\nui=GPUI\nscope=window-touch-lifecycle-smoke\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA"             > dist/gpui-android/BUILD-INFO.txt
+          (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-gpui-android-smoke-${{ github.sha }}
+          path: dist/gpui-android/*
+          if-no-files-found: error
+          retention-days: 14
