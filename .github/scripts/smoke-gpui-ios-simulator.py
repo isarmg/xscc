@@ -12,8 +12,18 @@ import time
 
 
 def run(*args, timeout=60):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-    print('$', ' '.join(map(str, args)), '\n', result.stdout, result.stderr, flush=True)
+    print('$', ' '.join(map(str, args)), flush=True)
+    started = time.monotonic()
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        for partial in (error.stdout, error.stderr):
+            if partial:
+                print(partial.decode(errors='replace') if isinstance(partial, bytes) else partial,
+                      flush=True)
+        print(f'Timed out after {time.monotonic() - started:.1f}s (budget {timeout}s)', flush=True)
+        raise
+    print(result.stdout, result.stderr, f'Elapsed: {time.monotonic() - started:.1f}s', flush=True)
     result.check_returncode()
     return result.stdout.strip()
 
@@ -62,7 +72,7 @@ def smoke(binary, output):
         udid = run('xcrun', 'simctl', 'create', 'XSCC management smoke', device['identifier'], runtime)
         report.update(runtime=runtime, device=device['name'], udid=udid)
         run('xcrun', 'simctl', 'boot', udid)
-        run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=240)
+        run('xcrun', 'simctl', 'bootstatus', udid, '-b', timeout=600)
         run('xcrun', 'simctl', 'install', udid, str(app), timeout=120)
         for phase in ('first-launch', 'relaunch'):
             launch = run('xcrun', 'simctl', 'launch',
@@ -80,14 +90,17 @@ def smoke(binary, output):
             run('xcrun', 'simctl', 'terminate', udid, info['CFBundleIdentifier'])
         report['result'] = 'installed_and_launched_twice; screenshots_require_review'
     except Exception as error:
+        if isinstance(error, subprocess.TimeoutExpired):
+            report['timeout_command'] = list(error.cmd)
+            report['timeout_budget_seconds'] = error.timeout
         report['error'] = str(error)
         raise
     finally:
         cleanup_errors = {}
         if udid:
             for args in [('io', udid, 'screenshot', str(output / 'final-state.png')),
-                         ('spawn', udid, 'log', 'show', '--last', '3m', '--style', 'compact',
-                          '--predicate', 'process == "xscc-gpui-mobile-management"'),
+                         ('spawn', udid, 'log', 'show', '--last', '15m', '--style', 'compact',
+                          '--predicate', 'process == "xscc-gpui-mobile-management" OR process == "SpringBoard" OR process == "backboardd" OR process == "launchd_sim"'),
                          ('shutdown', udid), ('delete', udid)]:
                 try:
                     text = run('xcrun', 'simctl', *args)
