@@ -1235,9 +1235,7 @@ struct CursorCal {
     measured_this_position: bool,
 }
 
-/// Only a hotspot the producer guessed is measured; kernel truth is never overridden. A producer
-/// that predates the provenance field arrives as measured (`legacy_hot_measured`), so it is never
-/// measured over either.
+/// Only a hotspot the producer guessed is measured; kernel truth is never overridden.
 fn calibratable(id: u64, hot_measured: bool) -> bool {
     id != scrap::drm_reader::HIDDEN_CURSOR_ID && !hot_measured
 }
@@ -1603,10 +1601,6 @@ fn provenance_is_news_for(display: i32, hot_measured: bool) -> bool {
 }
 
 /// Say once per display, and again only on a change, what the producer told us about the hotspot.
-///
-/// The counterpart of the producer's own provenance line, and it exists for the case that line
-/// cannot cover: a message that arrives with no `hot_measured` field at all, where what happens is
-/// decided by the field's serde default and is otherwise invisible on a running box.
 ///
 /// The hidden-cursor sentinel is skipped. It is sent with `hot_measured: false` because there is no
 /// hotspot to describe, so recording it would make every hide/show look like a provenance change.
@@ -2615,41 +2609,29 @@ mod drm_capturer_tests {
         (out, dw, dh)
     }
 
-    /// The upgrade window, end to end from the WIRE rather than from a struct literal.
-    ///
-    /// An old root service can be streaming to a freshly started `--server`, and its `DrmCursor`
-    /// carries no `hot_measured` at all. This takes the exact bytes such a producer puts on the
-    /// socket, deserializes them the way the consumer's receive loop does, and drives the real
-    /// delivery path, then reads back what was published. Staging it with two live processes is
-    /// not possible with how the package is built - a `--server` from one build will not run
-    /// inside the other's tree - so this is the honest form of that test, and it runs in CI
-    /// instead of once on somebody's desk.
-    ///
-    /// The transform must be non-zero: at 0 the delivery path never consults `hot_measured`, so a
-    /// test at 0 could not tell the two branches apart.
     #[test]
-    fn a_legacy_cursor_message_keeps_the_hotspot_the_old_protocol_meant() {
+    fn explicit_cursor_provenance_preserves_measured_and_inferred_hotspots() {
         use crate::ipc::Data;
 
         let (up, w, h, _box_centre) = ibeam_theme_aspect();
         let t = 90;
         let (scan, sw, sh) = as_scanned_out(&up, w, h, t);
-        // A hotspot the old producer measured and sent as a point on the scanned-out sprite.
+        // A driver-measured hotspot on the scanned-out sprite.
         let (hotx, hoty) = (3, 5);
 
-        // Exactly what an old producer writes: `Data` is adjacently tagged, and there is no
-        // `hot_measured` key because that build has no such field.
-        let legacy = format!(
-            r#"{{"t":"DrmCursor","c":{{"id":11,"width":{sw},"height":{sh},"hotx":{hotx},"hoty":{hoty}}}}}"#
+        let measured_message = format!(
+            r#"{{"t":"DrmCursor","c":{{"id":11,"width":{sw},"height":{sh},"hotx":{hotx},"hoty":{hoty},"hot_measured":true}}}}"#
         );
         let (id, mw, mh, mx, my, measured) =
-            match serde_json::from_str::<Data>(&legacy).expect("a legacy DrmCursor must parse") {
+            match serde_json::from_str::<Data>(&measured_message)
+                .expect("a current DrmCursor must parse")
+            {
                 Data::DrmCursor { id, width, height, hotx, hoty, hot_measured } => {
                     (id, width, height, hotx, hoty, hot_measured)
                 }
                 other => panic!("expected DrmCursor, got {other:?}"),
             };
-        assert!(measured, "no provenance on the wire must mean what the old protocol meant");
+        assert!(measured);
 
         // The two branches must disagree here, or the assertion below proves nothing.
         let mapped = unrotate_hotspot(t, mw as i32, mh as i32, mx, my);
@@ -2671,17 +2653,14 @@ mod drm_capturer_tests {
         };
         assert_eq!(
             published, mapped,
-            "a legacy message must keep the hotspot the producer sent, transformed as a point; \
-             re-inferring it would move the cursor for the length of an upgrade"
+            "an explicitly measured hotspot must preserve the producer's point after rotation"
         );
 
-        // The control: a NEW producer asking for re-inference says so explicitly, and that must
-        // not be swallowed by the default.
-        let modern = format!(
+        let inferred_message = format!(
             r#"{{"t":"DrmCursor","c":{{"id":12,"width":{sw},"height":{sh},"hotx":{hotx},"hoty":{hoty},"hot_measured":false}}}}"#
         );
         let Data::DrmCursor { hot_measured, .. } =
-            serde_json::from_str::<Data>(&modern).expect("a modern DrmCursor must parse")
+            serde_json::from_str::<Data>(&inferred_message).expect("a current DrmCursor must parse")
         else {
             panic!("expected DrmCursor")
         };
@@ -2695,8 +2674,7 @@ mod drm_capturer_tests {
         };
         assert_eq!(
             published2, reinferred,
-            "an explicit false must still re-infer, or the legacy default has eaten the new \
-             producer's request"
+            "an explicitly inferred hotspot must be measured from the upright sprite"
         );
     }
 

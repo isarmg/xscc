@@ -20,6 +20,8 @@ cargo test --locked -p xscc -p xscc-native-management
 
 macOS 离线 DMG 更新必须同时提供签名元数据：`--update update.dmg --metadata rustdesk-update.json --signature rustdesk-update.json.sig`。裸 DMG 参数会被拒绝；当前在线更新入口继续使用自己的发行校验流程。
 
+Linux DRM 光标 IPC 的每条 `DrmCursor` 消息必须明确携带布尔字段 `hot_measured`；缺失字段会被拒绝。生产者测量与接收端推断的热点继续分别按显式 `true` / `false` 处理。
+
 ## GPUI 桌面应用
 
 控制端使用 `live-session`，被控端使用 `native-host`，两者共用仓库内维护的 GPUI 和原生会话核心。

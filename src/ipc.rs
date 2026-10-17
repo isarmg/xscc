@@ -369,26 +369,9 @@ pub enum Data {
         hotx: i32,
         hoty: i32,
         /// Whether the hotspot came from the driver, or was inferred from the bitmap.
-        ///
-        /// Absent means the producer predates the field, and the default must then be TRUE, not
-        /// `bool::default()`. These messages are JSON over a unix socket between two processes
-        /// that are upgraded separately: an old root service can be streaming to a freshly
-        /// started `--server`, and its `{"hotx": 12, "hoty": 11}` carries no provenance. Read as
-        /// `false`, the new consumer would throw that hotspot away and re-infer one from the
-        /// upright bitmap, moving the cursor on a rotated display for the length of the upgrade.
-        /// Defaulting to true means "no provenance available, so behave as the old protocol did"
-        /// -- use the point the producer sent. It is not a claim that the value was measured; a
-        /// new producer that wants re-inference says `hot_measured: false` explicitly, which
-        /// serializes, so new-to-new is unaffected.
-        #[serde(default = "legacy_hot_measured")]
+        /// Every cursor message must declare this provenance explicitly.
         hot_measured: bool,
     },
-}
-
-/// The default for a `hot_measured` that is not on the wire at all; see the field's docs.
-#[cfg(all(target_os = "linux", feature = "drm"))]
-fn legacy_hot_measured() -> bool {
-    true
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -1679,6 +1662,22 @@ async fn handle_wayland_screencast_restore_token(
 mod test {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::*;
+
+    #[cfg(all(target_os = "linux", feature = "drm"))]
+    #[test]
+    fn drm_cursor_requires_explicit_hotspot_provenance() {
+        let missing = r#"{"t":"DrmCursor","c":{"id":11,"width":8,"height":8,"hotx":3,"hoty":5}}"#;
+        assert!(serde_json::from_str::<super::Data>(missing).is_err());
+        for measured in [true, false] {
+            let mut message: serde_json::Value = serde_json::from_str(missing).unwrap();
+            message["c"]["hot_measured"] = measured.into();
+            let super::Data::DrmCursor { hot_measured, .. } = serde_json::from_value(message).unwrap()
+            else {
+                panic!("expected DrmCursor")
+            };
+            assert_eq!(hot_measured, measured);
+        }
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
