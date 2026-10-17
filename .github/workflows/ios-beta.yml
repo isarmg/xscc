@@ -12,6 +12,7 @@ jobs:
     timeout-minutes: 180
     env:
       VCPKG_DEFAULT_TRIPLET: arm64-ios
+      VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
       VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -24,9 +25,13 @@ jobs:
           python3 .github/scripts/test-ios-beta-package.py
           python3 .github/scripts/test-mobile-managed-login.py
       - name: Verify device SDK and install native build tools
+        id: apple-toolchain
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+          echo "xcode-build=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "$GITHUB_OUTPUT"
+          echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
+          mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
           brew install nasm
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
@@ -40,12 +45,30 @@ jobs:
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: true
+      - name: Restore native dependency binary archives
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mobile-vcpkg-macOS-arm64-ios-${{ steps.apple-toolchain.outputs.xcode-build }}-${{ steps.apple-toolchain.outputs.sdk }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
       - name: Build native codec dependencies
+        id: native-dependencies
         run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"'
+      - name: Save successful native dependency binary archives
+        if: steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: bridge-artifact
           path: ./
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: rustdesk-lib-cache-ios
+          key: aarch64-apple-ios-${{ steps.apple-toolchain.outputs.xcode-build }}-${{ steps.apple-toolchain.outputs.sdk }}
+          cache-on-failure: true
       - name: Build device Rust bridge
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build unsigned device archive
