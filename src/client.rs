@@ -1632,6 +1632,8 @@ impl LoginConfigHandler {
             self.save_config(config);
         }
         *self.custom_fps.lock().unwrap() = Some(fps as _);
+        // This message replaces the peer's cap, so the last adaptive cap is no longer current.
+        self.last_auto_fps = None;
         msg_out
     }
 
@@ -2944,6 +2946,21 @@ mod retry_tests {
             "Incoming only mode",
             false,
         ));
+    }
+}
+
+#[cfg(test)]
+mod fps_tests {
+    use super::*;
+
+    #[test]
+    fn changing_target_fps_invalidates_the_previous_adaptive_cap() {
+        let mut handler = LoginConfigHandler::default();
+        handler.last_auto_fps = Some(27);
+        let message = handler.set_custom_fps(60, false);
+        assert_eq!(message.misc().option().custom_fps, 60);
+        assert_eq!(*handler.custom_fps.lock().unwrap(), Some(60));
+        assert_eq!(handler.last_auto_fps, None);
     }
 }
 
