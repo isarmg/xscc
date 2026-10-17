@@ -368,7 +368,6 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = HZF9JMC8YN;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -427,7 +426,7 @@
 					"-framework",
 					"\"wakelock_plus\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
+				PRODUCT_BUNDLE_IDENTIFIER = org.sarmg.xscc.beta;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -560,7 +559,6 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = HZF9JMC8YN;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -619,7 +617,7 @@
 					"-framework",
 					"\"wakelock_plus\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
+				PRODUCT_BUNDLE_IDENTIFIER = org.sarmg.xscc.beta;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -638,7 +636,6 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
-				DEVELOPMENT_TEAM = HZF9JMC8YN;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -697,7 +694,7 @@
 					"-framework",
 					"\"wakelock_plus\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.carriez.flutterHbb;
+				PRODUCT_BUNDLE_IDENTIFIER = org.sarmg.xscc.beta;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRIP_STYLE = "non-global";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";

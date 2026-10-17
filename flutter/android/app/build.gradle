@@ -8,6 +8,8 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+def xsccBeta = project.findProperty('xsccBeta') == 'true'
+
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file('key.properties')
 if (keystorePropertiesFile.exists()) {
@@ -100,7 +102,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId "com.carriez.flutter_hbb"
+        applicationId = xsccBeta ? "org.sarmg.xscc.beta" : "com.carriez.flutter_hbb"
+        manifestPlaceholders = [applicationLabel: xsccBeta ? "XSCC测试版" : "RustDesk"]
         minSdkVersion 29
         ndk {
             abiFilters "arm64-v8a"
@@ -123,7 +126,7 @@ android {
         release {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig signingConfigs.release
+            signingConfig = xsccBeta ? signingConfigs.debug : signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules'
         }
     }

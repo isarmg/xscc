@@ -2479,7 +2479,10 @@ pub async fn handle_hash(
         allow_err!(peer.send(&msg).await);
         return false;
     }
-    #[cfg(feature = "gpui-session")]
+    #[cfg(any(
+        feature = "gpui-session",
+        all(feature = "managed", any(target_os = "android", target_os = "ios")),
+    ))]
     if lc.read().unwrap().id.starts_with("managed:") {
         // This path is entered only after the managed transport has proved both identities.
         // Native clients never consult or transmit legacy stored remote passwords.

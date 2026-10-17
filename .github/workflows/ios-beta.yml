@@ -1,0 +1,64 @@
+name: iOS unsigned Flutter beta
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+      VCPKG_DEFAULT_TRIPLET: arm64-ios
+      VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Test device package metadata validation
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .github/scripts/test-ios-beta-package.py
+          python3 .github/scripts/test-mobile-managed-login.py
+      - name: Verify device SDK and install native build tools
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          brew install nasm
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: "3.47.7"
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: "1.99.0"
+          targets: aarch64-apple-ios
+      - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+      - name: Build native codec dependencies
+        run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          path: ./
+      - name: Build device Rust bridge
+        run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+      - name: Build unsigned device archive
+        working-directory: flutter
+        run: flutter build ipa --release --no-codesign
+      - name: Validate and package unsigned device IPA
+        run: |
+          python3 .github/scripts/package-ios-beta.py flutter/build/ios/archive/Runner.xcarchive dist
+          cp packaging/mobile/README.md dist/README.md
+          echo 'Unsigned iOS/iPadOS 26 ARM64 candidate. Requires your own valid signing and provisioning before physical-device installation. No Apple account, signing identity, or App Store submission used. Live remote-session acceptance remains outstanding.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-ios26-arm64-unsigned-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
