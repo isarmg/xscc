@@ -9,6 +9,7 @@ edition = "2018"
 
 [features]
 default = []
+experimental-quic = ["dep:quinn", "dep:rustls"]
 # The isolated Wayland socket-probe fallback (src/platform/linux/wayland_probe.rs).
 # Off by default so the base Wayland enumeration is untouched; the DRM login-screen
 # build (scrap/drm) turns it on.
@@ -27,6 +28,11 @@ libc = "0.2"
 log = "0.4"
 lazy_static = "1.5"
 anyhow = "1.0"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"], optional = true }
+
+[dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 backtrace = "0.3"

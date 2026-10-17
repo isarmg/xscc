@@ -111,6 +111,14 @@ jobs:
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Verify Linux native prerequisites
         run: bash .github/scripts/check-gpui-linux.sh preflight "${{ matrix.role }}"
+      - name: Test opt-in QUIC transport and media framing
+        if: matrix.role == 'controller'
+        run: |
+          for filter in direct_transport::quic::tests direct_transport::quic_media::tests; do
+            output=$(cargo test --locked -p base --features experimental-quic --lib "$filter" 2>&1) || { printf '%s\n' "$output"; exit 1; }
+            printf '%s\n' "$output"
+            grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$output" || { echo "No passing QUIC tests: $filter" >&2; exit 1; }
+          done
       - name: Lint, test and build real native role
         run: bash .github/scripts/validate-gpui-unix.sh x86_64-unknown-linux-gnu "${{ matrix.features }}" "${{ matrix.core_features }}"
       - name: Package and smoke-test unpacked Linux executable

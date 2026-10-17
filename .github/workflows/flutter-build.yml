@@ -1676,6 +1676,10 @@ jobs:
               cargo test --locked -p scrap --features drm plane_rotation_tests
             run_drm_tests "scrap drmtap_dl::tests" \
               cargo test --locked -p scrap --features drm drmtap_dl::tests
+            run_drm_tests "base QUIC transport" \
+              cargo test --locked -p base --lib --features experimental-quic direct_transport::quic::tests
+            run_drm_tests "base QUIC media framing" \
+              cargo test --locked -p base --lib --features experimental-quic direct_transport::quic_media::tests
             # Opt-in like drm, and this container already builds with it.
             cargo build --locked --lib --features "$FEATURES" --release
             rm -rf target/release/deps target/release/build

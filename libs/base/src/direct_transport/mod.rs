@@ -11,6 +11,10 @@ use hbb_common::{
 
 pub mod client;
 pub mod host;
+#[cfg(feature = "experimental-quic")]
+pub mod quic;
+#[cfg(any(feature = "experimental-quic", test))]
+pub mod quic_media;
 
 pub fn decode_peer_identity(
     signed: &[u8],
