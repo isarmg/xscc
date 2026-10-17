@@ -35,7 +35,7 @@ impl PlatformDisplay for AndroidDisplay {
         DisplayId::new(0)
     }
     fn uuid(&self) -> anyhow::Result<uuid::Uuid> {
-        Ok(uuid::Uuid::from_u128(0x616e64726f69642d677075692d00000001))
+        Ok(uuid::Uuid::from_bytes(*b"android-gpui\0\0\0\x01"))
     }
     fn bounds(&self) -> Bounds<Pixels> {
         self.bounds.get()
@@ -236,10 +236,10 @@ impl WindowState {
             .bounds
             .set(Bounds::new(Point::default(), logical));
         let rect = platform.app.content_rect();
-        let left = (rect.left as f32 / scale).clamp(0., logical.width.0);
-        let top = (rect.top as f32 / scale).clamp(0., logical.height.0);
-        let right = (rect.right as f32 / scale).clamp(left, logical.width.0);
-        let bottom = (rect.bottom as f32 / scale).clamp(top, logical.height.0);
+        let left = (rect.left as f32 / scale).clamp(0., f32::from(logical.width));
+        let top = (rect.top as f32 / scale).clamp(0., f32::from(logical.height));
+        let right = (rect.right as f32 / scale).clamp(left, f32::from(logical.width));
+        let bottom = (rect.bottom as f32 / scale).clamp(top, f32::from(logical.height));
         let viewport = if right > left && bottom > top {
             Bounds::new(
                 point(px(left), px(top)),
