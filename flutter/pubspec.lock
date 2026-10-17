@@ -1234,11 +1234,9 @@ packages:
   uni_links:
     dependency: "direct main"
     description:
-      path: uni_links
-      ref: f416118d843a7e9ed117c7bb7bdc2deda5a9e86f
-      resolved-ref: f416118d843a7e9ed117c7bb7bdc2deda5a9e86f
-      url: "https://github.com/rustdesk-org/uni_links"
-    source: git
+      path: "vendor/uni_links"
+      relative: true
+    source: path
     version: "0.5.1"
   uni_links_desktop:
     dependency: "direct main"

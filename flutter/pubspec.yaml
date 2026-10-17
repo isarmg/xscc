@@ -66,10 +66,7 @@ dependencies:
   file_picker: 8.0.7
   flutter_svg: ^2.0.5
   uni_links:
-    git:
-      url: https://github.com/rustdesk-org/uni_links
-      path: uni_links
-      ref: f416118d843a7e9ed117c7bb7bdc2deda5a9e86f
+    path: vendor/uni_links
   uni_links_desktop: ^0.1.6 # use 0.1.6 to make flutter 3.13 works
   path: ^1.8.1
   auto_size_text: ^3.0.0
