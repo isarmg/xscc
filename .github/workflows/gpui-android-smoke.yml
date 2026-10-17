@@ -51,6 +51,11 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android
 
+      - name: Test GPUI Android geometry on the host
+        run: |
+          rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/geometry.rs -o "$RUNNER_TEMP/gpui-android-geometry-tests"
+          "$RUNNER_TEMP/gpui-android-geometry-tests"
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: experiments/gpui-android-smoke
@@ -67,7 +72,7 @@ jobs:
           cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
           mkdir -p packaging/gpui-android/app/src/main/jniLibs
           cd experiments/gpui-android-smoke
-          cargo ndk -t arm64-v8a -p 29 -o ../../packaging/gpui-android/app/src/main/jniLibs build --release --locked
+          cargo ndk -t arm64-v8a --platform 29 -o ../../packaging/gpui-android/app/src/main/jniLibs build --release --locked
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"             ../../packaging/gpui-android/app/src/main/jniLibs/arm64-v8a/
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad

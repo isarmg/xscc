@@ -20,7 +20,15 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
         let timeout = state
             .window()
             .filter(|w| w.can_draw() && w.dirty.get())
-            .map(|_| next_frame.saturating_duration_since(Instant::now()));
+            .map(|_| {
+                let remaining = next_frame.saturating_duration_since(Instant::now());
+                // android-activity converts this duration to whole milliseconds.
+                if remaining.is_zero() {
+                    remaining
+                } else {
+                    remaining.max(Duration::from_millis(1))
+                }
+            });
         state.app.poll_events(timeout, |event| {
             let PollEvent::Main(event) = event else {
                 return;
