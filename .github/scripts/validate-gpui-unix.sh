@@ -11,5 +11,9 @@ cargo test --locked --manifest-path "$manifest" --no-default-features --features
 # Root defaults enable Flutter; always test the same native feature set that ships.
 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
 cargo test --locked -p xscc-native-management --target "$target"
+if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    # Select only the excluded dependency package while reusing the root lockfile.
+    cargo test --locked -p rust-pulsectl --lib --target "$target"
+fi
 cargo build --locked --release --manifest-path "$manifest" --no-default-features --features "$features" --bin xscc-gpui-validation --target "$target"
 python3 .github/scripts/test-gpui-unix-cli.py "${CARGO_TARGET_DIR:?}/$target/release/xscc-gpui-validation"

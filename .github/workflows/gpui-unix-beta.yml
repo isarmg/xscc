@@ -6,6 +6,7 @@ on:
       - 'experiments/gpui-validation/**'
       - 'experiments/shared/**'
       - 'vendor/gpui/**'
+      - 'vendor/rust-pulsectl/**'
       - 'src/**'
       - 'libs/**'
       - 'crates/**'

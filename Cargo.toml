@@ -177,7 +177,7 @@ wallpaper = { git = "https://github.com/rustdesk-org/wallpaper.rs" }
 scrap = { path = "libs/scrap", features = ["wayland"] }
 psimple = { package = "libpulse-simple-binding", version = "2.27" }
 pulse = { package = "libpulse-binding", version = "2.27" }
-rust-pulsectl = { git = "https://github.com/rustdesk-org/pulsectl" }
+rust-pulsectl = { path = "vendor/rust-pulsectl" }
 async-process = "1.7"
 evdev = { git="https://github.com/rustdesk-org/evdev" }
 dbus = "0.9"
@@ -198,7 +198,7 @@ jni = "0.21"
 
 [workspace]
 members = ["crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vdi/host", "vendor/gpui"]
+exclude = ["vdi/host", "vendor/gpui", "vendor/rust-pulsectl"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone
