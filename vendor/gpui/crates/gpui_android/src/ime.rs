@@ -1,6 +1,9 @@
 //! GameTextInput snapshots use Java Editable's UTF-16 offsets, even though the
 //! android-activity binding exposes their text as a Rust UTF-8 String.
-use crate::{text_state::State as TextState, window::WindowState};
+use crate::{
+    text_state::{Edit, State as TextState},
+    window::WindowState,
+};
 use android_activity::input::{ImeOptions, InputType, TextInputAction, TextInputState, TextSpan};
 use gpui::{Autocapitalize, FocusId, PlatformInputHandler, TextInputConfiguration};
 
@@ -146,19 +149,31 @@ impl WindowState {
                 if current == incoming {
                     return true;
                 }
-                if let Some(edit) = current.replacement(&incoming) {
-                    handler.replace_text_in_range(Some(edit.range), &edit.text);
-                    // Rejected/truncated edits invalidate incoming composing offsets.
-                    if snapshot(handler).is_none_or(|(_, accepted)| accepted.text != incoming.text)
-                    {
+                for edit in current.edits(&incoming) {
+                    let expected = match edit {
+                        Edit::Mark(edit) => {
+                            handler.replace_and_mark_text_in_range(
+                                Some(edit.range),
+                                &edit.text,
+                                None,
+                            );
+                            Some(edit.result)
+                        }
+                        Edit::Commit(edit) => {
+                            handler.replace_text_in_range(Some(edit.range), &edit.text);
+                            Some(edit.result)
+                        }
+                        Edit::Unmark => {
+                            handler.unmark_text();
+                            None
+                        }
+                    };
+                    // A rejected/truncated edit makes subsequent UTF-16 offsets invalid.
+                    if expected.is_some_and(|expected| {
+                        snapshot(handler).is_none_or(|(_, accepted)| accepted.text != expected)
+                    }) {
                         return true;
                     }
-                }
-                if let (Some(range), Some(text)) = (&incoming.composing, incoming.composing_text())
-                {
-                    handler.replace_and_mark_text_in_range(Some(range.clone()), text, None);
-                } else {
-                    handler.unmark_text();
                 }
                 handler.set_selected_text_range(incoming.selection.clone());
                 true
