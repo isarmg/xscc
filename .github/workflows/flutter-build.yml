@@ -1680,6 +1680,8 @@ jobs:
               cargo test --locked -p base --lib --features experimental-quic direct_transport::quic::tests
             run_drm_tests "base QUIC media framing" \
               cargo test --locked -p base --lib --features experimental-quic direct_transport::quic_media::tests
+            run_drm_tests "managed QUIC authorization" \
+              cargo test --locked --lib --features drm,experimental-quic management::quic
             # Opt-in like drm, and this container already builds with it.
             cargo build --locked --lib --features "$FEATURES" --release
             rm -rf target/release/deps target/release/build

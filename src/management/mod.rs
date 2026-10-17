@@ -2,6 +2,8 @@
 pub use xscc_native_management::{binding_store as store, enrollment};
 
 mod transport;
+#[cfg(feature = "experimental-quic")]
+pub(crate) mod quic;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use transport::accept;
 pub(crate) use transport::{check_controller, connect};
