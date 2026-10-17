@@ -13,7 +13,7 @@ path = "src/gpui_linux.rs"
 doctest = false
 
 [features]
-default = ["wayland", "x11"]
+default = ["wayland"]
 test-support = ["gpui/test-support"]
 wayland = [
     "dep:accesskit_unix",

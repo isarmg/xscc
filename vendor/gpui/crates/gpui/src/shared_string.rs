@@ -208,3 +208,27 @@ impl<'de> Deserialize<'de> for SharedString {
         SmolStr::deserialize(deserializer).map(SharedString)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::SharedString;
+    use std::sync::Arc;
+
+    #[test]
+    fn public_shared_string_conversions() {
+        let text = SharedString::new_static("GPUI");
+        assert_eq!(text.clone(), "GPUI");
+        assert_eq!(String::from(text), "GPUI");
+        let owned = SharedString::from(String::from("共享字符串"));
+        let shared: Arc<str> = owned.clone().into();
+        assert_eq!(SharedString::from(shared), owned);
+    }
+
+    #[test]
+    fn public_shared_string_json_round_trip() {
+        let text = SharedString::from("GPUI 共享字符串");
+        let json = serde_json::to_string(&text).unwrap();
+        assert_eq!(json, "\"GPUI 共享字符串\"");
+        assert_eq!(serde_json::from_str::<SharedString>(&json).unwrap(), text);
+    }
+}

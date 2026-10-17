@@ -19,12 +19,11 @@ autobenches = false
 workspace = true
 
 [features]
-default = ["font-kit", "wayland", "x11", "windows-manifest"]
+default = ["font-kit", "wayland", "windows-manifest"]
 test-support = [
     "collections/test-support",
     "http_client/test-support",
     "wayland",
-    "x11",
     "proptest",
     "dep:futures-concurrency",
     "dep:postage",
@@ -68,7 +67,6 @@ etagere.workspace = true
 futures.workspace = true
 futures-concurrency = { workspace = true, optional = true }
 gpui_macros.workspace = true
-gpui_shared_string.workspace = true
 http_client.workspace = true
 image.workspace = true
 inventory.workspace = true
@@ -95,6 +93,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 slotmap.workspace = true
 smallvec.workspace = true
+smol_str = { version = "0.3.6", default-features = false, features = ["serde"] }
 stacksafe = { workspace = true, optional = true }
 strum.workspace = true
 sum_tree.workspace = true
@@ -167,18 +166,16 @@ env_logger.workspace = true
 futures-concurrency.workspace = true
 postage = { workspace = true, features = ["blocking"] }
 web-time.workspace = true
-gpui_platform = { workspace = true, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { workspace = true, features = ["font-kit", "wayland"] }
 gpui_util.workspace = true
 lyon = { version = "1.0", features = ["extra"] }
 rand = { workspace = true, default-features = true }
 scheduler = { workspace = true, features = ["test-support"] }
 unicode-segmentation.workspace = true
-util_macros.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 http_client = { workspace = true, features = ["test-support"] }
 proptest.workspace = true
-reqwest_client = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 wasm-bindgen.workspace = true
@@ -202,10 +199,6 @@ path = "examples/hello_world.rs"
 [[example]]
 name = "move_entity_between_windows"
 path = "examples/move_entity_between_windows.rs"
-
-[[example]]
-name = "image"
-path = "examples/image/image.rs"
 
 [[example]]
 name = "input"

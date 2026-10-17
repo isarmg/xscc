@@ -12,44 +12,63 @@
     "crates/gpui_macos",
     "crates/gpui_macros",
     "crates/gpui_platform",
-    "crates/gpui_shared_string",
     "crates/gpui_util",
-    "crates/gpui_web",
     "crates/gpui_wgpu",
     "crates/gpui_windows",
     "crates/http_client",
-    "crates/http_client_tls",
-    "crates/path",
     "crates/refineable",
     "crates/refineable/derive_refineable",
-    "crates/reqwest_client",
     "crates/scheduler",
     "crates/sum_tree",
-    "crates/util",
-    "crates/util_macros",
     "crates/zlog",
     "crates/ztracing",
-    "crates/ztracing_macro",
-    "tooling/perf"
+    "crates/ztracing_macro"
   ],
   "source_changes_from_upstream": [
     "crates/gpui/Cargo.toml",
+    "crates/gpui/examples/README.md",
     "crates/gpui/examples/windows_shared_surface.rs",
     "crates/gpui/src/elements/surface.rs",
     "crates/gpui/src/geometry.rs",
+    "crates/gpui/src/gpui.rs",
     "crates/gpui/src/scene.rs",
+    "crates/gpui/src/shared_string.rs",
+    "crates/gpui/src/style.rs",
     "crates/gpui/src/window.rs",
+    "crates/gpui_linux/Cargo.toml",
+    "crates/gpui_platform/Cargo.toml",
+    "crates/gpui_platform/src/gpui_platform.rs",
     "crates/gpui_windows/src/directx_renderer.rs",
-    "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs"
+    "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs",
+    "crates/http_client/Cargo.toml",
+    "crates/http_client/src/http_client.rs"
   ],
   "asset_directories": [
     "assets/fonts/ibm-plex-sans",
     "assets/fonts/lilex"
   ],
-  "source_archive_policy": "Selected transitive path-dependency closure, including dev dependencies and all referenced target backends; no editor application or Git metadata.",
+  "source_archive_policy": "Native GPUI source with maintained tests and examples; unused web, downloader, and tooling packages removed.",
   "minimum_rust_version": "1.99",
   "maintenance_changes": [
     "Use std::f32::consts::GOLDEN_RATIO in phi(); bit-identical to the original f32 literal.",
-    "Use nonblocking Windows surface acquisition and test contention without presenting an incomplete frame."
-  ]
+    "Use nonblocking Windows surface acquisition and test contention without presenting an incomplete frame.",
+    "Expose core APIs through gpui_platform so the application uses one GPUI dependency.",
+    "Use Wayland-only Linux defaults and facade features.",
+    "Merge SharedString into gpui without changing its public re-export or serialization.",
+    "Remove Web backend, two network-image demos, unused GitHub downloader and performance harness; preserve the three style correctness tests."
+  ],
+  "initial_workspace_member_count": 28,
+  "removed_crates": [
+    "gpui_web",
+    "gpui_shared_string",
+    "reqwest_client",
+    "http_client_tls",
+    "util",
+    "path",
+    "util_macros",
+    "perf"
+  ],
+  "merged_sources": {
+    "crates/gpui_shared_string/gpui_shared_string.rs": "crates/gpui/src/shared_string.rs"
+  }
 }

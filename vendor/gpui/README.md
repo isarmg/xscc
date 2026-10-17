@@ -2,6 +2,10 @@
 
 GPUI is maintained here as part of XSCC. See [UPSTREAM.md](UPSTREAM.md) for source provenance, licenses, and the initial local changes.
 
+The workspace contains 20 crates. Applications use `gpui_platform` as the single
+public facade; XSCC imports it under the dependency name `gpui`. Linux defaults
+to Wayland.
+
 ## Toolchain and validation
 
 The GPUI crate requires Rust 1.99 or newer.

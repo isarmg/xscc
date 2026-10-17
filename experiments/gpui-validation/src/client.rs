@@ -643,7 +643,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
     let app_error = startup_error.clone();
     let handle = runtime.handle().clone();
     let host = cfg!(feature = "native-host");
-    gpui_platform::application().run(move |cx: &mut App| {
+    gpui::application().run(move |cx: &mut App| {
         text_field::init(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {

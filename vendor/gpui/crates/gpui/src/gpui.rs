@@ -52,6 +52,7 @@ pub mod randomized_element_tree;
 mod scene;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 mod seeds;
+mod shared_string;
 mod shared_uri;
 mod spring;
 mod style;
@@ -183,7 +184,6 @@ macro_rules! bench_main {
         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
     };
 }
-pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
 pub use http_client;
 pub use input::*;
@@ -198,6 +198,7 @@ pub use profiler::*;
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
 pub use refineable::*;
 pub use scene::*;
+pub use shared_string::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;

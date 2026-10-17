@@ -272,7 +272,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn shifted_key_identity_survives_releasing_shift_first() {
-        let platform = gpui_platform::current_platform(true);
+        let platform = gpui::current_platform(true);
         let mapper = platform.keyboard_mapper();
         let shifted = mapper.map_key_equivalent(
             Keystroke {

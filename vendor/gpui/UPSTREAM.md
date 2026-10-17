@@ -9,24 +9,19 @@ The machine-readable inventory is [upstream.json](upstream.json).
 
 ## Scope and licensing
 
-The 28 workspace members are the recursive Cargo path-dependency closure of
-`gpui` and `gpui_platform`, including development/build dependencies and
-platform-specific dependencies. The iOS and web backends remain because the
-platform facade references them during Cargo resolution; their inclusion does
-not enable a web application or expand XSCC's supported-platform policy.
+The initial import contained 28 workspace members. The maintained workspace now
+contains 20. It keeps native platform backends, required build dependencies,
+core tests, benchmarks, shaders, resources, and their font licenses. iOS remains
+available for future client work; the Web backend has been removed.
 
-Crate sources, examples, benchmarks, tests, shaders, Windows resources, and the
-fonts referenced by tests/examples are retained. Font licenses accompany the
-font files. All 28 workspace crates declare Apache-2.0; original crate license
-files and root Apache/GPL license texts are preserved. Existing attribution and
-copyright notices remain intact. License symlinks were materialized as ordinary
-files. No symlink points outside this repository.
+Original Apache-2.0 attribution and the root Apache/GPL license texts are
+preserved. Font licenses remain beside their fonts. License symlinks were
+materialized as ordinary files.
 
 The Zed editor application, unrelated crates, Git metadata, upstream workflows,
 and agent instructions are not included. The root Cargo manifest contains only
 the required dependency declarations, inherited package fields and lints.
-Dependency declarations retain their original versions, Git revisions and
-features. The upstream workspace's patches and build profiles are not imported:
+Retained external dependencies keep their original versions and Git revisions. The upstream workspace's patches and build profiles are not imported:
 Cargo already ignored those root patches/profiles when XSCC consumed GPUI as a
 Git dependency. XSCC's consuming workspace lockfile governs application builds.
 The standalone lockfile is seeded from the pinned upstream lock, pruned to this
@@ -65,3 +60,17 @@ Shared-surface drawing now uses zero-timeout mutex acquisition. A busy surface
 fails the draw without presenting an incomplete frame; another application draw
 is required to retry. The WARP fixture includes consumer contention coverage.
 This changes only the experimental surface path, not application video sessions.
+
+## Native workspace simplification
+
+The application uses `gpui_platform` as its single GPUI facade, importing it as
+`gpui`. Linux defaults and facade features enable Wayland without X11.
+The direct Linux backend still contains its optional X11 implementation.
+
+`SharedString` is an internal `gpui` module, retaining the `gpui::SharedString`
+public API and string serialization. The former standalone crate is removed.
+
+The Web backend, two network-image demos, unused optional GitHub downloader,
+and six associated tooling packages are removed. The three style tests formerly
+run through the performance harness now use ordinary `#[test]` attributes with
+the same assertions. Core tests, benchmark support, and Windows WARP tests remain.

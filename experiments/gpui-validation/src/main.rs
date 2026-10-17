@@ -233,7 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_mailbox = mailbox.clone();
     let app_stats = stats.clone();
     let app_manager = manager.clone();
-    gpui_platform::application().run(move |cx: &mut App| {
+    gpui::application().run(move |cx: &mut App| {
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
