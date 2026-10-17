@@ -7,7 +7,7 @@ use gpui::{
     prelude::*, rgb,
 };
 use librustdesk::gpui_session::{
-    self, InputCommand, Monitor, SessionEvent, SessionHandle, TargetFps,
+    self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
 };
 use std::{
     cell::Cell,
@@ -25,6 +25,7 @@ pub struct VideoState {
     pub monitors: Vec<Monitor>,
     pub current_monitor: usize,
     pub switching_monitor: bool,
+    pub quality: SessionQuality,
     pub notice: String,
 }
 
@@ -48,6 +49,7 @@ pub struct RemoteVideo {
     monitors: Vec<Monitor>,
     current_monitor: usize,
     switching_monitor: bool,
+    quality: SessionQuality,
     notice: String,
     focus: FocusHandle,
     bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -116,6 +118,7 @@ impl RemoteVideo {
             monitors: Vec::new(),
             current_monitor: 0,
             switching_monitor: false,
+            quality: SessionQuality::default(),
             notice: String::new(),
             focus,
             bounds: Rc::new(Cell::new(Bounds::default())),
@@ -139,6 +142,7 @@ impl RemoteVideo {
             monitors: self.monitors.clone(),
             current_monitor: self.current_monitor,
             switching_monitor: self.switching_monitor,
+            quality: self.quality.clone(),
             notice: self.notice.clone(),
         }
     }
@@ -175,6 +179,7 @@ impl RemoteVideo {
             match session.switch_monitor(index) {
                 Ok(()) => {
                     self.switching_monitor = true;
+                    self.quality = SessionQuality::default();
                     self.extent = (0, 0);
                     self.video.invalidate();
                     self.notice = format!(
@@ -256,6 +261,7 @@ impl RemoteVideo {
         self.monitors.clear();
         self.current_monitor = 0;
         self.switching_monitor = false;
+        self.quality = SessionQuality::default();
         self.keyboard_allowed = false;
         self.scroll_remainder = (0.0, 0.0);
         self.extent = (0, 0);
@@ -335,6 +341,11 @@ impl RemoteVideo {
                     }
                 }
                 SessionEvent::Monitors(monitors) => self.monitors = monitors,
+                SessionEvent::Quality { index, update } => {
+                    if !self.switching_monitor && index == self.current_monitor {
+                        self.quality.merge(update);
+                    }
+                }
                 SessionEvent::Display {
                     index,
                     x,
@@ -344,6 +355,7 @@ impl RemoteVideo {
                 } => {
                     self.release_input();
                     if self.current_monitor != index || self.switching_monitor {
+                        self.quality = SessionQuality::default();
                         self.video.invalidate();
                         self.extent = (0, 0);
                     }

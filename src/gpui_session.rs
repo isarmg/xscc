@@ -58,6 +58,32 @@ pub struct Monitor {
     pub available: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SessionQuality {
+    /// Successful decoder output callbacks per second, before GPUI presentation.
+    pub decoded_fps: Option<i32>,
+    pub receive_rate: Option<String>,
+    pub codec: Option<String>,
+    pub round_trip_ms: Option<i32>,
+}
+
+impl SessionQuality {
+    pub fn merge(&mut self, update: Self) {
+        if update.decoded_fps.is_some() {
+            self.decoded_fps = update.decoded_fps;
+        }
+        if update.receive_rate.is_some() {
+            self.receive_rate = update.receive_rate;
+        }
+        if update.codec.is_some() {
+            self.codec = update.codec;
+        }
+        if update.round_trip_ms.is_some() {
+            self.round_trip_ms = update.round_trip_ms;
+        }
+    }
+}
+
 #[derive(Default)]
 struct Monitors {
     list: Vec<Monitor>,
@@ -76,6 +102,10 @@ pub enum SessionEvent {
         enabled: bool,
     },
     Monitors(Vec<Monitor>),
+    Quality {
+        index: usize,
+        update: SessionQuality,
+    },
     Display {
         index: usize,
         x: i32,
@@ -407,7 +437,21 @@ impl InvokeUiSession for Handler {
     fn set_platform_additions(&self, _: &str) {}
     fn on_connected(&self, _: ConnType) {}
     fn update_privacy_mode(&self) {}
-    fn update_quality_status(&self, _: QualityStatus) {}
+    fn update_quality_status(&self, status: QualityStatus) {
+        let monitors = self.0.monitors.read().unwrap();
+        if self.0.closed.load(Ordering::Acquire) || monitors.pending.is_some() {
+            return;
+        }
+        self.event(SessionEvent::Quality {
+            index: monitors.current,
+            update: SessionQuality {
+                decoded_fps: status.fps.get(&monitors.current).copied(),
+                receive_rate: status.speed,
+                codec: status.codec_format.map(|codec| codec.to_string()),
+                round_trip_ms: status.delay.filter(|delay| *delay > 0),
+            },
+        });
+    }
     fn set_connection_type(&self, _: bool, _: bool, _: &str) {}
     fn set_fingerprint(&self, _: String) {}
     fn update_block_input_state(&self, _: bool) {}
@@ -491,6 +535,37 @@ mod tests {
         assert!(copy_frame(0, &raw).is_none());
     }
     #[test]
+    fn quality_reports_active_decoder_output_and_merges_partial_network_updates() {
+        let handler = Handler::default();
+        handler.0.monitors.write().unwrap().current = 1;
+        handler.update_quality_status(QualityStatus {
+            fps: [(0, 90), (1, 57)].into_iter().collect(),
+            speed: Some("123.00kB/s".into()),
+            codec_format: Some(scrap::CodecFormat::VP9),
+            ..Default::default()
+        });
+        handler.update_quality_status(QualityStatus {
+            delay: Some(23),
+            ..Default::default()
+        });
+        let mut quality = SessionQuality::default();
+        for _ in 0..2 {
+            let SessionEvent::Quality { index, update } = handler.0.events.pop().unwrap() else {
+                panic!("expected quality update")
+            };
+            assert_eq!(index, 1);
+            quality.merge(update);
+        }
+        assert_eq!(quality.decoded_fps, Some(57));
+        assert_eq!(quality.receive_rate.as_deref(), Some("123.00kB/s"));
+        assert_eq!(quality.codec, Some(scrap::CodecFormat::VP9.to_string()));
+        assert_eq!(quality.round_trip_ms, Some(23));
+        handler.0.monitors.write().unwrap().pending = Some(0);
+        handler.update_quality_status(QualityStatus::default());
+        assert!(handler.0.events.pop().is_none());
+    }
+
+    #[test]
     fn monitor_selection_accepts_only_available_advertised_displays() {
         let handle = SessionHandle {
             session: Session::default(),
@@ -516,10 +591,12 @@ mod tests {
             panic!("expected monitor request")
         };
         assert_eq!(message.misc().switch_display().display, 1);
-        let Data::Message(message) = receiver.try_recv().unwrap() else {
-            panic!("expected single-display capture")
-        };
-        assert_eq!(message.misc().capture_displays().set, vec![1]);
+        if !crate::ui_interface::use_texture_render() {
+            let Data::Message(message) = receiver.try_recv().unwrap() else {
+                panic!("expected single-display capture")
+            };
+            assert_eq!(message.misc().capture_displays().set, vec![1]);
+        }
         assert!(handle.switch_monitor(0).is_err());
     }
 

@@ -549,6 +549,23 @@ impl Render for ManagementPanel {
                         ),
                 )
             })
+            .when(!self.host && self.video_state.connected && !self.video_state.switching_monitor, |root| {
+                let quality = &self.video_state.quality;
+                let mut details = vec![format!("屏幕 {} · 目标 {} FPS", self.video_state.current_monitor + 1, self.video_state.target_fps.value())];
+                if let Some(fps) = quality.decoded_fps {
+                    details.push(format!("解码 {} FPS", fps));
+                }
+                if let Some(codec) = &quality.codec {
+                    details.push(format!("编码 {}", codec));
+                }
+                if let Some(rate) = &quality.receive_rate {
+                    details.push(format!("接收吞吐 {}", rate));
+                }
+                if let Some(delay) = quality.round_trip_ms {
+                    details.push(format!("网络往返 {} ms", delay));
+                }
+                root.child(div().text_color(rgb(palette.muted)).child(details.join(" · ")))
+            })
             .when(self.video_state.connecting || self.video_state.has_session, |root| {
                 root.child(
                     div()
