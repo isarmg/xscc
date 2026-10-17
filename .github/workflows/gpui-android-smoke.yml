@@ -99,6 +99,7 @@ jobs:
         run: gradle --no-daemon -p packaging/gpui-android :app:assembleRelease
 
       - name: Verify actual APK and package evidence
+        id: verify-apk
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
@@ -131,6 +132,29 @@ jobs:
           cp experiments/gpui-android-smoke/Cargo.lock dist/gpui-android/
           printf 'commit=%s\nui=GPUI\nscope=window-touch-lifecycle-smoke\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA"             > dist/gpui-android/BUILD-INFO.txt
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
+
+      - name: Collect failed DEX privacy diagnostics (no installable APK)
+        if: failure() && steps.verify-apk.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          APK=packaging/gpui-android/app/build/outputs/apk/release/app-release.apk
+          mkdir -p diagnostics/gpui-android
+          unzip -j "$APK" 'classes*.dex' -d diagnostics/gpui-android
+          for dex in diagnostics/gpui-android/classes*.dex; do
+            "$ANDROID_HOME/build-tools/36.0.0/dexdump" -d "$dex" > "$dex.disassembly.txt"
+          done
+          cp packaging/gpui-android/app/build/outputs/mapping/release/configuration.txt diagnostics/gpui-android/
+          cp packaging/gpui-android/app/build/outputs/mapping/release/mapping.txt diagnostics/gpui-android/
+          printf 'commit=%s\npurpose=failed-privacy-gate-diagnostics-only\n' "$GITHUB_SHA" > diagnostics/gpui-android/BUILD-INFO.txt
+
+      - name: Upload failed DEX diagnostics only
+        if: failure() && steps.verify-apk.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gpui-android-failed-dex-diagnostics-${{ github.sha }}
+          path: diagnostics/gpui-android/*
+          if-no-files-found: error
+          retention-days: 7
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

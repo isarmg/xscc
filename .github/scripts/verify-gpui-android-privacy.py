@@ -126,7 +126,7 @@ def check_privacy(strings, methods):
             raise ValueError("Packaged DEX still references Log." + name)
     for value in strings:
         if any(marker in value for marker in SENSITIVE_FORMATS):
-            raise ValueError("Sensitive log argument construction survived R8")
+            raise ValueError("Sensitive log-format string remains after R8 (code-reference investigation required): " + repr(value))
 
 
 def check_jni(classes, definitions):

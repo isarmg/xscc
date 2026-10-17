@@ -17,7 +17,7 @@ class PrivacyTests(unittest.TestCase):
                 privacy.check_privacy([], [("Landroid/util/Log;", name, "()I")])
 
     def test_rejects_remaining_plaintext_format_construction(self):
-        with self.assertRaisesRegex(ValueError, "argument construction"):
+        with self.assertRaisesRegex(ValueError, "log-format string"):
             privacy.check_privacy(["processKeyEvent(key=%d) text=%s"], [])
 
     def test_preserves_warning_and_error_diagnostics(self):
