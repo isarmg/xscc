@@ -58,7 +58,7 @@ jobs:
       - name: Install native Linux build prerequisites
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl git build-essential clang-21 libclang-21-dev llvm-21-dev cmake nasm ninja-build pkg-config python3 python3-venv unzip zip tar file patchelf \
+          apt-get install -y ca-certificates curl git build-essential autoconf automake libtool clang-21 libclang-21-dev llvm-21-dev cmake nasm ninja-build pkg-config python3 python3-venv unzip zip tar file patchelf \
             libayatana-appindicator3-dev libasound2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libpulse-dev libva-dev libxfixes-dev libssl-dev libdbus-1-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev libfreetype-dev libunwind-dev libvdpau-dev libxtst-dev libxi-dev libxrandr-dev
           python3 -m venv /opt/build-tools
           /opt/build-tools/bin/pip install cmake==4.4.4
