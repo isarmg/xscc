@@ -6,7 +6,9 @@ use gpui::{
     Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img,
     prelude::*, rgb,
 };
-use librustdesk::gpui_session::{self, InputCommand, SessionEvent, SessionHandle, TargetFps};
+use librustdesk::gpui_session::{
+    self, InputCommand, Monitor, SessionEvent, SessionHandle, TargetFps,
+};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -20,6 +22,9 @@ pub struct VideoState {
     pub has_session: bool,
     pub connected: bool,
     pub target_fps: TargetFps,
+    pub monitors: Vec<Monitor>,
+    pub current_monitor: usize,
+    pub switching_monitor: bool,
     pub notice: String,
 }
 
@@ -40,6 +45,9 @@ pub struct RemoteVideo {
     connected: bool,
     keyboard_allowed: bool,
     target_fps: TargetFps,
+    monitors: Vec<Monitor>,
+    current_monitor: usize,
+    switching_monitor: bool,
     notice: String,
     focus: FocusHandle,
     bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -105,6 +113,9 @@ impl RemoteVideo {
             connected: false,
             keyboard_allowed: false,
             target_fps: TargetFps::Fps60,
+            monitors: Vec::new(),
+            current_monitor: 0,
+            switching_monitor: false,
             notice: String::new(),
             focus,
             bounds: Rc::new(Cell::new(Bounds::default())),
@@ -125,6 +136,9 @@ impl RemoteVideo {
             has_session: self.session.is_some(),
             connected: self.connected,
             target_fps: self.target_fps,
+            monitors: self.monitors.clone(),
+            current_monitor: self.current_monitor,
+            switching_monitor: self.switching_monitor,
             notice: self.notice.clone(),
         }
     }
@@ -148,6 +162,29 @@ impl RemoteVideo {
 
     pub fn request_fps(&mut self, target: TargetFps, cx: &mut Context<Self>) {
         self.set_target_fps(target);
+        self.publish(cx);
+        cx.notify();
+    }
+
+    pub fn switch_monitor(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.connected || self.switching_monitor || self.current_monitor == index {
+            return;
+        }
+        self.release_input();
+        if let Some(session) = &self.session {
+            match session.switch_monitor(index) {
+                Ok(()) => {
+                    self.switching_monitor = true;
+                    self.extent = (0, 0);
+                    self.video.invalidate();
+                    self.notice = format!(
+                        "正在切换至屏幕 {}… 若主机未响应，请断开后重新连接。",
+                        index + 1
+                    );
+                }
+                Err(error) => self.notice = error.to_string(),
+            }
+        }
         self.publish(cx);
         cx.notify();
     }
@@ -216,6 +253,9 @@ impl RemoteVideo {
         }
         self.connecting = false;
         self.connected = false;
+        self.monitors.clear();
+        self.current_monitor = 0;
+        self.switching_monitor = false;
         self.keyboard_allowed = false;
         self.scroll_remainder = (0.0, 0.0);
         self.extent = (0, 0);
@@ -294,13 +334,24 @@ impl RemoteVideo {
                         self.keyboard_allowed = enabled;
                     }
                 }
+                SessionEvent::Monitors(monitors) => self.monitors = monitors,
                 SessionEvent::Display {
+                    index,
                     x,
                     y,
                     width: _,
                     height: _,
                 } => {
                     self.release_input();
+                    if self.current_monitor != index || self.switching_monitor {
+                        self.video.invalidate();
+                        self.extent = (0, 0);
+                    }
+                    self.current_monitor = index;
+                    if self.switching_monitor {
+                        self.notice = format!("已切换至屏幕 {}。", index + 1);
+                    }
+                    self.switching_monitor = false;
                     self.origin = (x, y);
                 }
             }
@@ -332,7 +383,7 @@ impl RemoteVideo {
     }
 
     fn key(&mut self, key: &gpui::Keystroke, down: bool) -> bool {
-        if !self.connected || !self.keyboard_allowed {
+        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
             return false;
         }
         let message = if down {
@@ -358,7 +409,7 @@ impl RemoteVideo {
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent) -> bool {
-        if !self.connected || !self.keyboard_allowed {
+        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
             return false;
         }
         let (x, y, trackpad) = match event.delta {
@@ -392,7 +443,7 @@ impl RemoteVideo {
         button: i32,
         modifiers: gpui::Modifiers,
     ) -> bool {
-        if !self.connected || !self.keyboard_allowed {
+        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
             return false;
         }
         let bounds = self.bounds.get();
@@ -458,7 +509,11 @@ impl Drop for RemoteVideo {
 
 impl Render for RemoteVideo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let frame = self.session.as_ref().and_then(SessionHandle::take_frame);
+        let frame = self
+            .session
+            .as_ref()
+            .and_then(SessionHandle::take_frame)
+            .filter(|frame| !self.switching_monitor && frame.display == self.current_monitor);
         match self.video.update(frame, window) {
             Ok(Some(extent)) => self.extent = extent,
             Ok(None) => {}

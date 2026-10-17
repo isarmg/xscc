@@ -489,6 +489,30 @@ impl Render for ManagementPanel {
                 root.child(div().text_color(rgb(palette.muted))
                     .child("点击画面发送键鼠 · Ctrl+Alt+Enter 全屏"))
             })
+            .when(!self.host && self.video_state.monitors.len() > 1, |root| {
+                root.child(
+                    div().flex().flex_wrap().gap_2().child("屏幕：")
+                        .children(self.video_state.monitors.iter().map(|monitor| {
+                            let index = monitor.index;
+                            let selected = self.video_state.current_monitor == index;
+                            let enabled = self.video_state.connected
+                                && !self.video_state.switching_monitor
+                                && monitor.available && !selected;
+                            div().id(("monitor", index)).px_3().py_1()
+                                .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                                .child(theme::surface(rgb(if selected { palette.accent } else { palette.panel }), None, theme::CONTROL_EXTENT))
+                                .text_color(rgb(if selected { palette.page } else if enabled { palette.text } else { palette.muted }))
+                                .child(format!("{} · {} · {}×{}{}", index + 1, monitor.name, monitor.width, monitor.height,
+                                    if monitor.available { "" } else { " · 不可用" }))
+                                .when(enabled, |button| button.cursor_pointer().on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        view.video.update(cx, |video, cx| video.switch_monitor(index, cx));
+                                        cx.notify();
+                                    },
+                                )))
+                        })),
+                )
+            })
             .when(!self.host && self.video_state.has_session, |root| {
                 root.child(
                     div()

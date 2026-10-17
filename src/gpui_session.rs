@@ -50,6 +50,22 @@ impl TargetFps {
 }
 
 #[derive(Clone, Debug)]
+pub struct Monitor {
+    pub index: usize,
+    pub name: String,
+    pub width: i32,
+    pub height: i32,
+    pub available: bool,
+}
+
+#[derive(Default)]
+struct Monitors {
+    list: Vec<Monitor>,
+    current: usize,
+    pending: Option<usize>,
+}
+
+#[derive(Clone, Debug)]
 pub enum SessionEvent {
     Connecting,
     Connected,
@@ -59,7 +75,9 @@ pub enum SessionEvent {
         name: String,
         enabled: bool,
     },
+    Monitors(Vec<Monitor>),
     Display {
+        index: usize,
         x: i32,
         y: i32,
         width: i32,
@@ -70,6 +88,7 @@ pub enum SessionEvent {
 struct Mailbox {
     frame: ArrayQueue<Frame>,
     events: ArrayQueue<SessionEvent>,
+    monitors: RwLock<Monitors>,
     connected: AtomicBool,
     keyboard: AtomicBool,
     closed: AtomicBool,
@@ -80,6 +99,7 @@ impl Default for Mailbox {
         Self {
             frame: ArrayQueue::new(1),
             events: ArrayQueue::new(64),
+            monitors: RwLock::new(Monitors::default()),
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
             closed: AtomicBool::new(false),
@@ -124,7 +144,11 @@ impl SessionHandle {
             mailbox.frame.pop();
             return None;
         }
-        mailbox.frame.pop()
+        let monitors = mailbox.monitors.read().unwrap();
+        mailbox
+            .frame
+            .pop()
+            .filter(|frame| monitors.pending.is_none() && frame.display == monitors.current)
     }
     pub fn drain_events(&self) -> Vec<SessionEvent> {
         let queue = &self.session.ui_handler.0.events;
@@ -134,6 +158,9 @@ impl SessionHandle {
         let mailbox = &self.session.ui_handler.0;
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
             bail!("Session is not connected");
+        }
+        if mailbox.monitors.read().unwrap().pending.is_some() {
+            bail!("Display switch is pending");
         }
         if !mailbox.keyboard.load(Ordering::Acquire) {
             bail!("Remote input permission is disabled");
@@ -150,6 +177,38 @@ impl SessionHandle {
         sender
             .send(Data::Message(message))
             .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
+    }
+    pub fn switch_monitor(&self, index: usize) -> ResultType<()> {
+        let mailbox = &self.session.ui_handler.0;
+        if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
+            bail!("Session is not connected");
+        }
+        {
+            let sender = self.session.sender.read().unwrap();
+            if sender.as_ref().is_none_or(|sender| sender.is_closed()) {
+                bail!("Session is disconnected");
+            }
+        }
+        {
+            let mut monitors = mailbox.monitors.write().unwrap();
+            if !monitors
+                .list
+                .iter()
+                .any(|monitor| monitor.index == index && monitor.available)
+            {
+                bail!("Display is unavailable");
+            }
+            if monitors.pending.is_some() {
+                bail!("Display switch is pending");
+            }
+            if monitors.current == index {
+                return Ok(());
+            }
+            monitors.pending = Some(index);
+            mailbox.frame.pop();
+        }
+        self.session.switch_display(index as i32);
+        Ok(())
     }
     pub fn set_target_fps(&self, target: TargetFps) -> ResultType<()> {
         let mailbox = &self.session.ui_handler.0;
@@ -233,7 +292,17 @@ impl InvokeUiSession for Handler {
         if self.0.closed.load(Ordering::Acquire) {
             return;
         }
+        {
+            let monitors = self.0.monitors.read().unwrap();
+            if monitors.pending.is_some() || monitors.current != display {
+                return;
+            }
+        }
         if let Some(frame) = copy_frame(display, image) {
+            let monitors = self.0.monitors.read().unwrap();
+            if monitors.pending.is_some() || monitors.current != display {
+                return;
+            }
             if self.0.closed.load(Ordering::Acquire) {
                 return;
             }
@@ -246,6 +315,7 @@ impl InvokeUiSession for Handler {
     }
     fn set_display(&self, x: i32, y: i32, width: i32, height: i32, _: bool, _: f64) {
         self.event(SessionEvent::Display {
+            index: self.0.monitors.read().unwrap().current,
             x,
             y,
             width,
@@ -253,6 +323,15 @@ impl InvokeUiSession for Handler {
         });
     }
     fn switch_display(&self, display: &SwitchDisplay) {
+        if display.display < 0 || display.width <= 0 || display.height <= 0 {
+            return;
+        }
+        {
+            let mut monitors = self.0.monitors.write().unwrap();
+            monitors.current = display.display as usize;
+            monitors.pending = None;
+            self.0.frame.pop();
+        }
         self.set_display(
             display.x,
             display.y,
@@ -263,6 +342,8 @@ impl InvokeUiSession for Handler {
         );
     }
     fn set_peer_info(&self, peer: &PeerInfo) {
+        self.set_displays(&peer.displays);
+        self.0.monitors.write().unwrap().current = peer.current_display.max(0) as usize;
         if let Some(display) = peer.displays.get(peer.current_display as usize) {
             self.set_display(
                 display.x,
@@ -308,7 +389,21 @@ impl InvokeUiSession for Handler {
     fn set_cursor_data(&self, _: CursorData) {}
     fn set_cursor_id(&self, _: String) {}
     fn set_cursor_position(&self, _: CursorPosition) {}
-    fn set_displays(&self, _: &Vec<DisplayInfo>) {}
+    fn set_displays(&self, displays: &Vec<DisplayInfo>) {
+        let list: Vec<_> = displays
+            .iter()
+            .enumerate()
+            .map(|(index, display)| Monitor {
+                index,
+                name: display.name.clone(),
+                width: display.width,
+                height: display.height,
+                available: display.online && display.width > 0 && display.height > 0,
+            })
+            .collect();
+        self.0.monitors.write().unwrap().list = list.clone();
+        self.event(SessionEvent::Monitors(list));
+    }
     fn set_platform_additions(&self, _: &str) {}
     fn on_connected(&self, _: ConnType) {}
     fn update_privacy_mode(&self) {}
@@ -395,6 +490,92 @@ mod tests {
         };
         assert!(copy_frame(0, &raw).is_none());
     }
+    #[test]
+    fn monitor_selection_accepts_only_available_advertised_displays() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let handler = &handle.session.ui_handler;
+        let online = DisplayInfo {
+            width: 1920,
+            height: 1080,
+            online: true,
+            ..Default::default()
+        };
+        handler.set_displays(&vec![online.clone(), online, DisplayInfo::default()]);
+        assert!(handle.switch_monitor(1).is_err());
+        handler.0.connected.store(true, Ordering::Release);
+        handler.0.keyboard.store(false, Ordering::Release);
+        assert!(handle.switch_monitor(2).is_err());
+        assert!(handle.switch_monitor(99).is_err());
+        assert!(receiver.try_recv().is_err());
+        handle.switch_monitor(1).unwrap();
+        let Data::Message(message) = receiver.try_recv().unwrap() else {
+            panic!("expected monitor request")
+        };
+        assert_eq!(message.misc().switch_display().display, 1);
+        let Data::Message(message) = receiver.try_recv().unwrap() else {
+            panic!("expected single-display capture")
+        };
+        assert_eq!(message.misc().capture_displays().set, vec![1]);
+        assert!(handle.switch_monitor(0).is_err());
+    }
+
+    #[test]
+    fn monitor_switch_waits_for_host_and_rejects_old_display_frames() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let handler = &handle.session.ui_handler;
+        let online = DisplayInfo {
+            width: 1,
+            height: 1,
+            online: true,
+            ..Default::default()
+        };
+        handler.set_peer_info(&PeerInfo {
+            displays: vec![online.clone(), online],
+            ..Default::default()
+        });
+        let mut image = scrap::ImageRgb {
+            raw: vec![1, 2, 3, 255],
+            w: 1,
+            h: 1,
+            fmt: scrap::ImageFormat::ABGR,
+            align: 1,
+        };
+        handler.on_rgba(0, &mut image);
+        handle.switch_monitor(1).unwrap();
+        assert!(handle.take_frame().is_none());
+        handler.on_rgba(0, &mut image);
+        handler.on_rgba(1, &mut image);
+        assert!(handle.take_frame().is_none());
+        handler.switch_display(&SwitchDisplay {
+            display: 1,
+            x: -1920,
+            y: 100,
+            width: 1,
+            height: 1,
+            ..Default::default()
+        });
+        handler.on_rgba(1, &mut image);
+        handler.on_rgba(0, &mut image);
+        assert_eq!(handle.take_frame().unwrap().display, 1);
+        assert!(handle.drain_events().iter().any(|event| matches!(
+            event,
+            SessionEvent::Display {
+                index: 1,
+                x: -1920,
+                y: 100,
+                ..
+            }
+        )));
+    }
+
     #[tokio::test]
     async fn latest_frame_replaces_old_frame_without_waiting() {
         let handle = SessionHandle {
