@@ -72,6 +72,8 @@ type ConnMap = HashMap<i32, ConnInner>;
 
 #[derive(Clone, Default)]
 pub struct ConnectionMeta {
+    #[cfg(feature = "test-lan-direct")]
+    pub(crate) test_lan: bool,
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
@@ -168,10 +170,16 @@ pub async fn create_tcp_connection(
     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
     let meta = {
         let mut meta = meta;
-        meta.managed_permit = tokio::select! {
-            result = crate::management::accept(&mut stream, &signing_public) => result?,
-            _ = unauthorized.evicted() => bail!("Unauthenticated connection evicted"),
-        };
+        #[cfg(feature = "test-lan-direct")]
+        let requires_managed = !meta.test_lan;
+        #[cfg(not(feature = "test-lan-direct"))]
+        let requires_managed = true;
+        if requires_managed {
+            meta.managed_permit = tokio::select! {
+                result = crate::management::accept(&mut stream, &signing_public) => result?,
+                _ = unauthorized.evicted() => bail!("Unauthenticated connection evicted"),
+            };
+        }
         stream.set_max_packet_length(MAX_UNAUTHORIZED_MESSAGE);
         meta
     };

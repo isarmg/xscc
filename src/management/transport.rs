@@ -91,6 +91,14 @@ pub(crate) async fn connect(
     conn_type: ConnType,
     interface: impl Interface,
 ) -> ResultType<(Stream, Vec<u8>, &'static str, Option<SessionPermit>)> {
+    #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+    if peer.starts_with(crate::test_lan::PREFIX) {
+        if conn_type != ConnType::DEFAULT_CONN {
+            bail!("Only desktop sessions are available in LAN test mode");
+        }
+        let (stream, key, kind) = crate::test_lan::connect(peer).await?;
+        return Ok((stream, key, kind, None));
+    }
     let status = rpc(Request::Status {}).await?;
     if status
         .get("configured")

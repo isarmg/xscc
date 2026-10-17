@@ -268,6 +268,8 @@ pub struct Connection {
     timer: crate::RustDeskInterval,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    #[cfg(feature = "test-lan-direct")]
+    test_lan: bool,
     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
     managed_permit: Option<crate::management::SessionPermit>,
     // The place among the unauthorized connections; given back at authorization.
@@ -434,6 +436,8 @@ impl Connection {
             timer: crate::rustdesk_interval(time::interval(SEC30)),
             tx_to_cm,
             authorized: false,
+            #[cfg(feature = "test-lan-direct")]
+            test_lan: meta.test_lan,
             #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
             managed_permit: meta.managed_permit,
             unauthorized_id: Some(unauthorized),
@@ -484,6 +488,10 @@ impl Connection {
             tx_from_authed,
             scope_violation_messages: HashSet::new(),
         };
+        #[cfg(all(feature = "test-lan-direct", target_os = "linux"))]
+        if conn.test_lan {
+            conn.audio = false;
+        }
         let addr = hbb_common::try_into_v4(addr);
         if !conn.on_open(addr).await {
             conn.closed = true;
@@ -794,7 +802,7 @@ impl Connection {
                 }
                 _ = second_timer.tick() => {
                     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
-                    if !crate::management::permits_host(conn.managed_permit.as_ref()) {
+                    if !conn.session_authority_valid() {
                         conn.send_close_reason_no_retry("Management authorization expired").await;
                         conn.on_close("management authorization expired", true).await;
                         break;
@@ -1058,6 +1066,15 @@ impl Connection {
         msg_out.set_hash(self.hash.clone());
         self.send(msg_out).await;
         true
+    }
+
+    #[cfg(feature = "managed")]
+    fn session_authority_valid(&self) -> bool {
+        #[cfg(feature = "test-lan-direct")]
+        if self.test_lan {
+            return true;
+        }
+        crate::management::permits_host(self.managed_permit.as_ref())
     }
 
     // Returns whether this connection should be kept alive.
@@ -1885,6 +1902,16 @@ impl Connection {
                 return false;
             }
             self.stream.set_send_timeout(SEND_TIMEOUT_VIDEO);
+
+            #[cfg(feature = "test-lan-direct")]
+            if self.test_lan {
+                if !crate::test_lan::is_peer(&lr.username) {
+                    self.send_login_error("Test LAN target is required").await;
+                    return false;
+                }
+                self.require_2fa = None;
+                return self.send_logon_response_and_keep_alive().await;
+            }
 
             #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
             let managed_target = self.managed_permit.as_ref().is_some_and(|permit| lr.username == format!("managed:{}", permit.controlled.device_id));

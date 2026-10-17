@@ -1,6 +1,10 @@
 //! Native process lifecycle for the separate GPUI applications.
 use hbb_common::config;
 
+pub fn test_lan_direct_compiled() -> bool {
+    cfg!(feature = "test-lan-direct")
+}
+
 pub fn is_host() -> bool {
     cfg!(feature = "gpui-host")
 }
@@ -91,6 +95,20 @@ pub fn handle_background_command() -> bool {
     let Some(argument) = std::env::args().nth(1) else {
         return false;
     };
+    #[cfg(all(feature = "test-lan-direct", feature = "gpui-host"))]
+    if argument == "--test-lan-host" {
+        let result = (|| -> hbb_common::ResultType<()> {
+            prepare(true).map_err(hbb_common::anyhow::Error::msg)?;
+            let address = crate::test_lan::configured_bind()?;
+            hbb_common::init_log(false, "test-lan-host");
+            crate::test_lan::run_host(address)
+        })();
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return true;
+    }
     if !matches!(
         argument.as_str(),
         "--server" | "--service" | "--install-service-only" | "--uninstall-service-only"

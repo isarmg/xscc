@@ -317,6 +317,40 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
     Ok(SessionHandle { session })
 }
 
+#[cfg(feature = "test-lan-direct")]
+pub async fn connect_test_lan(endpoint: &str) -> ResultType<SessionHandle> {
+    let endpoint = crate::test_lan::target(endpoint)?;
+    let handler = Handler::default();
+    handler.event(SessionEvent::Connecting);
+    let session = Session {
+        ui_handler: handler.clone(),
+        server_keyboard_enabled: Arc::new(RwLock::new(true)),
+        server_clipboard_enabled: Arc::new(RwLock::new(false)),
+        ..Default::default()
+    };
+    session.lc.write().unwrap().initialize(
+        format!("{}{}", crate::test_lan::PREFIX, endpoint),
+        ConnType::DEFAULT_CONN,
+        None,
+        None,
+        None,
+    );
+    let round = session.connection_round_state.lock().unwrap().new_round();
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    *session.sender.write().unwrap() = Some(sender.clone());
+    let running = session.clone();
+    tokio::spawn(async move {
+        let mut remote = Remote::new(running, receiver, sender);
+        remote.io_loop(round).await;
+        handler.0.closed.store(true, Ordering::Release);
+        handler.0.connected.store(false, Ordering::Release);
+        handler.0.frame.pop();
+        handler.event(SessionEvent::Disconnected);
+        handler.0.updates.notify_one();
+    });
+    Ok(SessionHandle { session })
+}
+
 impl InvokeUiSession for Handler {
     fn on_rgba(&self, display: usize, image: &mut scrap::ImageRgb) {
         if self.0.closed.load(Ordering::Acquire) {

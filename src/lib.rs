@@ -30,6 +30,8 @@ pub mod gpui_session;
 pub mod gpui_host;
 #[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
 pub mod gpui_management;
+#[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+mod test_lan;
 mod client;
 mod lan;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

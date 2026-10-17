@@ -1,10 +1,10 @@
-use crate::{input, presentation::VideoPresentation};
+use crate::{input, presentation::VideoPresentation, theme};
 use base::message_proto::Message;
 use gpui::{
-    Bounds, Context, DispatchPhase, EventEmitter, FocusHandle, ImageSource, IntoElement,
-    KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Subscription,
-    Window, canvas, div, img, prelude::*, rgb,
+    App, Bounds, Context, DispatchPhase, EventEmitter, FocusHandle, Focusable, ImageSource,
+    IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
+    Subscription, Window, canvas, div, img, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
     self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
@@ -153,6 +153,39 @@ impl RemoteVideo {
 
     pub fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.start_connect(device_id);
+        self.focus.focus(window, cx);
+        self.publish(cx);
+        cx.notify();
+    }
+
+    #[cfg(feature = "test-lan-direct")]
+    pub fn connect_test_lan(
+        &mut self,
+        endpoint: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connecting || self.session.is_some() {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
+        self.connecting = true;
+        self.video.invalidate();
+        self.notice = "正在连接局域网测试地址…".into();
+        let sender = self.sender.clone();
+        let wake = self.wake.clone();
+        self.runtime.spawn(async move {
+            let result = gpui_session::connect_test_lan(&endpoint)
+                .await
+                .map_err(|error| error.to_string());
+            if let Err(error) = sender.send(Reply::Connect(generation, result))
+                && let Reply::Connect(_, Ok(session)) = error.0
+            {
+                session.disconnect();
+            }
+            wake.notify_one();
+        });
         self.focus.focus(window, cx);
         self.publish(cx);
         cx.notify();
@@ -448,6 +481,10 @@ impl RemoteVideo {
         if !self.connected || !self.keyboard_allowed || self.switching_monitor {
             return false;
         }
+        if !scroll_hits_frame(event.position, self.bounds.get(), self.extent) {
+            self.scroll_remainder = (0.0, 0.0);
+            return false;
+        }
         let (x, y, trackpad) = match event.delta {
             ScrollDelta::Lines(delta) => (delta.x, delta.y, false),
             ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
@@ -534,6 +571,24 @@ impl RemoteVideo {
             }
         }
         false
+    }
+}
+
+fn scroll_hits_frame(position: Point<Pixels>, bounds: Bounds<Pixels>, extent: (u32, u32)) -> bool {
+    input::pointer(
+        f32::from(position.x - bounds.origin.x),
+        f32::from(position.y - bounds.origin.y),
+        (bounds.size.width.into(), bounds.size.height.into()),
+        extent,
+        0,
+        0,
+    )
+    .is_some()
+}
+
+impl Focusable for RemoteVideo {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
     }
 }
 
@@ -719,6 +774,36 @@ impl Render for RemoteVideo {
                 .left_0()
                 .size_full(),
             )
+            .when(window.is_fullscreen(), |video| {
+                video.child(
+                    div()
+                        .id("exit-remote-fullscreen")
+                        .absolute()
+                        .top_3()
+                        .right_3()
+                        .px_3()
+                        .h(px(theme::CONTROL_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .text_color(rgb(theme::DARK.text))
+                        .cursor_pointer()
+                        .occlude()
+                        .child(theme::surface(
+                            rgb(theme::DARK.panel),
+                            Some(rgb(theme::DARK.border)),
+                            theme::CONTROL_EXTENT,
+                        ))
+                        .child("退出全屏")
+                        .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            if view.release_input() {
+                                view.publish(cx);
+                            }
+                            window.toggle_fullscreen();
+                            cx.stop_propagation();
+                        })),
+                )
+            })
     }
 }
 
@@ -726,6 +811,27 @@ impl Render for RemoteVideo {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn scrolling_only_targets_the_visible_frame_after_resize() {
+        use gpui::{point, px, size};
+
+        let origin = point(px(300.0), px(80.0));
+        let wide = Bounds::new(origin, size(px(1000.0), px(800.0)));
+        let tall = Bounds::new(origin, size(px(1000.0), px(400.0)));
+        for (x, y, bounds, extent, accepted) in [
+            (800.0, 480.0, wide, (1920, 1080), true),
+            (800.0, 81.0, wide, (1920, 1080), false),
+            (301.0, 280.0, tall, (1080, 1920), false),
+            (800.0, 280.0, tall, (1080, 1920), true),
+            (800.0, 480.0, wide, (0, 0), false),
+        ] {
+            assert_eq!(
+                scroll_hits_frame(point(px(x), px(y)), bounds, extent),
+                accepted
+            );
+        }
+    }
 
     #[test]
     fn replies_before_ui_wait_coalesce_without_losing_terminal_reply() {

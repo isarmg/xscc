@@ -214,6 +214,16 @@ impl Render for Probe {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--build-capabilities") {
+        let enabled = cfg!(feature = "test-lan-direct");
+        #[cfg(all(
+            any(target_os = "windows", target_os = "linux", target_os = "macos"),
+            feature = "live-session"
+        ))]
+        let enabled = enabled || librustdesk::gpui_host::test_lan_direct_compiled();
+        println!("XSCC_TEST_LAN_DIRECT={}", u8::from(enabled));
+        return Ok(());
+    }
     #[cfg(all(
         any(target_os = "windows", target_os = "linux", target_os = "macos"),
         feature = "live-session"

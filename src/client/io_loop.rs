@@ -109,6 +109,10 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Err(err) = tokio::task::spawn_blocking(client::get_hwcodec_config).await {
             log::error!("Local hardware codec probe task failed: {err}");
         }
+        #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+        let test_lan = crate::test_lan::is_peer(&self.handler.get_id());
+        #[cfg(not(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios")))))]
+        let test_lan = false;
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
         #[cfg(feature = "managed")]
@@ -140,7 +144,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let identity_verified = managed_permit.is_some();
                 #[cfg(not(feature = "managed"))]
                 let identity_verified = false;
-                if !is_secured || (!identity_verified && !client::confirm_direct_identity(
+                if !is_secured || (!test_lan && !identity_verified && !client::confirm_direct_identity(
                     &self.handler, &mut self.receiver, &pk,
                 ).await) {
                     self.send_close_reason(&mut peer, "Device identity was not trusted").await;
@@ -208,7 +212,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         _ = status_timer.tick() => {
                             #[cfg(feature = "managed")]
-                            if !crate::management::check_controller(managed_permit.as_ref()).await {
+                            if !test_lan && !crate::management::check_controller(managed_permit.as_ref()).await {
                                 self.send_close_reason(&mut peer, "Management authorization expired").await;
                                 self.handler.on_establish_connection_error("Management authorization expired".to_owned());
                                 break;
@@ -706,6 +710,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
+                    #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+                    if crate::test_lan::is_peer(&self.handler.get_id()) {
+                        let message = self.handler.lc.read().unwrap().create_login_msg(
+                            String::new(), String::new(), Vec::new(),
+                        );
+                        return peer.send(&message).await.is_ok();
+                    }
                     if !self
                         .handler
                         .handle_hash(&self.handler.password.clone(), hash, peer)

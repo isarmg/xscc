@@ -14,6 +14,8 @@ $out = Join-Path $root "dist/$role"
 $payload = Join-Path $env:RUNNER_TEMP $stem
 New-Item -ItemType Directory -Force $out, $payload | Out-Null
 $exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-gpui-validation.exe'
+& python "$PSScriptRoot/check-gpui-package-mode.py" $exe --output (Join-Path $payload 'build-capabilities.json')
+if ($LASTEXITCODE -ne 0) { throw 'Package capability gate failed' }
 $bytes = [System.IO.File]::ReadAllBytes($exe)
 $pe = [BitConverter]::ToInt32($bytes, 0x3c)
 if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550 -or
@@ -40,7 +42,11 @@ Copy-Item "$root/LICENCE" $payload
 Copy-Item "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/$readme" (Join-Path $payload 'README.txt')
+if ($env:XSCC_PACKAGE_MODE -eq 'test-lan-direct') {
+    Get-Content (Join-Path $payload 'TEST-ONLY.txt') | Add-Content (Join-Path $payload 'README.txt')
+}
 $metadata = [ordered]@{
+    package_mode = if ($env:XSCC_PACKAGE_MODE) { $env:XSCC_PACKAGE_MODE } else { 'managed' }
     package_version = $env:PACKAGE_VERSION
     source_sha = $env:SOURCE_SHA
     source_url = "$env:SERVER_URL/$env:REPOSITORY/tree/$env:SOURCE_SHA"
@@ -64,8 +70,11 @@ if ((Get-AuthenticodeSignature $installer).Status -ne 'NotSigned') {
 }
 $archiveKind = if ($role -eq 'host') { 'files' } else { 'portable' }
 Compress-Archive -Path $payload -DestinationPath (Join-Path $out "$stem-$archiveKind.zip") -Force
-foreach ($file in @('build-info.json', 'README.txt', 'dependencies.txt')) {
+foreach ($file in @('build-info.json', 'build-capabilities.json', 'README.txt', 'dependencies.txt')) {
     Copy-Item (Join-Path $payload $file) (Join-Path $out "$stem-$file")
+}
+if ($env:XSCC_PACKAGE_MODE -eq 'test-lan-direct') {
+    Copy-Item (Join-Path $payload 'TEST-ONLY.txt') (Join-Path $out "$stem-TEST-ONLY.txt")
 }
 $checksums = "$stem-SHA256SUMS.txt"
 Get-ChildItem $out -File | Where-Object Name -ne $checksums | Sort-Object Name | ForEach-Object {

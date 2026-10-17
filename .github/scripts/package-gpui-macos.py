@@ -90,6 +90,8 @@ def package(binary, output, role, version):
         executable.chmod(0o755)
         resources = contents / "Resources"
         resources.mkdir()
+        subprocess.run([sys.executable, str(ROOT / ".github/scripts/check-gpui-package-mode.py"),
+                        str(binary.resolve()), "--output", str(resources / "build-capabilities.json")], check=True)
         for source in (ROOT / "LICENCE", ROOT / "packaging/gpui-windows/GPUI-LICENSE-APACHE.txt",
                        ROOT / "packaging/gpui-windows/THIRD_PARTY_NOTICES.txt",
                        ROOT / "packaging/gpui-macos/README.txt"):

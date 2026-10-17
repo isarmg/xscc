@@ -17,6 +17,7 @@ name="xscc-$role-$version-linux-x86_64"
 staging=$(mktemp -d)
 trap 'rm -rf -- "$staging"' EXIT
 mkdir -- "$staging/$name"
+python3 "$root/.github/scripts/check-gpui-package-mode.py" "$executable" --output "$staging/$name/build-capabilities.json"
 install -m 755 -- "$executable" "$staging/$name/xscc-$role"
 install -m 755 -- "$root/packaging/gpui-linux/launch.sh" "$staging/$name/launch.sh"
 printf '%s\n' "$role" > "$staging/$name/role"
