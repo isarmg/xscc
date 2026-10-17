@@ -2,9 +2,9 @@ use crate::{input, presentation::VideoPresentation};
 use base::message_proto::Message;
 use gpui::{
     Bounds, Context, DispatchPhase, EventEmitter, FocusHandle, ImageSource, IntoElement,
-    KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img,
-    prelude::*, rgb,
+    KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Subscription,
+    Window, canvas, div, img, prelude::*, rgb,
 };
 use librustdesk::gpui_session::{
     self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
@@ -394,14 +394,15 @@ impl RemoteVideo {
         }
     }
 
-    fn key(&mut self, key: &gpui::Keystroke, down: bool) -> bool {
+    fn key(&mut self, key: &gpui::Keystroke, down: bool, cx: &Context<Self>) -> bool {
         if !self.connected || !self.keyboard_allowed || self.switching_monitor {
             return false;
         }
+        let identity = input::key_identity(key, cx.keyboard_mapper().as_ref());
         let message = if down {
             input::key(key, true)
         } else {
-            self.keys.get(&key.key).map(input::release_key)
+            self.keys.get(&identity).map(input::release_key)
         };
         let Some(message) = message else {
             return false;
@@ -412,12 +413,35 @@ impl RemoteVideo {
                 return true;
             }
             if down {
-                self.keys.entry(key.key.clone()).or_insert(message);
+                self.keys.entry(identity).or_insert(message);
             } else {
-                self.keys.remove(&key.key);
+                self.keys.remove(&identity);
             }
         }
         false
+    }
+
+    fn modifiers(&mut self, modifiers: gpui::Modifiers, cx: &Context<Self>) -> bool {
+        let mut failed = false;
+        for (key, down) in [
+            ("control", modifiers.control),
+            ("alt", modifiers.alt),
+            ("shift", modifiers.shift),
+            ("super", modifiers.platform),
+        ] {
+            if down != self.keys.contains_key(key) {
+                failed |= self.key(
+                    &gpui::Keystroke {
+                        key: key.into(),
+                        modifiers,
+                        ..Default::default()
+                    },
+                    down,
+                    cx,
+                );
+            }
+        }
+        failed
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent) -> bool {
@@ -567,12 +591,19 @@ impl Render for RemoteVideo {
                     cx.stop_propagation();
                     return;
                 }
-                if view.focus.is_focused(window) && view.key(&event.keystroke, true) {
+                if view.focus.is_focused(window) && view.key(&event.keystroke, true, cx) {
                     view.publish(cx);
                 }
             }))
+            .on_modifiers_changed(
+                cx.listener(|view, event: &ModifiersChangedEvent, window, cx| {
+                    if view.focus.is_focused(window) && view.modifiers(event.modifiers, cx) {
+                        view.publish(cx);
+                    }
+                }),
+            )
             .on_key_up(cx.listener(|view, event: &KeyUpEvent, window, cx| {
-                if view.focus.is_focused(window) && view.key(&event.keystroke, false) {
+                if view.focus.is_focused(window) && view.key(&event.keystroke, false, cx) {
                     view.publish(cx);
                 }
             }))

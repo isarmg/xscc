@@ -4,6 +4,14 @@ use base::{
 };
 use gpui::Keystroke;
 
+#[cfg(target_os = "windows")]
+pub fn key_identity(key: &Keystroke, mapper: &dyn gpui::PlatformKeyboardMapper) -> String {
+    mapper
+        .map_key_equivalent(key.clone(), false)
+        .key()
+        .to_owned()
+}
+
 pub fn key(key: &Keystroke, down: bool) -> Option<Message> {
     let mut event = KeyEvent {
         down,
@@ -60,6 +68,8 @@ pub fn key(key: &Keystroke, down: bool) -> Option<Message> {
         _ => None,
     };
     if let Some(key) = control {
+        // The host must hold this explicit modifier, not inject and release it as chord metadata.
+        event.modifiers.retain(|modifier| *modifier != key.into());
         event.set_control_key(key);
     } else {
         let text = key.key_char.as_deref().unwrap_or(&key.key);
@@ -257,6 +267,77 @@ mod tests {
             vec![ControlKey::Control.into()]
         );
         assert!(!released.key_event().down);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn shifted_key_identity_survives_releasing_shift_first() {
+        let platform = gpui_platform::current_platform(true);
+        let mapper = platform.keyboard_mapper();
+        let shifted = mapper.map_key_equivalent(
+            Keystroke {
+                key: "1".into(),
+                modifiers: gpui::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            false,
+        );
+        let release = Keystroke {
+            key: shifted.key().into(),
+            ..Default::default()
+        };
+        assert_ne!(shifted.inner().key, release.key);
+        for (control, alt) in [(false, false), (true, false), (true, true)] {
+            let press = Keystroke {
+                modifiers: gpui::Modifiers {
+                    control,
+                    alt,
+                    ..shifted.inner().modifiers
+                },
+                ..shifted.inner().clone()
+            };
+            assert_eq!(
+                key_identity(&press, mapper.as_ref()),
+                key_identity(&release, mapper.as_ref())
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_modifiers_stay_down_and_use_focus_loss_release() {
+        for (name, control) in [
+            ("control", ControlKey::Control),
+            ("alt", ControlKey::Alt),
+            ("shift", ControlKey::Shift),
+            ("super", ControlKey::Meta),
+        ] {
+            let pressed = key(
+                &Keystroke {
+                    key: name.into(),
+                    modifiers: gpui::Modifiers {
+                        control: true,
+                        alt: true,
+                        shift: true,
+                        platform: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                true,
+            )
+            .unwrap();
+            assert_eq!(pressed.key_event().control_key(), control);
+            assert!(pressed.key_event().down);
+            assert!(!pressed.key_event().modifiers.contains(&control.into()));
+            assert_eq!(pressed.key_event().modifiers.len(), 3);
+            let released = release_key(&pressed);
+            assert_eq!(released.key_event().control_key(), control);
+            assert!(!released.key_event().down);
+            assert!(released.key_event().modifiers.is_empty());
+        }
     }
 
     #[test]
