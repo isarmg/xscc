@@ -1025,6 +1025,8 @@ struct ConnToken {
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
+    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    pub(crate) mobile_touch_enabled: bool,
     id: String,
     pub conn_type: ConnType,
     hash: Hash,
@@ -1461,9 +1463,9 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
-        // The first mobile GPUI session slice is explicitly view-only.
+        // Mobile touch is an explicit per-session capability; other side channels stay disabled.
         #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
-        restrict_mobile_view_only(&mut msg);
+        restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled);
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
@@ -2984,8 +2986,8 @@ mod direct_approval_tests {
 }
 
 #[cfg(any(test, all(target_os = "ios", feature = "gpui-mobile-session")))]
-fn restrict_mobile_view_only(options: &mut OptionMessage) {
-    options.disable_keyboard = BoolOption::Yes.into();
+fn restrict_mobile_capabilities(options: &mut OptionMessage, touch_enabled: bool) {
+    options.disable_keyboard = if touch_enabled { BoolOption::No } else { BoolOption::Yes }.into();
     options.disable_audio = BoolOption::Yes.into();
     options.disable_clipboard = BoolOption::Yes.into();
     options.lock_after_session_end = BoolOption::No.into();
@@ -3005,12 +3007,17 @@ mod mobile_view_only_tests {
         options.disable_clipboard = BoolOption::No.into();
         options.lock_after_session_end = BoolOption::Yes.into();
         options.block_input = BoolOption::Yes.into();
-        restrict_mobile_view_only(&mut options);
+        restrict_mobile_capabilities(&mut options, false);
         assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.lock_after_session_end.enum_value(), Ok(BoolOption::No));
         assert_eq!(options.block_input.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.custom_fps, 30);
+        restrict_mobile_capabilities(&mut options, true);
+        assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
+        assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.custom_fps, 30);
     }
 }

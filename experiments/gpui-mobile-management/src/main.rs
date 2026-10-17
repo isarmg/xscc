@@ -9,6 +9,8 @@ mod session_view;
 mod text_field;
 #[path = "../../gpui-validation/src/theme.rs"]
 mod theme;
+#[cfg(any(test, all(target_os = "ios", feature = "mobile-session")))]
+mod touch_input;
 
 use gpui::{App, AppContext, WindowOptions};
 

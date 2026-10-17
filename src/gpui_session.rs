@@ -30,6 +30,11 @@ pub enum InputCommand {
     Mouse(MouseEvent),
 }
 
+#[cfg(any(test, all(target_os = "ios", feature = "gpui-mobile-session")))]
+fn mobile_pointer_permitted(enabled: bool, input: &InputCommand) -> bool {
+    enabled && matches!(input, InputCommand::Mouse(_))
+}
+
 /// Requested cadence; the host and transport retain their capability and QoS limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TargetFps {
@@ -184,9 +189,22 @@ impl SessionHandle {
         let queue = &self.session.ui_handler.0.events;
         (0..64).map_while(|_| queue.pop()).collect()
     }
+    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    pub fn touch_input_allowed(&self) -> bool {
+        let mailbox = &self.session.ui_handler.0;
+        self.session.lc.read().unwrap().mobile_touch_enabled
+            && mailbox.connected.load(Ordering::Acquire)
+            && !mailbox.closed.load(Ordering::Acquire)
+            && mailbox.keyboard.load(Ordering::Acquire)
+            && mailbox.monitors.read().unwrap().pending.is_none()
+    }
+
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
-        if cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) {
-            bail!("This mobile preview is view-only");
+        #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+        {
+            if !mobile_pointer_permitted(self.session.lc.read().unwrap().mobile_touch_enabled, &input) {
+                bail!("Pointer capability is disabled or this input is not supported");
+            }
         }
         let mailbox = &self.session.ui_handler.0;
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
@@ -285,6 +303,15 @@ impl Drop for SessionHandle {
 }
 
 pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
+    connect_mode(device_id, false).await
+}
+
+#[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+pub async fn connect_touch(device_id: &str) -> ResultType<SessionHandle> {
+    connect_mode(device_id, true).await
+}
+
+async fn connect_mode(device_id: &str, _touch_enabled: bool) -> ResultType<SessionHandle> {
     let device_id = uuid::Uuid::parse_str(device_id)?;
     // Resolve through the existing authenticated owner. Never accept an address or identity
     // asserted by the UI; the transport resolves again immediately before the handshake.
@@ -304,6 +331,10 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
         None,
         None,
     );
+    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    {
+        session.lc.write().unwrap().mobile_touch_enabled = _touch_enabled;
+    }
     let round = session.connection_round_state.lock().unwrap().new_round();
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     *session.sender.write().unwrap() = Some(sender.clone());
@@ -790,6 +821,14 @@ mod tests {
         );
         assert_eq!(handle.take_frame().unwrap().bgra[2], 11);
     }
+    #[test]
+    fn mobile_pointer_requires_explicit_capability_and_rejects_keys() {
+        let pointer = InputCommand::Mouse(MouseEvent::default());
+        assert!(!mobile_pointer_permitted(false, &pointer));
+        assert!(mobile_pointer_permitted(true, &pointer));
+        assert!(!mobile_pointer_permitted(true, &InputCommand::Key(KeyEvent::default())));
+    }
+
     #[test]
     fn typed_input_preserves_key_order_and_rejects_disconnected_input() {
         let handle = SessionHandle {

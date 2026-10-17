@@ -1042,12 +1042,26 @@ pub(crate) struct DeferredDraw {
     paint_range: Range<PaintIndex>,
 }
 
+struct RawTouchListener {
+    owner: EntityId,
+    hitbox: Hitbox,
+    callback: Box<dyn FnMut(&TouchEvent, &mut Window, &mut App)>,
+}
+
+#[derive(Default)]
+struct RawTouchCapture {
+    owner: Option<EntityId>,
+    contacts: Vec<TouchEvent>,
+    captured_sequence: bool,
+}
+
 pub(crate) struct Frame {
     pub(crate) focus: Option<FocusId>,
     pub(crate) window_active: bool,
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
     accessed_element_states: Vec<(GlobalElementId, TypeId)>,
     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
+    touch_listeners: Vec<Option<RawTouchListener>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
     pub(crate) hitboxes: Vec<Hitbox>,
@@ -1083,6 +1097,7 @@ pub(crate) struct PaintIndex {
     #[cfg(any(test, feature = "test-support"))]
     debug_bounds_index: usize,
     mouse_listeners_index: usize,
+    touch_listeners_index: usize,
     input_handlers_index: usize,
     cursor_styles_index: usize,
     accessed_element_states_index: usize,
@@ -1104,6 +1119,7 @@ impl Frame {
             element_states: FxHashMap::default(),
             accessed_element_states: Vec::new(),
             mouse_listeners: Vec::new(),
+            touch_listeners: Vec::new(),
             dispatch_tree,
             scene: Scene::default(),
             hitboxes: Vec::new(),
@@ -1131,6 +1147,7 @@ impl Frame {
         self.element_states.clear();
         self.accessed_element_states.clear();
         self.mouse_listeners.clear();
+        self.touch_listeners.clear();
         self.dispatch_tree.clear();
         self.scene.clear();
         self.input_handlers.clear();
@@ -1289,6 +1306,7 @@ pub struct Window {
     last_input_modality: InputModality,
     touch_gestures: TouchGestureRecognizer,
     touch_prediction_enabled: bool,
+    raw_touch_capture: RawTouchCapture,
     long_press_timer: Option<Task<()>>,
     long_press_capture: Option<EntityId>,
     pub(crate) refreshing: bool,
@@ -1759,7 +1777,10 @@ impl Window {
             let window_id = handle.window_id();
             let mut cx = cx.to_async();
             move || {
-                let _ = handle.update(&mut cx, |_, window, _| window.remove_window());
+                let _ = handle.update(&mut cx, |_, window, cx| {
+                    window.release_touch_capture(cx);
+                    window.remove_window();
+                });
                 let _ = cx.update(|cx| {
                     SystemWindowTabController::remove_tab(cx, window_id);
                 });
@@ -2010,6 +2031,10 @@ impl Window {
                 handle
                     .update(&mut cx, |_, window, cx| {
                         window.active.set(active);
+                        if !active {
+                            window.release_touch_capture(cx);
+                            window.raw_touch_capture = RawTouchCapture::default();
+                        }
                         window.modifiers = window.platform_window.modifiers();
                         window.capslock = window.platform_window.capslock();
                         window
@@ -2190,6 +2215,7 @@ impl Window {
                     .map_or_else(GestureTuning::default, |gestures| gestures.tuning()),
             ),
             touch_prediction_enabled: true,
+            raw_touch_capture: RawTouchCapture::default(),
             long_press_timer: None,
             long_press_capture: None,
             refreshing: false,
@@ -3524,6 +3550,16 @@ impl Window {
         self.invalidator.set_phase(DrawPhase::Focus);
         let previous_focus_path = self.rendered_frame.focus_path();
         let previous_window_active = self.rendered_frame.window_active;
+        if let Some(owner) = self.raw_touch_capture.owner
+            && !self
+                .next_frame
+                .touch_listeners
+                .iter()
+                .flatten()
+                .any(|listener| listener.owner == owner)
+        {
+            self.release_touch_capture(cx);
+        }
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
         let current_focus_path = self.rendered_frame.focus_path();
@@ -4064,6 +4100,7 @@ impl Window {
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.next_frame.debug_bounds_records.len(),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
+            touch_listeners_index: self.next_frame.touch_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
@@ -4096,6 +4133,12 @@ impl Window {
         self.next_frame.mouse_listeners.extend(
             self.rendered_frame.mouse_listeners
                 [range.start.mouse_listeners_index..range.end.mouse_listeners_index]
+                .iter_mut()
+                .map(|listener| listener.take()),
+        );
+        self.next_frame.touch_listeners.extend(
+            self.rendered_frame.touch_listeners
+                [range.start.touch_listeners_index..range.end.touch_listeners_index]
                 .iter_mut()
                 .map(|listener| listener.take()),
         );
@@ -5500,6 +5543,46 @@ impl Window {
         )));
     }
 
+    /// Registers a raw-touch canvas during paint. The first touch must hit this
+    /// hitbox; the entire multi-touch sequence then bypasses gesture recognition.
+    /// Use a stable entity ID for `owner`, with one raw-touch canvas per entity.
+    /// Capture survives changing hitboxes across frames and movement out of bounds.
+    /// Removing the listener or deactivating the window delivers cancellation.
+    pub fn on_touch_event(
+        &mut self,
+        owner: EntityId,
+        hitbox: &Hitbox,
+        listener: impl FnMut(&TouchEvent, &mut Window, &mut App) + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame.touch_listeners.push(Some(RawTouchListener {
+            owner,
+            hitbox: hitbox.clone(),
+            callback: Box::new(listener),
+        }));
+    }
+
+    /// Cancels the captured touches and releases their canvas. Remaining events
+    /// in this sequence are discarded until every contact has ended or cancelled.
+    pub fn release_touch_capture(&mut self, cx: &mut App) {
+        let Some(owner) = self.raw_touch_capture.owner.take() else {
+            return;
+        };
+        let mut listeners = mem::take(&mut self.rendered_frame.touch_listeners);
+        if let Some(listener) = listeners
+            .iter_mut()
+            .flatten()
+            .find(|listener| listener.owner == owner)
+        {
+            for mut event in self.raw_touch_capture.contacts.clone() {
+                event.phase = crate::TouchPhase::Cancelled;
+                event.predicted_position = None;
+                (listener.callback)(&event, self, cx);
+            }
+        }
+        self.rendered_frame.touch_listeners = listeners;
+    }
+
     /// Register a key event listener on this node for the next frame. The type of event
     /// is determined by the first parameter of the given listener. When the next frame is rendered
     /// the listener will be cleared.
@@ -5864,6 +5947,10 @@ impl Window {
     /// dispatches whatever it resolves (scroll steps, synthesized taps)
     /// through the ordinary mouse-event path.
     fn dispatch_touch_event(&mut self, event: &TouchEvent, cx: &mut App) {
+        if self.dispatch_raw_touch_event(event, cx) {
+            self.prevent_default();
+            return;
+        }
         let mut event = event.clone();
         if !self.touch_prediction_enabled {
             event.predicted_position = None;
@@ -5900,6 +5987,77 @@ impl Window {
         if self.touch_gestures.has_momentum() {
             self.schedule_touch_momentum_tick();
         }
+    }
+
+    fn dispatch_raw_touch_event(&mut self, event: &TouchEvent, cx: &mut App) -> bool {
+        if event.phase == crate::TouchPhase::Started && self.raw_touch_capture.contacts.is_empty() {
+            let owner = self
+                .rendered_frame
+                .touch_listeners
+                .iter()
+                .rev()
+                .flatten()
+                .find(|listener| listener.hitbox.is_hovered_at(event.position, self))
+                .map(|listener| listener.owner);
+            self.raw_touch_capture.owner = owner;
+            self.raw_touch_capture.captured_sequence = owner.is_some();
+            if owner.is_some() {
+                // Stop any earlier scroll momentum before handing the canvas raw input.
+                self.touch_gestures = TouchGestureRecognizer::new(
+                    cx.platform
+                        .gestures()
+                        .map_or_else(GestureTuning::default, |gestures| gestures.tuning()),
+                );
+                self.long_press_timer.take();
+                self.long_press_capture = None;
+            }
+        }
+        match event.phase {
+            crate::TouchPhase::Started => {
+                self.raw_touch_capture
+                    .contacts
+                    .retain(|touch| touch.id != event.id);
+                self.raw_touch_capture.contacts.push(event.clone());
+            }
+            crate::TouchPhase::Moved => {
+                if let Some(touch) = self
+                    .raw_touch_capture
+                    .contacts
+                    .iter_mut()
+                    .find(|touch| touch.id == event.id)
+                {
+                    *touch = event.clone();
+                }
+            }
+            crate::TouchPhase::Ended | crate::TouchPhase::Cancelled => {
+                self.raw_touch_capture
+                    .contacts
+                    .retain(|touch| touch.id != event.id);
+            }
+        }
+        let captured = self.raw_touch_capture.captured_sequence;
+        if let Some(owner) = self.raw_touch_capture.owner {
+            let mut listeners = mem::take(&mut self.rendered_frame.touch_listeners);
+            if let Some(listener) = listeners
+                .iter_mut()
+                .flatten()
+                .find(|listener| listener.owner == owner)
+            {
+                (listener.callback)(event, self, cx);
+                if self.raw_touch_capture.owner != Some(owner) {
+                    for mut cancelled in self.raw_touch_capture.contacts.clone() {
+                        cancelled.phase = crate::TouchPhase::Cancelled;
+                        cancelled.predicted_position = None;
+                        (listener.callback)(&cancelled, self, cx);
+                    }
+                }
+            }
+            self.rendered_frame.touch_listeners = listeners;
+        }
+        if self.raw_touch_capture.contacts.is_empty() {
+            self.raw_touch_capture = RawTouchCapture::default();
+        }
+        captured
     }
 
     fn dispatch_recognized_touch_gesture(&mut self, gesture: RecognizedTouchGesture, cx: &mut App) {
@@ -9236,6 +9394,186 @@ mod tests {
             })
             .unwrap();
         assert_eq!(b_focus_count.get(), 1);
+    }
+
+    struct RawTouchCanvas {
+        enabled: bool,
+        events: Rc<RefCell<Vec<(TouchId, TouchPhase)>>>,
+        clicks: Rc<Cell<usize>>,
+    }
+
+    impl Render for RawTouchCanvas {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let owner = cx.entity_id();
+            let enabled = self.enabled;
+            let events = self.events.clone();
+            let clicks = self.clicks.clone();
+            canvas(
+                |bounds, window, _| window.insert_hitbox(bounds, crate::HitboxBehavior::Normal),
+                move |_, hitbox, window, _| {
+                    if enabled {
+                        window.on_touch_event(owner, &hitbox, move |event, _, _| {
+                            events.borrow_mut().push((event.id, event.phase));
+                        });
+                    }
+                    window.on_mouse_event(move |_: &MouseDownEvent, phase, _, _| {
+                        if phase == DispatchPhase::Bubble {
+                            clicks.set(clicks.get() + 1);
+                        }
+                    });
+                },
+            )
+            .w(px(100.))
+            .h(px(100.))
+        }
+    }
+
+    fn raw_touch_canvas(
+        cx: &mut TestAppContext,
+        enabled: bool,
+    ) -> (
+        crate::WindowHandle<RawTouchCanvas>,
+        Rc<RefCell<Vec<(TouchId, TouchPhase)>>>,
+        Rc<Cell<usize>>,
+    ) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let clicks = Rc::new(Cell::new(0));
+        let window = cx.add_window({
+            let events = events.clone();
+            let clicks = clicks.clone();
+            move |_, _| RawTouchCanvas {
+                enabled,
+                events,
+                clicks,
+            }
+        });
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        (window, events, clicks)
+    }
+
+    #[gpui::test]
+    fn raw_touch_capture_survives_repaint_and_tracks_multiple_contacts(cx: &mut TestAppContext) {
+        let (window, events, clicks) = raw_touch_canvas(cx, true);
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Started, 10.);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Started, 200.);
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Ended, 200.);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Moved, 250.);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Cancelled, 250.);
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                (TouchId(1), TouchPhase::Started),
+                (TouchId(2), TouchPhase::Started),
+                (TouchId(1), TouchPhase::Ended),
+                (TouchId(2), TouchPhase::Moved),
+                (TouchId(2), TouchPhase::Cancelled),
+            ]
+        );
+        assert_eq!(clicks.get(), 0);
+        let (other_window, other_events, _) = raw_touch_canvas(cx, true);
+        dispatch_raw_test_touch(window, cx, TouchId(3), TouchPhase::Started, 10.);
+        dispatch_raw_test_touch(other_window, cx, TouchId(3), TouchPhase::Started, 10.);
+        cx.test_window(window.into())
+            .simulate_active_status_change(false);
+        assert_eq!(
+            events.borrow().last(),
+            Some(&(TouchId(3), TouchPhase::Cancelled))
+        );
+        dispatch_raw_test_touch(other_window, cx, TouchId(3), TouchPhase::Ended, 10.);
+        assert_eq!(
+            *other_events.borrow(),
+            vec![
+                (TouchId(3), TouchPhase::Started),
+                (TouchId(3), TouchPhase::Ended),
+            ]
+        );
+        cx.test_window(window.into())
+            .simulate_active_status_change(true);
+        dispatch_raw_test_touch(window, cx, TouchId(4), TouchPhase::Started, 10.);
+        dispatch_raw_test_touch(window, cx, TouchId(4), TouchPhase::Ended, 10.);
+        assert_eq!(
+            events.borrow().last(),
+            Some(&(TouchId(4), TouchPhase::Ended))
+        );
+    }
+
+    #[gpui::test]
+    fn raw_touch_listener_removal_cancels_without_synthesizing_a_click(cx: &mut TestAppContext) {
+        let (window, events, clicks) = raw_touch_canvas(cx, true);
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Started, 10.);
+        window
+            .update(cx, |view, _, cx| {
+                view.enabled = false;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Ended, 10.);
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                (TouchId(1), TouchPhase::Started),
+                (TouchId(1), TouchPhase::Cancelled),
+            ]
+        );
+        assert_eq!(clicks.get(), 0);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Started, 10.);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Ended, 10.);
+        assert_eq!(clicks.get(), 1);
+    }
+
+    #[gpui::test]
+    fn raw_touch_capture_does_not_steal_an_existing_default_sequence(cx: &mut TestAppContext) {
+        let (window, events, clicks) = raw_touch_canvas(cx, false);
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Started, 10.);
+        window
+            .update(cx, |view, _, cx| {
+                view.enabled = true;
+                cx.notify();
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .unwrap();
+        dispatch_raw_test_touch(window, cx, TouchId(1), TouchPhase::Ended, 10.);
+        assert!(events.borrow().is_empty());
+        assert_eq!(clicks.get(), 1);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Started, 200.);
+        dispatch_raw_test_touch(window, cx, TouchId(2), TouchPhase::Ended, 200.);
+        assert!(events.borrow().is_empty());
+        assert_eq!(clicks.get(), 2);
+    }
+
+    fn dispatch_raw_test_touch(
+        window: crate::WindowHandle<RawTouchCanvas>,
+        cx: &mut TestAppContext,
+        id: TouchId,
+        phase: TouchPhase,
+        x: f32,
+    ) {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.dispatch_event(
+                TouchEvent {
+                    id,
+                    phase,
+                    position: point(px(x), px(0.)),
+                    ..TouchEvent::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        })
+        .unwrap();
     }
 
     #[gpui::test]

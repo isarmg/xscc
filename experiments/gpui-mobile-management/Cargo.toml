@@ -11,7 +11,7 @@ publish = false
 [features]
 default = ["mobile-management"]
 mobile-management = []
-mobile-session = ["dep:librustdesk", "dep:image"]
+mobile-session = ["dep:librustdesk", "dep:image", "dep:base"]
 # This compatibility feature enables shared appearance only, never media.
 live-session = []
 
@@ -26,6 +26,7 @@ unicode-segmentation = "1.12"
 libc = "=0.2.189"
 
 [target.'cfg(target_os = "ios")'.dependencies]
+base = { path = "../../libs/base", optional = true }
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session"], optional = true }
 image = { version = "0.25", default-features = false, optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }

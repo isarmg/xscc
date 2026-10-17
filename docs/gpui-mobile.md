@@ -52,11 +52,13 @@ Neither a green build nor an unsigned IPA is a claim that remote control works.
 
 ## First-frame follow-on (explicit `mobile-session` feature)
 
-The iOS preview now has an opt-in view-only session path. It links the existing
+The iOS preview has an opt-in software-decoded session path with direct touch and an explicit view-only mode. It links the existing
 Rust client with `gpui-mobile-session` and no default features, attaches the already
 opened manager, and reuses authorization, TCP login, software decode and the BGRA
 presentation helper. Desktop and Flutter cfg behavior is retained when this feature
-is off. The feature explicitly disables audio/input/clipboard in protocol options
-and locally; the UI offers screen selection and disconnect, without placeholder
-input controls. Native build success and real-device first-frame/revocation tests
+is off. Audio and clipboard remain disabled in protocol options and locally.
+The direct-touch mode enables pointer input only through an explicit session
+capability, with current server permission and authorization checks; view-only
+switching releases input and reconnects with input disabled. The root `connect`
+entry remains view-only. No keyboard, right-click or inertial scrolling is added. Native build success and real-device first-frame/revocation tests
 remain separate acceptance gates. No physical-device streaming is claimed.

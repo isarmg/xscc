@@ -15,8 +15,16 @@ class DevicePreviewTests(unittest.TestCase):
         self.assertFalse(package.preview_capabilities(False)['software_video_preview'])
         self.assertEqual(package.preview_capabilities(True), {
             'management': True, 'software_video_preview': True,
-            'audio': False, 'remote_input': False, 'clipboard': False,
+            'audio': False, 'remote_input': False, 'remote_pointer': False,
+            'remote_keyboard': False, 'clipboard': False,
         })
+
+    def test_touch_preview_keeps_keyboard_audio_and_clipboard_disabled(self):
+        capabilities = package.preview_capabilities(False, touch_preview=True)
+        self.assertTrue(capabilities['software_video_preview'])
+        self.assertTrue(capabilities['remote_pointer'])
+        for name in ('remote_keyboard', 'audio', 'clipboard'):
+            self.assertFalse(capabilities[name])
 
     def test_device_metadata(self):
         info = plistlib.loads((Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist').read_bytes())

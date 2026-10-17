@@ -1,4 +1,4 @@
-name: GPUI iOS view-only preview
+name: GPUI iOS touch preview
 on:
   workflow_dispatch:
   push:
@@ -56,7 +56,9 @@ jobs:
           brew install nasm
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          workspaces: experiments/gpui-mobile-management
+          workspaces: |
+            experiments/gpui-mobile-management
+            vendor/gpui
           key: gpui-ios26-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}
           cache-on-failure: true
       - name: Check formatting and host management tests
@@ -64,6 +66,12 @@ jobs:
         run: |
           cargo fmt --check
           cargo test --locked --bin xscc-gpui-mobile-management
+      - name: Run GPUI raw touch regression tests
+        working-directory: vendor/gpui
+        run: |
+          set -o pipefail
+          cargo test --locked -p gpui --lib raw_touch_ 2>&1 | tee "$RUNNER_TEMP/gpui-raw-touch-tests.log"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' "$RUNNER_TEMP/gpui-raw-touch-tests.log"
       - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
@@ -95,11 +103,11 @@ jobs:
           cargo build --locked --release --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --view-only
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --touch-preview
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
-          echo 'Native GPUI view-only preview: management and software-decoded video. Audio, remote input and clipboard are disabled. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection and first-frame rendering remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Native GPUI touch preview: management, software video and direct pointer control with a view-only toggle. Audio, keyboard and clipboard are disabled. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-view-only-ios26-arm64-unsigned-${{ github.sha }}
+          name: xscc-gpui-touch-preview-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error
