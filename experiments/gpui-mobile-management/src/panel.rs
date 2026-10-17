@@ -238,21 +238,22 @@ impl Render for Panel {
             .gap_4()
             .w_full()
             .max_w(px(720.))
-            .child(div().text_2xl().child("XSCC"))
             .child(
                 div()
-                    .text_color(rgb(palette.muted))
-                    .child("GPUI · 移动管理预览"),
-            )
-            .child(
-                if cfg!(all(
-                    any(target_os = "ios", target_os = "android"),
-                    feature = "mobile-session"
-                )) {
-                    "远程画面与触控预览，可切换仅查看；音频、键盘和剪贴板已禁用。"
-                } else {
-                    "此版本支持服务端绑定与设备列表，尚未接入远程画面、音频和输入。"
-                },
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_2xl().child("XSCC"))
+                    .child(div().text_sm().text_color(rgb(palette.muted)).child(
+                        if cfg!(all(
+                            any(target_os = "ios", target_os = "android"),
+                            feature = "mobile-session"
+                        )) {
+                            "移动预览 · 画面与触控"
+                        } else {
+                            "移动预览 · 仅设备管理"
+                        },
+                    )),
             )
             .child(self.server.clone())
             .child(self.code.clone())
@@ -280,7 +281,7 @@ impl Render for Panel {
                 "offline" => "离线",
                 _ => status.phase.as_str(),
             };
-            content = content.child(div().child(format!("管理状态：{state}")));
+            content = content.child(div().child(format!("服务端：{state}")));
             if let Some(server) = &status.server {
                 content = content.child(
                     div()
@@ -329,17 +330,14 @@ impl Render for Panel {
                         )));
                 }
             }
-            content = content.child(div().text_lg().child("已授权的被控设备"));
+            content = content.child(div().text_lg().child("授权设备"));
             let peers: Vec<_> = status
                 .peers
                 .iter()
                 .filter(|peer| peer.role == InstanceRole::Controlled)
                 .collect();
             if peers.is_empty() {
-                content =
-                    content.child(div().text_color(rgb(palette.muted)).child(
-                        "当前没有可用的已授权设备。绑定失效或服务端离线时，设备列表会清空。",
-                    ));
+                content = content.child(div().text_color(rgb(palette.muted)).child("暂无授权设备"));
             }
             for peer in peers {
                 #[cfg(all(
