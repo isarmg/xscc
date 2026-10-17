@@ -1,6 +1,9 @@
 #![cfg(target_os = "android")]
 
 #[cfg(feature = "mobile-session")]
+mod display_state;
+
+#[cfg(feature = "mobile-session")]
 mod keyboard_action;
 #[cfg(feature = "mobile-session")]
 mod keyboard_input;

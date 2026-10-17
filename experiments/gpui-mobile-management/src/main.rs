@@ -5,6 +5,14 @@
         feature = "mobile-session"
     )
 ))]
+mod display_state;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
 mod keyboard_action;
 #[cfg(any(
     test,

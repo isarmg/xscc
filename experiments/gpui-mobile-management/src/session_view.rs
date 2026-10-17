@@ -1,4 +1,5 @@
 use crate::{
+    display_state::accepts_display_update,
     presentation::VideoPresentation,
     remote_keyboard::{Command, KeyboardControl, KeyboardEvent, RemoteKeyboard},
     theme,
@@ -13,7 +14,9 @@ use gpui::{
     IntoElement, ObjectFit, Render, Subscription, TouchEvent, TouchPhase, Window, canvas, div, img,
     prelude::*, px, rgb,
 };
-use librustdesk::gpui_session::{self, InputCommand, SessionEvent, SessionHandle};
+use librustdesk::gpui_session::{
+    self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
+};
 use std::{
     rc::Rc,
     sync::{Arc, mpsc},
@@ -29,6 +32,12 @@ pub struct SessionView {
     keyboard_control: Option<Rc<KeyboardControl>>,
     keyboard_subscription: Option<Subscription>,
     touch: TouchInput,
+    monitors: Vec<Monitor>,
+    current_monitor: Option<usize>,
+    pending_monitor: Option<usize>,
+    connected: bool,
+    target_fps: Option<TargetFps>,
+    quality: SessionQuality,
     direct_touch: bool,
     extent: (u32, u32),
     origin: (i32, i32),
@@ -116,6 +125,12 @@ impl SessionView {
             keyboard_control: None,
             keyboard_subscription: None,
             touch: TouchInput::default(),
+            monitors: Vec::new(),
+            current_monitor: None,
+            pending_monitor: None,
+            connected: false,
+            target_fps: None,
+            quality: SessionQuality::default(),
             direct_touch: true,
             extent: (0, 0),
             origin: (0, 0),
@@ -151,6 +166,12 @@ impl SessionView {
         self.keyboard_subscription.take();
         self.release_input();
         self.touch.reset();
+        self.monitors.clear();
+        self.current_monitor = None;
+        self.pending_monitor = None;
+        self.connected = false;
+        self.target_fps = None;
+        self.quality = SessionQuality::default();
         self.extent = (0, 0);
         self.origin = (0, 0);
         self.generation = self.generation.wrapping_add(1);
@@ -214,6 +235,7 @@ impl SessionView {
 
     fn input_allowed(&self) -> bool {
         self.direct_touch
+            && self.pending_monitor.is_none()
             && self.authorized()
             && self.extent.0 > 0
             && self.extent.1 > 0
@@ -356,6 +378,55 @@ impl SessionView {
         cx.notify();
     }
 
+    fn switch_monitor(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.authorized()
+            || !self.connected
+            || self.pending_monitor.is_some()
+            || self.current_monitor == Some(index)
+            || !self
+                .monitors
+                .iter()
+                .any(|monitor| monitor.index == index && monitor.available)
+        {
+            return;
+        }
+        // Releases must precede the core's pending-display input gate.
+        self.release_input();
+        if let Some(control) = &self.keyboard_control {
+            control.cancel();
+        }
+        window.dismiss_virtual_keyboard();
+        let Some(session) = &self.session else { return };
+        match session.switch_monitor(index) {
+            Ok(()) => {
+                self.pending_monitor = Some(index);
+                self.quality = SessionQuality::default();
+                self.extent = (0, 0);
+                self.presentation.invalidate();
+                if let Err(error) = self.presentation.update(None, window) {
+                    self.stop();
+                    self.notice = error;
+                } else {
+                    self.notice = format!("正在切换至屏幕 {}… 未响应时请断开重连。", index + 1);
+                }
+            }
+            Err(error) => self.notice = error.to_string(),
+        }
+        cx.notify();
+    }
+
+    fn request_fps(&mut self, target: TargetFps, cx: &mut Context<Self>) {
+        if !self.authorized() || !self.connected {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        match session.set_target_fps(target) {
+            Ok(()) => self.target_fps = Some(target),
+            Err(error) => self.notice = error.to_string(),
+        }
+        cx.notify();
+    }
+
     fn consume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         while let Ok(Reply::Connected(generation, result)) = self.receiver.try_recv() {
             if generation != self.generation {
@@ -408,11 +479,47 @@ impl SessionView {
             .unwrap_or_default();
         for event in events {
             match event {
-                SessionEvent::Connected => self.notice = "已连接，等待首帧…".into(),
-                SessionEvent::Display { x, y, .. } => {
+                SessionEvent::Connected => {
+                    self.connected = true;
+                    self.notice = "已连接，等待首帧…".into();
+                }
+                SessionEvent::Monitors(monitors) => {
+                    if self.current_monitor.is_some_and(|index| {
+                        !monitors
+                            .iter()
+                            .any(|monitor| monitor.index == index && monitor.available)
+                    }) {
+                        self.release_input();
+                        if let Some(control) = &self.keyboard_control {
+                            control.cancel();
+                        }
+                        self.current_monitor = None;
+                        self.extent = (0, 0);
+                        self.quality = SessionQuality::default();
+                        self.presentation.invalidate();
+                        self.notice = "当前屏幕已离线，请选择可用屏幕。".into();
+                    }
+                    self.monitors = monitors;
+                }
+                SessionEvent::Quality { index, update } => {
+                    if accepts_display_update(self.current_monitor, self.pending_monitor, index) {
+                        self.quality.merge(update);
+                    }
+                }
+                SessionEvent::Display { index, x, y, .. } => {
                     self.release_input();
                     if let Some(control) = &self.keyboard_control {
                         control.cancel();
+                    }
+                    if self.current_monitor != Some(index) || self.pending_monitor.is_some() {
+                        self.quality = SessionQuality::default();
+                        self.presentation.invalidate();
+                        self.extent = (0, 0);
+                    }
+                    self.current_monitor = Some(index);
+                    if self.pending_monitor == Some(index) {
+                        self.pending_monitor = None;
+                        self.notice = "屏幕已切换，等待首帧…".into();
                     }
                     self.origin = (x, y);
                 }
@@ -435,7 +542,10 @@ impl SessionView {
         let frame = self
             .session
             .as_ref()
-            .and_then(|session| session.take_frame());
+            .and_then(|session| session.take_frame())
+            .filter(|frame| {
+                accepts_display_update(self.current_monitor, self.pending_monitor, frame.display)
+            });
         if let Some(frame) = &frame {
             let extent = (frame.width, frame.height);
             if self.extent != extent {
@@ -466,9 +576,9 @@ impl SessionView {
         match self.presentation.update(frame, window) {
             Ok(Some(_)) => {
                 self.notice = if self.input_allowed() {
-                    "直接触控 · 单指点击/拖动，双指滚动 · 音频和剪贴板关闭".into()
+                    "直接触控 · 单指点击/拖动，双指滚动 · 剪贴板关闭".into()
                 } else {
-                    "仅查看画面 · 输入未启用，音频和剪贴板关闭".into()
+                    "仅查看画面 · 输入未启用，剪贴板关闭".into()
                 }
             }
             Ok(None) => {}
@@ -509,6 +619,79 @@ impl Render for SessionView {
             .gap_3()
             .w_full()
             .child(div().child(self.notice.clone()))
+            .when(self.connected, |view| {
+                view.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .children(self.monitors.iter().map(|monitor| {
+                            let index = monitor.index;
+                            let label = format!(
+                                "屏幕 {} · {}×{}{}",
+                                index + 1,
+                                monitor.width,
+                                monitor.height,
+                                if !monitor.available {
+                                    "（离线）"
+                                } else if self.pending_monitor == Some(index) {
+                                    "（切换中）"
+                                } else if self.current_monitor == Some(index) {
+                                    "（当前）"
+                                } else {
+                                    ""
+                                }
+                            );
+                            div()
+                                .id(("monitor", index))
+                                .min_h(px(44.))
+                                .p_2()
+                                .bg(rgb(palette.panel))
+                                .child(label)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.switch_monitor(index, window, cx)
+                                }))
+                        })),
+                )
+                .child(
+                    div().flex().gap_2().children(
+                        [TargetFps::Fps30, TargetFps::Fps60]
+                            .into_iter()
+                            .map(|target| {
+                                div()
+                                    .id(("target-fps", target.value() as usize))
+                                    .min_h(px(44.))
+                                    .p_2()
+                                    .bg(rgb(palette.panel))
+                                    .child(format!(
+                                        "请求 {} FPS{}",
+                                        target.value(),
+                                        if self.target_fps == Some(target) {
+                                            "（已请求）"
+                                        } else {
+                                            ""
+                                        }
+                                    ))
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.request_fps(target, cx)
+                                    }))
+                            }),
+                    ),
+                )
+                .child(div().child(format!(
+                        "解码 {} FPS · 接收 {} · RTT {} ms · {}（目标帧率不代表实际呈现）",
+                        self.quality
+                            .decoded_fps
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "—".into()),
+                        self.quality.receive_rate.as_deref().unwrap_or("—"),
+                        self.quality
+                            .round_trip_ms
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "—".into()),
+                        self.quality.codec.as_deref().unwrap_or("—"),
+                    )))
+            })
             .when_some(audio, |view, audio| {
                 view.child(
                     div()

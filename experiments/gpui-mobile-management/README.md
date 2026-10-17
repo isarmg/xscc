@@ -173,3 +173,19 @@ Home/resume/rotation. The session build also requires the first-frame, touch,
 view-only, revocation and background-during-drag checks above on Android.
 Successful cross-compilation and APK/privacy checks do not
 establish physical-device operation or a working remote-control session.
+
+
+### Display and performance controls
+
+The mobile session lists the host's reported monitors and can request an available
+monitor. Switching cancels local IME/pointer state, releases pressed input, clears
+the previous image and blocks input until a confirmed display and new frame arrive.
+A disconnected monitor clears its cached image; a pending switch cannot be submitted
+again. If the host does not respond, disconnect and reconnect.
+
+The 30/60 FPS controls request the existing host stream target. They do not promise
+that frame rate. The status shows reported decoder-output FPS, receive rate, RTT
+and codec for the current display; missing values remain unknown, and these are
+not physical presentation or end-to-end latency measurements. No new protocol,
+freeform resolution or hardware-decoder support is introduced. Physical-device
+multi-monitor, pointer alignment and constrained-network acceptance remains open.
