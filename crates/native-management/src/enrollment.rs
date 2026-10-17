@@ -364,6 +364,12 @@ async fn decode<T: DeserializeOwned>(mut response: Response) -> Result<T> {
     {
         return Err(EnrollmentError::Unauthorized);
     }
+    if response.status().is_server_error()
+        || response.status() == StatusCode::TOO_MANY_REQUESTS
+        || response.status() == StatusCode::REQUEST_TIMEOUT
+    {
+        return Err(EnrollmentError::Unavailable);
+    }
     if !response.status().is_success() {
         return Err(EnrollmentError::Rejected);
     }
@@ -427,6 +433,36 @@ mod tests {
                     .await,
                 Err(expected)
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn temporary_http_failures_remain_recoverable() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+        for status in [408, 429, 500, 502, 503, 504] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                assert!(stream.read(&mut [0; 4096]).unwrap() > 0);
+                write!(stream, "HTTP/1.1 {status} Temporary failure\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+            });
+            let response = Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                decode::<Binding>(response).await,
+                Err(EnrollmentError::Unavailable)
+            );
+            server.join().unwrap();
         }
     }
 
