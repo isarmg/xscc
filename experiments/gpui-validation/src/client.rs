@@ -682,6 +682,10 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     .any(|name| name == "Sarmg Maple")
                 {
                     "Sarmg Maple"
+                } else if cfg!(target_os = "macos") {
+                    "Menlo"
+                } else if cfg!(target_os = "linux") {
+                    "monospace"
                 } else {
                     "Consolas"
                 }

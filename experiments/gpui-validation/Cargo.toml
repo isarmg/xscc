@@ -31,7 +31,11 @@ libc = "=0.2.189"
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-session"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-session"], optional = true }
 scrap = { path = "../../libs/scrap", optional = true, features = ["linux-pkg-config"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-session", "screencapturekit"], optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }

@@ -1,0 +1,215 @@
+name: GPUI Unix beta candidates
+on:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - 'experiments/gpui-validation/**'
+      - 'experiments/shared/**'
+      - 'vendor/gpui/**'
+      - 'src/**'
+      - 'libs/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'vcpkg.json'
+      - 'res/vcpkg/**'
+      - 'res/vcpkg-triplets/**'
+      - 'packaging/gpui-*/**'
+      - '.github/scripts/*gpui*'
+      - '.github/workflows/gpui-unix-beta.yml'
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: 'Unsigned beta candidate version (no release publication)'
+        required: true
+        default: '0.1.0-beta.1'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: gpui-unix-beta-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.1' }}
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    container: ubuntu:26.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: controller
+            features: live-session
+            core_features: use_dasp,gpui-session,hwcodec
+          - role: host
+            features: native-host
+            core_features: use_dasp,gpui-host,hwcodec
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-${{ matrix.role }}
+      VCPKG_DEFAULT_TRIPLET: x64-linux
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-linux
+    steps:
+      - name: Install native Linux build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y ca-certificates curl git build-essential clang-21 libclang-21-dev llvm-21-dev cmake nasm ninja-build pkg-config python3 python3-venv unzip zip tar file patchelf \
+            libayatana-appindicator3-dev libasound2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libpulse-dev libva-dev libxfixes-dev libssl-dev libdbus-1-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev libfreetype-dev libunwind-dev libvdpau-dev libxtst-dev libxi-dev libxrandr-dev
+          python3 -m venv /opt/build-tools
+          /opt/build-tools/bin/pip install cmake==4.4.4
+          echo /opt/build-tools/bin >> "$GITHUB_PATH"
+          echo /usr/lib/llvm-21/bin >> "$GITHUB_PATH"
+          echo CC=clang-21 >> "$GITHUB_ENV"
+          echo CXX=clang++-21 >> "$GITHUB_ENV"
+          echo LIBCLANG_PATH=/usr/lib/llvm-21/lib >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate candidate label
+        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]'
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt,clippy
+      - name: Set up pinned native codec dependencies
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+      - name: Restore native dependency archives
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: gpui-unix-linux-x64-linux-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+      - name: Build pinned native dependencies
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
+        run: |
+          mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+      - name: Save successful native dependency archives
+        if: matrix.role == 'controller' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Verify Linux native prerequisites
+        run: bash .github/scripts/check-gpui-linux.sh preflight "${{ matrix.role }}"
+      - name: Lint, test and build real native role
+        run: bash .github/scripts/validate-gpui-unix.sh x86_64-unknown-linux-gnu "${{ matrix.features }}" "${{ matrix.core_features }}"
+      - name: Package and smoke-test unpacked Linux executable
+        run: |
+          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/xscc-gpui-validation"
+          ldd "$binary" | tee "$RUNNER_TEMP/dependencies.txt"
+          if grep -q 'not found' "$RUNNER_TEMP/dependencies.txt"; then exit 1; fi
+          bash .github/scripts/package-gpui-linux.sh '${{ matrix.role }}' "$PACKAGE_VERSION" "$binary" dist
+          mkdir "$RUNNER_TEMP/unpacked"
+          tar -xzf "dist/xscc-${{ matrix.role }}-$PACKAGE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          python3 .github/scripts/test-gpui-unix-cli.py "$RUNNER_TEMP/unpacked/xscc-${{ matrix.role }}-$PACKAGE_VERSION-linux-x86_64/xscc-${{ matrix.role }}"
+          cp "$RUNNER_TEMP/dependencies.txt" dist/dependencies.txt
+      - name: Record candidate provenance and validation limits
+        run: |
+          printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'x86_64-unknown-linux-gnu' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
+          echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-${{ matrix.role }}-${{ env.PACKAGE_VERSION }}-linux-x86_64-unsigned
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+  macos:
+    runs-on: macos-26
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: controller
+            features: live-session
+            core_features: use_dasp,gpui-session,hwcodec
+          - role: host
+            features: native-host
+            core_features: use_dasp,gpui-host,hwcodec
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-${{ matrix.role }}
+      VCPKG_DEFAULT_TRIPLET: arm64-osx
+      VCPKG_DEFAULT_HOST_TRIPLET: arm64-osx
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate candidate label
+        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]'
+      - name: Verify native Apple Silicon and macOS 26 SDK
+        run: |
+          [[ "$(uname -m)" == arm64 ]]
+          [[ "$(sw_vers -productVersion)" == 26.* ]]
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx metal --version
+          brew install llvm nasm pkg-config
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+      - name: Test macOS packaging validation
+        run: python3 .github/scripts/test-gpui-macos-package.py
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+          targets: aarch64-apple-darwin
+          components: rustfmt,clippy
+      - name: Set up pinned native codec dependencies
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+      - name: Restore native dependency archives
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: gpui-unix-macos-arm64-osx-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+      - name: Build pinned native dependencies
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
+        run: |
+          mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx --x-install-root="$VCPKG_ROOT/installed"
+      - name: Save successful native dependency archives
+        if: matrix.role == 'controller' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Lint, test and build real native role
+        run: bash .github/scripts/validate-gpui-unix.sh aarch64-apple-darwin "${{ matrix.features }},librustdesk/screencapturekit" "${{ matrix.core_features }},screencapturekit"
+      - name: Package and smoke-test unpacked macOS application
+        run: |
+          app="XSCC-${{ matrix.role }}.app"
+          python3 .github/scripts/package-gpui-macos.py --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-gpui-validation" --output "$RUNNER_TEMP/$app" --role '${{ matrix.role }}' --version "$PACKAGE_VERSION"
+          plutil -lint "$RUNNER_TEMP/$app/Contents/Info.plist"
+          mkdir -p dist "$RUNNER_TEMP/unpacked"
+          archive="dist/xscc-${{ matrix.role }}-$PACKAGE_VERSION-macos26-arm64-unsigned.zip"
+          ditto -c -k --keepParent "$RUNNER_TEMP/$app" "$archive"
+          ditto -x -k "$archive" "$RUNNER_TEMP/unpacked"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$RUNNER_TEMP/unpacked/$app/Contents/Info.plist")
+          python3 .github/scripts/test-gpui-unix-cli.py "$RUNNER_TEMP/unpacked/$app/Contents/MacOS/$executable"
+          (cd dist && shasum -a 256 *.zip > SHA256SUMS)
+      - name: Record candidate provenance and validation limits
+        run: |
+          printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'aarch64-apple-darwin' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
+          echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-${{ matrix.role }}-${{ env.PACKAGE_VERSION }}-macos-arm64-unsigned
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

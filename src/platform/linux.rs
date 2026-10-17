@@ -2,6 +2,15 @@ use super::{gtk_sudo, CursorData, ResultType};
 use desktop::Desktop;
 pub use base::platform::linux::*;
 
+#[cfg(feature = "gpui-host")]
+pub fn start_gpui_host_audio() -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("xscc-host-audio".into())
+        .spawn(crate::ipc::start_pa)
+        .map(|_| ())
+        .map_err(|error| format!("Could not start host audio: {error}"))
+}
+
 #[cfg(feature = "drm")]
 pub fn dispatch_wayland_display_probe() {
     use std::ffi::OsStr;

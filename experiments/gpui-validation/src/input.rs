@@ -4,7 +4,7 @@ use base::{
 };
 use gpui::Keystroke;
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", feature = "live-session"))]
 pub fn key_identity(key: &Keystroke, mapper: &dyn gpui::PlatformKeyboardMapper) -> String {
     mapper
         .map_key_equivalent(key.clone(), false)

@@ -17,3 +17,13 @@ cargo test --locked -p xscc -p xscc-native-management
 原生构建在本仓库根目录执行，沿用 `.cargo/config.toml`、`docs/BUILD-TOOLCHAIN.md` 和导入的应用构建工作流；遵守 `AGENTS.md`，不在本地运行 Flutter Rust Bridge 代码生成器。目录与来源说明见 [源码整合](rustdesk-source.md)。
 
 桥接 CI 生成接口后单独分析新增的管理界面，检查 Dart 与原生接口一致。2026-10-15 的本机临时联调使用测试 CA、TLS 代理、当前 xscs 数据库和两个 `NativeManager`，验证 HTTPS 注册、WSS 列表、地址上报、双向配对证明、状态脱敏、两端撤权与解绑。该联调没有运行捕获、媒体或输入，不作为物理设备串流验收。
+
+## GPUI 桌面应用
+
+控制端使用 `live-session`，被控端使用 `native-host`，两者共用仓库内维护的 GPUI 和原生会话核心。
+
+- [Windows 11 构建与打包](gpui-windows-beta.md)
+- [Linux Wayland 构建与运行](gpui-linux.md)
+- [macOS 26 Apple Silicon 构建与运行](gpui-macos.md)
+
+Linux/macOS 被控端在已登录的桌面会话中运行。原生 CI 检查编译、单元测试和打包后的命令行入口；图形会话、捕获授权及真实串流另做实机验收。

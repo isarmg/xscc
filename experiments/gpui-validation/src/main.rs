@@ -3,19 +3,43 @@
     windows_subsystem = "windows"
 )]
 
-#[cfg(all(target_os = "windows", feature = "live-session"))]
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
+))]
 mod client;
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+#[cfg(any(
+    all(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        feature = "live-session"
+    ),
+    test
+))]
 mod host_address;
 mod input;
 mod options;
-#[cfg(all(target_os = "windows", feature = "live-session"))]
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
+))]
 mod presentation;
-#[cfg(all(target_os = "windows", feature = "live-session"))]
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
+))]
 mod remote_video;
-#[cfg(all(target_os = "windows", feature = "live-session"))]
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
+))]
 mod text_field;
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+#[cfg(any(
+    all(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        feature = "live-session"
+    ),
+    test
+))]
 mod theme;
 use options::Options;
 #[path = "../../shared/management.rs"]
@@ -190,7 +214,10 @@ impl Render for Probe {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(all(target_os = "windows", feature = "live-session"))]
+    #[cfg(all(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        feature = "live-session"
+    ))]
     if librustdesk::gpui_host::handle_background_command() {
         return Ok(());
     }
@@ -199,7 +226,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .worker_threads(2)
         .enable_all()
         .build()?;
-    #[cfg(all(target_os = "windows", feature = "live-session"))]
+    #[cfg(all(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        feature = "live-session"
+    ))]
     if !options.diagnostic {
         return client::run(&runtime);
     }

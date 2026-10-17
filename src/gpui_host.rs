@@ -37,6 +37,8 @@ fn prepare(_headless: bool) -> Result<(), String> {
 
 pub fn initialize() -> Result<(), String> {
     prepare(false)?;
+    #[cfg(all(target_os = "linux", feature = "gpui-host"))]
+    crate::platform::linux::start_gpui_host_audio()?;
     #[cfg(all(windows, feature = "gpui-host"))]
     {
         windows_host::installed_executable().map_err(|e| e.to_string())?;

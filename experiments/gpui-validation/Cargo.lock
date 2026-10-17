@@ -1170,6 +1170,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cidre"
+version = "0.4.0"
+source = "git+https://github.com/yury/cidre.git?rev=f05c428#f05c4288f9870c9fab53272ddafd6ec01c7b2dbf"
+dependencies = [
+ "cidre-macros",
+ "parking_lot",
+]
+
+[[package]]
+name = "cidre-macros"
+version = "0.1.0"
+source = "git+https://github.com/yury/cidre.git?rev=f05c428#f05c4288f9870c9fab53272ddafd6ec01c7b2dbf"
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1621,6 +1635,7 @@ version = "0.15.3"
 source = "git+https://github.com/rustdesk-org/cpal?branch=osx-screencapturekit#96d4da121b7d949677ac5b6887413a9185fd7f39"
 dependencies = [
  "alsa",
+ "cidre",
  "core-foundation-sys",
  "coreaudio-rs",
  "dasp_sample",
