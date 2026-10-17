@@ -1,4 +1,4 @@
-#[cfg(all(target_os = "ios", feature = "gpui-mobile-session", feature = "flutter"))]
+#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session", feature = "flutter"))]
 compile_error!("GPUI mobile sessions must be built without the Flutter feature");
 
 #[cfg(not(any(
@@ -31,7 +31,7 @@ pub use self::server::*;
     feature = "gpui-session",
     any(
         not(any(target_os = "android", target_os = "ios")),
-        all(target_os = "ios", feature = "gpui-mobile-session")
+        all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")
     )
 ))]
 pub mod gpui_session;

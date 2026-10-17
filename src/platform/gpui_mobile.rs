@@ -12,5 +12,9 @@ pub fn initialize(directory: &Path, manager: Arc<NativeManager>) -> ResultType<(
         .ok_or_else(|| hbb_common::anyhow::anyhow!("Invalid sandbox path"))?;
     crate::management::attach_gpui_owner(manager)?;
     *config::APP_DIR.write().unwrap() = directory.to_owned();
+    #[cfg(target_os = "android")]
+    {
+        *config::APP_HOME_DIR.write().unwrap() = directory.to_owned();
+    }
     Ok(())
 }

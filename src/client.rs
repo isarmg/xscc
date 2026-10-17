@@ -255,7 +255,7 @@ impl Client {
         Some(rx_started)
     }
 
-    #[cfg(target_os = "android")]
+    #[cfg(all(target_os = "android", feature = "flutter"))]
     fn try_start_clipboard(_p: Option<()>) -> Option<UnboundedReceiver<()>> {
         let mut clipboard_lock = CLIPBOARD_STATE.lock().unwrap();
         if clipboard_lock.running {
@@ -1025,7 +1025,7 @@ struct ConnToken {
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
-    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub(crate) mobile_touch_enabled: bool,
     id: String,
     pub conn_type: ConnType,
@@ -1464,7 +1464,7 @@ impl LoginConfigHandler {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
         // Mobile touch is an explicit per-session capability; other side channels stay disabled.
-        #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
         restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled);
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
@@ -2985,7 +2985,7 @@ mod direct_approval_tests {
 
 }
 
-#[cfg(any(test, all(target_os = "ios", feature = "gpui-mobile-session")))]
+#[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
 fn restrict_mobile_capabilities(options: &mut OptionMessage, touch_enabled: bool) {
     options.disable_keyboard = if touch_enabled { BoolOption::No } else { BoolOption::Yes }.into();
     options.disable_audio = BoolOption::Yes.into();

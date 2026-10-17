@@ -58,10 +58,17 @@ alone is not evidence. Physical-device IME behavior and logcat still need testin
 
 The management flavor uses `org.sarmg.xscc.gpui.preview` and displays
 “XSCC GPUI 管理预览”. It builds the Android library from
-`experiments/gpui-mobile-management` with only `mobile-management`, reusing the
-native management UI. This first preview does not include remote streaming or
-desktop hosting. Server login/device management still require physical-device
-acceptance against the intended server.
+`experiments/gpui-mobile-management` with `mobile-management,mobile-session`, reusing the
+native management UI. This preview includes the existing software-video receive/decode path and
+pointer/touch controls, but no desktop hosting. Audio, remote keyboard and
+clipboard capabilities remain disabled. Server authorization, first decoded
+frame, display and pointer behavior still require physical-device acceptance
+against the intended server; successful packaging alone does not prove a session.
+
+Only management builds the pinned NDK ARM64 codec dependencies (the same native
+dependency script/cache used by the Flutter candidate, without Flutter codegen).
+The dependency gate rejects Flutter, host/capture and hardware-codec features.
+Smoke continues to build without these codec dependencies or Internet access.
 
 The two flavors share the IME bridge, source privacy patch and all final DEX,
 JNI, signature and 16 KB gates. Smoke has no Internet permission; management

@@ -18,7 +18,10 @@ pub enum Command {
 
 pub enum Event {
     Opened(Status),
-    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    ))]
     SessionReady(Arc<NativeManager>),
     Status(Status),
     Action(Result<(), String>),
@@ -65,7 +68,10 @@ fn open(directory: PathBuf) -> Result<Arc<NativeManager>, String> {
         .map_err(|error| format!("Protected management storage unavailable: {error}"))?;
     let manager =
         NativeManager::open(root, Arc::new(Controller)).map_err(|error| error.to_string())?;
-    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    ))]
     librustdesk::platform::gpui_mobile::initialize(&directory, manager.clone())
         .map_err(|error| error.to_string())?;
     Ok(manager)
@@ -97,7 +103,10 @@ pub async fn run(
             return;
         }
     };
-    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    ))]
     publish(Event::SessionReady(manager.clone()));
     publish(Event::Opened(manager.status()));
     let mut active = *lifecycle.borrow_and_update();
@@ -148,8 +157,60 @@ pub async fn run(
 }
 
 #[cfg(test)]
+#[path = "../../../src/management/gpui_android_owner.rs"]
+mod android_session_owner;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn android_session_owner_releases_private_directory_on_activity_drop() {
+        let temporary = tempfile::tempdir().unwrap();
+        let manager = NativeManager::open(
+            PrivateDirectory::create(temporary.path(), "xscc-managed").unwrap(),
+            Arc::new(Controller),
+        )
+        .unwrap();
+        android_session_owner::attach(&manager).unwrap();
+        assert!(Arc::ptr_eq(
+            &manager,
+            &android_session_owner::get().unwrap()
+        ));
+        let other_directory = tempfile::tempdir().unwrap();
+        let other = NativeManager::open(
+            PrivateDirectory::create(other_directory.path(), "xscc-managed").unwrap(),
+            Arc::new(Controller),
+        )
+        .unwrap();
+        assert!(android_session_owner::attach(&other).is_err());
+        assert!(Arc::ptr_eq(
+            &manager,
+            &android_session_owner::get().unwrap()
+        ));
+        drop(other);
+        assert!(
+            NativeManager::open(
+                PrivateDirectory::create(temporary.path(), "xscc-managed").unwrap(),
+                Arc::new(Controller),
+            )
+            .is_err()
+        );
+        manager.shutdown().await.unwrap();
+        drop(manager);
+        assert!(android_session_owner::get().is_err());
+        let reopened = NativeManager::open(
+            PrivateDirectory::create(temporary.path(), "xscc-managed").unwrap(),
+            Arc::new(Controller),
+        )
+        .unwrap();
+        android_session_owner::attach(&reopened).unwrap();
+        assert!(Arc::ptr_eq(
+            &reopened,
+            &android_session_owner::get().unwrap()
+        ));
+        reopened.shutdown().await.unwrap();
+    }
 
     #[tokio::test]
     async fn reopening_preserves_installation_identity_and_single_owner() {

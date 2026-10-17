@@ -7,6 +7,12 @@ on:
       - 'experiments/gpui-mobile-management/**'
       - 'crates/management/**'
       - 'crates/native-management/**'
+      - 'src/**'
+      - 'libs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'vcpkg.json'
+      - 'res/vcpkg*/**'
       - 'vendor/gpui/**'
       - 'packaging/gpui-android/**'
       - '.github/workflows/gpui-android-smoke.yml'
@@ -22,6 +28,8 @@ env:
   RUST_VERSION: '1.99.0'
   CARGO_NDK_VERSION: '4.1.2'
   NDK_VERSION: r30
+  VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+  VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
   GRADLE_VERSION: '9.8.1'
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
 jobs:
@@ -72,6 +80,42 @@ jobs:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
 
+      - name: Prepare management codec build tools
+        if: matrix.flavor == 'management'
+        run: |
+          sudo apt-get install -y nasm
+          mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+
+      - name: Setup pinned management codec dependencies
+        if: matrix.flavor == 'management'
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: true
+
+      - name: Restore native dependency binary archives
+        if: matrix.flavor == 'management'
+        id: native-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: mobile-vcpkg-Linux-arm64-android-${{ env.NDK_VERSION }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+
+      - name: Build Android native codec dependencies
+        if: matrix.flavor == 'management'
+        id: native-dependencies
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./flutter/build_android_deps.sh arm64-v8a
+
+      - name: Save successful native dependency binary archives
+        if: matrix.flavor == 'management' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ github.workspace }}/.vcpkg-binary-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: ${{ env.RUST_VERSION }}
@@ -103,14 +147,28 @@ jobs:
           cd "$WORKSPACE"
           FEATURES=()
           if [ "$FLAVOR" = management ]; then
-            FEATURES=(--no-default-features --features mobile-management)
-            cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}' > "$RUNNER_TEMP/management-dependencies.txt"
-            if grep -Eq '^(rustdesk|scrap|enigo|clipboard) v' "$RUNNER_TEMP/management-dependencies.txt"; then
-              echo "Unexpected media/host dependency in management-only preview" >&2
-              exit 1
-            fi
+            FEATURES=(--no-default-features --features mobile-management,mobile-session)
+            cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}|{f}' > "$RUNNER_TEMP/management-dependencies.txt"
+            python3 - "$RUNNER_TEMP/management-dependencies.txt" <<'PY'
+          import sys
+          graph = {}
+          for line in open(sys.argv[1]):
+              package, features = line.rstrip().split('|', 1)
+              graph.setdefault(package.split()[0], set()).update(filter(None, features.removesuffix(' (*)').split(',')))
+          assert {'rustdesk', 'scrap'} <= graph.keys(), "Missing real software-video client"
+          assert not ({'flutter_rust_bridge', 'flutter_rust_bridge_macros', 'dart-sys', 'enigo', 'clipboard', 'hwcodec'} & graph.keys()), "Unexpected Flutter/host/hardware dependency"
+          assert {'gpui-mobile-session', 'managed'} <= graph['rustdesk'], "Missing managed mobile boundary"
+          assert not ({'default', 'flutter', 'gpui-host', 'test-lan-direct', 'hwcodec', 'mediacodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
+          assert not ({'capture', 'wayland', 'drm', 'hwcodec', 'mediacodec', 'vram', 'quartz', 'x11'} & graph['scrap']), "Unexpected scrap capture/hardware capability"
+          PY
           fi
-          cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
+          if [ "$FLAVOR" = management ]; then
+            bindgen_args="$(cargo ndk-env --platform 29 --target aarch64-linux-android --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android"])')"
+            env "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=$bindgen_args --target=aarch64-linux-android29" \
+              cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
+          else
+            cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked
+          fi
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI_LIBS/arm64-v8a/"
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
@@ -159,6 +217,10 @@ jobs:
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
           printf 'commit=%s\nui=GPUI\nscope=%s-preview\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$FLAVOR"             > dist/gpui-android/BUILD-INFO.txt
+          if [ "$FLAVOR" = management ]; then
+            printf 'session=software-video-pointer-preview\naudio=false\nkeyboard=false\nclipboard=false\nfirst_frame_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
+            cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
+          fi
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
 
       - name: Collect failed DEX privacy diagnostics (no installable APK)

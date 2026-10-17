@@ -30,10 +30,11 @@ unicode-segmentation = "1.12"
 # Match the validated iOS framework dependency while backtrace uses dyld declarations.
 libc = "=0.2.189"
 
-[target.'cfg(target_os = "ios")'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 base = { path = "../../libs/base", optional = true }
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session"], optional = true }
 image = { version = "0.25", default-features = false, optional = true }
+[target.'cfg(target_os = "ios")'.dependencies]
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

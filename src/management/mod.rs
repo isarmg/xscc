@@ -2,6 +2,8 @@
 pub use xscc_native_management::{binding_store as store, enrollment};
 
 mod transport;
+#[cfg(all(target_os = "android", feature = "gpui-mobile-session"))]
+mod gpui_android_owner;
 #[cfg(feature = "experimental-quic")]
 pub(crate) mod quic;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -158,6 +160,17 @@ pub(crate) fn attach_gpui_owner(manager: Arc<NativeManager>) -> ResultType<()> {
     MANAGER.set(Ok(manager)).map_err(|_| hbb_common::anyhow::anyhow!("Native management owner is already initialized"))
 }
 
+#[cfg(all(target_os = "android", feature = "gpui-mobile-session"))]
+pub(crate) fn attach_gpui_owner(manager: Arc<NativeManager>) -> ResultType<()> {
+    gpui_android_owner::attach(&manager).map_err(|error| hbb_common::anyhow::anyhow!(error))
+}
+
+#[cfg(all(target_os = "android", feature = "gpui-mobile-session"))]
+fn owner() -> ResultType<Arc<NativeManager>> {
+    gpui_android_owner::get().map_err(|error| hbb_common::anyhow::anyhow!(error))
+}
+
+#[cfg(not(all(target_os = "android", feature = "gpui-mobile-session")))]
 fn owner() -> ResultType<&'static Arc<NativeManager>> {
     match MANAGER.get() {
         Some(Ok(manager)) => Ok(manager),

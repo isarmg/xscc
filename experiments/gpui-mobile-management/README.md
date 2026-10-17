@@ -23,8 +23,9 @@ Implemented paths use the real `xscc-native-management::NativeManager`:
 - The existing GPUI desktop palette, Mac-mini contour and native text field,
   with system safe-area/keyboard bounds and a scrollable mobile layout.
 
-The app uses Foundation's user-domain Application Support directory in its own
-sandbox, then the manager's protected `xscc-managed` child directory. It does not
+On iOS the app uses Foundation's user-domain Application Support directory; on
+Android it uses AndroidApp.internal_data_path. Both use the manager's protected
+`xscc-managed` child directory in the application sandbox. It does not
 reuse a desktop home directory, Flutter's app sandbox, or a second management
 identity for each window/session. The standalone preview has its own installation
 identity because it is a separate app; future media integration must use this same
@@ -63,10 +64,10 @@ native transport through its existing periodic permit check. Returning to the
 foreground does not automatically reconnect the screen session.
 
 Android uses the same Panel and NativeManager through the Android-only cdylib
-entry; the existing iOS binary entry is unchanged. Android currently includes
-management only, with no screen, audio or remote-input session. The separate
+entry; the existing iOS binary entry is unchanged. Both platforms enable screen
+and pointer input only with `mobile-session`. The separate
 [Android backend smoke slice](../../packaging/gpui-android/README.md) remains an
-offline regression baseline. Software decode is the initial iOS media path; no hardware
+offline regression baseline. Software decode is the initial mobile media path; no hardware
 decoding, zero-copy performance or successful device first frame is claimed here.
 
 ## Build and verification
@@ -117,10 +118,17 @@ separately.
 ## Android management entry
 
 Build the `xscc_gpui_android_management` cdylib from this workspace with
-`--lib --no-default-features --features mobile-management --locked` through
+`--lib --no-default-features --features mobile-management,mobile-session --locked` through
 `cargo ndk -t arm64-v8a -p 29`. Packaging reuses the existing Android Activity,
 protected IME bridge and final-DEX privacy gates. The management flavor has
-INTERNET permission; the smoke flavor retains its no-network contract.
+INTERNET permission; the smoke flavor retains its no-network contract. Omit
+`mobile-session` for management only. The session build uses the existing pinned
+Android codec dependencies (VPX/AOM software decode), without `mediacodec`,
+`hwcodec`, `flutter` or capture features. GameActivity owns the Android context;
+this entry never invokes Flutter JNI initialization or replaces ndk_context.
+The root session configuration home is the same private directory, without
+reading another application's credentials. The existing NativeManager TLS and
+authorization policy remain in force.
 
 The entry obtains its private directory only from AndroidApp.internal_data_path;
 it never uses HOME, a desktop configuration path, external storage or Flutter
@@ -130,8 +138,14 @@ org.sarmg.xscc.gpui.preview, separate from both smoke and Flutter; each app has 
 own installation identity and requires its own server-authorized enrollment.
 Initial management activity follows the actual Android window focus/visibility;
 the shared lifecycle observer handles subsequent foreground/background changes.
+The Android session adapter holds only a weak manager reference, so Activity
+destruction does not permanently retain the installation lock. If old work still
+holds the previous owner during recreation, initialization fails explicitly rather
+than replacing it or opening a second owner. Runtime shutdown remains best-effort.
 
 Android acceptance must verify protected text editing, first enrollment, policy
 list updates, restart preserving identity/binding, two-step unbind, and
-Home/resume/rotation. Successful cross-compilation and APK/privacy checks do not
+Home/resume/rotation. The session build also requires the first-frame, touch,
+view-only, revocation and background-during-drag checks above on Android.
+Successful cross-compilation and APK/privacy checks do not
 establish physical-device operation or a working remote-control session.

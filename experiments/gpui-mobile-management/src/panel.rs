@@ -26,7 +26,10 @@ pub struct Panel {
     busy: bool,
     confirm_unbind: bool,
     notice: String,
-    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    ))]
     session: Entity<crate::session_view::SessionView>,
     _updates: gpui::Task<()>,
     _lifecycle: Subscription,
@@ -103,7 +106,10 @@ impl Panel {
             busy: false,
             confirm_unbind: false,
             notice: "正在读取本机绑定…".into(),
-            #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+            #[cfg(all(
+                any(target_os = "ios", target_os = "android"),
+                feature = "mobile-session"
+            ))]
             session: cx
                 .new(|cx| crate::session_view::SessionView::new(runtime.clone(), _window, cx)),
             _updates: updates,
@@ -114,7 +120,10 @@ impl Panel {
     fn consume(&mut self, _cx: &mut Context<Self>) {
         while let Ok(event) = self.events.try_recv() {
             match event {
-                #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                #[cfg(all(
+                    any(target_os = "ios", target_os = "android"),
+                    feature = "mobile-session"
+                ))]
                 Event::SessionReady(manager) => {
                     self.session.update(_cx, |view, _| view.attach(manager))
                 }
@@ -128,7 +137,10 @@ impl Panel {
                         status.peers.clear();
                     }
                     self.status = Some(status);
-                    #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                    #[cfg(all(
+                        any(target_os = "ios", target_os = "android"),
+                        feature = "mobile-session"
+                    ))]
                     self.session
                         .update(_cx, |view, cx| view.check_authorization(cx));
                 }
@@ -159,7 +171,10 @@ impl Panel {
         if !self.enabled() {
             return;
         }
-        #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "mobile-session"
+        ))]
         self.session.update(_cx, |view, cx| {
             view.stop();
             cx.notify();
@@ -230,8 +245,11 @@ impl Render for Panel {
                     .child("GPUI · 移动管理预览"),
             )
             .child(
-                if cfg!(all(target_os = "ios", feature = "mobile-session")) {
-                    "远程画面预览：仅查看，音频、远程输入和剪贴板均已禁用。"
+                if cfg!(all(
+                    any(target_os = "ios", target_os = "android"),
+                    feature = "mobile-session"
+                )) {
+                    "远程画面与触控预览，可切换仅查看；音频、键盘和剪贴板已禁用。"
                 } else {
                     "此版本支持服务端绑定与设备列表，尚未接入远程画面、音频和输入。"
                 },
@@ -249,7 +267,10 @@ impl Render for Panel {
                     cx.notify();
                 },
             )));
-        #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "mobile-session"
+        ))]
         {
             content = content.child(self.session.clone());
         }
@@ -321,7 +342,10 @@ impl Render for Panel {
                     ));
             }
             for peer in peers {
-                #[cfg(all(target_os = "ios", feature = "mobile-session"))]
+                #[cfg(all(
+                    any(target_os = "ios", target_os = "android"),
+                    feature = "mobile-session"
+                ))]
                 if peer.online {
                     let id = peer.binding.device_id.to_string();
                     content = content.child(

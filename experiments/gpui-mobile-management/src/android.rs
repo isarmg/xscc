@@ -2,10 +2,17 @@
 
 mod management;
 mod panel;
+#[cfg(feature = "mobile-session")]
+#[path = "../../gpui-validation/src/presentation.rs"]
+mod presentation;
+#[cfg(feature = "mobile-session")]
+mod session_view;
 #[path = "../../gpui-validation/src/text_field.rs"]
 mod text_field;
 #[path = "../../gpui-validation/src/theme.rs"]
 mod theme;
+#[cfg(feature = "mobile-session")]
+mod touch_input;
 
 use gpui::{App, AppContext, WindowOptions};
 

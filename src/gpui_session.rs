@@ -30,7 +30,7 @@ pub enum InputCommand {
     Mouse(MouseEvent),
 }
 
-#[cfg(any(test, all(target_os = "ios", feature = "gpui-mobile-session")))]
+#[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
 fn mobile_pointer_permitted(enabled: bool, input: &InputCommand) -> bool {
     enabled && matches!(input, InputCommand::Mouse(_))
 }
@@ -189,7 +189,7 @@ impl SessionHandle {
         let queue = &self.session.ui_handler.0.events;
         (0..64).map_while(|_| queue.pop()).collect()
     }
-    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub fn touch_input_allowed(&self) -> bool {
         let mailbox = &self.session.ui_handler.0;
         self.session.lc.read().unwrap().mobile_touch_enabled
@@ -200,7 +200,7 @@ impl SessionHandle {
     }
 
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
-        #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
         {
             if !mobile_pointer_permitted(self.session.lc.read().unwrap().mobile_touch_enabled, &input) {
                 bail!("Pointer capability is disabled or this input is not supported");
@@ -306,7 +306,7 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
     connect_mode(device_id, false).await
 }
 
-#[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
 pub async fn connect_touch(device_id: &str) -> ResultType<SessionHandle> {
     connect_mode(device_id, true).await
 }
@@ -331,7 +331,7 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool) -> ResultType<Sessi
         None,
         None,
     );
-    #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     {
         session.lc.write().unwrap().mobile_touch_enabled = _touch_enabled;
     }
@@ -842,7 +842,7 @@ mod tests {
             .0
             .connected
             .store(true, Ordering::Release);
-        if cfg!(all(target_os = "ios", feature = "gpui-mobile-session")) {
+        if cfg!(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")) {
             assert!(handle.send_input(InputCommand::Key(KeyEvent::default())).is_err());
             assert!(receiver.try_recv().is_err());
             return;

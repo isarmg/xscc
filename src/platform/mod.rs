@@ -1,4 +1,4 @@
-#[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
+#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
 pub mod gpui_mobile;
 
 #[cfg(target_os = "linux")]

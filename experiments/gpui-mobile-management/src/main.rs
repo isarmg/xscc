@@ -1,15 +1,27 @@
 mod management;
 mod panel;
-#[cfg(all(target_os = "ios", feature = "mobile-session"))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
 #[path = "../../gpui-validation/src/presentation.rs"]
 mod presentation;
-#[cfg(all(target_os = "ios", feature = "mobile-session"))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
 mod session_view;
 #[path = "../../gpui-validation/src/text_field.rs"]
 mod text_field;
 #[path = "../../gpui-validation/src/theme.rs"]
 mod theme;
-#[cfg(any(test, all(target_os = "ios", feature = "mobile-session")))]
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
 mod touch_input;
 
 use gpui::{App, AppContext, WindowOptions};

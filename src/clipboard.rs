@@ -543,7 +543,7 @@ mod proto {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "flutter"))]
 pub fn handle_msg_clipboard(mut cb: Clipboard) {
     use hbb_common::protobuf::Message;
 
@@ -562,7 +562,7 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "flutter"))]
 pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
     use hbb_common::protobuf::Message;
 
@@ -581,7 +581,7 @@ pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", feature = "flutter"))]
 pub fn get_clipboards_msg(client: bool) -> Option<Message> {
     let mut clipboards = scrap::android::ffi::get_clipboards(client)?;
     clipboards
