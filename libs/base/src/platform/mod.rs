@@ -7,15 +7,15 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 use hbb_common::{config::Config, log};
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 use std::process::exit;
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 static mut GLOBAL_CALLBACK: Option<Box<dyn Fn()>> = None;
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 extern "C" fn breakdown_signal_handler(sig: i32) {
     let mut stack = vec![];
     backtrace::trace(|frame| {
@@ -70,7 +70,7 @@ extern "C" fn breakdown_signal_handler(sig: i32) {
     exit(0);
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(all(not(debug_assertions), not(target_os = "ios")))]
 pub fn register_breakdown_handler<T>(callback: T)
 where
     T: Fn() + 'static,
