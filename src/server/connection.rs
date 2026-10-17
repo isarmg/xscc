@@ -219,6 +219,8 @@ enum MessageInput {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Mouse(InputMouse),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    ReleaseMouseButtons(i32),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Key((KeyEvent, bool)),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Pointer((PointerDeviceEvent, i32)),
@@ -586,6 +588,10 @@ impl Connection {
                             log::info!("Change permission {} -> {}", name, enabled);
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
+                                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                                if !enabled {
+                                    conn.release_mouse_buttons();
+                                }
                                 conn.send_permission(Permission::Keyboard, enabled).await;
                                 if let Some(s) = conn.server.upgrade() {
                                     s.write().unwrap().subscribe(
@@ -888,6 +894,9 @@ impl Connection {
                             mouse_input.simulate,
                             mouse_input.show_cursor,
                         );
+                    }
+                    MessageInput::ReleaseMouseButtons(conn) => {
+                        release_pressed_mouse_buttons(conn);
                     }
                     MessageInput::Key((mut msg, press)) => {
                         // Set the press state to false, use `down` only in `handle_key()`.
@@ -2970,6 +2979,10 @@ impl Connection {
         if let Ok(q) = o.disable_keyboard.enum_value() {
             if q != BoolOption::NotSet {
                 self.disable_keyboard = q == BoolOption::Yes;
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                if self.disable_keyboard {
+                    self.release_mouse_buttons();
+                }
                 if let Some(s) = self.server.upgrade() {
                     s.write().unwrap().subscribe(
                         super::clipboard_service::NAME,
@@ -3287,6 +3300,18 @@ impl Connection {
                     self.inner.send(msg.into());
                 }
             }
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn release_mouse_buttons(&self) {
+        // Queue behind accepted downs so disconnect/revocation cannot leave a late down held.
+        if self
+            .tx_input
+            .send(MessageInput::ReleaseMouseButtons(self.inner.id()))
+            .is_err()
+        {
+            release_pressed_mouse_buttons(self.inner.id());
         }
     }
 
@@ -3689,6 +3714,8 @@ impl Default for PortableState {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        self.release_mouse_buttons();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         self.release_pressed_modifiers();
     }

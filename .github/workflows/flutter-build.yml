@@ -1662,6 +1662,8 @@ jobs:
               cargo test --locked --lib --features drm cursor_pos_tests
             run_drm_tests "rustdesk peer_abs_sample_tests" \
               cargo test --locked --lib --features drm peer_abs_sample_tests
+            run_drm_tests "rustdesk mouse_button_tests" \
+              cargo test --locked --lib --features drm mouse_button_tests
             run_drm_tests "rustdesk input_map_tests" \
               cargo test --locked --lib --features drm input_map_tests
             run_drm_tests "rustdesk drm_pacing_tests" \

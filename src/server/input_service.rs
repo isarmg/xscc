@@ -1,3 +1,5 @@
+mod mouse_buttons;
+
 #[cfg(target_os = "linux")]
 use super::rdp_input::client::{RdpInputKeyboard, RdpInputMouse};
 use super::*;
@@ -503,6 +505,7 @@ lazy_static::lazy_static! {
     static ref ENIGO: Arc<Mutex<Enigo>> = {
         Arc::new(Mutex::new(Enigo::new()))
     };
+    static ref MOUSE_BUTTONS_DOWN: Mutex<mouse_buttons::PressedMouseButtons> = Default::default();
     static ref KEYS_DOWN: Arc<Mutex<HashMap<KeysDown, Instant>>> = Default::default();
     static ref LATEST_PEER_INPUT_CURSOR: Arc<Mutex<Input>> = Default::default();
     static ref LATEST_SYS_CURSOR_POS: Arc<Mutex<(Option<Instant>, (i32, i32))>> = Arc::new(Mutex::new((None, (INVALID_CURSOR_POS, INVALID_CURSOR_POS))));
@@ -1009,7 +1012,55 @@ fn release_record_key(record_key: KeysDown) {
     func();
 }
 
+fn mouse_button(button: i32) -> Option<MouseButton> {
+    match button {
+        MOUSE_BUTTON_LEFT => Some(MouseButton::Left),
+        MOUSE_BUTTON_RIGHT => Some(MouseButton::Right),
+        MOUSE_BUTTON_WHEEL => Some(MouseButton::Middle),
+        MOUSE_BUTTON_BACK => Some(MouseButton::Back),
+        MOUSE_BUTTON_FORWARD => Some(MouseButton::Forward),
+        _ => None,
+    }
+}
+
+// Use the same dispatch queues and Windows portable-service route as the original down.
+// Unowned ups are ignored, including buttons still held by another connection.
+pub fn release_pressed_mouse_buttons(conn: i32) {
+    for button in [
+        MOUSE_BUTTON_LEFT,
+        MOUSE_BUTTON_RIGHT,
+        MOUSE_BUTTON_WHEEL,
+        MOUSE_BUTTON_BACK,
+        MOUSE_BUTTON_FORWARD,
+    ] {
+        let evt = MouseEvent {
+            mask: (button << 3) | MOUSE_TYPE_UP,
+            ..Default::default()
+        };
+        handle_mouse(&evt, conn, String::new(), 0, true, false);
+    }
+}
+
+fn fix_mouse_down_timeout(force: bool) {
+    let release = move || {
+        let mut en = ENIGO.lock().unwrap();
+        MOUSE_BUTTONS_DOWN.lock().unwrap().release_matching(
+            |_, _, at| force || at.elapsed().as_millis() >= 360_000,
+            |button| {
+                if let Some(button) = mouse_button(button) {
+                    en.mouse_up(button);
+                }
+            },
+        );
+    };
+    #[cfg(target_os = "macos")]
+    QUEUE.exec_async(release);
+    #[cfg(not(target_os = "macos"))]
+    release();
+}
+
 fn fix_key_down_timeout(force: bool) {
+    fix_mouse_down_timeout(force);
     let key_down = KEYS_DOWN.lock().unwrap();
     if key_down.is_empty() {
         return;
@@ -1366,42 +1417,32 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
                 };
             }
         }
-        MOUSE_TYPE_DOWN => match buttons {
-            MOUSE_BUTTON_LEFT => {
-                allow_err!(en.mouse_down(MouseButton::Left));
+        MOUSE_TYPE_DOWN => {
+            if let Some(button) = mouse_button(buttons) {
+                if let Err(err) = MOUSE_BUTTONS_DOWN
+                    .lock()
+                    .unwrap()
+                    .press(conn, buttons, || en.mouse_down(button))
+                {
+                    hbb_common::throttled_log!(
+                        Duration::from_secs(1),
+                        warn,
+                        "Mouse down failed: {}",
+                        err
+                    );
+                }
             }
-            MOUSE_BUTTON_RIGHT => {
-                allow_err!(en.mouse_down(MouseButton::Right));
-            }
-            MOUSE_BUTTON_WHEEL => {
-                allow_err!(en.mouse_down(MouseButton::Middle));
-            }
-            MOUSE_BUTTON_BACK => {
-                allow_err!(en.mouse_down(MouseButton::Back));
-            }
-            MOUSE_BUTTON_FORWARD => {
-                allow_err!(en.mouse_down(MouseButton::Forward));
-            }
-            _ => {}
-        },
-        MOUSE_TYPE_UP => match buttons {
-            MOUSE_BUTTON_LEFT => {
-                en.mouse_up(MouseButton::Left);
-            }
-            MOUSE_BUTTON_RIGHT => {
-                en.mouse_up(MouseButton::Right);
-            }
-            MOUSE_BUTTON_WHEEL => {
-                en.mouse_up(MouseButton::Middle);
-            }
-            MOUSE_BUTTON_BACK => {
-                en.mouse_up(MouseButton::Back);
-            }
-            MOUSE_BUTTON_FORWARD => {
-                en.mouse_up(MouseButton::Forward);
-            }
-            _ => {}
-        },
+        }
+        MOUSE_TYPE_UP => {
+            MOUSE_BUTTONS_DOWN.lock().unwrap().release_matching(
+                |owner, button, _| owner == conn && button == buttons,
+                |button| {
+                    if let Some(button) = mouse_button(button) {
+                        en.mouse_up(button);
+                    }
+                },
+            );
+        }
         MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
             #[allow(unused_mut)]
             let mut x = -evt.x;
