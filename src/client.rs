@@ -80,6 +80,8 @@ use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
+#[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+pub(crate) mod mobile_audio;
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
 #[cfg(target_os = "windows")]
@@ -362,6 +364,10 @@ impl ClientClipboardHandler {
 /// Audio handler for the [`Client`].
 #[derive(Default)]
 pub struct AudioHandler {
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    mobile_audio_gate: Option<Arc<std::sync::atomic::AtomicBool>>,
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    mobile_audio_failed: Option<Arc<std::sync::atomic::AtomicBool>>,
     audio_decoder: Option<(AudioDecoder, Vec<f32>)>,
     #[cfg(target_os = "linux")]
     simple: Option<psimple::Simple>,
@@ -787,13 +793,28 @@ impl AudioHandler {
         self.device_channel = config.channels;
         #[cfg(target_os = "windows")]
         let err_fn = self.playback_recovery.new_error_callback();
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        let mobile_error_gate = self.mobile_audio_gate.clone();
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        let mobile_error_status = self.mobile_audio_failed.clone();
         #[cfg(not(target_os = "windows"))]
         let err_fn = move |err| {
+            #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+            {
+                if let Some(gate) = &mobile_error_gate { gate.store(false, std::sync::atomic::Ordering::Release); }
+                if let Some(failed) = &mobile_error_status { failed.store(true, std::sync::atomic::Ordering::Release); }
+            }
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
         };
         self.audio_buffer
             .resize(config.sample_rate.0 as _, config.channels as _);
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        if self.mobile_audio_gate.is_some() {
+            self.resize_mobile_audio_buffer(config.sample_rate.0, config.channels);
+        }
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        let mobile_output_gate = self.mobile_audio_gate.clone();
         let audio_buffer = self.audio_buffer.0.clone();
         let discontinuity_generation = self.audio_buffer.3.clone();
         let mut playback_writer = audio_playback::AudioPlaybackWriter::new(
@@ -809,7 +830,16 @@ impl AudioHandler {
         let stream = device.build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                if mobile_output_gate.as_ref().is_some_and(|gate| !gate.load(std::sync::atomic::Ordering::Acquire)) {
+                    data.fill(T::from_sample(0.0));
+                    return;
+                }
                 playback_writer.write_output(data);
+                #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                if mobile_output_gate.as_ref().is_some_and(|gate| !gate.load(std::sync::atomic::Ordering::Acquire)) {
+                    data.fill(T::from_sample(0.0));
+                }
             },
             err_fn,
             timeout,
@@ -1025,6 +1055,10 @@ struct ConnToken {
 /// Login config handler for [`Client`].
 #[derive(Default)]
 pub struct LoginConfigHandler {
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub(crate) mobile_audio: Option<mobile_audio::MobileAudio>,
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub(crate) mobile_audio_allowed: bool,
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub(crate) mobile_touch_enabled: bool,
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
@@ -1467,7 +1501,8 @@ impl LoginConfigHandler {
         }
         // Mobile pointer/keyboard are explicit per-session capabilities; other side channels stay disabled.
         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
-        restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled || self.mobile_keyboard_enabled);
+        restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled || self.mobile_keyboard_enabled,
+            self.mobile_audio.as_ref().is_some_and(|audio| audio.status().enabled));
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
@@ -2988,9 +3023,9 @@ mod direct_approval_tests {
 }
 
 #[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
-fn restrict_mobile_capabilities(options: &mut OptionMessage, touch_enabled: bool) {
+fn restrict_mobile_capabilities(options: &mut OptionMessage, touch_enabled: bool, audio_enabled: bool) {
     options.disable_keyboard = if touch_enabled { BoolOption::No } else { BoolOption::Yes }.into();
-    options.disable_audio = BoolOption::Yes.into();
+    options.disable_audio = if audio_enabled { BoolOption::No } else { BoolOption::Yes }.into();
     options.disable_clipboard = BoolOption::Yes.into();
     options.lock_after_session_end = BoolOption::No.into();
     options.block_input = BoolOption::No.into();
@@ -3009,17 +3044,20 @@ mod mobile_view_only_tests {
         options.disable_clipboard = BoolOption::No.into();
         options.lock_after_session_end = BoolOption::Yes.into();
         options.block_input = BoolOption::Yes.into();
-        restrict_mobile_capabilities(&mut options, false);
+        restrict_mobile_capabilities(&mut options, false, false);
         assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.lock_after_session_end.enum_value(), Ok(BoolOption::No));
         assert_eq!(options.block_input.enum_value(), Ok(BoolOption::No));
         assert_eq!(options.custom_fps, 30);
-        restrict_mobile_capabilities(&mut options, true);
+        restrict_mobile_capabilities(&mut options, true, false);
         assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::No));
         assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.custom_fps, 30);
+        restrict_mobile_capabilities(&mut options, true, true);
+        assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
     }
 }

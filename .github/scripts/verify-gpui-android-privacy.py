@@ -179,6 +179,19 @@ def check_jni(classes, definitions):
                          repr(sorted(required - definitions)))
 
 
+def check_playback_jni(classes, definitions):
+    bridge = "Lorg/xscc/gpui/AndroidPlaybackAudio;"
+    required = {
+        (bridge, "<init>", "(Landroid/content/Context;J)V"),
+        (bridge, "activate", "()Z"),
+        (bridge, "close", "()V"),
+        (bridge, "nativeStopped", "(JI)V"),
+    }
+    if bridge not in classes or required - definitions:
+        raise ValueError("Required Android playback JNI declarations missing: " +
+                         repr(sorted(required - definitions)))
+
+
 def check_game_abi(expected_classes, expected_members, classes, definitions):
     if expected_classes - classes or expected_members - definitions:
         raise ValueError("GameActivity JNI classes/members removed or renamed: " +
@@ -186,7 +199,7 @@ def check_game_abi(expected_classes, expected_members, classes, definitions):
                          repr(sorted(expected_members - definitions)[:3]))
 
 
-def verify(apk, aar):
+def verify(apk, aar, management=False):
     classes, definitions = set(), set()
     dex_count = 0
     with zipfile.ZipFile(apk) as archive:
@@ -213,6 +226,8 @@ def verify(apk, aar):
         raise ValueError("GameActivity reference AAR is empty")
     check_game_abi(expected_classes, expected_members, classes, definitions)
     check_jni(classes, definitions)
+    if management:
+        check_playback_jni(classes, definitions)
     return len(expected_classes), len(expected_members)
 
 
@@ -220,6 +235,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("apk")
     parser.add_argument("aar", help="Unmodified Maven games-activity 4.4.0 AAR")
+    parser.add_argument("--management", action="store_true", help="Require playback JNI declarations in the management APK")
     args = parser.parse_args()
-    classes, members = verify(args.apk, args.aar)
+    classes, members = verify(args.apk, args.aar, management=args.management)
     print(f"DEX privacy gate passed; preserved {classes} GameActivity classes and {members} members")

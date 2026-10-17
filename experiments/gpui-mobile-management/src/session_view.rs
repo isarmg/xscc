@@ -82,6 +82,16 @@ impl SessionView {
         let window_handle = window.window_handle();
         let weak = cx.entity().downgrade();
         let lifecycle = cx.on_app_lifecycle(move |phase, cx| {
+            if matches!(phase, AppLifecyclePhase::Inactive) {
+                let _ = weak.update(cx, |view, cx| {
+                    if let Some(session) = &view.session {
+                        if let Err(error) = session.set_audio_enabled(false) {
+                            view.notice = error.to_string();
+                        }
+                    }
+                    cx.notify();
+                });
+            }
             if matches!(
                 phase,
                 AppLifecyclePhase::Background | AppLifecyclePhase::Disconnected
@@ -483,6 +493,7 @@ impl Render for SessionView {
             window.request_animation_frame();
         }
         let palette = theme::palette(window.appearance());
+        let audio = self.session.as_ref().map(SessionHandle::audio_status);
         let generation = self.generation;
         let extent = self.extent;
         let origin = self.origin;
@@ -498,6 +509,32 @@ impl Render for SessionView {
             .gap_3()
             .w_full()
             .child(div().child(self.notice.clone()))
+            .when_some(audio, |view, audio| {
+                view.child(
+                    div()
+                        .id("session-audio")
+                        .min_h(px(44.))
+                        .p_3()
+                        .text_color(rgb(palette.text))
+                        .bg(rgb(palette.panel))
+                        .child(if audio.enabled {
+                            "关闭声音"
+                        } else {
+                            "开启声音（使用系统音量）"
+                        })
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if let Some(session) = &view.session {
+                                if let Err(error) =
+                                    session.set_audio_enabled(!session.audio_status().enabled)
+                                {
+                                    view.notice = error.to_string();
+                                }
+                            }
+                            cx.notify();
+                        })),
+                )
+                .when_some(audio.error, |view, error| view.child(div().child(error)))
+            })
             .child(
                 div()
                     .relative()

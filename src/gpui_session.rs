@@ -11,6 +11,8 @@ use std::sync::{
     Arc, RwLock,
 };
 use xscc_native_management::manager::Request;
+#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+pub use crate::client::mobile_audio::AudioStatus;
 
 #[derive(Debug)]
 pub struct Frame {
@@ -321,7 +323,77 @@ impl SessionHandle {
             .send(Data::Message(message))
             .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
     }
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "gpui-mobile-session"
+    ))]
+    pub fn audio_status(&self) -> AudioStatus {
+        self.session
+            .lc
+            .read()
+            .unwrap()
+            .mobile_audio
+            .as_ref()
+            .map(|audio| audio.status())
+            .unwrap_or_else(|| AudioStatus {
+                error: Some("Audio playback is unavailable.".into()),
+                ..Default::default()
+            })
+    }
+
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "gpui-mobile-session"
+    ))]
+    pub fn set_audio_enabled(&self, enabled: bool) -> ResultType<()> {
+        let config = self.session.lc.read().unwrap();
+        if enabled && !config.mobile_audio_allowed {
+            bail!("The remote device has disabled audio.");
+        }
+        let audio = config
+            .mobile_audio
+            .as_ref()
+            .ok_or_else(|| hbb_common::anyhow::anyhow!("Audio playback is unavailable."))?;
+        if !enabled {
+            audio.set_enabled(false);
+        }
+        let mailbox = &self.session.ui_handler.0;
+        if enabled
+            && (!mailbox.connected.load(Ordering::Acquire)
+                || mailbox.closed.load(Ordering::Acquire))
+        {
+            bail!("Session is not connected");
+        }
+        let mut option = OptionMessage::new();
+        option.disable_audio = if enabled {
+            option_message::BoolOption::No
+        } else {
+            option_message::BoolOption::Yes
+        }
+        .into();
+        let mut misc = Misc::new();
+        misc.set_option(option);
+        let mut message = Message::new();
+        message.set_misc(misc);
+        let sender = self.session.sender.read().unwrap();
+        if let Some(sender) = sender.as_ref() {
+            sender
+                .send(Data::Message(message))
+                .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))?;
+        } else if enabled {
+            bail!("Session is disconnected");
+        }
+        if enabled {
+            audio.set_enabled(true);
+        }
+        Ok(())
+    }
+
     pub fn disconnect(&self) {
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        if let Some(audio) = &self.session.lc.read().unwrap().mobile_audio {
+            audio.stop();
+        }
         self.session
             .ui_handler
             .0
@@ -382,14 +454,32 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: 
         let mut config = session.lc.write().unwrap();
         config.mobile_touch_enabled = _touch_enabled;
         config.mobile_keyboard_enabled = _keyboard_enabled;
+        config.mobile_audio_allowed = true;
+        let mailbox = Arc::downgrade(&handler.0);
+        match crate::client::mobile_audio::MobileAudio::new(move || {
+            if let Some(mailbox) = mailbox.upgrade() {
+                mailbox.updates.notify_one();
+            }
+        }) {
+            Ok(audio) => config.mobile_audio = Some(audio),
+            Err(error) => handler.event(SessionEvent::Error(format!(
+                "Audio playback unavailable: {error}"
+            ))),
+        }
     }
     let round = session.connection_round_state.lock().unwrap().new_round();
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     *session.sender.write().unwrap() = Some(sender.clone());
     let running = session.clone();
     tokio::spawn(async move {
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        let audio = running.lc.read().unwrap().mobile_audio.clone();
         let mut remote = Remote::new(running, receiver, sender);
         remote.io_loop(round).await;
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        if let Some(audio) = audio {
+            audio.stop();
+        }
         handler.0.closed.store(true, Ordering::Release);
         handler.0.connected.store(false, Ordering::Release);
         handler.0.frame.pop();

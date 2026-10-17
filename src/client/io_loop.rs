@@ -41,6 +41,7 @@ use std::{
 
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
+    #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
     audio_sender: MediaSender,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
@@ -85,6 +86,7 @@ impl<T: InvokeUiSession> Remote<T> {
     ) -> Self {
         Self {
             handler,
+            #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
             audio_sender: crate::client::start_audio_thread(),
             receiver,
             sender,
@@ -931,7 +933,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
-                    Some(misc::Union::AudioFormat(f)) if !cfg!(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")) => {
+                    Some(misc::Union::AudioFormat(f)) => {
+                        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                        if let Some(audio) = &self.handler.lc.read().unwrap().mobile_audio {
+                            audio.handle_format(f);
+                        }
+                        #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
                         self.audio_sender.send(MediaData::AudioFormat(f)).ok();
                     }
                     Some(misc::Union::PermissionInfo(p)) => {
@@ -954,6 +961,14 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Ok(Permission::Audio) => {
+                                #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                                {
+                                    let mut config = self.handler.lc.write().unwrap();
+                                    config.mobile_audio_allowed = p.enabled;
+                                    if !p.enabled {
+                                        if let Some(audio) = &config.mobile_audio { audio.set_enabled(false); }
+                                    }
+                                }
                                 self.handler.set_permission("audio", p.enabled);
                             }
                             Ok(Permission::Restart) => {
@@ -1109,7 +1124,12 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::TestDelay(t)) => {
                     self.handler.handle_test_delay(t, peer).await;
                 }
-                Some(message::Union::AudioFrame(frame)) if !cfg!(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")) => {
+                Some(message::Union::AudioFrame(frame)) => {
+                    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                    if let Some(audio) = &self.handler.lc.read().unwrap().mobile_audio {
+                        audio.push_frame(frame);
+                    }
+                    #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
                     if !self.handler.lc.read().unwrap().disable_audio.v {
                         self.audio_sender
                             .send(MediaData::AudioFrame(Box::new(frame)))

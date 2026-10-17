@@ -15,16 +15,17 @@ class DevicePreviewTests(unittest.TestCase):
         self.assertFalse(package.preview_capabilities(False)['software_video_preview'])
         self.assertEqual(package.preview_capabilities(True), {
             'management': True, 'software_video_preview': True,
-            'audio': False, 'remote_input': False, 'remote_pointer': False,
+            'audio': False, 'microphone': False, 'remote_input': False, 'remote_pointer': False,
             'remote_keyboard': False, 'clipboard': False,
         })
 
-    def test_interactive_preview_enables_keyboard_but_not_audio_or_clipboard(self):
-        capabilities = package.preview_capabilities(False, keyboard_preview=True)
+    def test_interactive_preview_enables_playback_but_not_microphone_or_clipboard(self):
+        capabilities = package.preview_capabilities(False, playback_preview=True)
         self.assertTrue(capabilities['software_video_preview'])
         self.assertTrue(capabilities['remote_pointer'])
         self.assertTrue(capabilities['remote_keyboard'])
-        for name in ('audio', 'clipboard'):
+        self.assertTrue(capabilities['audio'])
+        for name in ('microphone', 'clipboard'):
             self.assertFalse(capabilities[name])
 
     def test_device_metadata(self):

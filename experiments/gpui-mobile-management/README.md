@@ -43,12 +43,15 @@ IPC, host listener, capture, additional binding store or QUIC feature is enabled
 The UI defaults to direct touch: tap to left-click, move one finger beyond the
 threshold to drag, and move two fingers to scroll. A second finger releases an
 active drag; cancellation or a third finger cancels the gesture. There is no
-right-click, hardware-keyboard integration, inertial scrolling, audio playback or clipboard integration.
+right-click, hardware-keyboard integration, inertial scrolling or clipboard integration.
 The visible view-only switch releases input and reconnects with input disabled on
 the wire. The root adapter's existing `connect` API remains view-only; only the
 explicit `connect_touch` entry enables pointer input. The app uses the explicit
 `connect_interactive` entry for touch plus the software keyboard, subject to current
-server permission and authorization. Audio and clipboard remain protocol-disabled.
+server permission and authorization. Clipboard remains protocol-disabled. Remote
+audio is output-only and initially off for each connection; the sound button
+enables it using system volume. Mute, inactivity, interruption and disconnect stop
+playback and discard old audio. See the [audio boundary and device acceptance](../../docs/gpui-mobile.md#foreground-remote-audio).
 
 The remote software keyboard submits final IME commits naturally; preedit remains
 local. A short local suffix supports composition and grapheme deletion, with a
@@ -124,9 +127,12 @@ unsupported app platform rather than opening a production binding store.
    Switch to view-only and verify the host refuses input; revoke server input
    permission while dragging. Exercise software-keyboard composition/commit/cancel,
    emoji deletion, empty Backspace, navigation, and view-only rejection. Verify
-   Linux non-ASCII is explicitly rejected without altering the clipboard. Audio,
-   hardware-keyboard integration and clipboard remain disabled.
-7. Exercise repeated taps, Cancel/Confirm unbind, soft keyboard/IME, keyboard dismissal,
+   Linux non-ASCII is explicitly rejected without altering the clipboard.
+   Full hardware-keyboard integration and clipboard remain disabled.
+7. Enable remote sound, test mute and system volume, then interrupt audio focus,
+   unplug headphones, background, disconnect and reconnect. Old audio must not
+   replay; interruptions require explicitly enabling sound again.
+8. Exercise repeated taps, Cancel/Confirm unbind, soft keyboard/IME, keyboard dismissal,
    safe areas, landscape, Dynamic Type/accessibility and long lists on both devices.
 
 No real server enrollment or physical-device test has been performed by the local

@@ -11,6 +11,21 @@ spec.loader.exec_module(privacy)
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_playback_jni_requires_every_registered_entry(self):
+        bridge = "Lorg/xscc/gpui/AndroidPlaybackAudio;"
+        members = {
+            (bridge, "<init>", "(Landroid/content/Context;J)V"),
+            (bridge, "activate", "()Z"),
+            (bridge, "close", "()V"),
+            (bridge, "nativeStopped", "(JI)V"),
+        }
+        privacy.check_playback_jni({bridge}, members)
+        with self.assertRaisesRegex(ValueError, "playback JNI"):
+            privacy.check_playback_jni(set(), members)
+        for missing in members:
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "playback JNI"):
+                privacy.check_playback_jni({bridge}, members - {missing})
+
     def test_rejects_packaged_debug_logging(self):
         for name in ("d", "v"):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Log"):

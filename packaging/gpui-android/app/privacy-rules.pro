@@ -39,3 +39,11 @@
     public int right;
     public int bottom;
 }
+
+# Playback uses JNI lookup and RegisterNatives rather than named ELF exports.
+-keep,allowoptimization class org.xscc.gpui.AndroidPlaybackAudio {
+    public <init>(android.content.Context, long);
+    public boolean activate();
+    public void close();
+    private static native void nativeStopped(long, int);
+}

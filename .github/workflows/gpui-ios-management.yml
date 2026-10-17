@@ -1,4 +1,4 @@
-name: GPUI iOS pointer and keyboard preview
+name: GPUI iOS interactive playback preview
 on:
   workflow_dispatch:
   push:
@@ -145,12 +145,12 @@ jobs:
           cargo build --locked --release --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --keyboard-preview
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --playback-preview
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
-          echo 'Native GPUI pointer and software-keyboard preview: management, software video, direct control or view-only, software-keyboard text and control keys. Audio and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Native GPUI interactive playback preview: management, software video, direct control or view-only, software-keyboard text and control keys. Foreground audio playback is opt-in per session and initially off; microphone and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input, audio playback, interruptions and route changes remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-pointer-keyboard-preview-ios26-arm64-unsigned-${{ github.sha }}
+          name: xscc-gpui-interactive-playback-preview-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error
   simulator-smoke:

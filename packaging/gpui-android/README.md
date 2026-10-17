@@ -64,8 +64,10 @@ pointer/touch controls, natural software-keyboard commits and a control-key bar,
 but no desktop hosting. Unmodified, non-repeating Enter/Tab events also support
 IME actions and identical hardware control events; full hardware-keyboard support
 is unfinished. macOS/Windows targets accept native Unicode; Linux targets accept
-printable ASCII and separate control keys without clipboard fallback. Audio and
-clipboard capabilities remain disabled. Server authorization, first decoded
+printable ASCII and separate control keys without clipboard fallback. Foreground
+remote audio playback is initially off and explicitly enabled per session with
+the sound button; microphone and clipboard remain disabled. Audio playback,
+interruptions, route changes and system-volume behavior need physical-device testing. Server authorization, first decoded
 frame, display, pointer and IME behavior still require physical-device acceptance
 against the intended server; successful packaging alone does not prove a session.
 

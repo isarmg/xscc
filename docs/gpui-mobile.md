@@ -56,7 +56,9 @@ The iOS preview has an opt-in software-decoded session path with direct touch an
 Rust client with `gpui-mobile-session` and no default features, attaches the already
 opened manager, and reuses authorization, TCP login, software decode and the BGRA
 presentation helper. Desktop and Flutter cfg behavior is retained when this feature
-is off. Audio and clipboard remain disabled in protocol options and locally.
+is off. Clipboard remains disabled in protocol options and locally. Foreground
+output-only audio is opt-in per session, using the existing Opus decoder and CPAL
+output; it never requests microphone access.
 The direct-touch mode enables pointer input only through an explicit session
 capability, with current server permission and authorization checks; view-only
 switching releases input and reconnects with input disabled. The root `connect`
@@ -67,3 +69,25 @@ complete hardware-keyboard integration, right-click or inertial scrolling is add
 Unmodified non-repeating Enter/Tab events also support Android IME actions; the
 identical hardware control events are accepted without claiming full hardware input. Native build success and real-device first-frame/revocation tests
 remain separate acceptance gates. No physical-device streaming is claimed.
+
+### Foreground remote audio
+
+The sound button starts disabled for each connection and uses system volume.
+It reuses Opus decoding, streaming resampling and the CPAL output backend;
+iOS owns a Playback AVAudioSession and Android requests foreground media audio
+focus using the existing GameActivity context. No input stream, recording
+permission, background service or background-audio entitlement is added.
+
+Mute, permission withdrawal, inactivity and disconnect close the output gate and
+discard pending audio. Platform interruption or output failure stops playback and
+shows a retry message; the user explicitly enables sound again. The mobile packet
+queue is capped at 64 frames / 256 KiB, rejects frames above 64 KiB, and discards
+packets resident locally for over 150 ms. A discard resets decoder/resampler
+continuity and clears PCM; mobile PCM capacity is also 150 ms. These are local
+resource/queue budgets, not measured end-to-end latency. Desktop/Flutter playback
+keeps its prior path and buffer policy.
+
+Physical-device acceptance must cover audible remote mono/stereo playback, system
+volume, mute/disconnect without old audio replay, headset/Bluetooth route changes,
+focus/phone interruption, background/foreground and reconnect. Compilation and
+packaging do not establish those results.

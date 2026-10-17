@@ -1,4 +1,6 @@
 //! Attach the existing application-owned manager; this entry creates no runtime or identity.
+pub mod audio;
+
 use hbb_common::{bail, config, ResultType};
 use std::{path::Path, sync::Arc};
 use xscc_native_management::manager::NativeManager;

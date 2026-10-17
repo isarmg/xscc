@@ -214,15 +214,17 @@ jobs:
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
           mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
           test "${#GAME_AARS[@]}" -eq 1
-          python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" | tee dist/gpui-android/dex-privacy.txt
+          privacy_args=()
+          if [ "$FLAVOR" = management ]; then privacy_args+=(--management); fi
+          python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
           cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
           scope="$FLAVOR-preview"
-          if [ "$FLAVOR" = management ]; then scope=software-video-pointer-keyboard-preview; fi
+          if [ "$FLAVOR" = management ]; then scope=software-video-pointer-keyboard-audio-preview; fi
           printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope"             > dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" = management ]; then
-            printf 'session=software-video-pointer-keyboard-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
+            printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
           fi
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
