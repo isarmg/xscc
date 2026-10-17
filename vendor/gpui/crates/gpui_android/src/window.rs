@@ -57,7 +57,13 @@ pub(crate) struct WindowState {
     size: Cell<Size<Pixels>>,
     pub scale: Cell<f32>,
     viewport: Cell<Bounds<Pixels>>,
-    input_handler: RefCell<Option<PlatformInputHandler>>,
+    insets_tracker: crate::insets::InsetsTracker,
+    pub(crate) native_insets: Cell<Option<crate::insets::Snapshot>>,
+    pub(crate) input_handler: Callback<PlatformInputHandler>,
+    pub(crate) ime: RefCell<crate::ime::ImeState>,
+    pub(crate) ime_bridge: crate::ime_bridge::Bridge,
+    pub(crate) ime_configuration: RefCell<TextInputConfiguration>,
+    pub(crate) ime_show: Cell<bool>,
     request_frame: Callback<Box<dyn FnMut(RequestFrameOptions)>>,
     pub input: Callback<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>,
     active_changed: Callback<Box<dyn FnMut(bool)>>,
@@ -109,7 +115,13 @@ impl AndroidWindow {
             size: Cell::new(logical),
             scale: Cell::new(scale),
             viewport: Cell::new(Bounds::new(Point::default(), logical)),
-            input_handler: RefCell::new(None),
+            insets_tracker: crate::insets::InsetsTracker::new(),
+            native_insets: Cell::new(None),
+            input_handler: Callback::default(),
+            ime: RefCell::default(),
+            ime_bridge: crate::ime_bridge::Bridge::new(&platform.app),
+            ime_configuration: RefCell::default(),
+            ime_show: Cell::new(false),
             request_frame: Callback::default(),
             input: Callback::default(),
             active_changed: Callback::default(),
@@ -211,10 +223,25 @@ impl WindowState {
         self.schedule_frame();
         Ok(())
     }
+    pub(crate) fn refresh_insets(&self) {
+        if let Some(snapshot) = self.insets_tracker.latest() {
+            if self.native_insets.replace(Some(snapshot)) != Some(snapshot) {
+                self.ime_visibility_changed(snapshot.ime_visible());
+                self.update_geometry_inner(false);
+                self.insets_changed.with(|f| f(self.insets()));
+            }
+        }
+    }
     pub fn update_geometry(&self) {
+        self.update_geometry_inner(true);
+    }
+    fn update_geometry_inner(&self, request_insets: bool) {
         let Some(platform) = self.platform.upgrade() else {
             return;
         };
+        if request_insets {
+            self.insets_tracker.request(&platform.app);
+        }
         let scale = density(platform.app.config().density());
         let physical = self
             .native
@@ -248,6 +275,20 @@ impl WindowState {
         } else {
             Bounds::new(Point::default(), logical)
         };
+        let viewport = if self.native_insets.get().is_some() {
+            let edges = self.insets().effective();
+            let left = edges.left.min(logical.width);
+            let top = edges.top.min(logical.height);
+            Bounds::new(
+                point(left, top),
+                size(
+                    (logical.width - left - edges.right).max(px(0.)),
+                    (logical.height - top - edges.bottom).max(px(0.)),
+                ),
+            )
+        } else {
+            viewport
+        };
         let viewport_changed = self.viewport.replace(viewport) != viewport;
         if changed {
             self.resized.with(|f| f(logical, scale));
@@ -260,6 +301,19 @@ impl WindowState {
         self.schedule_frame();
     }
     fn insets(&self) -> WindowInsets {
+        if let Some(snapshot) = self.native_insets.get() {
+            let scale = self.scale.get();
+            let edges = |value: crate::insets::Insets| Edges {
+                top: px(value.top.max(0) as f32 / scale),
+                left: px(value.left.max(0) as f32 / scale),
+                right: px(value.right.max(0) as f32 / scale),
+                bottom: px(value.bottom.max(0) as f32 / scale),
+            };
+            return WindowInsets {
+                safe_area: edges(snapshot.system),
+                ime: edges(snapshot.ime),
+            };
+        }
         let viewport = self.viewport.get();
         let full = self.size.get();
         WindowInsets {
@@ -275,6 +329,8 @@ impl WindowState {
 }
 impl Drop for WindowState {
     fn drop(&mut self) {
+        self.ime_bridge
+            .hide(crate::ime_bridge::Bridge::next_generation());
         self.renderer.get_mut().destroy();
         self.native.get_mut().take();
     }
@@ -333,10 +389,10 @@ impl PlatformWindow for AndroidWindow {
         Capslock::default()
     }
     fn set_input_handler(&mut self, handler: PlatformInputHandler) {
-        self.0.input_handler.replace(Some(handler));
+        self.0.input_handler.set(handler);
     }
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
-        self.0.input_handler.borrow_mut().take()
+        self.0.input_handler.take()
     }
     fn prompt(
         &self,
@@ -452,9 +508,18 @@ impl PlatformWindow for AndroidWindow {
     fn set_back_enabled(&self, enabled: bool) {
         self.0.back_enabled.set(enabled);
     }
+    fn set_text_input_configuration(&mut self, configuration: TextInputConfiguration) {
+        self.0.ime_configuration.replace(configuration);
+        self.0.schedule_frame();
+    }
+    fn text_input_state_changed(&self, _: TextInputStateChange) {
+        self.0.schedule_frame();
+    }
+    fn hide_soft_keyboard(&self) {
+        self.0.dismiss_keyboard();
+    }
     fn show_soft_keyboard(&self) {
-        log::warn!(
-            "Android GPUI text input is not implemented; this build is a rendering smoke test"
-        );
+        self.0.ime_show.set(true);
+        self.0.schedule_frame();
     }
 }

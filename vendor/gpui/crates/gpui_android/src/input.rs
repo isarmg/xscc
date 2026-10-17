@@ -1,5 +1,5 @@
 use android_activity::input::{
-    KeyAction, KeyEvent, Keycode, MetaState, MotionAction, MotionEvent, Source,
+    KeyAction, KeyEvent, Keycode, MetaState, MotionAction, MotionEvent, Source, TextInputAction,
 };
 use gpui::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, Pixels,
@@ -124,7 +124,7 @@ impl InputState {
         let keystroke = Keystroke {
             modifiers,
             key,
-            // Text input is not supported yet; do not fabricate US-layout characters.
+            // Text comes from GameTextInput; do not fabricate US-layout characters.
             key_char: None,
         };
         match event.action() {
@@ -138,6 +138,29 @@ impl InputState {
         }
         events
     }
+}
+
+pub(crate) fn text_action(action: TextInputAction) -> [PlatformInput; 2] {
+    let keystroke = Keystroke {
+        modifiers: Modifiers {
+            shift: action == TextInputAction::Previous,
+            ..Default::default()
+        },
+        key: match action {
+            TextInputAction::Next | TextInputAction::Previous => "tab",
+            _ => "enter",
+        }
+        .to_owned(),
+        key_char: None,
+    };
+    [
+        PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        }),
+        PlatformInput::KeyUp(KeyUpEvent { keystroke }),
+    ]
 }
 
 fn logical_position(x: f32, y: f32, scale: f32) -> Point<Pixels> {
@@ -258,5 +281,26 @@ mod tests {
         assert_eq!(key_name(Keycode::Del).as_deref(), Some("backspace"));
         assert_eq!(key_name(Keycode::MoveHome).as_deref(), Some("home"));
         assert!(key_name(Keycode::Back).is_none());
+    }
+
+    #[test]
+    fn editor_actions_emit_navigation_key_pairs() {
+        for (action, key, shift) in [
+            (TextInputAction::Next, "tab", false),
+            (TextInputAction::Previous, "tab", true),
+            (TextInputAction::Done, "enter", false),
+            (TextInputAction::Search, "enter", false),
+        ] {
+            let [PlatformInput::KeyDown(down), PlatformInput::KeyUp(up)] = text_action(action)
+            else {
+                panic!("Editor actions must emit a key-down/key-up pair");
+            };
+            assert_eq!(down.keystroke.key, key);
+            assert_eq!(down.keystroke.modifiers.shift, shift);
+            assert_eq!(down.keystroke, up.keystroke);
+            assert!(down.keystroke.key_char.is_none());
+            assert!(!down.is_held);
+            assert!(!down.prefer_character_input);
+        }
     }
 }

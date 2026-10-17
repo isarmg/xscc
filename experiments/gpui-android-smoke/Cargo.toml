@@ -6,6 +6,11 @@ rust-version = "1.99"
 license = "AGPL-3.0-only"
 publish = false
 
+[features]
+default = ["mobile-management"]
+mobile-management = []
+live-session = []
+
 [workspace]
 
 [lib]
@@ -16,6 +21,7 @@ crate-type = ["cdylib"]
 gpui = { package = "gpui_platform", path = "../../vendor/gpui/crates/gpui_platform", default-features = false }
 android_logger = "=0.13.3"
 log = "0.4"
+unicode-segmentation = "1.12"
 
 [profile.release]
 debug = 0

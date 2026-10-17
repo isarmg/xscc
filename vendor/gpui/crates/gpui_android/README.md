@@ -1,17 +1,23 @@
-# Android GPUI rendering slice
+# Android GPUI rendering and IME slice
 
 Experimental single-Activity ARM64 backend, minimum Android API 29. This is a
 native GPUI/WGPU rendering test, not a usable remote-control or login client.
 
 Implemented: native window and surface lifetime, touch/tap/drag/scroll through
 GPUI's portable recognizers, physical navigation keys, foreground task wakeup,
-background executor, activity lifecycle, back-to-finish, content viewport and
+background executor, activity lifecycle, Back/keyboard dismissal, content viewport and
 system Latin/Chinese/emoji font loading through API 29's font matcher.
 
-Not implemented: IME/text editing, clipboard, credential storage, mouse input,
+Experimental text input: GameTextInput snapshots, UTF-16 selections/composition,
+commit/delete, editor actions, protected password EditorInfo, and keyboard insets.
+The offline smoke app includes ordinary and password fields; it never connects
+to a management server. Real-device keyboard behavior remains unverified.
+
+Not implemented: clipboard, credential storage, mouse input,
 accessibility bridge, system dialogs, multiwindow, remote video/audio/control.
 Unsupported fallible operations return errors. Do not use this backend for
-password entry until secure IME support is implemented and tested.
+real password entry until the protected keyboard and final-DEX no-text-logging
+gates are verified and device acceptance passes.
 
 Only draw a surface between InitWindow and TerminateWindow. The latter releases
 the WGPU surface before returning to Android. Device loss uses WGPU recovery.
@@ -59,3 +65,48 @@ helper can be exercised on the host with:
 
     rustc --edition 2024 --test src/geometry.rs -o /tmp/gpui-android-geometry-tests
     /tmp/gpui-android-geometry-tests
+
+## IME contract and acceptance
+
+GameTextInput's Java `InputConnection` uses `Editable` and `Selection` offsets.
+Its Java State integers pass unchanged through the bundled C++ JNI State adapter
+and android-activity 0.6.1's TextInputState; those offsets are UTF-16, not UTF-8.
+Only slicing Rust text converts to byte boundaries. Invalid surrogate-interior
+caret offsets round down; composition boundaries expand to whole scalar values.
+Native snapshots are compared with the focused GPUI handler, and rejected or
+truncated edits are read back before composing ranges are applied. A generation-bound Java InputConnection guard rejects old-session reads and
+writes; tagged JNI events are checked again on the GPUI thread. Untagged
+android-activity TextEvent/TextAction snapshots are deliberately ignored. Handler calls occur outside paint/update.
+
+Secure fields use TYPE_TEXT_VARIATION_PASSWORD, NO_SUGGESTIONS and
+IME_FLAG_NO_PERSONALIZED_LEARNING. The latter is an IME request, not a guarantee
+about third-party keyboards. EditorInfo changes restart the keyboard connection;
+backgrounding and window destruction invalidate the session and clear Java
+editable text. Embedding Activities must extend the supplied AndroidImeBridge. No Rust text/password logs exist.
+Upstream Java GameTextInput contains text logging: packaging must remove these
+calls and verify the final DEX before any password-enabled APK is distributed.
+
+Source: android-activity 0.6.1's bundled GameActivity/GameTextInput JNI, and
+https://github.com/rust-mobile/android-games-sdk/tree/android-activity-4.0.0/game-text-input/src/main/java/com/google/androidgamesdk/gametextinput
+(Android SDK sources, Apache-2.0). Official API guidance:
+https://developer.android.com/games/agdk/add-support-for-text-input
+https://developer.android.com/reference/android/text/InputType
+https://developer.android.com/reference/android/view/inputmethod/EditorInfo
+
+Host-test the production Unicode helper:
+
+    rustc --edition 2024 --test src/text_state.rs -o /tmp/gpui-android-text-tests
+    /tmp/gpui-android-text-tests
+
+Device acceptance must exercise Latin/Chinese composition, commit/cancel, emoji
+and surrogate-boundary caret movement, selected replacement, delete, field
+switches during composition, full-field rejection, secure/nonsecure switches,
+editor actions, keyboard open/close/Back, Home/resume and rotation while editing.
+Confirm keyboard insets move visible content without changing full layout size;
+inspect logcat for absence of test secrets. Floating keyboards and hardware
+keyboard text/selection behavior also require device verification.
+
+The Activity retains GameTextInput’s edge-to-edge configuration and GameActivity’s
+soft-input window policy. Insets are converted from physical to logical pixels
+once. Surface resizing and keyboard occlusion on API29 and current Android
+versions remain explicit device acceptance checks.

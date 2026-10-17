@@ -1,12 +1,16 @@
-//! Experimental Android single-window GPUI backend. Text input is not supported yet.
+//! Experimental Android single-window GPUI backend.
 #![cfg(target_os = "android")]
 
 mod application;
 mod dispatcher;
 mod fonts;
 mod geometry;
+mod ime;
+mod ime_bridge;
 mod input;
+mod insets;
 mod platform;
+mod text_state;
 mod window;
 
 pub use android_activity::AndroidApp;

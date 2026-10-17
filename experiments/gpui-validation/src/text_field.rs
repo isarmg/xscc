@@ -343,8 +343,11 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.range_from_utf16(range);
         *actual = Some(self.to_utf16(range.clone()));
-        // Native selection services must not be able to copy the underlying secret either.
-        Some(if self.secret {
+        // Android GameTextInput requires the actual UTF-16 document to apply
+        // password selections/composition correctly. Its protected InputConnection
+        // and APK no-text-logging gate are required; copy/cut remain disabled.
+        // Other native selection services continue receiving only a mask.
+        Some(if self.secret && !cfg!(target_os = "android") {
             "*".repeat(self.content[range].encode_utf16().count())
         } else {
             self.content[range].to_owned()

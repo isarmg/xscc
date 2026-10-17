@@ -5456,6 +5456,7 @@ dependencies = [
  "android_logger",
  "gpui_platform",
  "log",
+ "unicode-segmentation",
 ]
 
 [[package]]

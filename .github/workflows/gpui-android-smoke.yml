@@ -34,6 +34,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 .github/scripts/test-gpui-android-apk.py
+          python3 .github/scripts/test-gpui-android-privacy.py
 
       - name: Install native build prerequisites
         run: |
@@ -55,6 +56,8 @@ jobs:
         run: |
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/geometry.rs -o "$RUNNER_TEMP/gpui-android-geometry-tests"
           "$RUNNER_TEMP/gpui-android-geometry-tests"
+          rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/text_state.rs -o "$RUNNER_TEMP/gpui-android-text-state-tests"
+          "$RUNNER_TEMP/gpui-android-text-state-tests"
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
@@ -79,6 +82,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '27'
+
+      - name: Test Java IME generation boundary on the host
+        run: python3 .github/scripts/test-gpui-android-ime.py
 
       - name: Install pinned Gradle and Android SDK components
         run: |
@@ -113,6 +119,13 @@ jobs:
             exit 1
           fi
           python3 .github/scripts/verify-gpui-android-apk.py "$APK" | tee dist/gpui-android/native-validation.txt
+          unzip -p "$APK" lib/arm64-v8a/libxscc_gpui_android_smoke.so > "$RUNNER_TEMP/gpui-smoke.so"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
+          grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeTextChanged$' "$RUNNER_TEMP/gpui-symbols.txt"
+          grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
+          mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
+          test "${#GAME_AARS[@]}" -eq 1
+          python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" | tee dist/gpui-android/dex-privacy.txt
           cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-smoke-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp experiments/gpui-android-smoke/Cargo.lock dist/gpui-android/

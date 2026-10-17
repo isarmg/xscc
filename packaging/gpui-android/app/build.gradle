@@ -23,7 +23,13 @@ android {
     buildTypes {
         release {
             signingConfig signingConfigs.debug
-            minifyEnabled false
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'privacy-rules.pro'
+            optimization {
+                keepRules {
+                    ignoreFrom 'androidx.annotation:annotation', 'androidx.annotation:annotation-jvm'
+                }
+            }
         }
     }
     packaging {
@@ -37,4 +43,11 @@ dependencies {
     implementation 'androidx.games:games-activity:4.4.0'
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.core:core:1.13.0'
+}
+
+// An unoptimized variant would retain upstream GameTextInput plaintext logs.
+androidComponents {
+    beforeVariants(selector().withBuildType('debug')) { variant ->
+        variant.enable = false
+    }
 }

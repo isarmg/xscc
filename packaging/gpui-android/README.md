@@ -32,3 +32,19 @@ runtime-tested until these checks have actually been performed.
 
 References: [GameActivity integration](https://developer.android.com/games/agdk/game-activity/get-started),
 [16 KB page sizes](https://developer.android.com/guide/practices/page-sizes).
+
+
+## IME logging privacy gate
+
+GameActivity 4.4.0 ships Java debug logs that include input text. Only the
+R8-optimized release variant is enabled here; debug APK generation is disabled.
+The local rules remove debug/verbose log calls while retaining info/warn/error
+diagnostics. The AndroidX annotation keep rules are restated unchanged for other
+classes; only GameSDK JNI classes permit body optimization, retaining all names
+and members.
+
+Before upload, CI inspects every final DEX, rejects debug/verbose Log references
+and surviving sensitive log argument formats, and compares GameSDK class/member
+definitions with the unmodified Maven AAR. A missing JNI declaration or residual
+text-log format fails packaging. This gate must pass on the actual APK; rule text
+alone is not evidence. Physical-device IME behavior and logcat still need testing.

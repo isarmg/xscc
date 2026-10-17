@@ -1,8 +1,15 @@
 #![cfg(target_os = "android")]
 
-use gpui::{Context, Window, WindowOptions, div, prelude::*, px, rgb};
+#[path = "../../gpui-validation/src/text_field.rs"]
+mod text_field;
+#[path = "../../gpui-validation/src/theme.rs"]
+mod theme;
+
+use gpui::{Context, Entity, Window, WindowOptions, div, prelude::*, px, rgb};
 
 struct Smoke {
+    address: Entity<text_field::TextField>,
+    password: Entity<text_field::TextField>,
     taps: usize,
     wakes: usize,
     font: gpui::SharedString,
@@ -23,7 +30,9 @@ impl Render for Smoke {
             .font_family(self.font.clone())
             .child(div().text_2xl().child("GPUI · Android ARM64"))
             .child("原生界面 · 触摸滚动測試")
-            .child("Rendering smoke test · Text input is not supported")
+            .child("Offline IME test · device keyboard verification pending")
+            .child(self.address.clone())
+            .child(self.password.clone())
             .child(
                 div()
                     .id("tap-counter")
@@ -92,6 +101,7 @@ fn android_main(app: gpui::AndroidApp) {
         }
     };
     application.run(|cx| {
+        text_field::init(cx);
         let names = cx.text_system().all_font_names();
         let font = names
             .iter()
@@ -100,7 +110,13 @@ fn android_main(app: gpui::AndroidApp) {
             .cloned()
             .unwrap_or_else(|| "sans-serif".into());
         if let Err(error) = cx.open_window(WindowOptions::default(), move |_, cx| {
+            let address =
+                cx.new(|cx| text_field::TextField::new("地址 / Chinese + emoji test", false, cx));
+            let password =
+                cx.new(|cx| text_field::TextField::new("密码 / secure keyboard test", true, cx));
             cx.new(|_| Smoke {
+                address,
+                password,
                 taps: 0,
                 wakes: 0,
                 font: font.into(),

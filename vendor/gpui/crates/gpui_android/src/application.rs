@@ -119,6 +119,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                     cancel_touches(state, &mut input);
                     if let Some(window) = state.window() {
                         window.set_visible(false);
+                        window.sync_ime();
                         window.detach_surface();
                         if let Some(close) = window.close.take() {
                             close();
@@ -130,13 +131,24 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                 }
                 _ => {}
             }
+            if let Some(window) = state.window() {
+                window.sync_ime();
+            }
         });
         state.dispatcher.drain();
+        if let Some(window) = state.window() {
+            window.refresh_insets();
+            window.sync_ime();
+            window.read_ime_events();
+        }
         if !state.destroyed.get() && Instant::now() >= next_frame {
             if let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get()) {
                 window.request_frame(false);
             }
             next_frame = Instant::now() + FRAME_INTERVAL;
+        }
+        if let Some(window) = state.window() {
+            window.sync_ime();
         }
     }
     state.dispatcher.shutdown();
@@ -165,6 +177,9 @@ fn read_input(state: &State, input: &mut InputState) {
             InputEvent::MotionEvent(event) => input.motion(event, window.scale.get()),
             InputEvent::KeyEvent(event) if event.key_code() == Keycode::Back => {
                 if event.action() == KeyAction::Up {
+                    if window.dismiss_keyboard() {
+                        return InputStatus::Handled;
+                    }
                     if window.back_enabled.get() {
                         window.back.with(|f| f());
                     } else if window.should_close.with(|f| f()).unwrap_or(true) {
@@ -174,6 +189,9 @@ fn read_input(state: &State, input: &mut InputState) {
                 return InputStatus::Handled;
             }
             InputEvent::KeyEvent(event) => input.key(event),
+            // Untagged GameActivity snapshots/actions cannot identify a field
+            // session. Only the generation-tagged Java bridge is authoritative.
+            InputEvent::TextEvent(_) | InputEvent::TextAction(_) => return InputStatus::Handled,
             _ => return InputStatus::Unhandled,
         };
         if mapped.is_empty() {
