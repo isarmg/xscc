@@ -150,7 +150,7 @@ pub fn pointer_with_capture(
     Some(message)
 }
 
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+#[cfg(any(feature = "live-session", test))]
 pub fn release_key(pressed: &Message) -> Message {
     let mut message = pressed.clone();
     let event = message.mut_key_event();
@@ -163,7 +163,7 @@ pub fn release_key(pressed: &Message) -> Message {
     message
 }
 
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+#[cfg(any(feature = "live-session", test))]
 pub fn modifier_keys(modifiers: gpui::Modifiers) -> Vec<protobuf::EnumOrUnknown<ControlKey>> {
     [
         ControlKey::Control,
@@ -182,7 +182,7 @@ pub fn modifier_keys(modifiers: gpui::Modifiers) -> Vec<protobuf::EnumOrUnknown<
     .collect()
 }
 
-#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+#[cfg(any(feature = "live-session", test))]
 pub fn wheel(x: i32, y: i32, trackpad: bool, modifiers: gpui::Modifiers) -> Option<Message> {
     if x == 0 && y == 0 {
         return None;
