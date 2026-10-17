@@ -21,6 +21,11 @@ subprojects {
             project.android.namespace = legacyNamespace
         }
     }
+    project.plugins.withId('com.android.library') {
+        project.androidComponents.finalizeDsl { android ->
+            android.compileSdk = Math.max(android.compileSdk ?: 0, 36)
+        }
+    }
     // JDK 27 no longer accepts Java 8 output; align Java and Kotlin in plugins too.
     project.afterEvaluate {
         if (project.extensions.findByName('android') != null) {
