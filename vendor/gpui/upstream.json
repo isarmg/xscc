@@ -36,6 +36,7 @@
     "crates/gpui/Cargo.toml",
     "crates/gpui/examples/windows_shared_surface.rs",
     "crates/gpui/src/elements/surface.rs",
+    "crates/gpui/src/geometry.rs",
     "crates/gpui/src/scene.rs",
     "crates/gpui/src/window.rs",
     "crates/gpui_windows/src/directx_renderer.rs",
@@ -45,5 +46,10 @@
     "assets/fonts/ibm-plex-sans",
     "assets/fonts/lilex"
   ],
-  "source_archive_policy": "Selected transitive path-dependency closure, including dev dependencies and all referenced target backends; no editor application or Git metadata."
+  "source_archive_policy": "Selected transitive path-dependency closure, including dev dependencies and all referenced target backends; no editor application or Git metadata.",
+  "minimum_rust_version": "1.99",
+  "maintenance_changes": [
+    "Use std::f32::consts::GOLDEN_RATIO in phi(); bit-identical to the original f32 literal.",
+    "Use nonblocking Windows surface acquisition and test contention without presenting an incomplete frame."
+  ]
 }

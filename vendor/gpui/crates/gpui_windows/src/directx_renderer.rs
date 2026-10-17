@@ -843,9 +843,12 @@ impl DirectXRenderer {
                     .device
                     .CreateShaderResourceView(&imported, None, Some(&mut view))?
             };
-            // Diagnostic-only bounded wait; production needs nonblocking acquisition and redraw scheduling.
             // windows-rs treats positive WAIT_TIMEOUT/WAIT_ABANDONED as success.
-            let status = unsafe { (mutex.vtable().AcquireSync)(mutex.as_raw(), 1, 2000) };
+            let status = unsafe { (mutex.vtable().AcquireSync)(mutex.as_raw(), 1, 0) };
+            anyhow::ensure!(
+                status.0 != windows::Win32::Foundation::WAIT_TIMEOUT.0 as i32,
+                "surface not ready (WAIT_TIMEOUT); key 1 was unavailable without waiting"
+            );
             anyhow::ensure!(status.0 == 0, "surface AcquireSync failed: {status:?}");
             let draw_result = (|| -> Result<()> {
                 let (width, height) = surface.windows_surface.dimensions();

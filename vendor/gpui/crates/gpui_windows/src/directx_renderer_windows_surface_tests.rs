@@ -315,6 +315,46 @@ fn windows_surface_warp_draw_pixels() -> Result<()> {
         .pipelines
         .quad_pipeline
         .update_buffer(&devices.device, context, &[foreground])?;
+    // A competing consumer holds the published image; this renderer must not wait or sample it.
+    let competing_device = warp_device()?;
+    let resource: IDXGIResource = surfaces[0].windows_surface.texture().cast()?;
+    let mut competing_texture: Option<ID3D11Texture2D> = None;
+    unsafe {
+        competing_device
+            .device
+            .OpenSharedResource(resource.GetSharedHandle()?, &mut competing_texture)?;
+    }
+    let competing_mutex: IDXGIKeyedMutex = competing_texture
+        .context("no competing consumer texture")?
+        .cast()?;
+    let status =
+        unsafe { (competing_mutex.vtable().AcquireSync)(competing_mutex.as_raw(), 1, 2000) };
+    anyhow::ensure!(
+        status.0 == 0,
+        "competing consumer AcquireSync failed: {status:?}"
+    );
+    unsafe { context.ClearRenderTargetView(&target_view, &[0., 0., 1., 1.]) };
+    let started = Instant::now();
+    let unavailable = renderer.draw_surfaces(&surfaces);
+    let elapsed = started.elapsed();
+    // Release before assertions so failure does not leave the fixture locked.
+    unsafe { competing_mutex.ReleaseSync(1)? };
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "surface acquisition blocked: {elapsed:?}"
+    );
+    assert!(
+        unavailable
+            .unwrap_err()
+            .to_string()
+            .contains("WAIT_TIMEOUT")
+    );
+    assert!(
+        read_pixels(&devices.device, context, &target)?
+            .chunks_exact(4)
+            .all(|pixel| pixel == [255, 0, 0, 255]),
+        "unavailable surface changed the render target"
+    );
     for _ in 0..3 {
         unsafe { context.ClearRenderTargetView(&target_view, &[0., 0., 1., 1.]) };
         // Deliberate call order checks shader composition, not Scene batching or presentation.

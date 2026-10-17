@@ -51,7 +51,10 @@ slot directly to this API.
 Renderer and source adapter LUIDs must match. Every draw imports the resource,
 acquires key 1, submits sampling, unbinds the texture, flushes, and releases key 1.
 Acquisition uses the raw HRESULT and requires exactly S_OK. WAIT_TIMEOUT and
-WAIT_ABANDONED are not treated as success. Release is attempted even if instance
+WAIT_ABANDONED are not treated as success. Acquisition has a zero timeout: an
+unavailable key fails the draw without sampling or presenting the incomplete
+frame. There is no automatic retry; another application draw is required.
+Release is attempted even if instance
 buffer setup fails after acquisition. Resource-owned legacy handles are never
 closed with CloseHandle.
 
@@ -61,10 +64,9 @@ twice and alternates between two independent sources on foreground-square clicks
 There is no decoder-return callback, so dropping a scene cannot call back into
 and block the decoder. COM references keep source textures alive through drawing.
 
-**Deliberate proof limitations:** a draw can wait up to two seconds on acquisition;
-that is unacceptable for production responsiveness. Imports/SRVs are created each
-draw, and each published frame needs an independent texture. GPU work can exceed
-the wait bound, and a hung driver call is not bounded by it. No mutable pool,
+**Deliberate proof limitations:** zero-timeout mutex acquisition does not bound
+other driver calls or GPU work. Imports/SRVs are created each draw, and each
+published frame needs an independent texture. No mutable pool,
 concurrent producer, caching, frame dropping, retry scheduling, throughput,
 latency target, or device-loss recovery is proven. Ancestor opacity is captured in the scene and applied by the sprite shader.
 The surface element’s own style opacity and rounded corners remain unsupported
@@ -129,7 +131,7 @@ remains CPU-backed. A native Windows build remains a validation gate.
 
 The maintained implementation includes exactly one surface test,
 `directx_renderer::windows_surface_tests::windows_surface_warp_draw_pixels`,
-inside the private Windows renderer. It explicitly creates two distinct WARP
+inside the private Windows renderer. It explicitly creates three distinct WARP
 software devices on the same adapter. It does not create an HWND, swapchain,
 DirectComposition target, or visible window. Missing WARP or any GPU/API failure
 fails the test; it never silently skips.
@@ -138,7 +140,9 @@ The fixture calls the actual maintained `draw_surfaces()` and existing `draw_qua
 with real shader pipelines and a standalone BGRA render target. An odd-width
 9×5 source is copied once into an immutable shared publication. Its two surface
 clones remain after the original publication/producer handles are dropped. The
-test clears and draws three times, sampling exact interior pixels (±1 rounding)
+test first holds key 1 on a competing consumer, checks that drawing fails in
+under one second without changing target pixels, and releases the key before
+asserting the result. It then clears and draws three times, sampling exact interior pixels (±1 rounding)
 for content-mask clipping, red/green source colors, 50% opacity over blue,
 full-opacity duplicate sampling, and a foreground green quad. Row-pitch-aware
 staging readback is test instrumentation. Each nonblocking Map retry is bounded
@@ -218,8 +222,8 @@ not executed on Windows yet.
 
 ## Next production milestone
 
-After compile/display results, replace immutable per-frame allocation/import and
-diagnostic waits with a bounded bridge-slot pool and explicit ownership states.
+After compile/display results, replace immutable per-frame allocation/import
+with a bounded bridge-slot pool and explicit ownership states.
 Keep the decoder frame alive until decode-to-copy completion; allow decoder reuse
 only after the isolation copy has completed reading it. Keep a published bridge
 slot immutable until render-to-reuse completion, including scene replay and

@@ -37,8 +37,8 @@ their unchanged manifest constraints.
 
 The existing reviewed Windows immutable shared-surface experiment is incorporated
 into the source (the former `0001-windows-immutable-surface.patch`), including its
-example and WARP regression tests. The source files match that patch exactly.
-The changed paths are listed in `upstream.json`.
+example and WARP regression tests. The initial import matched that patch exactly.
+The changed paths, including subsequent maintenance, are listed in `upstream.json`.
 
 `WindowsSurface` remains experimental: it requires a separately owned immutable
 opaque SDR BGRA D3D11 texture with keyed-mutex synchronization. The renderer
@@ -50,3 +50,18 @@ shared-texture presentation for production sessions.
 Further fixes belong directly in this source tree, with ordinary XSCC review and
 testing. Any future upstream import must be explicit and update this provenance;
 builds must not silently advance the upstream revision.
+
+## Rust 1.99 maintenance
+
+The GPUI crate now declares Rust 1.99 as its minimum toolchain. Its `phi()` helper
+uses `std::f32::consts::GOLDEN_RATIO` instead of an approximate literal, satisfying
+Rust 1.99 Clippy without a lint suppression. Both values have identical `f32`
+bits (`0x3fcf1bbd`), so the returned layout fraction is unchanged. Dependency
+versions and the pinned upstream revision are unchanged.
+
+## Windows surface acquisition
+
+Shared-surface drawing now uses zero-timeout mutex acquisition. A busy surface
+fails the draw without presenting an incomplete frame; another application draw
+is required to retry. The WARP fixture includes consumer contention coverage.
+This changes only the experimental surface path, not application video sessions.
