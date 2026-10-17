@@ -579,6 +579,7 @@ pub fn hostname() -> String {
 }
 
 #[inline]
+#[cfg(not(target_os = "ios"))]
 pub fn get_sysinfo() -> serde_json::Value {
     use hbb_common::sysinfo::System;
     let mut system = System::new();
@@ -663,6 +664,13 @@ pub fn is_modifier(evt: &KeyEvent) -> bool {
     }
 }
 
+#[cfg(target_os = "ios")]
+pub fn check_software_update() {
+    clear_software_update_url();
+    log::info!("Desktop software updates are unsupported on iOS; install a separately signed update");
+}
+
+#[cfg(not(target_os = "ios"))]
 pub fn check_software_update() {
     if is_custom_client() || Config::get_option(keys::OPTION_UPDATE_URL).trim().is_empty() {
         return;
@@ -795,6 +803,7 @@ fn update_check_url(configured: &str) -> ResultType<Option<url::Url>> {
     Ok(Some(url))
 }
 
+#[cfg(not(target_os = "ios"))]
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     clear_software_update_url();

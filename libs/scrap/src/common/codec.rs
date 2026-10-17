@@ -33,10 +33,11 @@ use hbb_common::{
     anyhow::anyhow,
     bail,
     config::{Config, PeerConfig},
-    lazy_static, log,
-    sysinfo::System,
-    ResultType,
+    lazy_static, log, ResultType,
 };
+
+#[cfg(not(target_os = "ios"))]
+use hbb_common::sysinfo::System;
 
 lazy_static::lazy_static! {
     static ref PEER_DECODINGS: Arc<Mutex<HashMap<i32, SupportedDecoding>>> = Default::default();
@@ -966,6 +967,18 @@ pub fn base_bitrate(width: u32, height: u32) -> u32 {
     bitrate
 }
 
+#[cfg(any(target_os = "ios", test))]
+fn ios_codec_thread_limit(cpus: usize, limit: usize) -> usize {
+    // Bound decoder workers without querying desktop system load or memory.
+    (cpus / 2).clamp(1, 2).min(limit)
+}
+
+#[cfg(target_os = "ios")]
+pub fn codec_thread_num(limit: usize) -> usize {
+    ios_codec_thread_limit(num_cpus::get(), limit)
+}
+
+#[cfg(not(target_os = "ios"))]
 pub fn codec_thread_num(limit: usize) -> usize {
     let max: usize = num_cpus::get();
     let mut res;
@@ -1150,4 +1163,14 @@ pub fn test_av1() {
             );
         });
     });
+}
+
+#[cfg(test)]
+mod ios_thread_tests {
+    #[test]
+    fn ios_decoder_respects_cpu_and_codec_limits() {
+        assert_eq!(super::ios_codec_thread_limit(1, 64), 1);
+        assert_eq!(super::ios_codec_thread_limit(8, 64), 2);
+        assert_eq!(super::ios_codec_thread_limit(8, 1), 1);
+    }
 }

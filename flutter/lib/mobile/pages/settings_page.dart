@@ -97,7 +97,7 @@ class _SettingsState extends State<SettingsPage> {
       ],
     ));
     final List<AbstractSettingsTile> enhancementsTiles = [];
-    if (!bind.isCustomClient()) {
+    if (!isIOS && !bind.isCustomClient()) {
       enhancementsTiles.add(
         SettingsTile.switchTile(
           initialValue: _checkUpdateOnStartup,

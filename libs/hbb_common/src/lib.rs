@@ -44,10 +44,12 @@ pub use machine_uid;
 pub use serde_derive;
 pub use serde_json;
 pub use sha2;
+#[cfg(not(target_os = "ios"))]
 pub use sysinfo;
 pub use thiserror;
 pub use toml;
 pub use uuid;
+#[cfg(not(target_os = "ios"))]
 pub mod fingerprint;
 pub use flexi_logger;
 pub mod log_throttle;
@@ -429,6 +431,7 @@ pub struct VersionCheckResponse {
 pub const VER_TYPE_RUSTDESK_CLIENT: &str = "rustdesk-client";
 pub const VER_TYPE_RUSTDESK_SERVER: &str = "rustdesk-server";
 
+#[cfg(not(target_os = "ios"))]
 pub fn version_check_request(typ: String) -> (VersionCheckRequest, String) {
     const URL: &str = "https://api.rustdesk.com/version/latest";
 
