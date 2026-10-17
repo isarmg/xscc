@@ -23,12 +23,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let directory = management::application_directory();
     let handle = runtime.handle().clone();
     gpui::application().run(move |cx: &mut App| {
+        eprintln!("XSCC_GPUI_LAUNCH_CALLBACK_REACHED");
         text_field::init(cx);
         if let Err(error) = cx.open_window(WindowOptions::default(), |window, cx| {
             cx.new(|cx| panel::Panel::new(directory, handle, window, cx))
         }) {
             eprintln!("Could not open the management preview: {error}");
             cx.quit();
+        } else {
+            eprintln!("XSCC_GPUI_WINDOW_CREATED");
         }
     });
     runtime.shutdown_timeout(std::time::Duration::from_secs(3));

@@ -153,3 +153,36 @@ jobs:
           name: xscc-gpui-touch-preview-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error
+  simulator-smoke:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.99.0'
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: experiments/gpui-mobile-management
+          key: gpui-ios26-management-simulator
+          cache-on-failure: true
+      - name: Build management-only Simulator application
+        working-directory: experiments/gpui-mobile-management
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '26.0'
+        run: cargo build --locked --target aarch64-apple-ios-sim --bin xscc-gpui-mobile-management
+      - name: Install, launch, capture and relaunch in Simulator
+        run: |
+          set -o pipefail
+          mkdir -p simulator-evidence
+          python3 .github/scripts/smoke-gpui-ios-simulator.py experiments/gpui-mobile-management/target/aarch64-apple-ios-sim/debug/xscc-gpui-mobile-management simulator-evidence 2>&1 | tee simulator-evidence/commands.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: xscc-gpui-simulator-evidence-${{ github.sha }}
+          path: simulator-evidence/
+          if-no-files-found: warn
