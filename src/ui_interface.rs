@@ -83,6 +83,13 @@ pub fn get_id() -> String {
     return ipc::get_id();
 }
 
+#[cfg(target_os = "ios")]
+pub fn get_local_address() -> String {
+    // The iOS client has no host listener to advertise.
+    String::new()
+}
+
+#[cfg(not(target_os = "ios"))]
 pub fn get_local_address() -> String {
     use std::net::{IpAddr, SocketAddr};
 
