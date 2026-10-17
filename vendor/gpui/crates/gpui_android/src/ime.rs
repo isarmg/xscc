@@ -64,9 +64,10 @@ impl WindowState {
             ime.requested |= show_requested;
             self.ime_bridge.configure(
                 ime.generation,
-                kind.bits(),
+                // Android flags are u32 bitsets; JNI jint preserves their signed bit pattern.
+                kind.bits() as i32,
                 action,
-                options.bits(),
+                options.bits() as i32,
                 native_state(&current),
                 ime.requested,
             );
