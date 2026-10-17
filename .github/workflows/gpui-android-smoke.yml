@@ -8,6 +8,7 @@ on:
       - 'packaging/gpui-android/**'
       - '.github/workflows/gpui-android-smoke.yml'
       - '.github/scripts/*gpui-android*'
+      - '.github/scripts/*gpui-game-activity*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,6 +36,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 .github/scripts/test-gpui-android-apk.py
           python3 .github/scripts/test-gpui-android-privacy.py
+          python3 .github/scripts/test-gpui-game-activity.py
 
       - name: Install native build prerequisites
         run: |

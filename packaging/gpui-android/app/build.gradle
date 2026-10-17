@@ -2,7 +2,26 @@ plugins {
     id 'com.android.application'
 }
 
+configurations {
+    gameActivityOriginal {
+        canBeConsumed = false
+        transitive = false
+    }
+}
+
+def filteredGameActivity = layout.buildDirectory.file('privacy/game-activity-4.4.0.aar')
+def prepareGameActivity = tasks.register('prepareGameActivity', Exec) {
+    inputs.files(configurations.gameActivityOriginal)
+    inputs.file(rootProject.file('../../.github/scripts/prepare-gpui-game-activity.py'))
+    outputs.file(filteredGameActivity)
+    doFirst {
+        commandLine 'python3', rootProject.file('../../.github/scripts/prepare-gpui-game-activity.py'),
+            configurations.gameActivityOriginal.singleFile, filteredGameActivity.get().asFile
+    }
+}
+
 android {
+    sourceSets.main.java.srcDir '../vendor/game-text-input/src/main/java'
     namespace 'org.xscc.gpui.smoke'
     compileSdk 36
 
@@ -40,7 +59,8 @@ android {
 }
 
 dependencies {
-    implementation 'androidx.games:games-activity:4.4.0'
+    gameActivityOriginal 'androidx.games:games-activity:4.4.0@aar'
+    implementation files(filteredGameActivity).builtBy(prepareGameActivity)
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'androidx.core:core:1.13.0'
 }

@@ -36,7 +36,11 @@ References: [GameActivity integration](https://developer.android.com/games/agdk/
 
 ## IME logging privacy gate
 
-GameActivity 4.4.0 ships Java debug logs that include input text. Only the
+GameActivity 4.4.0 ships Java debug logs that include input text. The fixed
+upstream InputConnection source under `vendor/game-text-input` removes only its
+30 debug-log statements and their argument expressions; its provenance records
+the upstream revision and SHA256. A SHA-pinned AAR filter removes exactly the
+three replaced class files and preserves all other AAR entries. Only the
 R8-optimized release variant is enabled here; debug APK generation is disabled.
 The local rules remove debug/verbose log calls while retaining info/warn/error
 diagnostics. The AndroidX annotation keep rules are restated unchanged for other
