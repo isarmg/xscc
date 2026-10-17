@@ -64,8 +64,12 @@ impl ManagementPanel {
         });
     }
 
+    fn can_act(&self) -> bool {
+        management_actions_enabled(self.initialized, self.status_pending, self.action_pending)
+    }
+
     fn action(&mut self, request: Command) {
-        if !self.initialized || self.action_pending {
+        if !self.can_act() {
             return;
         }
         self.action_pending = true;
@@ -89,7 +93,7 @@ impl ManagementPanel {
     }
 
     fn enroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.initialized || self.action_pending || self.status.is_none() {
+        if !self.can_act() || self.status.is_none() {
             return;
         }
         let server = self.server.read(cx).value().trim().to_owned();
@@ -125,7 +129,7 @@ impl ManagementPanel {
     }
 
     fn save_address(&mut self, cx: &mut Context<Self>) {
-        if !self.host || !self.initialized || self.action_pending {
+        if !self.host || !self.can_act() {
             return;
         }
         match crate::host_address::parse(
@@ -251,7 +255,7 @@ impl Render for ManagementPanel {
             } else {
                 "本机服务启动失败，请重新启动应用。"
             });
-        let idle = self.initialized && !self.action_pending;
+        let idle = self.can_act();
         let can_refresh = idle && !self.status_pending;
         let peers = self
             .status
@@ -366,7 +370,7 @@ impl Render for ManagementPanel {
                                     "解绑此实例"
                                 })
                                 .on_click(cx.listener(|view, _, _, cx| {
-                                    if !view.initialized || view.action_pending { return; }
+                                    if !view.can_act() { return; }
                                     if view.confirm_unbind {
                                         view.video.update(cx, |video, cx| video.disconnect(cx));
                                         view.action(Command::Unbind);
@@ -718,7 +722,10 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     let management_task = cx.spawn(async move |view, cx| {
                         loop {
                             if view
-                                .update(cx, |view: &mut ManagementPanel, _| view.refresh())
+                                .update(cx, |view: &mut ManagementPanel, cx| {
+                                    view.refresh();
+                                    cx.notify();
+                                })
                                 .is_err()
                             {
                                 break;
@@ -770,6 +777,14 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+fn management_actions_enabled(
+    initialized: bool,
+    status_pending: bool,
+    action_pending: bool,
+) -> bool {
+    initialized && !status_pending && !action_pending
+}
+
 fn management_status(configured: bool, phase: &str) -> &'static str {
     if !configured {
         return "尚未绑定实例";
@@ -785,7 +800,15 @@ fn management_status(configured: bool, phase: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::management_status;
+    use super::{management_actions_enabled, management_status};
+
+    #[test]
+    fn management_actions_wait_for_refresh_before_changing_binding_or_addresses() {
+        assert!(management_actions_enabled(true, false, false));
+        assert!(!management_actions_enabled(true, true, false));
+        assert!(!management_actions_enabled(true, false, true));
+        assert!(!management_actions_enabled(false, false, false));
+    }
 
     #[test]
     fn binding_status_offers_recovery_instead_of_internal_phase_names() {
