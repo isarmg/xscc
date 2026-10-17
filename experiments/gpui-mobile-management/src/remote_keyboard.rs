@@ -1,5 +1,5 @@
 use crate::{
-    keyboard_action::{editor_action, finish_editor_action},
+    keyboard_action::{Shortcut, editor_action, finish_editor_action},
     keyboard_input::{KeyboardState, Output},
     theme,
 };
@@ -18,6 +18,7 @@ use std::{
 pub enum Command {
     Text(String),
     Key(ControlKey),
+    Shortcut(Shortcut),
 }
 pub struct KeyboardEvent {
     pub epoch: u64,
@@ -28,6 +29,7 @@ pub struct KeyboardControl {
     enabled: Cell<bool>,
     editing: Cell<bool>,
     unicode: Cell<bool>,
+    shortcuts: Cell<bool>,
 }
 impl KeyboardControl {
     pub fn new(unicode: bool) -> Rc<Self> {
@@ -36,6 +38,7 @@ impl KeyboardControl {
             enabled: Cell::new(false),
             editing: Cell::new(false),
             unicode: Cell::new(unicode),
+            shortcuts: Cell::new(false),
         })
     }
     pub fn epoch(&self) -> u64 {
@@ -45,8 +48,9 @@ impl KeyboardControl {
         self.editing.set(false);
         self.state.borrow_mut().reset();
     }
-    pub fn configure(&self, enabled: bool, unicode: bool) {
+    pub fn configure(&self, enabled: bool, unicode: bool, shortcuts: bool) {
         self.unicode.set(unicode);
+        self.shortcuts.set(enabled && shortcuts);
         if self.enabled.replace(enabled) && !enabled {
             self.cancel();
         }
@@ -106,6 +110,17 @@ impl RemoteKeyboard {
             }
             Err(_) => self.notice = "输入已取消：目标不支持该文字或编辑范围，请重新输入。".into(),
         }
+        self.changed(window, cx);
+    }
+    fn shortcut(&mut self, shortcut: Shortcut, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.control.enabled.get() || !self.control.shortcuts.get() {
+            return;
+        }
+        shortcut.cancel_composition(&mut self.control.state.borrow_mut());
+        cx.emit(KeyboardEvent {
+            epoch: self.control.epoch(),
+            commands: vec![Command::Shortcut(shortcut)],
+        });
         self.changed(window, cx);
     }
     fn control_key(&mut self, key: ControlKey, window: &mut Window, cx: &mut Context<Self>) {
@@ -353,6 +368,29 @@ impl Render for RemoteKeyboard {
                                 .child(label)
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     view.control_key(key, window, cx)
+                                }))
+                        }),
+                    ),
+                )
+            })
+            .when(enabled && self.control.shortcuts.get(), |view| {
+                view.child(
+                    div().flex().flex_wrap().gap_2().children(
+                        [
+                            ("全选 Ctrl+A", Shortcut::SelectAll),
+                            ("撤销 Ctrl+Z", Shortcut::Undo),
+                            ("保存 Ctrl+S", Shortcut::Save),
+                        ]
+                        .into_iter()
+                        .map(|(label, shortcut)| {
+                            div()
+                                .id(label)
+                                .min_h(gpui::px(44.))
+                                .p_2()
+                                .bg(rgb(palette.panel))
+                                .child(label)
+                                .on_click(cx.listener(move |view, _, window, cx| {
+                                    view.shortcut(shortcut, window, cx)
                                 }))
                         }),
                     ),

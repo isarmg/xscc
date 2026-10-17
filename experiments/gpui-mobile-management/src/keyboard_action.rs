@@ -69,3 +69,45 @@ mod tests {
         assert!(state.marked().is_none());
     }
 }
+
+/// Explicit one-shot actions, not an arbitrary key/modifier injection interface.
+#[derive(Clone, Copy)]
+pub enum Shortcut {
+    SelectAll,
+    Undo,
+    Save,
+}
+impl Shortcut {
+    pub fn character(self) -> char {
+        match self {
+            Self::SelectAll => 'a',
+            Self::Undo => 'z',
+            Self::Save => 's',
+        }
+    }
+    pub fn cancel_composition(self, state: &mut KeyboardState) {
+        state.reset();
+    }
+}
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    #[test]
+    fn shortcuts_cancel_preedit_and_invalidate_old_commits() {
+        for (shortcut, chr) in [
+            (Shortcut::SelectAll, 'a'),
+            (Shortcut::Undo, 'z'),
+            (Shortcut::Save, 's'),
+        ] {
+            let mut state = KeyboardState::new();
+            let old = state.epoch();
+            state.mark(old, None, "未提交", None).unwrap();
+            shortcut.cancel_composition(&mut state);
+            assert_eq!(shortcut.character(), chr);
+            assert_ne!(state.epoch(), old);
+            assert!(state.marked().is_none());
+            assert!(state.unmark(state.epoch(), true).unwrap().is_empty());
+            assert!(state.commit(old, None, "迟到", true).is_err());
+        }
+    }
+}

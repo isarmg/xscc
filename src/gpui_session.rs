@@ -41,7 +41,15 @@ fn mobile_pointer_permitted(enabled: bool, input: &InputCommand) -> bool {
 fn mobile_keyboard_permitted(enabled: bool, platform: &str, input: &InputCommand) -> bool {
     if !enabled || !matches!(platform, "Mac OS" | "Windows" | "Linux") { return false; }
     let InputCommand::Key(event) = input else { return false; };
-    if event.down || !event.modifiers.is_empty() || event.mode.enum_value() != Ok(KeyboardMode::Legacy) { return false; }
+    if event.down || event.mode.enum_value() != Ok(KeyboardMode::Legacy) { return false; }
+    if !event.modifiers.is_empty() {
+        // Only three one-shot legacy shortcuts. The existing Windows/Linux host
+        // handler releases modifiers it presses within the same input operation.
+        return matches!(platform, "Windows" | "Linux") && event.press
+            && event.modifiers.len() == 1
+            && event.modifiers[0].enum_value() == Ok(ControlKey::Control)
+            && matches!(event.union, Some(key_event::Union::Chr(97 | 122 | 115)));
+    }
     match &event.union {
         Some(key_event::Union::Seq(text)) => !event.press && !text.is_empty() && text.chars().all(|ch| {
             !ch.is_control() && (platform != "Linux" || ch.is_ascii() && (' '..='~').contains(&ch))
@@ -237,6 +245,12 @@ impl SessionHandle {
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub fn native_unicode_supported(&self) -> bool {
         matches!(self.session.ui_handler.0.platform.read().unwrap().as_str(), "Mac OS" | "Windows")
+    }
+
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub fn common_shortcuts_supported(&self) -> bool {
+        self.keyboard_input_allowed()
+            && matches!(self.session.ui_handler.0.platform.read().unwrap().as_str(), "Windows" | "Linux")
     }
 
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
@@ -1110,4 +1124,39 @@ mod tests {
         handle.session.ui_handler.on_rgba(0, &mut image);
         assert!(handle.take_frame().is_none());
     }
+    #[test]
+    fn mobile_shortcuts_are_three_one_shot_control_chords_only() {
+        for platform in ["Windows", "Linux"] {
+            for chr in ['a', 'z', 's'] {
+                let mut key = KeyEvent::new();
+                key.set_chr(chr as u32);
+                key.press = true;
+                key.modifiers.push(ControlKey::Control.into());
+                let input = InputCommand::Key(key.clone());
+                assert!(mobile_keyboard_permitted(true, platform, &input));
+                assert!(!mobile_keyboard_permitted(false, platform, &input));
+                assert!(!mobile_keyboard_permitted(true, "Mac OS", &input));
+                assert!(!mobile_keyboard_permitted(true, "unknown", &input));
+                key.down = true;
+                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+                key.down = false;
+                key.press = false;
+                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+                key.press = true;
+                key.mode = KeyboardMode::Map.into();
+                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+                key.mode = KeyboardMode::Legacy.into();
+                key.modifiers.push(ControlKey::Shift.into());
+                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+                key.modifiers = vec![ControlKey::Alt.into()];
+                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+            }
+        }
+        for chr in ['c', 'v', 'x', 'q', '中'] {
+            let mut key = KeyEvent::new(); key.set_chr(chr as u32); key.press = true;
+            key.modifiers.push(ControlKey::Control.into());
+            assert!(!mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key)));
+        }
+    }
+
 }

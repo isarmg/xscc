@@ -6,7 +6,7 @@ use crate::{
     touch_input::{Geometry, Output, Phase, Point, TouchInput},
 };
 use base::{
-    message_proto::{KeyEvent, MouseEvent},
+    message_proto::{ControlKey, KeyEvent, MouseEvent},
     session_protocol::input,
 };
 use gpui::{
@@ -160,7 +160,7 @@ impl SessionView {
 
     pub fn stop(&mut self) {
         if let Some(control) = self.keyboard_control.take() {
-            control.configure(false, false);
+            control.configure(false, false, false);
             control.cancel();
         }
         self.keyboard.take();
@@ -371,6 +371,11 @@ impl SessionView {
                 let mut key = KeyEvent::new();
                 match command {
                     Command::Text(text) => key.set_seq(text.clone()),
+                    Command::Shortcut(shortcut) => {
+                        key.set_chr(shortcut.character() as u32);
+                        key.press = true;
+                        key.modifiers.push(ControlKey::Control.into());
+                    }
                     Command::Key(control) => {
                         key.set_control_key(*control);
                         key.press = true;
@@ -581,6 +586,9 @@ impl SessionView {
                 self.session
                     .as_ref()
                     .is_some_and(SessionHandle::native_unicode_supported),
+                self.session
+                    .as_ref()
+                    .is_some_and(SessionHandle::common_shortcuts_supported),
             );
         }
         let pending = self.touch.flush();

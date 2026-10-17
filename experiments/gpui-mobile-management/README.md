@@ -194,3 +194,15 @@ and codec for the current display; missing values remain unknown, and these are
 not physical presentation or end-to-end latency measurements. No new protocol,
 freeform resolution or hardware-decoder support is introduced. Physical-device
 multi-monitor, pointer alignment and constrained-network acceptance remains open.
+
+
+### Limited one-shot shortcuts
+
+Windows and Linux targets expose only Select All (Ctrl+A), Undo (Ctrl+Z) and Save
+(Ctrl+S). Each action cancels local preedit/context and sends a single allowed
+legacy key-press command through the same authorization/input-permission gates.
+The existing host path releases modifiers it introduces during that operation;
+the mobile UI never leaves a modifier latched. Arbitrary chords, clipboard
+shortcuts, window switching and macOS shortcuts are not enabled by this slice.
+macOS native text and existing unmodified controls remain available. Actual
+application behavior and device interaction still require acceptance testing.
