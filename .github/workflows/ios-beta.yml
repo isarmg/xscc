@@ -11,7 +11,6 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 180
     env:
-      IPHONEOS_DEPLOYMENT_TARGET: "26.0"
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
     steps:
