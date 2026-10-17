@@ -68,7 +68,8 @@ pub fn key(key: &Keystroke, down: bool) -> Option<Message> {
         if chars.next().is_some() || value.is_control() {
             return None;
         }
-        event.set_unicode(u32::from(value));
+        // Legacy Unicode injects text on both down and up; Chr preserves the edge.
+        event.set_chr(u32::from(value));
     }
     let mut message = Message::new();
     message.set_key_event(event);
@@ -83,6 +84,18 @@ pub fn pointer(
     kind: i32,
     button: i32,
 ) -> Option<Message> {
+    pointer_with_capture(x, y, viewport, frame, kind, button, false)
+}
+
+pub fn pointer_with_capture(
+    x: f32,
+    y: f32,
+    viewport: (f32, f32),
+    frame: (u32, u32),
+    kind: i32,
+    button: i32,
+    captured: bool,
+) -> Option<Message> {
     if ![x, y, viewport.0, viewport.1]
         .into_iter()
         .all(f32::is_finite)
@@ -96,7 +109,11 @@ pub fn pointer(
     let scale = (viewport.0 / frame.0 as f32).min(viewport.1 / frame.1 as f32);
     let remote_x = (x - (viewport.0 - frame.0 as f32 * scale) / 2.0) / scale;
     let remote_y = (y - (viewport.1 - frame.1 as f32 * scale) / 2.0) / scale;
-    if remote_x < 0.0 || remote_y < 0.0 || remote_x >= frame.0 as f32 || remote_y >= frame.1 as f32
+    if !captured
+        && (remote_x < 0.0
+            || remote_y < 0.0
+            || remote_x >= frame.0 as f32
+            || remote_y >= frame.1 as f32)
     {
         return None;
     }
@@ -116,11 +133,43 @@ pub fn pointer(
     let mut message = Message::new();
     message.set_mouse_event(MouseEvent {
         mask: event_type | (button << 3),
-        x: remote_x as i32,
-        y: remote_y as i32,
+        x: remote_x.clamp(0.0, (frame.0 - 1) as f32) as i32,
+        y: remote_y.clamp(0.0, (frame.1 - 1) as f32) as i32,
         ..Default::default()
     });
     Some(message)
+}
+
+#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+pub fn release_key(pressed: &Message) -> Message {
+    let mut message = pressed.clone();
+    let event = message.mut_key_event();
+    event.down = false;
+    event.press = false;
+    // Legacy Chr uses these flags to decide whether a physical key needs releasing.
+    if !event.has_chr() {
+        event.modifiers.clear();
+    }
+    message
+}
+
+#[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
+pub fn modifier_keys(modifiers: gpui::Modifiers) -> Vec<protobuf::EnumOrUnknown<ControlKey>> {
+    [
+        ControlKey::Control,
+        ControlKey::Alt,
+        ControlKey::Shift,
+        ControlKey::Meta,
+    ]
+    .into_iter()
+    .zip([
+        modifiers.control,
+        modifiers.alt,
+        modifiers.shift,
+        modifiers.platform,
+    ])
+    .filter_map(|(key, enabled)| enabled.then_some(key.into()))
+    .collect()
 }
 
 #[cfg(any(all(target_os = "windows", feature = "live-session"), test))]
@@ -161,6 +210,76 @@ pub fn wheel(x: i32, y: i32, trackpad: bool, modifiers: gpui::Modifiers) -> Opti
 mod tests {
     use super::*;
     use protobuf::Message as _;
+    #[test]
+    fn printable_keys_use_edges_and_release_the_original_character() {
+        let pressed = key(
+            &Keystroke {
+                key: "a".into(),
+                key_char: Some("A".into()),
+                modifiers: gpui::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            },
+            true,
+        )
+        .unwrap();
+        assert!(pressed.key_event().has_chr());
+        assert_eq!(pressed.key_event().chr(), u32::from('A'));
+        assert!(pressed.key_event().down);
+        let released = release_key(&pressed);
+        assert_eq!(released.key_event().chr(), u32::from('A'));
+        assert!(!released.key_event().down);
+        assert_eq!(
+            released.key_event().modifiers,
+            vec![ControlKey::Shift.into()]
+        );
+    }
+
+    #[test]
+    fn hotkey_release_keeps_press_modifiers_after_control_is_released_or_focus_is_lost() {
+        let pressed = key(
+            &Keystroke {
+                key: "c".into(),
+                modifiers: gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap();
+        let released = release_key(&pressed);
+        assert_eq!(released.key_event().chr(), u32::from('c'));
+        assert_eq!(
+            released.key_event().modifiers,
+            vec![ControlKey::Control.into()]
+        );
+        assert!(!released.key_event().down);
+    }
+
+    #[test]
+    fn captured_drag_clamps_to_frame_edges_but_outside_clicks_are_ignored() {
+        assert!(pointer(500.0, 1.0, (1000.0, 800.0), (1920, 1080), 1, 1).is_none());
+        let dragged =
+            pointer_with_capture(-40.0, 900.0, (1000.0, 800.0), (1920, 1080), 0, 0, true).unwrap();
+        assert_eq!(
+            (dragged.mouse_event().x, dragged.mouse_event().y),
+            (0, 1079)
+        );
+        let released =
+            pointer_with_capture(1100.0, 1.0, (1000.0, 800.0), (1920, 1080), 2, 1, true).unwrap();
+        assert_eq!(
+            (released.mouse_event().x, released.mouse_event().y),
+            (1919, 0)
+        );
+        assert_eq!(
+            released.mouse_event().mask,
+            input::MOUSE_TYPE_UP | (input::MOUSE_BUTTON_LEFT << 3)
+        );
+    }
+
     #[test]
     fn function_keys_and_wheel_use_native_protocol() {
         let event = key(
@@ -212,7 +331,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(event.key_event().unicode(), u32::from('s'));
+        assert_eq!(event.key_event().chr(), u32::from('s'));
         assert_eq!(
             event.key_event().modifiers,
             vec![ControlKey::Control.into()]

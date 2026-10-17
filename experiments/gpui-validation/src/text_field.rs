@@ -93,6 +93,10 @@ impl TextField {
         }
     }
 
+    pub fn is_composing(&self) -> bool {
+        self.marked.is_some()
+    }
+
     pub fn value(&self) -> &str {
         &self.content
     }

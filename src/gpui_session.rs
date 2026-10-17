@@ -219,10 +219,10 @@ pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
     tokio::spawn(async move {
         let mut remote = Remote::new(running, receiver, sender);
         remote.io_loop(round).await;
+        handler.0.closed.store(true, Ordering::Release);
         handler.0.connected.store(false, Ordering::Release);
         handler.0.frame.pop();
         handler.event(SessionEvent::Disconnected);
-        handler.0.closed.store(true, Ordering::Release);
         handler.0.updates.notify_one();
     });
     Ok(SessionHandle { session })
@@ -237,8 +237,11 @@ impl InvokeUiSession for Handler {
             if self.0.closed.load(Ordering::Acquire) {
                 return;
             }
-            self.0.frame.force_push(frame);
-            self.0.updates.notify_one();
+            // Replacing an unread frame needs no second UI wake: the pending
+            // render will take the newest frame from the same mailbox.
+            if self.0.frame.force_push(frame).is_none() {
+                self.0.updates.notify_one();
+            }
         }
     }
     fn set_display(&self, x: i32, y: i32, width: i32, height: i32, _: bool, _: f64) {
@@ -394,8 +397,11 @@ mod tests {
     }
     #[tokio::test]
     async fn latest_frame_replaces_old_frame_without_waiting() {
-        let handler = Handler::default();
-        let updates = SessionUpdates(handler.0.clone());
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let handler = &handle.session.ui_handler;
+        let updates = handle.updates();
         let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255],
             w: 1,
@@ -411,8 +417,25 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(handler.0.frame.pop().unwrap().bgra[2], 9);
-        assert!(handler.0.frame.pop().is_none());
+        // The notification relay can wake before the UI renders. Further
+        // replacements must not wake it again until the pending frame is taken.
+        image.raw[0] = 10;
+        handler.on_rgba(0, &mut image);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), updates.wait())
+                .await
+                .is_err()
+        );
+        assert_eq!(handle.take_frame().unwrap().bgra[2], 10);
+        assert!(handle.take_frame().is_none());
+        image.raw[0] = 11;
+        handler.on_rgba(0, &mut image);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), updates.wait())
+                .await
+                .unwrap()
+        );
+        assert_eq!(handle.take_frame().unwrap().bgra[2], 11);
     }
     #[test]
     fn typed_input_preserves_key_order_and_rejects_disconnected_input() {

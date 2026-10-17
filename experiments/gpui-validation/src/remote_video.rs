@@ -1,9 +1,10 @@
 use crate::{input, presentation::VideoPresentation};
 use base::message_proto::Message;
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, ImageSource, IntoElement, KeyDownEvent, KeyUpEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render,
-    ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img, prelude::*, rgb,
+    Bounds, Context, DispatchPhase, EventEmitter, FocusHandle, ImageSource, IntoElement,
+    KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit,
+    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img,
+    prelude::*, rgb,
 };
 use librustdesk::gpui_session::{self, InputCommand, SessionEvent, SessionHandle, TargetFps};
 use std::{
@@ -176,16 +177,15 @@ impl RemoteVideo {
     }
 
     fn release_input(&mut self) -> bool {
+        self.scroll_remainder = (0.0, 0.0);
         let Some(session) = &self.session else {
             self.keys.clear();
             self.buttons.clear();
             return false;
         };
         let mut failed = false;
-        for (_, mut message) in self.keys.drain() {
-            message.mut_key_event().down = false;
-            message.mut_key_event().press = false;
-            message.mut_key_event().modifiers.clear();
+        for (_, pressed) in self.keys.drain() {
+            let message = input::release_key(&pressed);
             if let Err(error) = session.send_input(InputCommand::Key(message.key_event().clone())) {
                 self.notice = error.to_string();
                 failed = true;
@@ -194,6 +194,7 @@ impl RemoteVideo {
         for (_, mut message) in self.buttons.drain() {
             let event = message.mut_mouse_event();
             event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
+            event.modifiers.clear();
             if let Err(error) =
                 session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
             {
@@ -334,7 +335,12 @@ impl RemoteVideo {
         if !self.connected || !self.keyboard_allowed {
             return false;
         }
-        let Some(message) = input::key(key, down) else {
+        let message = if down {
+            input::key(key, true)
+        } else {
+            self.keys.get(&key.key).map(input::release_key)
+        };
+        let Some(message) = message else {
             return false;
         };
         if let Some(session) = &self.session {
@@ -343,7 +349,7 @@ impl RemoteVideo {
                 return true;
             }
             if down {
-                self.keys.insert(key.key.clone(), message);
+                self.keys.entry(key.key.clone()).or_insert(message);
             } else {
                 self.keys.remove(&key.key);
             }
@@ -359,6 +365,9 @@ impl RemoteVideo {
             ScrollDelta::Lines(delta) => (delta.x, delta.y, false),
             ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
         };
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
         self.scroll_remainder.0 += x;
         self.scroll_remainder.1 += y;
         let x = self.scroll_remainder.0.trunc() as i32;
@@ -376,20 +385,30 @@ impl RemoteVideo {
         false
     }
 
-    fn pointer(&mut self, position: Point<Pixels>, kind: i32, button: i32) -> bool {
+    fn pointer(
+        &mut self,
+        position: Point<Pixels>,
+        kind: i32,
+        button: i32,
+        modifiers: gpui::Modifiers,
+    ) -> bool {
         if !self.connected || !self.keyboard_allowed {
             return false;
         }
         let bounds = self.bounds.get();
-        let message = input::pointer(
+        if kind == 2 && !self.buttons.contains_key(&button) {
+            return false;
+        }
+        let message = input::pointer_with_capture(
             f32::from(position.x - bounds.origin.x),
             f32::from(position.y - bounds.origin.y),
             (bounds.size.width.into(), bounds.size.height.into()),
             self.extent,
             kind,
             button,
+            kind != 1 && !self.buttons.is_empty(),
         );
-        // A release outside the letterboxed frame still releases the held button.
+        // Preserve release even if the frame or viewport became unavailable during a drag.
         let already_absolute = message.is_none();
         let message = message.or_else(|| {
             (kind == 2)
@@ -398,6 +417,7 @@ impl RemoteVideo {
         });
         if let Some(mut message) = message {
             let event = message.mut_mouse_event();
+            event.modifiers = input::modifier_keys(modifiers);
             if kind == 2 {
                 event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
             }
@@ -412,6 +432,11 @@ impl RemoteVideo {
                 {
                     self.notice = error.to_string();
                     return true;
+                }
+                // Focus-loss releases should use the last drag position, not jump to its start.
+                for pressed in self.buttons.values_mut() {
+                    pressed.mut_mouse_event().x = message.mouse_event().x;
+                    pressed.mut_mouse_event().y = message.mouse_event().y;
                 }
                 if kind == 1 {
                     self.buttons.insert(button, message);
@@ -443,6 +468,14 @@ impl Render for RemoteVideo {
             }
         }
         let bounds = self.bounds.clone();
+        let drag_move = cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+            if !view.buttons.is_empty()
+                && !view.bounds.get().contains(&event.position)
+                && view.pointer(event.position, 0, 0, event.modifiers)
+            {
+                view.publish(cx);
+            }
+        });
         div()
             .id("remote-video")
             .relative()
@@ -451,6 +484,22 @@ impl Render for RemoteVideo {
             .text_color(rgb(crate::theme::DARK.muted))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if view.focus.is_focused(window)
+                    && event.keystroke.key == "enter"
+                    && event.keystroke.modifiers.control
+                    && event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.shift
+                    && !event.keystroke.modifiers.platform
+                {
+                    if !event.is_held {
+                        if view.release_input() {
+                            view.publish(cx);
+                        }
+                        window.toggle_fullscreen();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if view.focus.is_focused(window) && view.key(&event.keystroke, true) {
                     view.publish(cx);
                 }
@@ -464,7 +513,7 @@ impl Render for RemoteVideo {
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseDownEvent, window, cx| {
                     view.focus.focus(window, cx);
-                    if view.pointer(event.position, 1, 1) {
+                    if view.pointer(event.position, 1, 1, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -472,7 +521,7 @@ impl Render for RemoteVideo {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
-                    if view.pointer(event.position, 2, 1) {
+                    if view.pointer(event.position, 2, 1, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -480,7 +529,7 @@ impl Render for RemoteVideo {
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
-                    if view.pointer(event.position, 2, 1) {
+                    if view.pointer(event.position, 2, 1, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -489,7 +538,7 @@ impl Render for RemoteVideo {
                 MouseButton::Right,
                 cx.listener(|view, event: &MouseDownEvent, window, cx| {
                     view.focus.focus(window, cx);
-                    if view.pointer(event.position, 1, 2) {
+                    if view.pointer(event.position, 1, 2, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -497,7 +546,7 @@ impl Render for RemoteVideo {
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
-                    if view.pointer(event.position, 2, 2) {
+                    if view.pointer(event.position, 2, 2, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -505,7 +554,32 @@ impl Render for RemoteVideo {
             .on_mouse_up_out(
                 MouseButton::Right,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| {
-                    if view.pointer(event.position, 2, 2) {
+                    if view.pointer(event.position, 2, 2, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    view.focus.focus(window, cx);
+                    if view.pointer(event.position, 1, 3, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 3, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 3, event.modifiers) {
                         view.publish(cx);
                     }
                 }),
@@ -516,7 +590,7 @@ impl Render for RemoteVideo {
                 }
             }))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
-                if view.pointer(event.position, 0, 0) {
+                if view.pointer(event.position, 0, 0, event.modifiers) {
                     view.publish(cx);
                 }
             }))
@@ -532,11 +606,20 @@ impl Render for RemoteVideo {
                     .then_some(div().p_4().child("尚无远程画面")),
             )
             .child(
-                canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
+                canvas(
+                    move |area, _, _| bounds.set(area),
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                drag_move(event, window, cx);
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
             )
     }
 }

@@ -4,8 +4,9 @@ use crate::{
     theme,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, IntoElement, Render, StyleRefinement, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, KeyDownEvent, Render,
+    StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -36,6 +37,7 @@ struct ManagementPanel {
     initialized: bool,
     status: Option<Status>,
     status_pending: bool,
+    status_error: Option<String>,
     action_pending: bool,
     confirm_unbind: bool,
     notice: String,
@@ -68,7 +70,13 @@ impl ManagementPanel {
         }
         self.action_pending = true;
         self.confirm_unbind = false;
-        self.notice = "正在处理管理请求…".into();
+        self.notice = match &request {
+            Command::Enroll { .. } => "正在绑定实例…",
+            Command::Resume => "正在重新连接服务端…",
+            Command::Unbind => "正在解绑实例…",
+            Command::SetAddresses { .. } => "正在保存访问地址…",
+        }
+        .into();
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.runtime.spawn(async move {
@@ -81,7 +89,7 @@ impl ManagementPanel {
     }
 
     fn enroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.initialized || self.action_pending {
+        if !self.initialized || self.action_pending || self.status.is_none() {
             return;
         }
         let server = self.server.read(cx).value().trim().to_owned();
@@ -131,11 +139,67 @@ impl ManagementPanel {
     }
 
     fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host || self.action_pending {
+        if self.host || self.action_pending || self.status_error.is_some() {
             return;
         }
         self.video
             .update(cx, |video, cx| video.connect(device_id, window, cx));
+    }
+
+    fn form_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let fields = if self.host {
+            vec![
+                self.address_host.clone(),
+                self.address_port.clone(),
+                self.server.clone(),
+                self.password.clone(),
+            ]
+        } else {
+            vec![self.server.clone(), self.password.clone()]
+        };
+        let configured = self.status.as_ref().is_some_and(|status| status.configured);
+        let fields = if configured {
+            if self.host {
+                &fields[..2]
+            } else {
+                &fields[..0]
+            }
+        } else {
+            fields.as_slice()
+        };
+        let Some(index) = fields
+            .iter()
+            .position(|field| field.read(cx).focus_handle(cx).is_focused(window))
+        else {
+            return;
+        };
+        if fields[index].read(cx).is_composing() {
+            return;
+        }
+        let key = &event.keystroke;
+        if key.modifiers.control || key.modifiers.alt || key.modifiers.platform {
+            return;
+        }
+        match key.key.as_str() {
+            "tab" => {
+                let next = if key.modifiers.shift {
+                    (index + fields.len() - 1) % fields.len()
+                } else {
+                    (index + 1) % fields.len()
+                };
+                fields[next].read(cx).focus_handle(cx).focus(window, cx);
+                cx.stop_propagation();
+            }
+            "enter" if !key.modifiers.shift => {
+                if configured {
+                    self.save_address(cx);
+                } else {
+                    self.enroll(window, cx);
+                }
+                cx.stop_propagation();
+            }
+            _ => {}
+        }
     }
 
     fn consume_updates(&mut self) {
@@ -144,18 +208,29 @@ impl ManagementPanel {
                 Reply::Status(result) => {
                     self.status_pending = false;
                     match result {
-                        Ok(status) => self.status = Some(status),
-                        Err(error) => self.notice = error,
+                        Ok(status) => {
+                            self.status = Some(status);
+                            self.status_error = None;
+                        }
+                        Err(error) => self.status_error = Some(error),
                     }
                 }
                 Reply::Action(result) => {
                     self.action_pending = false;
                     match result {
                         Ok(status) => {
+                            self.notice = if status.configured {
+                                "设置已更新。设备列表会自动刷新。"
+                            } else {
+                                "已解绑。请使用服务端实例密码重新绑定。"
+                            }
+                            .into();
                             self.status = Some(status);
-                            self.notice = "管理请求完成。".into();
+                            self.status_error = None;
                         }
-                        Err(error) => self.notice = error,
+                        Err(error) => {
+                            self.notice = format!("操作未完成：{error}。请检查设置后重试。")
+                        }
                     }
                 }
             }
@@ -170,15 +245,14 @@ impl Render for ManagementPanel {
         let status_text = self
             .status
             .as_ref()
-            .map(|status| {
-                format!(
-                    "管理状态：{} · 角色：{:?} · 授权设备：{}",
-                    status.phase,
-                    status.role,
-                    status.peers.len()
-                )
-            })
-            .unwrap_or_else(|| "正在连接本机管理服务…".into());
+            .map(|status| management_status(status.configured, &status.phase))
+            .unwrap_or(if self.initialized {
+                "正在读取绑定状态…"
+            } else {
+                "本机服务启动失败，请重新启动应用。"
+            });
+        let idle = self.initialized && !self.action_pending;
+        let can_refresh = idle && !self.status_pending;
         let peers = self
             .status
             .as_ref()
@@ -210,7 +284,8 @@ impl Render for ManagementPanel {
             && !self.host
             && !self.video_state.connecting
             && !self.video_state.has_session
-            && !self.action_pending;
+            && !self.action_pending
+            && self.status_error.is_none();
         div()
             .id("management-panel")
             .size_full()
@@ -223,11 +298,8 @@ impl Render for ManagementPanel {
             .text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
-            .child(if self.host {
-                "XSCC 被控端 · Windows beta"
-            } else {
-                "XSCC 控制端 · Windows beta"
-            })
+            .on_key_down(cx.listener(Self::form_key_down))
+            .child(if self.host { "XSCC 被控端" } else { "XSCC 控制端" })
             .child(status_text)
             .when(
                 configured
@@ -242,10 +314,16 @@ impl Render for ManagementPanel {
                 )
                 },
             )
-            .child(self.notice.clone())
+            .when(!self.notice.is_empty(), |root| root.child(self.notice.clone()))
+            .when_some(self.status_error.clone(), |root, error| {
+                root.child(div().text_color(rgb(palette.danger)).child(
+                    format!("暂时无法刷新状态，设备列表可能已过期。请检查本机服务或点击刷新。详情：{error}")
+                ))
+            })
             .child(
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         div()
@@ -254,14 +332,24 @@ impl Render for ManagementPanel {
                             .py_1()
                             .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
                             .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(palette.accent))
-                            .cursor_pointer()
-                            .child("刷新状态")
-                            .on_click(cx.listener(|view, _, _, cx| {
+                            .text_color(rgb(if can_refresh { palette.accent } else { palette.muted }))
+                            .child(if self.status_pending { "正在刷新…" } else { "刷新状态" })
+                            .when(can_refresh, |button| button.cursor_pointer().on_click(cx.listener(|view, _, _, cx| {
                                 view.refresh();
                                 cx.notify();
-                            })),
+                            }))),
                     )
+                    .when(configured && self.status.as_ref().is_some_and(|status|
+                        !matches!(status.phase.as_str(), "online" | "connecting")), |row| {
+                        row.child(div().id("resume").px_3().py_1()
+                            .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
+                            .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
+                            .text_color(rgb(if idle { palette.accent } else { palette.muted })).child("重新连接服务端")
+                            .when(idle, |button| button.cursor_pointer().on_click(cx.listener(|view, _, _, cx| {
+                                view.action(Command::Resume);
+                                cx.notify();
+                            }))))
+                    })
                     .when(configured, |row| {
                         row.child(
                             div()
@@ -270,14 +358,15 @@ impl Render for ManagementPanel {
                                 .py_1()
                                 .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
                             .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(palette.danger))
-                                .cursor_pointer()
+                            .text_color(rgb(if idle { palette.danger } else { palette.muted }))
+                                .when(idle, |button| button.cursor_pointer())
                                 .child(if self.confirm_unbind {
                                     "确认解绑并关闭连接"
                                 } else {
                                     "解绑此实例"
                                 })
                                 .on_click(cx.listener(|view, _, _, cx| {
+                                    if !view.initialized || view.action_pending { return; }
                                     if view.confirm_unbind {
                                         view.video.update(cx, |video, cx| video.disconnect(cx));
                                         view.action(Command::Unbind);
@@ -308,24 +397,27 @@ impl Render for ManagementPanel {
             .when(self.host && self.initialized, |root| {
                 root.child(div().flex().flex_col().gap_2()
                     .child(format!("当前上报访问地址：{current_addresses}"))
-                    .child("设置新的上报访问地址（两项留空恢复自动；仅替换上报地址，不修改监听、路由或防火墙）")
+                    .child("访问地址（可选；两项留空自动获取，不修改监听或防火墙）")
                     .child(div().flex().gap_2().child(self.address_host.clone()).child(self.address_port.clone()))
                     .when(configured, |section| section.child(div().id("save-address").px_3().py_1().relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
                             .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
-                            .text_color(rgb(palette.accent)).cursor_pointer()
-                        .child(if self.action_pending { "正在保存…" } else { "保存上报地址 / 留空恢复自动" })
+                            .text_color(rgb(if idle { palette.accent } else { palette.muted })).when(idle, |button| button.cursor_pointer())
+                        .child(if self.action_pending { "正在保存…" } else { "保存访问地址" })
                         .on_click(cx.listener(|view, _, _, cx| view.save_address(cx)))))
                     .when(!configured, |section| section.child("绑定实例时将一并提交以上地址。")))
             })
-            .when(!configured && self.initialized, |root| {
+            .when(!configured && self.initialized && self.status.is_some(), |root| {
                 root.child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
                         .child("使用服务端中对应角色实例的密码绑定；连接权限由服务端授权列表决定。")
+                        .child("服务端地址")
                         .child(self.server.clone())
+                        .child("实例密码")
                         .child(self.password.clone())
+                        .child(div().text_color(rgb(palette.muted)).child("密码仅用于此次绑定。Tab 切换输入框，Enter 提交。"))
                         .child(
                             div()
                                 .id("enroll")
@@ -334,7 +426,7 @@ impl Render for ManagementPanel {
                                 .relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center()
                                 .child(theme::surface(rgb(palette.accent), None, theme::CONTROL_EXTENT))
                                 .text_color(rgb(palette.page))
-                                .cursor_pointer()
+                                .when(idle, |button| button.cursor_pointer())
                                 .child(if !self.initialized || self.action_pending {
                                     "正在绑定…"
                                 } else {
@@ -351,6 +443,11 @@ impl Render for ManagementPanel {
             } else {
                 "允许连接的被控端"
             })
+            .when(peers.is_empty(), |root| root.child(div().text_color(rgb(palette.muted)).child(
+                if !configured { "绑定后，此处会显示服务端授权的设备。" }
+                else if !correct_role { "连接服务端并确认实例角色后，才能获取授权设备。" }
+                else { "暂无授权设备。请在服务端为此实例分配设备，然后刷新。" }
+            )))
             .child(
                 div()
                     .id("peers")
@@ -385,13 +482,20 @@ impl Render for ManagementPanel {
                             })
                     })),
             )
+            .when(!self.host && !self.video_state.notice.is_empty(), |root| {
+                root.child(div().child(self.video_state.notice.clone()))
+            })
+            .when(!self.host && self.video_state.has_session, |root| {
+                root.child(div().text_color(rgb(palette.muted))
+                    .child("点击画面发送键鼠 · Ctrl+Alt+Enter 全屏"))
+            })
             .when(!self.host && self.video_state.has_session, |root| {
                 root.child(
                     div()
                         .flex()
                         .flex_wrap()
                         .gap_2()
-                        .child("请求目标 FPS（非实测）：")
+                        .child("画面流畅度（目标帧率）：")
                         .children(
                             [
                                 TargetFps::Fps30,
@@ -431,14 +535,16 @@ impl Render for ManagementPanel {
                             .child(theme::surface(rgb(palette.panel), None, theme::CONTROL_EXTENT))
                             .text_color(rgb(palette.danger))
                         .cursor_pointer()
-                        .child("断开 / 取消连接")
+                        .child(if self.video_state.connecting { "取消连接" } else { "断开连接" })
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.video.update(cx, |video, cx| video.disconnect(cx));
                             cx.notify();
                         })),
                 )
             })
-            .child("Beta：按实际能力协商硬件编解码，当前为 CPU 帧上传；零拷贝、多屏切换、音频、剪贴板和远程输入法尚未验收。")
+            .child(div().text_color(rgb(palette.muted)).child(
+                "预览版：音频、剪贴板、多屏切换和远程输入法尚待实机验证。"
+            ))
     }
 }
 
@@ -491,7 +597,7 @@ impl Render for Client {
 pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::Error>> {
     let initialization = gpui_host::initialize();
     let initialized = initialization.is_ok();
-    let initial_notice = initialization.err().unwrap_or_else(|| "正在初始化…".into());
+    let initial_notice = initialization.err().unwrap_or_default();
     let startup_error = Arc::new(Mutex::new(None::<String>));
     let app_error = startup_error.clone();
     let handle = runtime.handle().clone();
@@ -545,7 +651,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         &video,
                         |view: &mut ManagementPanel, _, state: &VideoState, cx| {
                             view.video_state = state.clone();
-                            view.notice = state.notice.clone();
                             cx.notify();
                         },
                     )];
@@ -590,6 +695,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         initialized,
                         status: None,
                         status_pending: false,
+                        status_error: None,
                         action_pending: false,
                         confirm_unbind: false,
                         notice: initial_notice,
@@ -617,4 +723,30 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
         return Err(error.into());
     }
     Ok(())
+}
+
+fn management_status(configured: bool, phase: &str) -> &'static str {
+    if !configured {
+        return "尚未绑定实例";
+    }
+    match phase {
+        "online" => "已连接服务端 · 授权列表自动更新",
+        "connecting" => "正在连接服务端…",
+        "revoked" => "实例授权已撤销，请联系管理员或重新绑定。",
+        "error" => "服务端连接失败，请检查网络并重新连接。",
+        _ => "服务端未连接，可尝试重新连接。",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::management_status;
+
+    #[test]
+    fn binding_status_offers_recovery_instead_of_internal_phase_names() {
+        assert_eq!(management_status(false, "offline"), "尚未绑定实例");
+        assert!(management_status(true, "revoked").contains("授权已撤销"));
+        assert!(management_status(true, "error").contains("重新连接"));
+        assert!(management_status(true, "unexpected").contains("重新连接"));
+    }
 }
