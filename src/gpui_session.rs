@@ -35,6 +35,24 @@ fn mobile_pointer_permitted(enabled: bool, input: &InputCommand) -> bool {
     enabled && matches!(input, InputCommand::Mouse(_))
 }
 
+#[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+fn mobile_keyboard_permitted(enabled: bool, platform: &str, input: &InputCommand) -> bool {
+    if !enabled || !matches!(platform, "Mac OS" | "Windows" | "Linux") { return false; }
+    let InputCommand::Key(event) = input else { return false; };
+    if event.down || !event.modifiers.is_empty() || event.mode.enum_value() != Ok(KeyboardMode::Legacy) { return false; }
+    match &event.union {
+        Some(key_event::Union::Seq(text)) => !event.press && !text.is_empty() && text.chars().all(|ch| {
+            !ch.is_control() && (platform != "Linux" || ch.is_ascii() && (' '..='~').contains(&ch))
+        }),
+        Some(key_event::Union::ControlKey(key)) => event.press && matches!(key.enum_value(), Ok(
+            ControlKey::Backspace | ControlKey::Delete | ControlKey::Return | ControlKey::Tab |
+            ControlKey::Escape | ControlKey::LeftArrow | ControlKey::RightArrow |
+            ControlKey::UpArrow | ControlKey::DownArrow
+        )),
+        _ => false,
+    }
+}
+
 /// Requested cadence; the host and transport retain their capability and QoS limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TargetFps {
@@ -121,6 +139,8 @@ pub enum SessionEvent {
 }
 
 struct Mailbox {
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    platform: RwLock<String>,
     frame: ArrayQueue<Frame>,
     events: ArrayQueue<SessionEvent>,
     monitors: RwLock<Monitors>,
@@ -132,6 +152,8 @@ struct Mailbox {
 impl Default for Mailbox {
     fn default() -> Self {
         Self {
+            #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+            platform: RwLock::new(String::new()),
             frame: ArrayQueue::new(1),
             events: ArrayQueue::new(64),
             monitors: RwLock::new(Monitors::default()),
@@ -199,11 +221,30 @@ impl SessionHandle {
             && mailbox.monitors.read().unwrap().pending.is_none()
     }
 
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub fn keyboard_input_allowed(&self) -> bool {
+        let mailbox = &self.session.ui_handler.0;
+        self.session.lc.read().unwrap().mobile_keyboard_enabled
+            && mailbox.connected.load(Ordering::Acquire)
+            && !mailbox.closed.load(Ordering::Acquire)
+            && mailbox.keyboard.load(Ordering::Acquire)
+            && mailbox.monitors.read().unwrap().pending.is_none()
+            && matches!(mailbox.platform.read().unwrap().as_str(), "Mac OS" | "Windows" | "Linux")
+    }
+
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub fn native_unicode_supported(&self) -> bool {
+        matches!(self.session.ui_handler.0.platform.read().unwrap().as_str(), "Mac OS" | "Windows")
+    }
+
     pub fn send_input(&self, input: InputCommand) -> ResultType<()> {
         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
         {
-            if !mobile_pointer_permitted(self.session.lc.read().unwrap().mobile_touch_enabled, &input) {
-                bail!("Pointer capability is disabled or this input is not supported");
+            let config = self.session.lc.read().unwrap();
+            if !mobile_pointer_permitted(config.mobile_touch_enabled, &input)
+                && !mobile_keyboard_permitted(config.mobile_keyboard_enabled,
+                    &self.session.ui_handler.0.platform.read().unwrap(), &input) {
+                bail!("Mobile input capability or target text support does not permit this command");
             }
         }
         let mailbox = &self.session.ui_handler.0;
@@ -303,15 +344,20 @@ impl Drop for SessionHandle {
 }
 
 pub async fn connect(device_id: &str) -> ResultType<SessionHandle> {
-    connect_mode(device_id, false).await
+    connect_mode(device_id, false, false).await
 }
 
 #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
 pub async fn connect_touch(device_id: &str) -> ResultType<SessionHandle> {
-    connect_mode(device_id, true).await
+    connect_mode(device_id, true, false).await
 }
 
-async fn connect_mode(device_id: &str, _touch_enabled: bool) -> ResultType<SessionHandle> {
+#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+pub async fn connect_interactive(device_id: &str) -> ResultType<SessionHandle> {
+    connect_mode(device_id, true, true).await
+}
+
+async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: bool) -> ResultType<SessionHandle> {
     let device_id = uuid::Uuid::parse_str(device_id)?;
     // Resolve through the existing authenticated owner. Never accept an address or identity
     // asserted by the UI; the transport resolves again immediately before the handshake.
@@ -333,7 +379,9 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool) -> ResultType<Sessi
     );
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     {
-        session.lc.write().unwrap().mobile_touch_enabled = _touch_enabled;
+        let mut config = session.lc.write().unwrap();
+        config.mobile_touch_enabled = _touch_enabled;
+        config.mobile_keyboard_enabled = _keyboard_enabled;
     }
     let round = session.connection_round_state.lock().unwrap().new_round();
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -440,6 +488,8 @@ impl InvokeUiSession for Handler {
         );
     }
     fn set_peer_info(&self, peer: &PeerInfo) {
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        { *self.0.platform.write().unwrap() = peer.platform.clone(); }
         self.set_displays(&peer.displays);
         self.0.monitors.write().unwrap().current = peer.current_display.max(0) as usize;
         if let Some(display) = peer.displays.get(peer.current_display as usize) {
@@ -821,6 +871,28 @@ mod tests {
         );
         assert_eq!(handle.take_frame().unwrap().bgra[2], 11);
     }
+    #[test]
+    fn mobile_keyboard_gates_unicode_controls_and_view_only() {
+        let text = |value: &str| {
+            let mut event = KeyEvent::new();
+            event.set_seq(value.into());
+            InputCommand::Key(event)
+        };
+        for platform in ["Mac OS", "Windows"] {
+            assert!(mobile_keyboard_permitted(true, platform, &text("你好😀")));
+            assert!(!mobile_keyboard_permitted(false, platform, &text("a")));
+        }
+        assert!(mobile_keyboard_permitted(true, "Linux", &text("ASCII !")));
+        for value in ["你好", "😀", "a\nb", "\t", "\u{7f}"] {
+            assert!(!mobile_keyboard_permitted(true, "Linux", &text(value)));
+        }
+        assert!(!mobile_keyboard_permitted(true, "unknown", &text("a")));
+        let mut key = KeyEvent::new(); key.press = true; key.set_control_key(ControlKey::Return);
+        assert!(mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key.clone())));
+        key.modifiers.push(ControlKey::Control.into());
+        assert!(!mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key)));
+    }
+
     #[test]
     fn mobile_pointer_requires_explicit_capability_and_rejects_keys() {
         let pointer = InputCommand::Mouse(MouseEvent::default());

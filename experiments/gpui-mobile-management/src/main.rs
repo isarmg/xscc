@@ -1,3 +1,19 @@
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod keyboard_action;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod keyboard_input;
 mod management;
 mod panel;
 #[cfg(all(
@@ -6,6 +22,11 @@ mod panel;
 ))]
 #[path = "../../gpui-validation/src/presentation.rs"]
 mod presentation;
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
+mod remote_keyboard;
 #[cfg(all(
     any(target_os = "ios", target_os = "android"),
     feature = "mobile-session"

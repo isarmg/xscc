@@ -397,7 +397,11 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
         if ((settings.mEditorInfo.inputType & EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE) == 0
                 && (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)
                 && event.hasNoModifiers()) {
-            sendEditorAction(settings.mEditorInfo.actionId);
+            // A software key is a down/up pair. Dispatch the action once, not
+            // again on release or auto-repeat; consume the complete pair.
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                sendEditorAction(settings.mEditorInfo.actionId);
+            }
             return true;
         }
         if (event.getAction() != KeyEvent.ACTION_DOWN) {

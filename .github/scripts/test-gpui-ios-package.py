@@ -19,11 +19,12 @@ class DevicePreviewTests(unittest.TestCase):
             'remote_keyboard': False, 'clipboard': False,
         })
 
-    def test_touch_preview_keeps_keyboard_audio_and_clipboard_disabled(self):
-        capabilities = package.preview_capabilities(False, touch_preview=True)
+    def test_interactive_preview_enables_keyboard_but_not_audio_or_clipboard(self):
+        capabilities = package.preview_capabilities(False, keyboard_preview=True)
         self.assertTrue(capabilities['software_video_preview'])
         self.assertTrue(capabilities['remote_pointer'])
-        for name in ('remote_keyboard', 'audio', 'clipboard'):
+        self.assertTrue(capabilities['remote_keyboard'])
+        for name in ('audio', 'clipboard'):
             self.assertFalse(capabilities[name])
 
     def test_device_metadata(self):

@@ -50,19 +50,19 @@ def validate_binary(binary):
     return build
 
 
-def preview_capabilities(view_only, touch_preview=False):
+def preview_capabilities(view_only, keyboard_preview=False):
     return {
         'management': True,
-        'software_video_preview': view_only or touch_preview,
+        'software_video_preview': view_only or keyboard_preview,
         'audio': False,
-        'remote_input': touch_preview,
-        'remote_pointer': touch_preview,
-        'remote_keyboard': False,
+        'remote_input': keyboard_preview,
+        'remote_pointer': keyboard_preview,
+        'remote_keyboard': keyboard_preview,
         'clipboard': False,
     }
 
 
-def package(binary, output, view_only=False, touch_preview=False):
+def package(binary, output, view_only=False, keyboard_preview=False):
     require(binary.is_file(), 'Missing built device executable')
     template = Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist'
     info = plistlib.loads(template.read_bytes())
@@ -71,7 +71,7 @@ def package(binary, output, view_only=False, touch_preview=False):
     sha = os.environ.get('GITHUB_SHA') or command('git', 'rev-parse', 'HEAD')
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
-    mode = 'touch-preview' if touch_preview else ('view-only' if view_only else 'management')
+    mode = 'pointer-keyboard-preview' if keyboard_preview else ('view-only' if view_only else 'management')
     name = f'xscc-gpui-{mode}-{sha[:12]}-ios26-arm64-unsigned.ipa'
     output.mkdir(parents=True, exist_ok=True)
     ipa = (output / name).resolve()
@@ -101,20 +101,20 @@ def package(binary, output, view_only=False, touch_preview=False):
         'source_commit': sha, 'artifact': name, 'sha256': digest,
         'bundle_id': info['CFBundleIdentifier'], 'build': info['CFBundleVersion'],
         'platform': 'iOS/iPadOS 26 ARM64 physical device',
-        'scope': ('GPUI touch preview: direct pointer control with a view-only toggle; no audio, keyboard or clipboard'
-                  if touch_preview else 'GPUI view-only preview: management and software video; not full remote control'
+        'scope': ('GPUI pointer and software-keyboard preview: direct control or view-only; software-keyboard text and control keys; no audio or clipboard; limited hardware Enter/Tab only; full hardware keyboard unsupported and Wayland non-ASCII rejected'
+                  if keyboard_preview else 'GPUI view-only preview: management and software video; not full remote control'
                   if view_only else 'GPUI management preview: binding and authorized host list; no video session'),
-        'declared_capabilities': preview_capabilities(view_only, touch_preview),
+        'declared_capabilities': preview_capabilities(view_only, keyboard_preview),
         'signing': 'UNSIGNED: requires your own matching provisioning and app signature before installation',
         'verified': ['ARM64 device executable', 'minimum iOS 26.0', 'system dynamic dependencies', 'Payload layout'],
-        'not_verified': ['physical-device launch', 'management interaction on device', 'authorized remote connection and first video frame', 'physical-device touch delivery and gestures', 'signing and provisioning'],
+        'not_verified': ['physical-device launch', 'management interaction on device', 'authorized remote connection and first video frame', 'physical-device touch delivery and gestures', 'physical-device software-keyboard input', 'signing and provisioning'],
         'xcode': command('xcodebuild', '-version'), 'macho_build': build,
     }, ensure_ascii=False, indent=2) + '\n')
     print(f'Prepared {ipa}; requires user signing before installation.')
 
 
 if __name__ == '__main__':
-    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] not in ('--view-only', '--touch-preview')):
-        raise SystemExit('Usage: package-gpui-ios.py DEVICE_EXECUTABLE OUTPUT_DIRECTORY [--view-only | --touch-preview]')
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] not in ('--view-only', '--keyboard-preview')):
+        raise SystemExit('Usage: package-gpui-ios.py DEVICE_EXECUTABLE OUTPUT_DIRECTORY [--view-only | --keyboard-preview]')
     package(Path(sys.argv[1]), Path(sys.argv[2]),
-            view_only='--view-only' in sys.argv[3:], touch_preview='--touch-preview' in sys.argv[3:])
+            view_only='--view-only' in sys.argv[3:], keyboard_preview='--keyboard-preview' in sys.argv[3:])

@@ -60,9 +60,13 @@ The management flavor uses `org.sarmg.xscc.gpui.preview` and displays
 “XSCC GPUI 管理预览”. It builds the Android library from
 `experiments/gpui-mobile-management` with `mobile-management,mobile-session`, reusing the
 native management UI. This preview includes the existing software-video receive/decode path and
-pointer/touch controls, but no desktop hosting. Audio, remote keyboard and
+pointer/touch controls, natural software-keyboard commits and a control-key bar,
+but no desktop hosting. Unmodified, non-repeating Enter/Tab events also support
+IME actions and identical hardware control events; full hardware-keyboard support
+is unfinished. macOS/Windows targets accept native Unicode; Linux targets accept
+printable ASCII and separate control keys without clipboard fallback. Audio and
 clipboard capabilities remain disabled. Server authorization, first decoded
-frame, display and pointer behavior still require physical-device acceptance
+frame, display, pointer and IME behavior still require physical-device acceptance
 against the intended server; successful packaging alone does not prove a session.
 
 Only management builds the pinned NDK ARM64 codec dependencies (the same native

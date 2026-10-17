@@ -1,4 +1,4 @@
-name: GPUI iOS touch preview
+name: GPUI iOS pointer and keyboard preview
 on:
   workflow_dispatch:
   push:
@@ -103,7 +103,7 @@ jobs:
             vendor/gpui
           key: gpui-ios26-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}
           cache-on-failure: true
-      - name: Check formatting and host management tests
+      - name: Check formatting and host management and keyboard tests
         working-directory: experiments/gpui-mobile-management
         run: |
           cargo fmt --check
@@ -145,12 +145,12 @@ jobs:
           cargo build --locked --release --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --touch-preview
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --keyboard-preview
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
-          echo 'Native GPUI touch preview: management, software video and direct pointer control with a view-only toggle. Audio, keyboard and clipboard are disabled. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Native GPUI pointer and software-keyboard preview: management, software video, direct control or view-only, software-keyboard text and control keys. Audio and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-touch-preview-ios26-arm64-unsigned-${{ github.sha }}
+          name: xscc-gpui-pointer-keyboard-preview-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error
   simulator-smoke:

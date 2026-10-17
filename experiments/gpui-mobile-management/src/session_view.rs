@@ -1,16 +1,23 @@
 use crate::{
     presentation::VideoPresentation,
+    remote_keyboard::{Command, KeyboardControl, KeyboardEvent, RemoteKeyboard},
     theme,
     touch_input::{Geometry, Output, Phase, Point, TouchInput},
 };
-use base::{message_proto::MouseEvent, session_protocol::input};
+use base::{
+    message_proto::{KeyEvent, MouseEvent},
+    session_protocol::input,
+};
 use gpui::{
-    AppContext, AppLifecyclePhase, Context, FocusHandle, HitboxBehavior, ImageSource, IntoElement,
-    ObjectFit, Render, Subscription, TouchEvent, TouchPhase, Window, canvas, div, img, prelude::*,
-    px, rgb,
+    AppContext, AppLifecyclePhase, Context, Entity, FocusHandle, HitboxBehavior, ImageSource,
+    IntoElement, ObjectFit, Render, Subscription, TouchEvent, TouchPhase, Window, canvas, div, img,
+    prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{self, InputCommand, SessionEvent, SessionHandle};
-use std::sync::{Arc, mpsc};
+use std::{
+    rc::Rc,
+    sync::{Arc, mpsc},
+};
 use xscc_native_management::manager::NativeManager;
 
 enum Reply {
@@ -18,6 +25,9 @@ enum Reply {
 }
 
 pub struct SessionView {
+    keyboard: Option<Entity<RemoteKeyboard>>,
+    keyboard_control: Option<Rc<KeyboardControl>>,
+    keyboard_subscription: Option<Subscription>,
     touch: TouchInput,
     direct_touch: bool,
     extent: (u32, u32),
@@ -52,6 +62,9 @@ impl SessionView {
             cx.observe_window_activation(window, |view: &mut Self, window, _| {
                 if !window.is_window_active() {
                     view.release_input();
+                    if let Some(control) = &view.keyboard_control {
+                        control.cancel();
+                    }
                 }
             }),
         ];
@@ -89,6 +102,9 @@ impl SessionView {
             }
         });
         Self {
+            keyboard: None,
+            keyboard_control: None,
+            keyboard_subscription: None,
             touch: TouchInput::default(),
             direct_touch: true,
             extent: (0, 0),
@@ -117,6 +133,12 @@ impl SessionView {
     }
 
     pub fn stop(&mut self) {
+        if let Some(control) = self.keyboard_control.take() {
+            control.configure(false, false);
+            control.cancel();
+        }
+        self.keyboard.take();
+        self.keyboard_subscription.take();
         self.release_input();
         self.touch.reset();
         self.extent = (0, 0);
@@ -154,7 +176,7 @@ impl SessionView {
         let direct_touch = self.direct_touch;
         self.connecting = Some(self.runtime.spawn(async move {
             let result = if direct_touch {
-                gpui_session::connect_touch(&device_id).await
+                gpui_session::connect_interactive(&device_id).await
             } else {
                 gpui_session::connect(&device_id).await
             }
@@ -256,6 +278,10 @@ impl SessionView {
             return;
         }
         if event.phase == TouchPhase::Started {
+            if let Some(control) = &self.keyboard_control {
+                control.cancel();
+            }
+            window.dismiss_virtual_keyboard();
             self.focus.focus(window, cx);
         }
         let phase = match event.phase {
@@ -276,7 +302,51 @@ impl SessionView {
         }
     }
 
-    fn consume(&mut self, window: &mut Window) {
+    fn keyboard_event(&mut self, event: &KeyboardEvent, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.generation {
+            return;
+        }
+        let Some(control) = &self.keyboard_control else {
+            return;
+        };
+        if control.epoch() != event.epoch {
+            return;
+        }
+        let allowed = self.input_allowed()
+            && self
+                .session
+                .as_ref()
+                .is_some_and(SessionHandle::keyboard_input_allowed);
+        if !allowed {
+            control.cancel();
+            return;
+        }
+        let mut failure = None;
+        if let Some(session) = &self.session {
+            for command in &event.commands {
+                let mut key = KeyEvent::new();
+                match command {
+                    Command::Text(text) => key.set_seq(text.clone()),
+                    Command::Key(control) => {
+                        key.set_control_key(*control);
+                        key.press = true;
+                    }
+                }
+                if let Err(error) = session.send_input(InputCommand::Key(key)) {
+                    failure = Some(error.to_string());
+                    break;
+                }
+            }
+        }
+        if let Some(error) = failure {
+            control.cancel();
+            self.stop();
+            self.notice = error;
+        }
+        cx.notify();
+    }
+
+    fn consume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         while let Ok(Reply::Connected(generation, result)) = self.receiver.try_recv() {
             if generation != self.generation {
                 continue;
@@ -295,6 +365,16 @@ impl SessionView {
                             }
                         }
                     }));
+                    let control = KeyboardControl::new(false);
+                    let keyboard_control = control.clone();
+                    let keyboard = cx.new(|cx| RemoteKeyboard::new(keyboard_control, window, cx));
+                    let generation = self.generation;
+                    self.keyboard_subscription =
+                        Some(cx.subscribe(&keyboard, move |view, _, event, cx| {
+                            view.keyboard_event(event, generation, cx);
+                        }));
+                    self.keyboard = Some(keyboard);
+                    self.keyboard_control = Some(control);
                     self.session = Some(session);
                 }
                 Ok(_) => {
@@ -321,6 +401,9 @@ impl SessionView {
                 SessionEvent::Connected => self.notice = "已连接，等待首帧…".into(),
                 SessionEvent::Display { x, y, .. } => {
                     self.release_input();
+                    if let Some(control) = &self.keyboard_control {
+                        control.cancel();
+                    }
                     self.origin = (x, y);
                 }
                 SessionEvent::Permission { name, enabled } if name == "keyboard" && !enabled => {
@@ -347,11 +430,26 @@ impl SessionView {
             let extent = (frame.width, frame.height);
             if self.extent != extent {
                 self.release_input();
+                if let Some(control) = &self.keyboard_control {
+                    control.cancel();
+                }
                 self.extent = extent;
             }
         }
         if !self.input_allowed() {
             self.release_input();
+        }
+        if let Some(control) = &self.keyboard_control {
+            control.configure(
+                self.input_allowed()
+                    && self
+                        .session
+                        .as_ref()
+                        .is_some_and(SessionHandle::keyboard_input_allowed),
+                self.session
+                    .as_ref()
+                    .is_some_and(SessionHandle::native_unicode_supported),
+            );
         }
         let pending = self.touch.flush();
         self.send_outputs(pending);
@@ -380,7 +478,7 @@ impl Drop for SessionView {
 
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.consume(window);
+        self.consume(window, cx);
         if self.touch.pending() {
             window.request_animation_frame();
         }
@@ -445,6 +543,7 @@ impl Render for SessionView {
                         )
                     }),
             )
+            .children(self.keyboard.clone())
             .child(
                 div()
                     .id("touch-mode")
@@ -453,7 +552,7 @@ impl Render for SessionView {
                     .child(if self.direct_touch {
                         "切换为仅查看（重连会话）"
                     } else {
-                        "启用直接触控（重连会话）"
+                        "启用触控与软键盘（重连会话）"
                     })
                     .on_click(cx.listener(|view, _, _window, cx| {
                         let selected = view.selected.clone();

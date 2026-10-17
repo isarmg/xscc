@@ -1,10 +1,16 @@
 #![cfg(target_os = "android")]
 
+#[cfg(feature = "mobile-session")]
+mod keyboard_action;
+#[cfg(feature = "mobile-session")]
+mod keyboard_input;
 mod management;
 mod panel;
 #[cfg(feature = "mobile-session")]
 #[path = "../../gpui-validation/src/presentation.rs"]
 mod presentation;
+#[cfg(feature = "mobile-session")]
+mod remote_keyboard;
 #[cfg(feature = "mobile-session")]
 mod session_view;
 #[path = "../../gpui-validation/src/text_field.rs"]

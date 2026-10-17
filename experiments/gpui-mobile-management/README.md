@@ -43,11 +43,26 @@ IPC, host listener, capture, additional binding store or QUIC feature is enabled
 The UI defaults to direct touch: tap to left-click, move one finger beyond the
 threshold to drag, and move two fingers to scroll. A second finger releases an
 active drag; cancellation or a third finger cancels the gesture. There is no
-right-click, keyboard, inertial scrolling, audio playback or clipboard integration.
+right-click, hardware-keyboard integration, inertial scrolling, audio playback or clipboard integration.
 The visible view-only switch releases input and reconnects with input disabled on
 the wire. The root adapter's existing `connect` API remains view-only; only the
-explicit `connect_touch` entry enables pointer input, subject to current server
-permission and authorization. Audio and clipboard remain protocol-disabled.
+explicit `connect_touch` entry enables pointer input. The app uses the explicit
+`connect_interactive` entry for touch plus the software keyboard, subject to current
+server permission and authorization. Audio and clipboard remain protocol-disabled.
+
+The remote software keyboard submits final IME commits naturally; preedit remains
+local. A short local suffix supports composition and grapheme deletion, with a
+position-isolated synthetic anchor for empty-document Backspace. This is not a
+copy of the remote document. Pointer/control-key navigation, focus loss, background,
+mode changes and revocation cancel that context. Edits outside the known suffix
+are rejected rather than guessing remote selection. Failed sends clear context.
+There is no text logging or clipboard fallback. macOS and Windows targets use native
+Unicode text injection; Linux targets accept printable ASCII only. Return, Tab and
+the control-key bar use separate single-press protocol commands. Hardware keyboard
+support and native Wayland Unicode remain separate unfinished work. Unmodified,
+non-repeating Enter/Tab key-down events are accepted for Android IME actions;
+the identical hardware control events also work, but other hardware keys are not
+integrated. IME actions finalize marked text and emit the control in one batch.
 
 Touches beginning in contain black bars produce no remote input. Dragging outside
 the image clamps coordinates; move packets are frame-coalesced, and button edges
@@ -107,7 +122,10 @@ unsupported app platform rather than opening a production binding store.
    rapidly. Old images/connections must never revive. Verify taps, drag release outside
    the image, two-finger scroll, system cancellation and background during a drag.
    Switch to view-only and verify the host refuses input; revoke server input
-   permission while dragging. Audio, keyboard and clipboard remain disabled.
+   permission while dragging. Exercise software-keyboard composition/commit/cancel,
+   emoji deletion, empty Backspace, navigation, and view-only rejection. Verify
+   Linux non-ASCII is explicitly rejected without altering the clipboard. Audio,
+   hardware-keyboard integration and clipboard remain disabled.
 7. Exercise repeated taps, Cancel/Confirm unbind, soft keyboard/IME, keyboard dismissal,
    safe areas, landscape, Dynamic Type/accessibility and long lists on both devices.
 

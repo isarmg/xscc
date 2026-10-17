@@ -176,8 +176,10 @@ jobs:
           distribution: temurin
           java-version: '27'
 
-      - name: Test Java IME generation boundary on the host
-        run: python3 .github/scripts/test-gpui-android-ime.py
+      - name: Test Java IME generation and single-line editor actions on the host
+        run: |
+          python3 .github/scripts/test-gpui-android-ime.py
+          python3 .github/scripts/test-gpui-android-editor-action.py
 
       - name: Install pinned Gradle and Android SDK components
         run: |
@@ -216,9 +218,11 @@ jobs:
           cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
-          printf 'commit=%s\nui=GPUI\nscope=%s-preview\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$FLAVOR"             > dist/gpui-android/BUILD-INFO.txt
+          scope="$FLAVOR-preview"
+          if [ "$FLAVOR" = management ]; then scope=software-video-pointer-keyboard-preview; fi
+          printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope"             > dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" = management ]; then
-            printf 'session=software-video-pointer-preview\naudio=false\nkeyboard=false\nclipboard=false\nfirst_frame_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
+            printf 'session=software-video-pointer-keyboard-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
           fi
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)

@@ -10,8 +10,13 @@
 - AAR SHA256: `3a8b0887ac55a0a6ab56021ced7353a250539eac811278b74bccd8a5b678d9c9`
 - License: Apache-2.0; original source header retained.
 
-Local patch: delete exactly 30 complete `Log.d(...)` statements, including
-their argument expressions. No input/editing/lifecycle code is changed.
+Local patches:
+- Delete exactly 30 complete `Log.d(...)` statements, including their argument
+  expressions.
+- For single-line, unmodified Enter/Numpad Enter key pairs, send the editor
+  action only on initial ACTION_DOWN (repeat count zero). Consume release and
+  repeat without another action, preventing duplicate remote Return commands.
+  Multiline input and other editing/lifecycle paths retain upstream behavior.
 The two `Log.i` diagnostics about invalid cursor-request lengths remain.
 
 R8 removed the debug output calls, but actual 4.4.0 DEX still executed

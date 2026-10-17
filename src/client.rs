@@ -1027,6 +1027,8 @@ struct ConnToken {
 pub struct LoginConfigHandler {
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub(crate) mobile_touch_enabled: bool,
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    pub(crate) mobile_keyboard_enabled: bool,
     id: String,
     pub conn_type: ConnType,
     hash: Hash,
@@ -1463,9 +1465,9 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
-        // Mobile touch is an explicit per-session capability; other side channels stay disabled.
+        // Mobile pointer/keyboard are explicit per-session capabilities; other side channels stay disabled.
         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
-        restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled);
+        restrict_mobile_capabilities(&mut msg, self.mobile_touch_enabled || self.mobile_keyboard_enabled);
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
