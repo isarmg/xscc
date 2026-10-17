@@ -7,13 +7,10 @@ use std::{io::Read, path::Path};
 const UPDATE_SIDECAR_MAX_BYTES: u64 = 1024 * 1024;
 const PUBLIC_MACOS_BUNDLE_ID: &str = "com.carriez.rustdesk";
 const MACOS_UPDATE_USAGE: &str = "Usage: --update [update.dmg --metadata rustdesk-update.json --signature rustdesk-update.json.sig]";
-const LEGACY_UPDATE_WARNING: &str =
-    "legacy offline update: signed metadata not found; release hash was not verified";
 
 #[derive(Debug, Eq, PartialEq)]
 enum MacosUpdateArguments<'a> {
     CurrentApp,
-    LegacyDmg(&'a str),
     VerifiedDmg {
         dmg_path: &'a str,
         metadata_path: &'a str,
@@ -24,9 +21,6 @@ enum MacosUpdateArguments<'a> {
 fn parse_macos_update_args(args: &[String]) -> ResultType<MacosUpdateArguments<'_>> {
     match args {
         [command] if command == "--update" => Ok(MacosUpdateArguments::CurrentApp),
-        [command, dmg_path] if command == "--update" && dmg_path.ends_with(".dmg") => {
-            Ok(MacosUpdateArguments::LegacyDmg(dmg_path))
-        }
         [command, dmg_path, metadata_flag, metadata_path, signature_flag, signature_path]
             if command == "--update"
                 && dmg_path.ends_with(".dmg")
@@ -95,15 +89,6 @@ fn update_current_app() -> ResultType<()> {
     Ok(())
 }
 
-fn update_legacy_dmg(dmg_path: &str) -> ResultType<()> {
-    eprintln!("Warning: {LEGACY_UPDATE_WARNING}");
-    log::warn!("{LEGACY_UPDATE_WARNING}");
-    println!("Updating from DMG: {dmg_path}");
-    crate::platform::update_from_dmg(dmg_path)?;
-    println!("Update process from DMG started successfully.");
-    Ok(())
-}
-
 fn update_verified_dmg(
     dmg_path: &str,
     metadata_path: &str,
@@ -138,7 +123,6 @@ fn update_verified_dmg(
 pub(crate) fn execute_macos_update(args: &[String]) -> ResultType<()> {
     match parse_macos_update_args(args)? {
         MacosUpdateArguments::CurrentApp => update_current_app(),
-        MacosUpdateArguments::LegacyDmg(dmg_path) => update_legacy_dmg(dmg_path),
         MacosUpdateArguments::VerifiedDmg {
             dmg_path,
             metadata_path,
@@ -156,14 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_current_legacy_and_verified_macos_updates() {
+    fn parses_current_and_verified_macos_updates() {
         assert_eq!(
             MacosUpdateArguments::CurrentApp,
             parse_macos_update_args(&args(&["--update"])).unwrap()
-        );
-        assert_eq!(
-            MacosUpdateArguments::LegacyDmg("update.dmg"),
-            parse_macos_update_args(&args(&["--update", "update.dmg"])).unwrap()
         );
         assert_eq!(
             MacosUpdateArguments::VerifiedDmg {
@@ -181,6 +161,21 @@ mod tests {
             ]))
             .unwrap()
         );
+    }
+
+    #[test]
+    fn rejects_offline_macos_updates_without_signed_metadata() {
+        for arguments in [
+            vec!["--update", "update.dmg"],
+            vec![
+                "--update",
+                "update.dmg",
+                "--metadata",
+                "rustdesk-update.json",
+            ],
+        ] {
+            assert!(parse_macos_update_args(&args(&arguments)).is_err());
+        }
     }
 
     #[test]

@@ -18,6 +18,8 @@ cargo test --locked -p xscc -p xscc-native-management
 
 桥接 CI 生成接口后单独分析新增的管理界面，检查 Dart 与原生接口一致。2026-10-15 的本机临时联调使用测试 CA、TLS 代理、当前 xscs 数据库和两个 `NativeManager`，验证 HTTPS 注册、WSS 列表、地址上报、双向配对证明、状态脱敏、两端撤权与解绑。该联调没有运行捕获、媒体或输入，不作为物理设备串流验收。
 
+macOS 离线 DMG 更新必须同时提供签名元数据：`--update update.dmg --metadata rustdesk-update.json --signature rustdesk-update.json.sig`。裸 DMG 参数会被拒绝；当前在线更新入口继续使用自己的发行校验流程。
+
 ## GPUI 桌面应用
 
 控制端使用 `live-session`，被控端使用 `native-host`，两者共用仓库内维护的 GPUI 和原生会话核心。
