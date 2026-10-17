@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fail closed on packaged DEX logs or changed GameActivity JNI declarations."""
 import argparse
+import hashlib
 import io
 import struct
 import zipfile
@@ -78,13 +79,32 @@ def dex_symbols(data):
     return strings, methods, classes, definitions
 
 
-def class_symbols(data):
+JAVA8_ACCESS_MARKER = PREFIX + "gametextinput/InputConnection$1;"
+JAVA8_ACCESS_CTOR = (
+    PREFIX + "gametextinput/InputConnection$singleLineFilter;", "<init>",
+    "(" + PREFIX + "gametextinput/InputConnection;" + JAVA8_ACCESS_MARKER + ")V",
+)
+
+
+def normalize_java8_access(owner, class_flags, major, members):
+    # The pinned AAR's javac-8 empty access marker and forwarding constructor
+    # are replaced by a different synthetic bridge when javac-17/D8 compiles
+    # our source. Never exclude other synthetic fields/methods or real JNI ABI.
+    if major == 52 and owner == JAVA8_ACCESS_MARKER and class_flags & 0x1000 and not members:
+        return None, set()
+    required = {member for member, flags in members
+                if not (major == 52 and member == JAVA8_ACCESS_CTOR and flags & 0x1000)}
+    return owner, required
+
+
+def class_symbols(data, normalize_access=False):
     stream = io.BytesIO(data)
     def number(size=2):
         return int.from_bytes(stream.read(size), "big")
     if number(4) != 0xCAFEBABE:
         raise ValueError("Invalid Java class")
-    stream.read(4)
+    number()  # minor version
+    major = number()
     pool = [None] * number()
     index = 1
     while index < len(pool):
@@ -103,21 +123,31 @@ def class_symbols(data):
         else:
             raise ValueError("Unsupported constant pool tag")
         index += 1
-    number()
+    class_flags = number()
     owner = "L" + pool[pool[number()]] + ";"
     number()
     stream.read(number() * 2)
-    members = set()
+    members = []
     for _ in range(2):  # fields, methods
         for _ in range(number()):
-            number()
+            flags = number()
             name, descriptor = pool[number()], pool[number()]
             if name != "<clinit>":  # Pure static initialization can be folded.
-                members.add((owner, name, descriptor))
+                members.append(((owner, name, descriptor), flags))
             for _ in range(number()):
                 number()
                 stream.read(number(4))
-    return owner, members
+    if normalize_access:
+        shape_hashes = {
+            JAVA8_ACCESS_MARKER: "50453e540dac650a67e4a58ed6c755f3a6f4e3adfba81a9537e9563bc489432b",
+            JAVA8_ACCESS_CTOR[0]: "82a9b2f8b64b65086730ace41c909c7921878168bc115285926e0c7949e8d6c2",
+        }
+        # Pin the inspected empty-marker / six-byte forwarding-code shapes,
+        # not merely a name or ACC_SYNTHETIC claim in an arbitrary dependency.
+        if owner in shape_hashes and hashlib.sha256(data).hexdigest() != shape_hashes[owner]:
+            raise ValueError("Unreviewed javac access bridge shape")
+        return normalize_java8_access(owner, class_flags, major, members)
+    return owner, {member for member, _ in members}
 
 
 def check_privacy(strings, methods):
@@ -149,6 +179,13 @@ def check_jni(classes, definitions):
                          repr(sorted(required - definitions)))
 
 
+def check_game_abi(expected_classes, expected_members, classes, definitions):
+    if expected_classes - classes or expected_members - definitions:
+        raise ValueError("GameActivity JNI classes/members removed or renamed: " +
+                         repr(sorted((expected_classes - classes))[:3]) + " " +
+                         repr(sorted(expected_members - definitions)[:3]))
+
+
 def verify(apk, aar):
     classes, definitions = set(), set()
     dex_count = 0
@@ -167,15 +204,14 @@ def verify(apk, aar):
             expected_classes, expected_members = set(), set()
             for name in jar.namelist():
                 if name.startswith(PREFIX[1:]) and name.endswith(".class"):
-                    owner, members = class_symbols(jar.read(name))
+                    owner, members = class_symbols(jar.read(name), normalize_access=True)
+                    if owner is None:
+                        continue
                     expected_classes.add(owner)
                     expected_members.update(members)
     if not expected_classes or not expected_members:
         raise ValueError("GameActivity reference AAR is empty")
-    if expected_classes - classes or expected_members - definitions:
-        raise ValueError("GameActivity JNI classes/members removed or renamed: " +
-                         repr(sorted((expected_classes - classes))[:3]) + " " +
-                         repr(sorted(expected_members - definitions)[:3]))
+    check_game_abi(expected_classes, expected_members, classes, definitions)
     check_jni(classes, definitions)
     return len(expected_classes), len(expected_members)
 

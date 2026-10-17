@@ -26,5 +26,43 @@ class PrivacyTests(unittest.TestCase):
         ])
 
 
+    def test_normalizes_only_verified_java8_access_synthetics(self):
+        marker = privacy.JAVA8_ACCESS_MARKER
+        self.assertEqual(privacy.normalize_java8_access(marker, 0x1020, 52, []),
+                         (None, set()))
+        ctor = privacy.JAVA8_ACCESS_CTOR
+        real = (ctor[0], "<init>",
+                "(Lcom/google/androidgamesdk/gametextinput/InputConnection;)V")
+        owner, members = privacy.normalize_java8_access(
+            ctor[0], 0x20, 52, [(ctor, 0x1000), (real, 0x2)])
+        self.assertEqual(members, {real})
+        # A same-named nonsynthetic declaration must not be silently exempted.
+        self.assertEqual(privacy.normalize_java8_access(
+            ctor[0], 0x20, 52, [(ctor, 0x1)])[1], {ctor})
+        self.assertEqual(privacy.normalize_java8_access(marker, 0x20, 52, [])[0], marker)
+
+    def test_missing_real_jni_entry_still_fails(self):
+        owner = privacy.JAVA8_ACCESS_CTOR[0]
+        real = (owner, "<init>", "(Lcom/google/androidgamesdk/gametextinput/InputConnection;)V")
+        with self.assertRaisesRegex(ValueError, "members removed"):
+            privacy.check_game_abi({owner}, {real}, {owner}, set())
+        bridge = "Lorg/xscc/gpui/AndroidImeBridge;"
+        classes = {bridge, bridge[:-1] + "$ImeSurfaceView;", bridge[:-1] + "$SessionConnection;"}
+        members = {
+            (bridge, "configureIme", "(JIIILjava/lang/String;IIIIZ)V"),
+            (bridge, "hideIme", "(J)V"),
+            (bridge, "nativeTextChanged", "(JLjava/lang/String;IIII)V"),
+            (bridge, "nativeAction", "(JI)V"),
+        }
+        members.update(("Landroidx/core/view/WindowInsetsCompat$Type;", name, "()I")
+                       for name in ("systemBars", "displayCutout", "ime"))
+        members.update(("Landroidx/core/graphics/Insets;", name, "I")
+                       for name in ("left", "top", "right", "bottom"))
+        privacy.check_jni(classes, members)
+        members.remove((bridge, "nativeTextChanged", "(JLjava/lang/String;IIII)V"))
+        with self.assertRaisesRegex(ValueError, "JNI declarations missing"):
+            privacy.check_jni(classes, members)
+
+
 if __name__ == "__main__":
     unittest.main()
