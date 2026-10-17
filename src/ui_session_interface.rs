@@ -4,6 +4,7 @@ use crate::{
         MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_MASK,
         MOUSE_TYPE_TRACKPAD, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
     },
+    session_transport::SessionTransport,
     ui_interface::use_texture_render,
 };
 use async_trait::async_trait;
@@ -19,7 +20,7 @@ use hbb_common::{
         sync::mpsc,
         time::{Duration as TokioDuration, Instant},
     },
-    SessionID, Stream,
+    SessionID,
 };
 use rdev::{Event, EventType::*, KeyCode};
 #[cfg(feature = "vram")]
@@ -1475,7 +1476,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         }
     }
 
-    async fn handle_hash(&self, pass: &str, hash: Hash, peer: &mut Stream) -> bool {
+    async fn handle_hash(&self, pass: &str, hash: Hash, peer: &mut SessionTransport) -> bool {
         handle_hash(self.lc.clone(), pass, hash, self, peer).await
     }
 
@@ -1485,7 +1486,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         os_password: String,
         password: String,
         remember: bool,
-        peer: &mut Stream,
+        peer: &mut SessionTransport,
     ) {
         handle_login_from_ui(
             self.lc.clone(),
@@ -1498,7 +1499,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         .await;
     }
 
-    async fn handle_test_delay(&self, t: TestDelay, peer: &mut Stream) {
+    async fn handle_test_delay(&self, t: TestDelay, peer: &mut SessionTransport) {
         if !t.from_client {
             self.update_quality_status(QualityStatus {
                 delay: Some(t.last_delay as _),

@@ -72,6 +72,8 @@ type ConnMap = HashMap<i32, ConnInner>;
 
 #[derive(Clone, Default)]
 pub struct ConnectionMeta {
+    #[cfg(feature = "experimental-quic")]
+    pub(crate) quic_accepted_at: Option<tokio::time::Instant>,
     #[cfg(feature = "test-lan-direct")]
     pub(crate) test_lan: bool,
     pub control_permissions: Option<ControlPermissions>,
@@ -198,7 +200,7 @@ pub async fn create_tcp_connection(
     }
     Connection::start(
         addr,
-        stream,
+        stream.into(),
         id,
         Arc::downgrade(&server),
         meta,

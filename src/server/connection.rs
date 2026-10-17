@@ -262,7 +262,7 @@ impl AuthConnType {
 pub struct Connection {
     inner: ConnInner,
     display_idx: usize,
-    stream: super::Stream,
+    stream: crate::session_transport::SessionTransport,
     server: super::ServerPtrWeak,
     hash: Hash,
     timer: crate::RustDeskInterval,
@@ -387,12 +387,14 @@ fn drm_can_serve_login_screen() -> bool {
 impl Connection {
     pub async fn start(
         addr: SocketAddr,
-        stream: super::Stream,
+        stream: crate::session_transport::SessionTransport,
         id: i32,
         server: super::ServerPtrWeak,
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
     ) {
+        #[cfg(feature = "experimental-quic")]
+        let quic_accepted_at = meta.quic_accepted_at;
         let super::ConnectionMeta {
             control_permissions,
             ..
@@ -527,6 +529,8 @@ impl Connection {
             crate::rustdesk_interval(time::interval_at(Instant::now(), TEST_DELAY_TIMEOUT));
         let mut last_recv_time = Instant::now();
         let started = Instant::now();
+        #[cfg(feature = "experimental-quic")]
+        let started = quic_accepted_at.unwrap_or(started);
 
         conn.stream.set_send_timeout(SEND_TIMEOUT_VIDEO);
 

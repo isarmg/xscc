@@ -5776,6 +5776,7 @@ dependencies = [
  "parity-tokio-ipc",
  "piet",
  "piet-coregraphics",
+ "rcgen",
  "rdev",
  "repng",
  "reqwest",

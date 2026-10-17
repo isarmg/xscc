@@ -8,7 +8,10 @@ use hbb_common::{
     tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec},
 };
 use quinn::{Connection, Endpoint, RecvStream, SendStream, TransportConfig, VarInt};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+pub use rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    RootCertStore,
+};
 use std::{convert::TryFrom, future::Future, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::time::{interval, timeout, MissedTickBehavior};
 
@@ -82,6 +85,9 @@ pub fn server_config(
     let mut config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls)?,
     ));
+    // Admission and the application IP whitelist are tied to the initial peer
+    // address, as on TCP. Do not silently expand them through path migration.
+    config.migration(false);
     config.transport_config(transport());
     Ok(config)
 }
@@ -157,22 +163,56 @@ impl Listener {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.endpoint.local_addr()?)
     }
+    /// Stop admission and close existing QUIC connections when the host service stops.
+    pub fn close(&self) {
+        self.endpoint.close(0u32.into(), b"listener stopped");
+    }
 
+    /// Obtain the source address and reserve application admission before TLS or
+    /// identity work. The application owns the admission guard across handshake,
+    /// management authorization and its normal login deadline.
+    pub async fn incoming(&self) -> Option<Incoming> {
+        self.endpoint.accept().await.map(|incoming| Incoming {
+            incoming,
+            endpoint: self.endpoint.clone(),
+            identity: self.identity.clone(),
+        })
+    }
+
+    /// Convenience for experiments/tests only: production listeners must call
+    /// `incoming`, enforce admission and spawn each bounded `handshake` separately.
     pub async fn accept(&self) -> Result<PendingSession> {
-        let incoming = self
-            .endpoint
-            .accept()
+        self.incoming()
             .await
-            .context("QUIC listener closed")?;
+            .context("QUIC listener closed")?
+            .handshake()
+            .await
+    }
+}
+
+pub struct Incoming {
+    incoming: quinn::Incoming,
+    endpoint: Endpoint,
+    identity: sign::SecretKey,
+}
+impl Incoming {
+    pub fn remote_address(&self) -> SocketAddr {
+        self.incoming.remote_address()
+    }
+    /// Refuse before allocating application state or performing the handshake.
+    pub fn refuse(self) {
+        self.incoming.refuse();
+    }
+    pub async fn handshake(self) -> Result<PendingSession> {
         timeout(HANDSHAKE_TIMEOUT, async {
-            let connection = incoming.await?;
+            let connection = self.incoming.await?;
             let exporter = exporter(&connection)?;
             let (send, recv) = connection.open_bi().await?;
             let (mut send, recv) = framed(send, recv, AUTH_LIMIT);
             let proof = sign::sign_detached(&exporter, &self.identity);
             write_frame(&mut send, proof.as_ref(), AUTH_LIMIT).await?;
             Ok(PendingSession {
-                endpoint: self.endpoint.clone(),
+                endpoint: self.endpoint,
                 connection,
                 binding: ChannelBinding {
                     exporter,
@@ -280,6 +320,11 @@ pub struct Session {
     _auth: (FramedSend, FramedRecv),
 }
 impl Session {
+    /// Recheck the same local management authority before delivering buffered application data.
+    pub fn ensure_authorized(&self) -> Result<()> {
+        self.check()
+    }
+
     fn check(&self) -> Result<()> {
         check(&self.connection, &self.binding, self.authorization.as_ref())
     }
@@ -329,6 +374,17 @@ impl Session {
         self.connection.send_datagram(bytes)?;
         Ok(())
     }
+    /// Backpressure-aware media send for a dedicated bounded writer task. Unlike
+    /// `send_media`, a full local queue does not evict older queued fragments.
+    pub async fn send_media_wait(&self, bytes: Bytes) -> Result<()> {
+        checked_io(
+            &self.connection,
+            &self.binding,
+            self.authorization.as_ref(),
+            async { Ok(self.connection.send_datagram_wait(bytes).await?) },
+        )
+        .await
+    }
     pub async fn recv_media(&self) -> Result<Bytes> {
         checked_io(
             &self.connection,
@@ -337,6 +393,10 @@ impl Session {
             async { Ok(self.connection.read_datagram().await?) },
         )
         .await
+    }
+    /// Wait for the peer/transport to close, without initiating a local close.
+    pub async fn closed(&self) {
+        self.connection.closed().await;
     }
     pub fn close(&self) {
         self.connection.close(0u32.into(), b"session closed");
@@ -361,6 +421,26 @@ impl ReliableLane {
             &self.binding,
             self.authorization.as_ref(),
             write_frame(&mut self.send, bytes, MAX_RELIABLE_MESSAGE),
+        )
+        .await
+    }
+    /// End this reliable direction and wait for transport acknowledgement. This
+    /// does not prove application processing; keep the connection alive until
+    /// the application peer closes or a bounded shutdown deadline expires.
+    pub async fn finish(&mut self) -> Result<()> {
+        let send = &mut self.send;
+        checked_io(
+            &self.connection,
+            &self.binding,
+            self.authorization.as_ref(),
+            async {
+                send.flush().await?;
+                send.get_mut().finish()?;
+                if send.get_ref().stopped().await?.is_some() {
+                    bail!("QUIC reliable direction stopped before acknowledgement");
+                }
+                Ok(())
+            },
         )
         .await
     }
@@ -622,5 +702,32 @@ mod tests {
         };
         let (read, _) = tokio::join!(timeout(Duration::from_secs(2), b.recv_media()), revoke);
         assert_eq!(read.unwrap().unwrap_err().to_string(), "test permit denied");
+    }
+    #[tokio::test]
+    async fn admission_can_refuse_before_identity_handshake() {
+        let (client, host, key) = endpoints();
+        let address = host.local_addr().unwrap();
+        let attempt = tokio::spawn(async move { client.connect(address, "localhost", key).await });
+        let incoming = host.incoming().await.unwrap();
+        assert!(incoming.remote_address().ip().is_loopback());
+        assert_ne!(incoming.remote_address().port(), 0);
+        incoming.refuse();
+        assert!(attempt.await.unwrap().is_err());
+        let (client, host, key) = endpoints();
+        let (a, b) = pair(&client, &host, key).await;
+        let a_auth = lease(a.binding(), true);
+        let b_auth = lease(b.binding(), true);
+        let a = a.authorize(a_auth).unwrap();
+        let b = b.authorize(b_auth).unwrap();
+        host.close();
+        assert!(host.incoming().await.is_none());
+        assert!(timeout(Duration::from_secs(2), a.recv_media())
+            .await
+            .unwrap()
+            .is_err());
+        assert!(timeout(Duration::from_secs(2), b.recv_media())
+            .await
+            .unwrap()
+            .is_err());
     }
 }

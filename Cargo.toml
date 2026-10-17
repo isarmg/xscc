@@ -223,6 +223,7 @@ cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
 
 [dev-dependencies]
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 hound = "3.5"
 docopt = "1.1"
 tokio = "1.44"

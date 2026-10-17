@@ -58,6 +58,25 @@ async fn receive(session: &mut PendingSession) -> ResultType<WireMessage> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+pub(crate) async fn connect_controller(
+    session: PendingSession,
+    permit: SessionPermit,
+) -> ResultType<(Session, SessionPermit)> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        ipc::connect(session, permit).await
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        connect(session, super::owner()?.clone(), permit).await
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) async fn accept_owned(session: PendingSession) -> ResultType<(Session, SessionPermit)> {
+    accept(session, super::owner()?.clone()).await
+}
+
 /// Only the existing in-process owner may authorize. An unconfigured manager
 /// cannot fall back to unmanaged access here, even on non-host builds.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

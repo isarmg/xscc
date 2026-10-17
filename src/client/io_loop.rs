@@ -7,6 +7,7 @@ use crate::{
         self, Client, Data, Interface, MediaData, MediaSender,
         QualityStatus, SEC30,
     },
+    session_transport::SessionTransport,
     ui_session_interface::{InvokeUiSession, Session},
 };
 
@@ -27,7 +28,6 @@ use hbb_common::{
         sync::mpsc,
         time::{self, Duration, Instant},
     },
-    Stream,
 };
 use scrap::CodecFormat;
 use std::{
@@ -115,7 +115,14 @@ impl<T: InvokeUiSession> Remote<T> {
         let test_lan = false;
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
-        #[cfg(feature = "managed")]
+        #[cfg(feature = "experimental-quic")]
+        let (result, managed_permit) = match client::quic::connect(
+            &self.handler.get_id(), conn_type, self.handler.clone(),
+        ).await {
+            Ok((stream, key, kind, permit)) => (Ok((stream, key, kind)), permit),
+            Err(error) => (Err(error), None),
+        };
+        #[cfg(all(feature = "managed", not(feature = "experimental-quic")))]
         let (result, managed_permit) = match crate::management::connect(
             &self.handler.get_id(), conn_type, self.handler.clone(),
         ).await {
@@ -296,7 +303,7 @@ impl<T: InvokeUiSession> Remote<T> {
 
 
 
-    async fn send_close_reason(&mut self, peer: &mut Stream, reason: &str) {
+    async fn send_close_reason(&mut self, peer: &mut SessionTransport, reason: &str) {
         if self.sent_close_reason {
             return;
         }
@@ -384,7 +391,7 @@ impl<T: InvokeUiSession> Remote<T> {
         });
     }
 
-    async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
+    async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut SessionTransport) -> bool {
         match data {
             Data::Close => {
                 self.send_close_reason(peer, "").await;
@@ -502,7 +509,7 @@ impl<T: InvokeUiSession> Remote<T> {
         true
     }
 
-    async fn send_toggle_virtual_display_msg(&self, peer: &mut Stream) {
+    async fn send_toggle_virtual_display_msg(&self, peer: &mut SessionTransport) {
         if !self.peer_info.is_support_virtual_display() {
             return;
         }
@@ -522,7 +529,7 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
-    async fn send_toggle_privacy_mode_msg(&self, peer: &mut Stream) {
+    async fn send_toggle_privacy_mode_msg(&self, peer: &mut SessionTransport) {
         let impl_key = {
             let lc = self.handler.lc.read().unwrap();
             (lc.version >= hbb_common::get_version_number("1.2.4")
@@ -561,7 +568,7 @@ impl<T: InvokeUiSession> Remote<T> {
     // Currently, this function only considers decoding speed and queue length, not network delay.
     // The controlled end can consider auto fps as the maximum decoding fps.
     #[inline]
-    async fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>, peer: &mut Stream) -> bool {
+    async fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>, peer: &mut SessionTransport) -> bool {
         self.video_threads.iter_mut().for_each(|(k, v)| {
             let real_fps = real_fps_map.get(k).cloned().unwrap_or_default();
             if real_fps == 0 {
@@ -678,7 +685,7 @@ impl<T: InvokeUiSession> Remote<T> {
         true
     }
 
-    async fn send_congestion_refresh(&mut self, peer: &mut Stream, display: usize) -> bool {
+    async fn send_congestion_refresh(&mut self, peer: &mut SessionTransport, display: usize) -> bool {
         // Send in this loop: a queued UI refresh could invalidate a later recovery keyframe.
         let message = client::LoginConfigHandler::refresh_display(display as _);
         if let Err(error) = peer.send(&message).await {
@@ -688,7 +695,7 @@ impl<T: InvokeUiSession> Remote<T> {
         true
     }
 
-    async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
+    async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut SessionTransport) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             if base::session_protocol::is_legacy_role_switch_message(&msg_in) {
                 self.send_close_reason(peer, "Runtime role switching is not supported")
@@ -794,6 +801,11 @@ impl<T: InvokeUiSession> Remote<T> {
                             // https://github.com/rustdesk/rustdesk/discussions/9010
                         }
 
+                        #[cfg(feature = "experimental-quic")]
+                        if let Err(error) = peer.enable_media() {
+                            self.handler.on_establish_connection_error(format!("{error:#}"));
+                            return false;
+                        }
                         self.is_connected = true;
                     }
                     _ => {}
@@ -1612,10 +1624,11 @@ mod congestion_recovery_tests {
 mod tests {
     use super::*;
     use crate::flutter::FlutterHandler;
+    use hbb_common::Stream;
 
     /// A round's `Remote` over a loopback pair, before any login: what it sends to `peer`
     /// arrives at `far`.
-    async fn remote_and_peer() -> (Remote<FlutterHandler>, Stream, Stream) {
+    async fn remote_and_peer() -> (Remote<FlutterHandler>, SessionTransport, Stream) {
         let listener = hbb_common::tcp::new_listener("127.0.0.1:0", false)
             .await
             .unwrap();
@@ -1628,7 +1641,7 @@ mod tests {
         let far = Stream::Tcp(hbb_common::tcp::FramedStream::from(accepted, far_addr));
         let (sender, receiver) = mpsc::unbounded_channel::<Data>();
         let remote = Remote::new(Session::<FlutterHandler>::default(), receiver, sender);
-        (remote, peer.unwrap(), far)
+        (remote, peer.unwrap().into(), far)
     }
 
     async fn arrives(far: &mut Stream) -> bool {

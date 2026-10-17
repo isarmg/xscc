@@ -33,6 +33,9 @@ pub mod gpui_management;
 #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
 mod test_lan;
 mod client;
+pub(crate) mod session_transport;
+#[cfg(all(feature = "experimental-quic", not(any(target_os = "android", target_os = "ios"))))]
+mod quic_host;
 mod lan;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod direct_server;

@@ -38,6 +38,8 @@ impl DirectServer {
             allow_err!(super::lan::start_listening());
         });
         scrap::codec::test_av1();
+        #[cfg(all(feature = "experimental-quic", not(any(target_os = "android", target_os = "ios"))))]
+        tokio::spawn(crate::quic_host::run(server.clone()));
         direct_server(server).await;
     }
 }

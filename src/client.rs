@@ -26,6 +26,7 @@ use std::{
 use crate::{
     common::input::{MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP},
     is_keyboard_mode_supported,
+    session_transport::SessionTransport,
     ui_interface::{get_builtin_option, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -90,6 +91,8 @@ mod audio_state_tests;
 pub(crate) mod hwcodec;
 pub mod helper;
 pub mod io_loop;
+#[cfg(feature = "experimental-quic")]
+pub(crate) mod quic;
 mod presentation;
 pub mod screenshot;
 mod streaming;
@@ -2164,7 +2167,7 @@ pub(crate) fn get_hwcodec_config() {
 ///
 /// * `t` - The latency test message.
 /// * `peer` - The peer.
-pub async fn handle_test_delay(t: TestDelay, peer: &mut Stream) {
+pub async fn handle_test_delay(t: TestDelay, peer: &mut SessionTransport) {
     if !t.from_client {
         let mut msg_out = Message::new();
         msg_out.set_test_delay(t);
@@ -2467,7 +2470,7 @@ pub async fn handle_hash(
     password_preset: &str,
     hash: Hash,
     interface: &impl Interface,
-    peer: &mut Stream,
+    peer: &mut SessionTransport,
 ) -> bool {
     // A fixed incoming-only role must never answer a client login challenge.
     if config::is_incoming_only() {
@@ -2599,7 +2602,7 @@ async fn send_login(
     os_username: String,
     os_password: String,
     password: Vec<u8>,
-    peer: &mut Stream,
+    peer: &mut SessionTransport,
 ) {
     let msg_out = lc
         .read()
@@ -2624,7 +2627,7 @@ pub async fn handle_login_from_ui(
     os_password: String,
     password: String,
     remember: bool,
-    peer: &mut Stream,
+    peer: &mut SessionTransport,
 ) {
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
@@ -2665,16 +2668,16 @@ pub trait Interface: Send + Clone + 'static + Sized {
     fn on_error(&self, err: &str) {
         self.msgbox("error", "Error", err, "");
     }
-    async fn handle_hash(&self, pass: &str, hash: Hash, peer: &mut Stream) -> bool;
+    async fn handle_hash(&self, pass: &str, hash: Hash, peer: &mut SessionTransport) -> bool;
     async fn handle_login_from_ui(
         &self,
         os_username: String,
         os_password: String,
         password: String,
         remember: bool,
-        peer: &mut Stream,
+        peer: &mut SessionTransport,
     );
-    async fn handle_test_delay(&self, t: TestDelay, peer: &mut Stream);
+    async fn handle_test_delay(&self, t: TestDelay, peer: &mut SessionTransport);
 
     fn get_lch(&self) -> Arc<RwLock<LoginConfigHandler>>;
 
