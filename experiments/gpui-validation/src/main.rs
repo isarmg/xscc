@@ -47,6 +47,14 @@ mod text_field;
     test
 ))]
 mod theme;
+#[cfg(any(
+    all(
+        any(target_os = "windows", target_os = "linux", target_os = "macos"),
+        feature = "live-session"
+    ),
+    test
+))]
+mod window_layout;
 use options::Options;
 #[path = "../../shared/management.rs"]
 mod management;

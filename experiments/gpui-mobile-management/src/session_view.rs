@@ -36,6 +36,7 @@ pub struct SessionView {
     current_monitor: Option<usize>,
     pending_monitor: Option<usize>,
     connected: bool,
+    controls_expanded: bool,
     target_fps: Option<TargetFps>,
     quality: SessionQuality,
     direct_touch: bool,
@@ -132,6 +133,7 @@ impl SessionView {
             current_monitor: None,
             pending_monitor: None,
             connected: false,
+            controls_expanded: false,
             target_fps: None,
             quality: SessionQuality::default(),
             direct_touch: true,
@@ -198,6 +200,15 @@ impl SessionView {
         for reply in self.receiver.try_iter() {
             drop(reply);
         }
+    }
+
+    pub fn leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop();
+        self.controls_expanded = false;
+        if let Err(error) = self.presentation.update(None, window) {
+            self.notice = error;
+        }
+        cx.notify();
     }
 
     pub fn connect(&mut self, device_id: String, cx: &mut Context<Self>) {
@@ -664,13 +675,64 @@ impl Render for SessionView {
         let touch = cx.listener(move |view, event: &(TouchEvent, Geometry), window, cx| {
             view.touch_event(&event.0, event.1, generation, window, cx);
         });
-        div()
+        let viewport = div()
+            .absolute()
+            .top(px(44.))
+            .bottom_0()
+            .left_0()
+            .w_full()
+            .bg(rgb(0x101010))
+            .overflow_hidden()
+            .children(self.presentation.image().map(|image| {
+                img(ImageSource::Render(image.clone()))
+                    .size_full()
+                    .object_fit(ObjectFit::Contain)
+            }))
+            .when(input_allowed, |view| {
+                view.child(
+                    canvas(
+                        |bounds, window, _| {
+                            (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal))
+                        },
+                        move |_, (bounds, hitbox), window, _| {
+                            let geometry = Geometry {
+                                bounds: (
+                                    bounds.origin.x.into(),
+                                    bounds.origin.y.into(),
+                                    bounds.size.width.into(),
+                                    bounds.size.height.into(),
+                                ),
+                                extent,
+                                origin,
+                            };
+                            window.on_touch_event(owner, &hitbox, move |event, window, cx| {
+                                touch(&(event.clone(), geometry), window, cx)
+                            });
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+            });
+        let controls = div()
+            .id("session-controls-scroll")
+            .occlude()
+            .absolute()
+            .top(px(44.))
+            .left_0()
+            .w_full()
+            .max_h(px((f32::from(window.fully_visible_bounds().size.height)
+                - 100.)
+                .max(44.)))
+            .overflow_y_scroll()
+            .p_3()
+            .bg(rgb(palette.panel))
             .flex()
             .flex_col()
-            .track_focus(&self.focus)
             .gap_3()
             .w_full()
-            .child(div().child(self.notice.clone()))
             .when(self.connected, |view| {
                 view.child(
                     div()
@@ -770,51 +832,6 @@ impl Render for SessionView {
                 )
                 .when_some(audio.error, |view, error| view.child(div().child(error)))
             })
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .h(px(280.))
-                    .bg(rgb(0x101010))
-                    .overflow_hidden()
-                    .children(self.presentation.image().map(|image| {
-                        img(ImageSource::Render(image.clone()))
-                            .size_full()
-                            .object_fit(ObjectFit::Contain)
-                    }))
-                    .when(input_allowed, |view| {
-                        view.child(
-                            canvas(
-                                |bounds, window, _| {
-                                    (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal))
-                                },
-                                move |_, (bounds, hitbox), window, _| {
-                                    let geometry = Geometry {
-                                        bounds: (
-                                            bounds.origin.x.into(),
-                                            bounds.origin.y.into(),
-                                            bounds.size.width.into(),
-                                            bounds.size.height.into(),
-                                        ),
-                                        extent,
-                                        origin,
-                                    };
-                                    window.on_touch_event(
-                                        owner,
-                                        &hitbox,
-                                        move |event, window, cx| {
-                                            touch(&(event.clone(), geometry), window, cx)
-                                        },
-                                    );
-                                },
-                            )
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full(),
-                        )
-                    }),
-            )
             .when(input_allowed, |view| {
                 view.child(
                     div()
@@ -882,6 +899,59 @@ impl Render for SessionView {
                             cx.notify();
                         })),
                 )
+            });
+        div()
+            .relative()
+            .size_full()
+            .overflow_hidden()
+            .track_focus(&self.focus)
+            .bg(rgb(palette.page))
+            .when(self.presentation.image().is_some(), |view| {
+                view.child(viewport)
+            })
+            .child(
+                div()
+                    .relative()
+                    .occlude()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .bg(rgb(palette.panel))
+                    .px_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .when(self.presentation.image().is_some(), |view| view.truncate())
+                            .child(self.notice.clone()),
+                    )
+                    .when(self.selected.is_some(), |view| {
+                        view.child(
+                            div()
+                                .id("toggle-session-controls")
+                                .occlude()
+                                .min_h(px(44.))
+                                .p_2()
+                                .child(if self.controls_expanded {
+                                    "收起控制"
+                                } else {
+                                    "会话控制"
+                                })
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    view.release_input();
+                                    if let Some(control) = &view.keyboard_control {
+                                        control.cancel();
+                                    }
+                                    window.dismiss_virtual_keyboard();
+                                    view.controls_expanded = !view.controls_expanded;
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .when(self.controls_expanded && self.selected.is_some(), |view| {
+                view.child(controls)
             })
     }
 }

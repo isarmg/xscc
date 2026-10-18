@@ -37,6 +37,8 @@ pub struct Panel {
     active: bool,
     busy: bool,
     confirm_unbind: bool,
+    binding_expanded: bool,
+    session_visible: bool,
     notice: String,
     #[cfg(all(
         any(target_os = "ios", target_os = "android"),
@@ -92,6 +94,7 @@ impl Panel {
                     AppLifecyclePhase::Background | AppLifecyclePhase::Disconnected => {
                         view.active = false;
                         view.confirm_unbind = false;
+                        view.session_visible = false;
                         if let Some(status) = &mut view.status {
                             status.peers.clear();
                         }
@@ -128,6 +131,8 @@ impl Panel {
             active,
             busy: false,
             confirm_unbind: false,
+            binding_expanded: false,
+            session_visible: false,
             notice: "正在读取本机绑定…".into(),
             #[cfg(all(
                 any(target_os = "ios", target_os = "android"),
@@ -236,6 +241,48 @@ impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = theme::palette(window.appearance());
         let visible = window.fully_visible_bounds();
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "mobile-session"
+        ))]
+        if self.session_visible {
+            return div()
+                .size_full()
+                .bg(rgb(palette.page))
+                .text_color(rgb(palette.text))
+                .child(
+                    div()
+                        .absolute()
+                        .left(visible.origin.x)
+                        .top(visible.origin.y)
+                        .w(visible.size.width)
+                        .h(visible.size.height)
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .id("back-to-hosts")
+                                .min_h(px(44.))
+                                .px_4()
+                                .py_2()
+                                .child("‹ 返回主机列表")
+                                .on_click(cx.listener(|view, _, window, cx| {
+                                    window.dismiss_virtual_keyboard();
+                                    view.session
+                                        .update(cx, |session, cx| session.leave(window, cx));
+                                    view.session_visible = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .w_full()
+                                .child(self.session.clone()),
+                        ),
+                );
+        }
         let enabled = self.enabled();
         let button = |id: &'static str, label: &'static str| {
             div()
@@ -264,33 +311,187 @@ impl Render for Panel {
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .items_center()
+                    .justify_between()
                     .gap_2()
                     .child(div().text_2xl().child("XSCC"))
-                    .child(div().text_sm().text_color(rgb(palette.muted)).child(
-                        if cfg!(all(
-                            any(target_os = "ios", target_os = "android"),
-                            feature = "mobile-session"
-                        )) {
-                            "移动预览 · 画面与触控"
+                    .child(
+                        div()
+                            .id("toggle-server-binding")
+                            .relative()
+                            .min_h(px(44.))
+                            .px_3()
+                            .py_2()
+                            .child(theme::surface(
+                                rgb(palette.panel),
+                                Some(rgb(palette.border)),
+                                theme::CONTROL_EXTENT,
+                            ))
+                            .child(if self.binding_expanded {
+                                "收起服务器"
+                            } else {
+                                "绑定服务器"
+                            })
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.binding_expanded = !view.binding_expanded;
+                                view.confirm_unbind = false;
+                                window.dismiss_virtual_keyboard();
+                                cx.notify();
+                            })),
+                    ),
+            );
+        if self.binding_expanded {
+            content = content
+                .child(self.server.clone())
+                .child(self.code.clone())
+                .child(
+                    button("enroll", "绑定 / 重新授权")
+                        .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
+                )
+                .child(button("resume", "重新连接服务端").on_click(cx.listener(
+                    |view, _, window, cx| {
+                        window.dismiss_virtual_keyboard();
+                        view.action(Command::Resume, cx);
+                        cx.notify();
+                    },
+                )));
+            if let Some(status) = &self.status {
+                let state = match status.phase.as_str() {
+                    "online" => "在线",
+                    "offline" => "离线",
+                    _ => status.phase.as_str(),
+                };
+                content = content.child(div().child(format!("服务端：{state}")));
+                if let Some(server) = &status.server {
+                    content = content.child(
+                        div()
+                            .text_color(rgb(palette.muted))
+                            .child(format!("已保存服务端：{server}")),
+                    );
+                }
+                if let Some(binding) = &status.binding {
+                    content = content.child(
+                        div()
+                            .text_color(rgb(palette.muted))
+                            .child(format!("本机实例：{}", binding.device_id)),
+                    );
+                }
+                if status.configured {
+                    content = content.child(
+                        button(
+                            "unbind",
+                            if self.confirm_unbind {
+                                "确认解除本机绑定"
+                            } else {
+                                "解除绑定"
+                            },
+                        )
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            if !view.enabled() {
+                                return;
+                            }
+                            window.dismiss_virtual_keyboard();
+                            if view.confirm_unbind {
+                                view.action(Command::Unbind, cx);
+                            } else {
+                                view.confirm_unbind = true;
+                            }
+                            cx.notify();
+                        })),
+                    );
+                    if self.confirm_unbind {
+                        content = content
+                            .child("解除本机绑定后，需要重新输入实例密码。")
+                            .child(button("cancel-unbind", "取消").on_click(cx.listener(
+                                |view, _, _, cx| {
+                                    view.confirm_unbind = false;
+                                    cx.notify();
+                                },
+                            )));
+                    }
+                }
+            }
+        }
+        content = content.child(div().text_lg().child("主机"));
+        let peers: Vec<_> = self
+            .status
+            .as_ref()
+            .into_iter()
+            .flat_map(|status| &status.peers)
+            .filter(|peer| peer.role == InstanceRole::Controlled)
+            .collect();
+        if peers.is_empty() {
+            content = content.child(div().text_color(rgb(palette.muted)).child("暂无授权主机"));
+        }
+        for peer in peers {
+            let id = peer.binding.device_id.to_string();
+            let connectable = peer.online && !peer.addresses.is_empty();
+            let addresses = peer
+                .addresses
+                .iter()
+                .map(|address| {
+                    if address.host.contains(':') {
+                        format!("[{}]:{}", address.host, address.port)
+                    } else {
+                        format!("{}:{}", address.host, address.port)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("、");
+            let card = div()
+                .id(gpui::SharedString::from(format!("host-{id}")))
+                .relative()
+                .w_full()
+                .aspect_ratio(3. / 2.)
+                .p_4()
+                .flex()
+                .flex_col()
+                .justify_between()
+                .overflow_hidden()
+                .child(theme::surface(
+                    rgb(palette.panel),
+                    Some(rgb(palette.border)),
+                    theme::PANEL_EXTENT,
+                ))
+                .child(div().text_lg().child(peer.name.clone()))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(if addresses.is_empty() {
+                            "地址：未知".to_owned()
                         } else {
-                            "移动预览 · 仅设备管理"
-                        },
-                    )),
-            )
-            .child(self.server.clone())
-            .child(self.code.clone())
-            .child(
-                button("enroll", "绑定 / 重新授权")
-                    .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
-            )
-            .child(button("resume", "重新连接服务端").on_click(cx.listener(
-                |view, _, window, cx| {
-                    window.dismiss_virtual_keyboard();
-                    view.action(Command::Resume, cx);
-                    cx.notify();
-                },
-            )));
+                            format!("地址：{addresses}")
+                        })
+                        .child("系统：未知")
+                        .child(if peer.online {
+                            "状态：在线"
+                        } else {
+                            "状态：离线"
+                        }),
+                )
+                .child(div().text_color(rgb(palette.muted)).child(if connectable {
+                    "点击连接"
+                } else {
+                    "暂不可连接"
+                }));
+            #[cfg(all(
+                any(target_os = "ios", target_os = "android"),
+                feature = "mobile-session"
+            ))]
+            let card = card.on_click(cx.listener(move |view, _, window, cx| {
+                if !view.enabled() || !connectable {
+                    return;
+                }
+                window.dismiss_virtual_keyboard();
+                view.session
+                    .update(cx, |session, cx| session.connect(id.clone(), cx));
+                view.session_visible = true;
+                cx.notify();
+            }));
+            content = content.child(card);
+        }
         #[cfg(all(
             any(target_os = "ios", target_os = "android"),
             feature = "test-lan-direct"
@@ -310,10 +511,16 @@ impl Render for Panel {
                     .child(
                         div()
                             .id("XSCC_MOBILE_TEST_IP_DIRECT_V2")
+                            .relative()
                             .min_h(px(44.))
                             .p_3()
+                            .child(theme::surface(
+                                rgb(palette.panel),
+                                Some(rgb(palette.border)),
+                                theme::CONTROL_EXTENT,
+                            ))
                             .opacity(if self.active { 1. } else { 0.5 })
-                            .child("IP 直连（测试）")
+                            .child("连接输入的 IP（测试）")
                             .on_click(cx.listener(|view, _, window, cx| {
                                 if !view.active || view.test_lan_address.read(cx).is_composing() {
                                     return;
@@ -324,125 +531,11 @@ impl Render for Panel {
                                 view.session.update(cx, |session, cx| {
                                     session.connect_test_lan(endpoint, cx)
                                 });
+                                view.session_visible = true;
+                                cx.notify();
                             })),
                     ),
             );
-        }
-        #[cfg(all(
-            any(target_os = "ios", target_os = "android"),
-            feature = "mobile-session"
-        ))]
-        {
-            content = content.child(self.session.clone());
-        }
-        if let Some(status) = &self.status {
-            let state = match status.phase.as_str() {
-                "online" => "在线",
-                "offline" => "离线",
-                _ => status.phase.as_str(),
-            };
-            content = content.child(div().child(format!("服务端：{state}")));
-            if let Some(server) = &status.server {
-                content = content.child(
-                    div()
-                        .text_color(rgb(palette.muted))
-                        .child(format!("已保存服务端：{server}")),
-                );
-            }
-            if let Some(binding) = &status.binding {
-                content = content.child(
-                    div()
-                        .text_color(rgb(palette.muted))
-                        .child(format!("本机实例：{}", binding.device_id)),
-                );
-            }
-            if status.configured {
-                content = content.child(
-                    button(
-                        "unbind",
-                        if self.confirm_unbind {
-                            "确认解除本机绑定"
-                        } else {
-                            "解除绑定"
-                        },
-                    )
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if !view.enabled() {
-                            return;
-                        }
-                        window.dismiss_virtual_keyboard();
-                        if view.confirm_unbind {
-                            view.action(Command::Unbind, cx);
-                        } else {
-                            view.confirm_unbind = true;
-                        }
-                        cx.notify();
-                    })),
-                );
-                if self.confirm_unbind {
-                    content = content
-                        .child("解除本机绑定后，需要重新输入实例密码。")
-                        .child(button("cancel-unbind", "取消").on_click(cx.listener(
-                            |view, _, _, cx| {
-                                view.confirm_unbind = false;
-                                cx.notify();
-                            },
-                        )));
-                }
-            }
-            content = content.child(div().text_lg().child("授权设备"));
-            let peers: Vec<_> = status
-                .peers
-                .iter()
-                .filter(|peer| peer.role == InstanceRole::Controlled)
-                .collect();
-            if peers.is_empty() {
-                content = content.child(div().text_color(rgb(palette.muted)).child("暂无授权设备"));
-            }
-            for peer in peers {
-                #[cfg(all(
-                    any(target_os = "ios", target_os = "android"),
-                    feature = "mobile-session"
-                ))]
-                if peer.online {
-                    let id = peer.binding.device_id.to_string();
-                    content = content.child(
-                        div()
-                            .id(gpui::SharedString::from(format!("view-{id}")))
-                            .min_h(px(44.))
-                            .p_3()
-                            .child(format!("查看 {} 的画面", peer.name))
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                if !view.enabled() {
-                                    return;
-                                }
-                                window.dismiss_virtual_keyboard();
-                                view.session
-                                    .update(cx, |session, cx| session.connect(id.clone(), cx));
-                            })),
-                    );
-                }
-
-                content = content.child(
-                    div()
-                        .relative()
-                        .p_4()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(theme::surface(
-                            rgb(palette.panel),
-                            Some(rgb(palette.border)),
-                            theme::PANEL_EXTENT,
-                        ))
-                        .child(peer.name.clone())
-                        .child(div().text_color(rgb(palette.muted)).child(format!(
-                            "{} · {}",
-                            peer.binding.device_id,
-                            if peer.online { "在线" } else { "离线" }
-                        ))),
-                );
-            }
         }
         if !self.notice.is_empty() {
             content = content.child(

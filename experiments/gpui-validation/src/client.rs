@@ -6,7 +6,7 @@ use crate::{
 use gpui::{
     App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, KeyDownEvent, Render,
     StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -516,7 +516,20 @@ impl Render for ManagementPanel {
                 (Some(InstanceRole::Controlled), true) | (Some(InstanceRole::Controller), false)
             )
         });
-        let can_connect = correct_role
+        let current_peers = self.status_error.is_none()
+            && self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.phase == "online");
+        let panel_width = if !self.host && self.video_state.connected {
+            (f32::from(window.viewport_size().width) * 0.38).min(420.)
+        } else {
+            f32::from(window.viewport_size().width) - 32.
+        };
+        #[cfg(feature = "test-lan-direct")]
+        let card_width = (panel_width - 24.).max(1.).min(420.);
+        let can_connect = current_peers
+            && correct_role
             && !self.host
             && !self.video_state.connecting
             && !self.video_state.has_session
@@ -644,7 +657,7 @@ impl Render for ManagementPanel {
                 },
             );
         #[cfg(feature = "test-lan-direct")]
-        let panel = panel.when(!self.host, |root| {
+        let panel = panel.when(!self.host && !self.video_state.connected, |root| {
             let enabled = self.initialized
                 && !self.action_pending
                 && !self.video_state.connecting
@@ -652,10 +665,14 @@ impl Render for ManagementPanel {
             root.child(
                 div()
                     .relative()
-                    .p_4()
+                    .w(px(card_width))
+                    .h(px(card_width * 2. / 3.))
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .p_3()
                     .flex()
                     .flex_col()
-                    .gap_2()
+                    .gap_1()
                     .child(theme::surface(
                         rgb(palette.panel),
                         None,
@@ -665,8 +682,9 @@ impl Render for ManagementPanel {
                     .child(
                         div()
                             .text_color(rgb(palette.danger))
-                            .child("测试专用：任何可达设备均可直接控制，无身份验证。"),
+                            .child("无验证：任何可达设备可控制"),
                     )
+                    .child("系统未知 · 状态未知")
                     .child(self.lan_endpoint.clone())
                     .child(
                         div()
@@ -745,6 +763,12 @@ impl Render for ManagementPanel {
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .when(!self.host, |grid| {
+                        grid.grid()
+                            .flex_shrink_0()
+                            .grid_cols(crate::window_layout::card_columns(panel_width - 24.))
+                            .gap_3()
+                    })
                     .children(peers.iter().map(|peer| {
                         let id = peer.binding.device_id.to_string();
                         let available = can_connect
@@ -757,25 +781,40 @@ impl Render for ManagementPanel {
                             .flex()
                             .flex_col()
                             .gap_1()
+                            .when(!self.host, |card| {
+                                card.min_w_0()
+                                    .w_full()
+                                    .aspect_ratio(3. / 2.)
+                                    .overflow_hidden()
+                                    .justify_between()
+                            })
                             .child(theme::surface(
                                 rgb(palette.panel),
                                 None,
                                 theme::PANEL_EXTENT,
                             ))
-                            .child(peer.name.clone())
-                            .child(div().text_color(rgb(palette.muted)).child(
-                                if peer.addresses.is_empty() {
-                                    "未上报地址".into()
-                                } else {
-                                    peer.addresses
-                                        .iter()
-                                        .map(|address| {
-                                            format_peer_address(&address.host, address.port)
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("，")
-                                },
-                            ))
+                            .child(
+                                div()
+                                    .when(!self.host, |text| text.truncate())
+                                    .child(peer.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .when(!self.host, |text| text.truncate())
+                                    .text_color(rgb(palette.muted))
+                                    .child(if peer.addresses.is_empty() {
+                                        "未上报地址".into()
+                                    } else {
+                                        peer.addresses
+                                            .iter()
+                                            .map(|address| {
+                                                format_peer_address(&address.host, address.port)
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("，")
+                                    }),
+                            )
+                            .when(!self.host, |card| card.child("系统未知（未上报）"))
                             .child(
                                 div()
                                     .text_color(rgb(if available {
@@ -783,7 +822,11 @@ impl Render for ManagementPanel {
                                     } else {
                                         palette.muted
                                     }))
-                                    .child(if peer.online { "在线" } else { "离线" }),
+                                    .child(crate::window_layout::peer_status(if self.host {
+                                        Some(peer.online)
+                                    } else {
+                                        current_peers.then_some(peer.online)
+                                    })),
                             )
                             .when(available, |row| {
                                 row.cursor_pointer().on_click(cx.listener(
@@ -1008,9 +1051,8 @@ impl Render for Client {
         let palette = theme::palette(window.appearance());
         // Cached views require a definite viewport; panel content scrolls within it.
         let panel_width = (f32::from(window.viewport_size().width) * 0.38).min(420.0);
-        let fullscreen_video = !self.host
-            && self.management.read(cx).video_state.has_session
-            && window.is_fullscreen();
+        let remote_visible = !self.host && self.management.read(cx).video_state.connected;
+        let fullscreen_video = remote_visible && window.is_fullscreen();
         div()
             .size_full()
             .flex()
@@ -1038,8 +1080,8 @@ impl Render for Client {
                             div()
                                 .h_full()
                                 .flex_shrink_0()
-                                .when(!self.host, |panel| panel.w(px(panel_width)))
-                                .when(self.host, |panel| panel.w_full())
+                                .when(remote_visible, |panel| panel.w(px(panel_width)))
+                                .when(!remote_visible, |panel| panel.w_full())
                                 .child(
                                     self.management
                                         .clone()
@@ -1047,7 +1089,7 @@ impl Render for Client {
                                 ),
                         )
                     })
-                    .when(!self.host, |root| {
+                    .when(remote_visible, |root| {
                         root.child(
                             div()
                                 .flex_1()
@@ -1095,11 +1137,29 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
             }
         })
         .detach();
-        let bounds = Bounds::centered(None, size(px(1100.0), px(850.0)), cx);
+        let work_area = cx
+            .primary_display()
+            .map(|display| display.visible_bounds())
+            .unwrap_or_else(|| Bounds::new(point(px(0.), px(0.)), size(px(1024.), px(768.))));
+        let (initial, minimum) = crate::window_layout::window_sizes(
+            [
+                f32::from(work_area.size.width),
+                f32::from(work_area.size.height),
+            ],
+            host,
+        );
+        let bounds = Bounds::new(
+            point(
+                work_area.center().x - px(initial[0] / 2.),
+                work_area.center().y - px(initial[1] / 2.),
+            ),
+            size(px(initial[0]), px(initial[1])),
+        );
         let result = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(if host { 440.0 } else { 800.0 }), px(480.0))),
+                window_min_size: Some(size(px(minimum[0]), px(minimum[1]))),
+                is_resizable: true,
                 titlebar: Some(TitlebarOptions {
                     title: Some(
                         if host {
@@ -1136,9 +1196,16 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                 .into();
                 let management = cx.new(|cx| {
                     let (sender, receiver) = mpsc::channel();
-                    let subscriptions = vec![cx.subscribe(
+                    let subscriptions = vec![cx.subscribe_in(
                         &video,
-                        |view: &mut ManagementPanel, _, state: &VideoState, cx| {
+                        window,
+                        |view: &mut ManagementPanel, _, state: &VideoState, window, cx| {
+                            if view.video_state.connected
+                                && !state.connected
+                                && window.is_fullscreen()
+                            {
+                                window.toggle_fullscreen();
+                            }
                             view.video_state = state.clone();
                             cx.notify();
                         },
