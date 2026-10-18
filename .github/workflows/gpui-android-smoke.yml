@@ -244,8 +244,8 @@ jobs:
           fi
           if [ "$FLAVOR" = landirect ]; then
             python3 -c "import sys; sys.path.insert(0, '.github/scripts'); from gpui_mobile_test_gate import WARNING; print(WARNING)" > dist/gpui-android/TEST-ONLY.txt
-            printf 'test_lan_direct=true\nidentity_authentication=false\nhost_test_opt_in_required=true\n' >> dist/gpui-android/BUILD-INFO.txt
-            mv "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-LAN-direct-${GITHUB_SHA:0:12}.apk"
+            printf 'test_lan_direct=true\nidentity_authentication=false\nhost_test_opt_in_required=true\ntest_ip_scope=any-reachable-ipv4-or-ipv6\n' >> dist/gpui-android/BUILD-INFO.txt
+            mv "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-IP-direct-${GITHUB_SHA:0:12}.apk"
           else
             printf 'test_lan_direct=false\n' >> dist/gpui-android/BUILD-INFO.txt
           fi

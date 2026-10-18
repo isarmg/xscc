@@ -14,10 +14,13 @@ def check(binary, mode):
     result = subprocess.run([str(binary), '--build-capabilities'], capture_output=True,
                             text=True, timeout=15, check=False)
     expected = f'XSCC_TEST_LAN_DIRECT={int(mode == "test-lan-direct")}'
+    if mode == 'test-lan-direct':
+        expected += '\ntest_ip_scope=any-reachable-ipv4-or-ipv6'
     if result.returncode != 0 or result.stdout.strip() != expected:
         raise ValueError(f'Binary capabilities do not match explicit package mode {mode}: '
                          f'{result.stdout!r} {result.stderr!r}')
     return {'mode': mode, 'test_lan_direct': mode == 'test-lan-direct',
+            'test_ip_scope': 'any-reachable-ipv4-or-ipv6' if mode == 'test-lan-direct' else None,
             'distribution': 'TEST ONLY - never promote to a production release'
             if mode == 'test-lan-direct' else 'managed beta candidate'}
 
@@ -33,8 +36,8 @@ if __name__ == '__main__':
             args.output.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
             if metadata['test_lan_direct']:
                 args.output.with_name('TEST-ONLY.txt').write_text(
-                    'TEST ONLY: unauthenticated LAN direct access is enabled.\n'
-                    'Use only on an isolated, trusted test LAN. Never distribute as a production release.\n\n'
+                    'TEST ONLY: unauthenticated unrestricted IP direct access is enabled.\n'
+                    'Any reachable IP is allowed; anyone reaching the test listener can control the host. Never distribute as a production release.\n\n'
                     + (Path(__file__).resolve().parents[2] / 'docs/test-lan-direct.md').read_text(encoding='utf-8'),
                     encoding='utf-8')
         print(json.dumps(metadata))

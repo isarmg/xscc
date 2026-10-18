@@ -1678,9 +1678,9 @@ jobs:
               cargo test --locked -p scrap --features drm plane_rotation_tests
             run_drm_tests "scrap drmtap_dl::tests" \
               cargo test --locked -p scrap --features drm drmtap_dl::tests
-            run_drm_tests "TEST LAN session rejects non-LAN destinations" \
-              cargo test --locked --lib --no-default-features --features use_dasp,gpui-session,test-lan-direct gpui_session::tests::test_lan_view_and_interactive_modes_reject_non_lan_targets
-            run_drm_tests "TEST LAN address restrictions" \
+            run_drm_tests "TEST IP session rejects malformed destinations" \
+              cargo test --locked --lib --no-default-features --features use_dasp,gpui-session,test-lan-direct gpui_session::tests::test_ip_view_and_interactive_modes_reject_malformed_targets
+            run_drm_tests "TEST IP address parsing" \
               cargo test --locked --lib --no-default-features --features use_dasp,gpui-session,test-lan-direct test_lan::
             run_drm_tests "base QUIC transport" \
               cargo test --locked -p base --lib --features experimental-quic direct_transport::quic::tests

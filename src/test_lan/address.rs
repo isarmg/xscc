@@ -1,41 +1,26 @@
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, SocketAddr};
 
 pub const DEFAULT_PORT: u16 = 21119;
 pub const PREFIX: &str = "test-lan:";
 
-pub fn endpoint(input: &str) -> Result<SocketAddrV4, &'static str> {
+pub fn endpoint(input: &str) -> Result<SocketAddr, &'static str> {
     let input = input.trim();
-    let address = input
-        .parse::<SocketAddrV4>()
+    input
+        .parse::<SocketAddr>()
         .or_else(|_| {
             input
-                .parse::<Ipv4Addr>()
-                .map(|ip| SocketAddrV4::new(ip, DEFAULT_PORT))
+                .parse::<IpAddr>()
+                .map(|ip| SocketAddr::new(ip, DEFAULT_PORT))
         })
-        .map_err(|_| "Enter a private IPv4 address, optionally followed by a port")?;
-    if !address.ip().is_private() || address.port() == 0 {
-        return Err("Test LAN connections require a private IPv4 address and a nonzero port");
+        .map_err(|_| "Enter an IPv4 or IPv6 address, optionally with a port; use [IPv6]:port")
+}
+
+pub fn connect_endpoint(input: &str) -> Result<SocketAddr, &'static str> {
+    let address = endpoint(input)?;
+    if address.port() == 0 {
+        return Err("Enter the host's listening port (1–65535); remote port 0 is not connectable");
     }
     Ok(address)
-}
-
-pub fn same_subnet(local: Ipv4Addr, prefix: u8, peer: Ipv4Addr) -> bool {
-    if !local.is_private() || !peer.is_private() || !(1..=30).contains(&prefix) {
-        return false;
-    }
-    let mask = u32::MAX << (32 - prefix);
-    let network = u32::from(local) & mask;
-    let host = u32::from(peer);
-    host & mask == network && host != network && host != (network | !mask)
-}
-
-#[cfg(any(target_os = "ios", test))]
-pub(super) fn mask_prefix(mask: u32) -> Option<u8> {
-    let prefix = mask.leading_ones();
-    if !(1..=30).contains(&prefix) || mask != u32::MAX << (32 - prefix) {
-        return None;
-    }
-    Some(prefix as u8)
 }
 
 #[cfg(test)]
@@ -43,49 +28,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn interface_masks_require_contiguous_usable_subnets() {
-        assert_eq!(
-            mask_prefix(u32::from(Ipv4Addr::new(255, 255, 255, 0))),
-            Some(24)
-        );
-        assert_eq!(
-            mask_prefix(u32::from(Ipv4Addr::new(255, 255, 0, 0))),
-            Some(16)
-        );
-        for mask in [0, u32::MAX, u32::MAX - 1, 0xff00ff00] {
-            assert_eq!(mask_prefix(mask), None);
+    fn accepts_ipv4_and_ipv6_without_network_scope_restrictions() {
+        for ip in [
+            "192.168.1.2",
+            "8.8.8.8",
+            "100.64.0.1",
+            "127.0.0.1",
+            "2001:db8::1",
+            "::1",
+        ] {
+            let endpoint = connect_endpoint(ip).unwrap();
+            assert_eq!(endpoint.ip(), ip.parse::<IpAddr>().unwrap());
+            assert_eq!(endpoint.port(), DEFAULT_PORT);
         }
+        assert_eq!(
+            endpoint(" 8.8.8.8:3456 ").unwrap().to_string(),
+            "8.8.8.8:3456"
+        );
+        assert_eq!(
+            endpoint("[2001:db8::1]:65535").unwrap().to_string(),
+            "[2001:db8::1]:65535"
+        );
     }
 
     #[test]
-    fn accepts_only_private_ipv4_and_valid_ports() {
-        assert_eq!(endpoint("192.168.1.2").unwrap().port(), DEFAULT_PORT);
-        assert_eq!(endpoint("10.0.0.2:3456").unwrap().port(), 3456);
+    fn accepts_wildcard_listeners_and_os_assigned_ports() {
+        assert_eq!(endpoint("0.0.0.0:0").unwrap().to_string(), "0.0.0.0:0");
+        assert_eq!(endpoint("[::]:0").unwrap().to_string(), "[::]:0");
+        assert_eq!(endpoint("::").unwrap().to_string(), "[::]:21119");
+        assert!(connect_endpoint("8.8.8.8:0").is_err());
+        assert!(connect_endpoint("[2001:db8::1]:0").is_err());
+    }
+
+    #[test]
+    fn rejects_non_ip_and_malformed_endpoints() {
         for value in [
+            "",
             "example.com",
-            "8.8.8.8",
-            "127.0.0.1",
-            "0.0.0.0",
-            "::1",
-            "192.168.1.2:0",
-            "192.168.1.2:65536",
-            "100.64.0.1",
+            "https://8.8.8.8",
+            "1.2.3.256",
+            "8.8.8.8:65536",
+            "8.8.8.8:-1",
+            "[::1]:65536",
+            "[::1]:abc",
         ] {
             assert!(endpoint(value).is_err(), "{value}");
         }
-    }
-
-    #[test]
-    fn subnet_excludes_network_broadcast_and_other_networks() {
-        let local = Ipv4Addr::new(192, 168, 1, 2);
-        assert!(same_subnet(local, 24, Ipv4Addr::new(192, 168, 1, 3)));
-        for peer in [
-            Ipv4Addr::new(192, 168, 2, 3),
-            Ipv4Addr::new(192, 168, 1, 0),
-            Ipv4Addr::new(192, 168, 1, 255),
-        ] {
-            assert!(!same_subnet(local, 24, peer));
-        }
-        assert!(!same_subnet(local, 0, local));
     }
 }

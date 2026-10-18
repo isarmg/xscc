@@ -29,6 +29,12 @@ mod presentation;
 ))]
 mod remote_video;
 #[cfg(all(
+    target_os = "windows",
+    feature = "native-host",
+    feature = "test-lan-direct"
+))]
+mod test_host;
+#[cfg(all(
     any(target_os = "windows", target_os = "linux", target_os = "macos"),
     feature = "live-session"
 ))]
@@ -222,6 +228,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))]
         let enabled = enabled || librustdesk::gpui_host::test_lan_direct_compiled();
         println!("XSCC_TEST_LAN_DIRECT={}", u8::from(enabled));
+        if enabled {
+            println!("test_ip_scope=any-reachable-ipv4-or-ipv6");
+        }
         return Ok(());
     }
     #[cfg(all(

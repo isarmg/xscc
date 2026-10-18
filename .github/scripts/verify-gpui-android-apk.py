@@ -104,7 +104,7 @@ if __name__ == "__main__":
         raise ValueError("Test-only application ID requires test package mode")
     with zipfile.ZipFile(args.apk) as archive:
         verify_test_capability(archive.read("lib/arm64-v8a/lib" + args.expected_library + ".so"), args.test_lan_direct)
-    if args.test_lan_direct and "application-label:'XSCC TEST LAN'" not in Path(args.badging).read_text():
+    if args.test_lan_direct and "application-label:'XSCC TEST IP'" not in Path(args.badging).read_text():
         raise ValueError("Missing TEST application label")
     check_manifest(Path(args.badging).read_text(), Path(args.manifest_tree).read_text(),
                    args.expected_package, args.permission_mode)

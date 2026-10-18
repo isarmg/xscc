@@ -236,7 +236,7 @@ impl SessionView {
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         let interactive = self.direct_touch;
-        self.notice = "TEST ONLY：正在建立临时局域网直连…".into();
+        self.notice = "TEST ONLY：正在建立临时 IP 直连…".into();
         self.connecting = Some(self.runtime.spawn(async move {
             let result = gpui_session::connect_test_lan_mobile(&endpoint, interactive)
                 .await

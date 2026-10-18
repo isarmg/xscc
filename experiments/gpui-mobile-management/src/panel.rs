@@ -19,7 +19,7 @@ use xscc_native_management::manager::Status;
     feature = "test-lan-direct"
 ))]
 const TEST_LAN_WARNING: &str =
-    "TEST ONLY · 临时 IP 直连，无身份认证，仅限隔离测试网络。正式发布删除。";
+    "TEST ONLY · 临时 IP 直连，无身份认证；任何可达设备均可控制主机。正式发布删除。";
 
 pub struct Panel {
     commands: tokio::sync::mpsc::Sender<Command>,
@@ -116,8 +116,13 @@ impl Panel {
                 any(target_os = "ios", target_os = "android"),
                 feature = "test-lan-direct"
             ))]
-            test_lan_address: cx
-                .new(|cx| TextField::new("测试主机私网 IPv4，如 192.168.1.20:21119", false, cx)),
+            test_lan_address: cx.new(|cx| {
+                TextField::new(
+                    "测试主机 IP 或 IP:端口；IPv6 带端口时使用 [地址]:端口",
+                    false,
+                    cx,
+                )
+            }),
             status: None,
             initialized: false,
             active,
@@ -304,11 +309,11 @@ impl Render for Panel {
                     .child(self.test_lan_address.clone())
                     .child(
                         div()
-                            .id("XSCC_MOBILE_TEST_LAN_DIRECT_V1")
+                            .id("XSCC_MOBILE_TEST_IP_DIRECT_V2")
                             .min_h(px(44.))
                             .p_3()
                             .opacity(if self.active { 1. } else { 0.5 })
-                            .child("局域网直连（测试）")
+                            .child("IP 直连（测试）")
                             .on_click(cx.listener(|view, _, window, cx| {
                                 if !view.active || view.test_lan_address.read(cx).is_composing() {
                                     return;

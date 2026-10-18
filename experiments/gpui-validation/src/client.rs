@@ -35,6 +35,12 @@ struct ManagementPanel {
     address_port: Entity<TextField>,
     #[cfg(feature = "test-lan-direct")]
     lan_endpoint: Entity<TextField>,
+    #[cfg(all(
+        target_os = "windows",
+        feature = "native-host",
+        feature = "test-lan-direct"
+    ))]
+    test_host: Arc<Mutex<crate::test_host::TestHost>>,
     host: bool,
     initialized: bool,
     status: Option<Status>,
@@ -655,11 +661,11 @@ impl Render for ManagementPanel {
                         None,
                         theme::PANEL_EXTENT,
                     ))
-                    .child("局域网直连 · 仅测试")
+                    .child("IP 直连 · 仅测试")
                     .child(
                         div()
                             .text_color(rgb(palette.danger))
-                            .child("测试专用：同网段可直接控制，无身份验证。"),
+                            .child("测试专用：任何可达设备均可直接控制，无身份验证。"),
                     )
                     .child(self.lan_endpoint.clone())
                     .child(
@@ -689,6 +695,34 @@ impl Render for ManagementPanel {
                             }),
                     ),
             )
+        });
+        #[cfg(all(target_os = "windows", feature = "native-host", feature = "test-lan-direct"))]
+        let panel = panel.when(self.host, |root| {
+            let (active, message, address) = {
+                let host = self.test_host.lock().unwrap();
+                (host.active(), host.message.clone(), host.address)
+            };
+            let addresses = address.map(gpui_host::test_direct_addresses).unwrap_or_default();
+            root.child(div().p_4().flex().flex_col().gap_2()
+                .child("IP 直连 · 仅测试")
+                .child(div().text_color(rgb(palette.danger)).child("无身份验证、无接入确认：任何能到达监听端口的设备均可控制此电脑，包括公网设备。"))
+                .child("监听地址（留空使用 0.0.0.0:21119；不需要绑定管理服务器）")
+                .child(self.lan_endpoint.clone())
+                .child(message)
+                .children(addresses.into_iter().map(|address| format!("手机可填写：{address}")))
+                .child("手机不填端口时使用 21119；通配地址不是手机连接目标。退出此窗口会停止测试监听。")
+                .child(div().id("test-direct-host-toggle").px_3().py_2().cursor_pointer()
+                    .text_color(rgb(palette.accent))
+                    .child(if active { "停止 IP 直连" } else { "开启 IP 直连（测试）" })
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        let mut host = view.test_host.lock().unwrap();
+                        if host.active() {
+                            host.stop();
+                        } else {
+                            host.start(view.lan_endpoint.read(cx).value());
+                        }
+                        cx.notify();
+                    }))))
         });
         panel
             .child(if self.host {
@@ -1034,7 +1068,26 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
     let app_error = startup_error.clone();
     let handle = runtime.handle().clone();
     let host = cfg!(feature = "native-host");
+    #[cfg(all(
+        target_os = "windows",
+        feature = "native-host",
+        feature = "test-lan-direct"
+    ))]
+    let test_host = Arc::new(Mutex::new(crate::test_host::TestHost::default()));
     gpui::application().run(move |cx: &mut App| {
+        #[cfg(all(
+            target_os = "windows",
+            feature = "native-host",
+            feature = "test-lan-direct"
+        ))]
+        {
+            let test_host = test_host.clone();
+            cx.on_app_quit(move |_| {
+                test_host.lock().unwrap().stop();
+                async {}
+            })
+            .detach();
+        }
         text_field::init(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -1111,6 +1164,12 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             if view
                                 .update(cx, |view: &mut ManagementPanel, cx| {
                                     view.refresh();
+                                    #[cfg(all(
+                                        target_os = "windows",
+                                        feature = "native-host",
+                                        feature = "test-lan-direct"
+                                    ))]
+                                    view.test_host.lock().unwrap().poll();
                                     cx.notify();
                                 })
                                 .is_err()
@@ -1131,8 +1190,15 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             .new(|cx| TextField::new("新的域名或 IP（不含端口）", false, cx)),
                         address_port: cx.new(|cx| TextField::new("端口（默认 21118）", false, cx)),
                         #[cfg(feature = "test-lan-direct")]
-                        lan_endpoint: cx
-                            .new(|cx| TextField::new("私网 IPv4[:端口]，默认 21119", false, cx)),
+                        lan_endpoint: cx.new(|cx| {
+                            TextField::new("IPv4 或 IPv6，带端口如 [::1]:21119", false, cx)
+                        }),
+                        #[cfg(all(
+                            target_os = "windows",
+                            feature = "native-host",
+                            feature = "test-lan-direct"
+                        ))]
+                        test_host: test_host.clone(),
                         host,
                         initialized,
                         status: None,

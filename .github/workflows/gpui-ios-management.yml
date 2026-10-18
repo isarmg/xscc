@@ -37,7 +37,7 @@ jobs:
           - mode: interactive-playback-preview
             features: mobile-session
             package_flags: --playback-preview
-          - mode: TEST-LAN-direct
+          - mode: TEST-IP-direct
             features: mobile-session,test-lan-direct
             package_flags: --playback-preview --test-lan-direct
     env:
@@ -158,7 +158,7 @@ jobs:
       - name: Validate and package unsigned preview
         run: |
           python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios ${{ matrix.package_flags }}
-          if [ "${{ matrix.mode }}" = TEST-LAN-direct ]; then
+          if [ "${{ matrix.mode }}" = TEST-IP-direct ]; then
             cat dist-gpui-ios/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"
           fi
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md

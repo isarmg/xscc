@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       test_lan_direct:
-        description: 'TEST ONLY: include unauthenticated LAN direct capability; never promote these packages'
+        description: 'TEST ONLY: include unauthenticated unrestricted IP direct capability; never promote these packages'
         required: true
         default: true
         type: boolean
@@ -149,7 +149,7 @@ jobs:
         run: |
           printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'x86_64-unknown-linux-gnu' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
           printf 'package_mode=%s\n' "$XSCC_PACKAGE_MODE" >> dist/build-manifest.txt
-          if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated LAN direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
+          if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated unrestricted IP direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
           echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -242,7 +242,7 @@ jobs:
         run: |
           printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'aarch64-apple-darwin' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
           printf 'package_mode=%s\n' "$XSCC_PACKAGE_MODE" >> dist/build-manifest.txt
-          if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated LAN direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
+          if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated unrestricted IP direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
           echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

@@ -95,18 +95,21 @@ volume, mute/disconnect without old audio replay, headset/Bluetooth route change
 focus/phone interruption, background/foreground and reconnect. Compilation and
 packaging do not establish those results.
 
-### Temporary TEST LAN direct packages
+### Temporary TEST IP direct packages
 
-The mobile CI jobs also build separate `TEST-LAN-direct` candidates with the
+The mobile CI jobs also build separate `TEST-IP-direct` candidates with the
 explicit `test-lan-direct` Cargo feature. Android uses the `landirect` flavor;
 iOS packaging uses `--playback-preview --test-lan-direct`. Both use the distinct
-`org.sarmg.xscc.gpui.testdirect` application identifier and `XSCC TEST LAN` label.
+`org.sarmg.xscc.gpui.testdirect` application identifier and `XSCC TEST IP` label.
 The normal managed candidates and management-only simulator keep the feature off.
 Packaging checks the actual native binary marker against the selected mode.
 
 These packages carry `TEST-ONLY.txt`: the direct path has no identity authentication
 or per-session host confirmation and requires a matching desktop host explicitly
-started in test mode on an isolated private IPv4 LAN. See
+started in test mode. Any reachable IPv4/IPv6 address is allowed, with no private
+address or subnet restriction; anyone reaching the test listener can control the
+host. Use desktop and mobile TEST packages from the same source revision, and
+replace older hosts that still enforce private-subnet restrictions. See
 [test host setup](test-lan-direct.md). The iOS local-network prompt describes this
 test connection; users still grant any OS permission themselves. No Bonjour,
 ATS exception, microphone permission or new Android permission is added. The IPA

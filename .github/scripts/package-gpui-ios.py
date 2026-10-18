@@ -66,22 +66,22 @@ def preview_capabilities(view_only, playback_preview=False):
 
 def package(binary, output, view_only=False, playback_preview=False, test_lan_direct=False):
     require(binary.is_file(), 'Missing built device executable')
-    require(not test_lan_direct or playback_preview, 'Test LAN mode requires interactive playback')
+    require(not test_lan_direct or playback_preview, 'Test IP mode requires interactive playback')
     verify_test_capability(binary.read_bytes(), test_lan_direct)
     template = Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist'
     info = plistlib.loads(template.read_bytes())
     validate_metadata(info)
     if test_lan_direct:
         info['CFBundleIdentifier'] = 'org.sarmg.xscc.gpui.testdirect'
-        info['CFBundleDisplayName'] = 'XSCC TEST LAN'
-        info['NSLocalNetworkUsageDescription'] = '仅限测试：连接你明确启用测试监听的局域网主机，无身份认证。'
+        info['CFBundleDisplayName'] = 'XSCC TEST IP'
+        info['NSLocalNetworkUsageDescription'] = '仅限测试：通过 IP 连接你明确启用测试监听的主机，无身份认证；局域网连接需系统授权。'
     build = validate_binary(binary)
     sha = os.environ.get('GITHUB_SHA') or command('git', 'rev-parse', 'HEAD')
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
     mode = 'interactive-playback-preview' if playback_preview else ('view-only' if view_only else 'management')
     if test_lan_direct:
-        mode = 'TEST-LAN-direct'
+        mode = 'TEST-IP-direct'
     name = f'xscc-gpui-{mode}-{sha[:12]}-ios26-arm64-unsigned.ipa'
     output.mkdir(parents=True, exist_ok=True)
     if test_lan_direct:
@@ -119,6 +119,7 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
         'declared_capabilities': preview_capabilities(view_only, playback_preview),
         'audio_default_enabled': False,
         'test_lan_direct': test_lan_direct,
+        'test_ip_scope': 'any-reachable-ipv4-or-ipv6' if test_lan_direct else None,
         'test_warning': WARNING if test_lan_direct else None,
         'signing': 'UNSIGNED: requires your own matching provisioning and app signature before installation',
         'verified': ['ARM64 device executable', 'minimum iOS 26.0', 'system dynamic dependencies', 'Payload layout'],

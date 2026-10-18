@@ -5,6 +5,19 @@ pub fn test_lan_direct_compiled() -> bool {
     cfg!(feature = "test-lan-direct")
 }
 
+#[cfg(all(
+    target_os = "windows",
+    feature = "gpui-host",
+    feature = "test-lan-direct"
+))]
+mod test_direct;
+#[cfg(all(
+    target_os = "windows",
+    feature = "gpui-host",
+    feature = "test-lan-direct"
+))]
+pub use test_direct::{guard_test_direct_child, test_direct_addresses};
+
 pub fn is_host() -> bool {
     cfg!(feature = "gpui-host")
 }
@@ -96,9 +109,11 @@ pub fn handle_background_command() -> bool {
         return false;
     };
     #[cfg(all(feature = "test-lan-direct", feature = "gpui-host"))]
-    if argument == "--test-lan-host" {
+    if argument == "--test-lan-host" || argument == "--test-lan-host-ui" {
         #[cfg(windows)]
-        crate::platform::windows::alloc_console();
+        if argument == "--test-lan-host" {
+            crate::platform::windows::alloc_console();
+        }
         let result = (|| -> hbb_common::ResultType<()> {
             prepare(true).map_err(hbb_common::anyhow::Error::msg)?;
             let address = crate::test_lan::configured_bind()?;

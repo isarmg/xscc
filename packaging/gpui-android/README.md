@@ -71,13 +71,13 @@ interruptions, route changes and system-volume behavior need physical-device tes
 frame, display, pointer and IME behavior still require physical-device acceptance
 against the intended server; successful packaging alone does not prove a session.
 
-Management and TEST LAN direct build the pinned NDK ARM64 codec dependencies (the same native
+Management and TEST IP direct build the pinned NDK ARM64 codec dependencies (the same native
 dependency script/cache used by the Flutter candidate, without Flutter codegen).
 The dependency gate rejects Flutter, host/capture and hardware-codec features.
 Smoke continues to build without these codec dependencies or Internet access.
 
 All flavors share the IME bridge, source privacy patch and all final DEX,
-JNI, signature and 16 KB gates. Smoke has no Internet permission; management and TEST LAN direct
+JNI, signature and 16 KB gates. Smoke has no Internet permission; management and TEST IP direct
 add only Internet. Each may use its exact application-ID-scoped AndroidX
 signature permission for non-exported receivers. Backup remains disabled.
 There are no recording, storage or accessibility permissions, and no Flutter
@@ -86,14 +86,16 @@ storage. These APKs remain disposable-debug-key previews.
 
 ## TEST-only LAN direct APK
 
-The separate `landirect` flavor is named **XSCC TEST LAN** and uses application
+The separate `landirect` flavor is named **XSCC TEST IP** and uses application
 ID `org.sarmg.xscc.gpui.testdirect`. CI enables `test-lan-direct` only for this
-flavor and publishes a `TEST-LAN-direct` APK with `TEST-ONLY.txt`. The ordinary
+flavor and publishes a `TEST-IP-direct` APK with `TEST-ONLY.txt`. The ordinary
 `management` flavor still excludes this feature. Dependency and binary-marker
 gates reject mismatched package modes before publishing an APK.
 
 This test mode has **no identity authentication or per-session host confirmation**.
-Use an isolated private IPv4 LAN and a matching desktop TEST host explicitly
+There is no private-address or subnet restriction: any reachable IPv4/IPv6 address
+is allowed, and anyone reaching the test listener can control the desktop. Use a
+matching desktop TEST host from the same source revision, explicitly
 started with `--test-lan-host` and `XSCC_TEST_LAN_BIND` (normally port 21119).
 See [test host instructions](../../docs/test-lan-direct.md). It neither enables
 normal host access nor changes the normal managed connection. INTERNET remains

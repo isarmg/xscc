@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       test_lan_direct:
-        description: 'TEST ONLY: include unauthenticated LAN direct capability; never promote these packages'
+        description: 'TEST ONLY: include unauthenticated unrestricted IP direct capability; never promote these packages'
         required: true
         default: true
         type: boolean
@@ -142,13 +142,13 @@ jobs:
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::host_tests"
       - name: Test native codec probe parser and failure handling
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::hwcodec::tests"
-      - name: Compile and test test-only LAN role
+      - name: Compile and test test-only IP role
         run: |
           cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features "${{ matrix.features }},test-lan-direct" --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { throw 'Test-only LAN role tests failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Test-only IP role tests failed' }
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "test_lan::"
           if ('${{ matrix.role }}' -eq 'controller') {
-            ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "gpui_session::tests::test_lan_view_and_interactive_modes_reject_non_lan_targets"
+            ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "gpui_session::tests::test_ip_view_and_interactive_modes_reject_malformed_targets"
           }
       - name: Build standalone release executable
         run: |

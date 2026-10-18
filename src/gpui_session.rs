@@ -781,10 +781,18 @@ fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
 mod tests {
     #[cfg(feature = "test-lan-direct")]
     #[tokio::test]
-    async fn test_lan_view_and_interactive_modes_reject_non_lan_targets() {
+    async fn test_ip_view_and_interactive_modes_reject_malformed_targets() {
         for interactive in [false, true] {
-            for endpoint in ["8.8.8.8", "127.0.0.1", "example.com", "192.168.1.2:0"] {
-                assert!(super::connect_test_lan_mode(endpoint, interactive).await.is_err());
+            for endpoint in [
+                "",
+                "example.com",
+                "192.168.1.2:65536",
+                "[::1]:invalid",
+                "192.168.1.2:0",
+            ] {
+                assert!(super::connect_test_lan_mode(endpoint, interactive)
+                    .await
+                    .is_err());
             }
         }
     }

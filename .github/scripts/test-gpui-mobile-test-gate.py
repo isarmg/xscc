@@ -4,7 +4,7 @@ import unittest
 import importlib.util
 from pathlib import Path
 import tempfile
-from gpui_mobile_test_gate import MARKER, verify_test_capability
+from gpui_mobile_test_gate import MARKER, LEGACY_MARKER, verify_test_capability
 
 
 class MobileTestGateTests(unittest.TestCase):
@@ -16,11 +16,18 @@ class MobileTestGateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify_test_capability(b'ordinary managed application', True)
 
+    def test_legacy_or_mixed_scope_markers_are_rejected(self):
+        for binary in (LEGACY_MARKER, LEGACY_MARKER + MARKER):
+            for test_mode in (False, True):
+                with self.subTest(binary=binary, test_mode=test_mode), self.assertRaises(ValueError):
+                    verify_test_capability(binary, test_mode)
+
     def test_android_lan_flavor_avoids_reserved_test_prefix(self):
         root = Path(__file__).resolve().parents[2]
         gradle = (root / 'packaging/gpui-android/app/build.gradle').read_text()
         workflow = (root / '.github/workflows/gpui-android-smoke.yml').read_text()
         self.assertIn('        landirect {', gradle)
+        self.assertIn("appLabel: 'XSCC TEST IP'", gradle)
         self.assertNotIn('        testdirect {', gradle)
         self.assertIn('flavor: landirect\n            variant: Landirect', workflow)
         source = root / 'packaging/gpui-android/app/src'
