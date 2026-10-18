@@ -926,6 +926,11 @@ impl Connection {
                         }
                     }
                     MessageInput::BlockOff => {
+                        // Windows only lets the thread that acquired the input block release it.
+                        #[cfg(windows)]
+                        if !block_input_mode {
+                            continue;
+                        }
                         let (ok, msg) = crate::platform::block_input(false);
                         if ok {
                             block_input_mode = false;
@@ -4158,6 +4163,23 @@ mod test {
 
     fn unauthorized_count() -> usize {
         UNAUTHORIZED_CONNS.lock().unwrap().len()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unblock_without_owned_input_block_is_a_noop() {
+        let (input, receiver) = std_mpsc::channel();
+        let (notifications, mut replies) = mpsc::unbounded_channel();
+        input.send(MessageInput::BlockOff).unwrap();
+        input.send(MessageInput::BlockOff).unwrap();
+        drop(input);
+        std::thread::spawn(move || Connection::handle_input(receiver, notifications))
+            .join()
+            .unwrap();
+        assert!(matches!(
+            replies.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

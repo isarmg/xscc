@@ -3028,7 +3028,8 @@ fn restrict_mobile_capabilities(options: &mut OptionMessage, touch_enabled: bool
     options.disable_audio = if audio_enabled { BoolOption::No } else { BoolOption::Yes }.into();
     options.disable_clipboard = BoolOption::Yes.into();
     options.lock_after_session_end = BoolOption::No.into();
-    options.block_input = BoolOption::No.into();
+    // No sends an unblock command; mobile never requests host input blocking.
+    options.block_input = BoolOption::NotSet.into();
 }
 
 #[cfg(test)]
@@ -3049,9 +3050,10 @@ mod mobile_view_only_tests {
         assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.lock_after_session_end.enum_value(), Ok(BoolOption::No));
-        assert_eq!(options.block_input.enum_value(), Ok(BoolOption::No));
+        assert_eq!(options.block_input.enum_value(), Ok(BoolOption::NotSet));
         assert_eq!(options.custom_fps, 30);
         restrict_mobile_capabilities(&mut options, true, false);
+        assert_eq!(options.block_input.enum_value(), Ok(BoolOption::NotSet));
         assert_eq!(options.disable_keyboard.enum_value(), Ok(BoolOption::No));
         assert_eq!(options.disable_audio.enum_value(), Ok(BoolOption::Yes));
         assert_eq!(options.disable_clipboard.enum_value(), Ok(BoolOption::Yes));
