@@ -5,6 +5,7 @@ import re
 import struct
 import zipfile
 from pathlib import Path
+from gpui_mobile_test_gate import verify_test_capability
 
 PAGE = 16384
 LIBRARY = "lib/arm64-v8a/libxscc_gpui_android_smoke.so"
@@ -93,9 +94,18 @@ if __name__ == "__main__":
     parser.add_argument("--expected-package", default="org.xscc.gpui.smoke")
     parser.add_argument("--expected-library", default="xscc_gpui_android_smoke")
     parser.add_argument("--permission-mode", choices=("smoke", "management"), default="smoke")
+    parser.add_argument("--test-lan-direct", action="store_true")
     parser.add_argument("--badging", required=True)
     parser.add_argument("--manifest-tree", required=True)
     args = parser.parse_args()
+    if args.test_lan_direct and args.expected_package != "org.sarmg.xscc.gpui.testdirect":
+        raise ValueError("Test-only APK requires its distinct application ID")
+    if not args.test_lan_direct and args.expected_package == "org.sarmg.xscc.gpui.testdirect":
+        raise ValueError("Test-only application ID requires test package mode")
+    with zipfile.ZipFile(args.apk) as archive:
+        verify_test_capability(archive.read("lib/arm64-v8a/lib" + args.expected_library + ".so"), args.test_lan_direct)
+    if args.test_lan_direct and "application-label:'XSCC TEST LAN'" not in Path(args.badging).read_text():
+        raise ValueError("Missing TEST application label")
     check_manifest(Path(args.badging).read_text(), Path(args.manifest_tree).read_text(),
                    args.expected_package, args.permission_mode)
     print("Verified ELF/ZIP 16 KB alignment: " + ", ".join(verify(args.apk, "lib/arm64-v8a/lib" + args.expected_library + ".so")))

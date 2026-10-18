@@ -83,3 +83,22 @@ signature permission for non-exported receivers. Backup remains disabled.
 There are no recording, storage or accessibility permissions, and no Flutter
 credential migration. Each package uses its own Android private application
 storage. These APKs remain disposable-debug-key previews.
+
+## TEST-only LAN direct APK
+
+The separate `testdirect` flavor is named **XSCC TEST LAN** and uses application
+ID `org.sarmg.xscc.gpui.testdirect`. CI enables `test-lan-direct` only for this
+flavor and publishes a `TEST-LAN-direct` APK with `TEST-ONLY.txt`. The ordinary
+`management` flavor still excludes this feature. Dependency and binary-marker
+gates reject mismatched package modes before publishing an APK.
+
+This test mode has **no identity authentication or per-session host confirmation**.
+Use an isolated private IPv4 LAN and a matching desktop TEST host explicitly
+started with `--test-lan-host` and `XSCC_TEST_LAN_BIND` (normally port 21119).
+See [test host instructions](../../docs/test-lan-direct.md). It neither enables
+normal host access nor changes the normal managed connection. INTERNET remains
+the only Android network permission; no microphone or clipboard capability is
+added. Actual-device connections and input still require device testing.
+
+Remove this flavor, feature and test entry points before production release;
+renaming a TEST artifact does not make it a production package.

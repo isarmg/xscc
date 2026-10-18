@@ -29,9 +29,33 @@ pub fn same_subnet(local: Ipv4Addr, prefix: u8, peer: Ipv4Addr) -> bool {
     host & mask == network && host != network && host != (network | !mask)
 }
 
+#[cfg(any(target_os = "ios", test))]
+pub(super) fn mask_prefix(mask: u32) -> Option<u8> {
+    let prefix = mask.leading_ones();
+    if !(1..=30).contains(&prefix) || mask != u32::MAX << (32 - prefix) {
+        return None;
+    }
+    Some(prefix as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_masks_require_contiguous_usable_subnets() {
+        assert_eq!(
+            mask_prefix(u32::from(Ipv4Addr::new(255, 255, 255, 0))),
+            Some(24)
+        );
+        assert_eq!(
+            mask_prefix(u32::from(Ipv4Addr::new(255, 255, 0, 0))),
+            Some(16)
+        );
+        for mask in [0, u32::MAX, u32::MAX - 1, 0xff00ff00] {
+            assert_eq!(mask_prefix(mask), None);
+        }
+    }
 
     #[test]
     fn accepts_only_private_ipv4_and_valid_ports() {

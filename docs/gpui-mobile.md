@@ -94,3 +94,24 @@ Physical-device acceptance must cover audible remote mono/stereo playback, syste
 volume, mute/disconnect without old audio replay, headset/Bluetooth route changes,
 focus/phone interruption, background/foreground and reconnect. Compilation and
 packaging do not establish those results.
+
+### Temporary TEST LAN direct packages
+
+The mobile CI jobs also build separate `TEST-LAN-direct` candidates with the
+explicit `test-lan-direct` Cargo feature. Android uses the `testdirect` flavor;
+iOS packaging uses `--playback-preview --test-lan-direct`. Both use the distinct
+`org.sarmg.xscc.gpui.testdirect` application identifier and `XSCC TEST LAN` label.
+The normal managed candidates and management-only simulator keep the feature off.
+Packaging checks the actual native binary marker against the selected mode.
+
+These packages carry `TEST-ONLY.txt`: the direct path has no identity authentication
+or per-session host confirmation and requires a matching desktop host explicitly
+started in test mode on an isolated private IPv4 LAN. See
+[test host setup](test-lan-direct.md). The iOS local-network prompt describes this
+test connection; users still grant any OS permission themselves. No Bonjour,
+ATS exception, microphone permission or new Android permission is added. The IPA
+remains unsigned and requires the user's provisioning and signature. Build success
+does not establish physical-device connection or input acceptance.
+
+Remove the temporary feature, test UI, test package variants and backend test
+entry points before production release. Never promote a renamed test artifact.

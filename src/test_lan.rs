@@ -1,5 +1,7 @@
 //! Temporary, explicitly enabled LAN testing only. Remove after the testing phase.
 mod address;
+#[cfg(target_os = "ios")]
+mod ios;
 
 use hbb_common::{
     anyhow::Context,
@@ -8,7 +10,10 @@ use hbb_common::{
     tcp::FramedStream,
     ResultType, Stream,
 };
-#[cfg(feature = "gpui-host")]
+#[cfg(all(
+    feature = "gpui-host",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 use hbb_common::{config::Config, log, tokio};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
@@ -19,6 +24,7 @@ pub(crate) fn is_peer(peer: &str) -> bool {
         .is_some_and(|value| address::endpoint(value).is_ok())
 }
 
+#[cfg(not(target_os = "ios"))]
 fn local_network(local: Ipv4Addr, peer: Ipv4Addr) -> bool {
     default_net::get_interfaces().into_iter().any(|interface| {
         interface.ipv4.iter().any(|network| {
@@ -27,6 +33,7 @@ fn local_network(local: Ipv4Addr, peer: Ipv4Addr) -> bool {
     })
 }
 
+#[cfg(not(target_os = "ios"))]
 pub(crate) fn target(input: &str) -> ResultType<SocketAddrV4> {
     let target = address::endpoint(input).map_err(hbb_common::anyhow::Error::msg)?;
     if !default_net::get_interfaces().into_iter().any(|interface| {
@@ -35,6 +42,27 @@ pub(crate) fn target(input: &str) -> ResultType<SocketAddrV4> {
             .iter()
             .any(|network| address::same_subnet(network.addr, network.prefix_len, *target.ip()))
     }) {
+        bail!("Test LAN target must be on a directly connected private IPv4 subnet");
+    }
+    Ok(target)
+}
+
+#[cfg(target_os = "ios")]
+fn local_network(local: Ipv4Addr, peer: Ipv4Addr) -> bool {
+    ios::ipv4_networks().is_ok_and(|networks| {
+        networks
+            .into_iter()
+            .any(|(ip, prefix)| ip == local && address::same_subnet(local, prefix, peer))
+    })
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) fn target(input: &str) -> ResultType<SocketAddrV4> {
+    let target = address::endpoint(input).map_err(hbb_common::anyhow::Error::msg)?;
+    if !ios::ipv4_networks()?
+        .into_iter()
+        .any(|(ip, prefix)| address::same_subnet(ip, prefix, *target.ip()))
+    {
         bail!("Test LAN target must be on a directly connected private IPv4 subnet");
     }
     Ok(target)
@@ -63,7 +91,10 @@ pub(crate) async fn connect(peer: &str) -> ResultType<(Stream, Vec<u8>, &'static
     Ok((stream, key, "TCP"))
 }
 
-#[cfg(feature = "gpui-host")]
+#[cfg(all(
+    feature = "gpui-host",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 pub(crate) fn configured_bind() -> ResultType<SocketAddrV4> {
     let input = std::env::var("XSCC_TEST_LAN_BIND")
         .context("Set XSCC_TEST_LAN_BIND to this host's private IPv4 address before starting --test-lan-host")?;
@@ -75,7 +106,10 @@ pub(crate) fn configured_bind() -> ResultType<SocketAddrV4> {
 }
 
 // This is a dedicated process entry point, called before the UI runtime starts.
-#[cfg(feature = "gpui-host")]
+#[cfg(all(
+    feature = "gpui-host",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 #[tokio::main]
 pub(crate) async fn run_host(address: SocketAddrV4) -> ResultType<()> {
     if config::is_outgoing_only()

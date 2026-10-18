@@ -18,6 +18,7 @@ on:
       - '.github/workflows/gpui-android-smoke.yml'
       - '.github/scripts/*gpui-android*'
       - '.github/scripts/*gpui-game-activity*'
+      - '.github/scripts/*gpui*mobile*'
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,17 +46,26 @@ jobs:
             workspace: experiments/gpui-android-smoke
             library: xscc_gpui_android_smoke
             package: org.xscc.gpui.smoke
+            permission_mode: smoke
           - flavor: management
             variant: Management
             workspace: experiments/gpui-mobile-management
             library: xscc_gpui_android_management
             package: org.sarmg.xscc.gpui.preview
+            permission_mode: management
+          - flavor: testdirect
+            variant: Testdirect
+            workspace: experiments/gpui-mobile-management
+            library: xscc_gpui_android_management
+            package: org.sarmg.xscc.gpui.testdirect
+            permission_mode: management
     env:
       FLAVOR: ${{ matrix.flavor }}
       VARIANT: ${{ matrix.variant }}
       WORKSPACE: ${{ matrix.workspace }}
       NATIVE_LIBRARY: ${{ matrix.library }}
       APPLICATION_ID: ${{ matrix.package }}
+      PERMISSION_MODE: ${{ matrix.permission_mode }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -65,6 +75,7 @@ jobs:
       - name: Check source and package validation tests
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 .github/scripts/test-gpui-mobile-test-gate.py
           python3 .github/scripts/test-gpui-android-apk.py
           python3 .github/scripts/test-gpui-android-privacy.py
           python3 .github/scripts/test-gpui-game-activity.py
@@ -81,13 +92,13 @@ jobs:
           add-to-path: true
 
       - name: Prepare management codec build tools
-        if: matrix.flavor == 'management'
+        if: matrix.flavor != 'smoke'
         run: |
           sudo apt-get install -y nasm
           mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
 
       - name: Setup pinned management codec dependencies
-        if: matrix.flavor == 'management'
+        if: matrix.flavor != 'smoke'
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
           vcpkgDirectory: /opt/artifacts/vcpkg
@@ -95,7 +106,7 @@ jobs:
           doNotCache: true
 
       - name: Restore native dependency binary archives
-        if: matrix.flavor == 'management'
+        if: matrix.flavor != 'smoke'
         id: native-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
@@ -103,14 +114,14 @@ jobs:
           key: mobile-vcpkg-Linux-arm64-android-${{ env.NDK_VERSION }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
 
       - name: Build Android native codec dependencies
-        if: matrix.flavor == 'management'
+        if: matrix.flavor != 'smoke'
         id: native-dependencies
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: ./flutter/build_android_deps.sh arm64-v8a
 
       - name: Save successful native dependency binary archives
-        if: matrix.flavor == 'management' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
+        if: matrix.flavor != 'smoke' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
@@ -146,11 +157,12 @@ jobs:
           mkdir -p "$JNI_LIBS"
           cd "$WORKSPACE"
           FEATURES=()
-          if [ "$FLAVOR" = management ]; then
+          if [ "$FLAVOR" != smoke ]; then
             FEATURES=(--no-default-features --features mobile-management,mobile-session)
+            if [ "$FLAVOR" = testdirect ]; then FEATURES=(--no-default-features --features mobile-management,mobile-session,test-lan-direct); fi
             cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}|{f}' > "$RUNNER_TEMP/management-dependencies.txt"
             python3 - "$RUNNER_TEMP/management-dependencies.txt" <<'PY'
-          import sys
+          import os, sys
           graph = {}
           for line in open(sys.argv[1]):
               package, features = line.rstrip().split('|', 1)
@@ -158,11 +170,12 @@ jobs:
           assert {'rustdesk', 'scrap'} <= graph.keys(), "Missing real software-video client"
           assert not ({'flutter_rust_bridge', 'flutter_rust_bridge_macros', 'dart-sys', 'enigo', 'clipboard', 'hwcodec'} & graph.keys()), "Unexpected Flutter/host/hardware dependency"
           assert {'gpui-mobile-session', 'managed'} <= graph['rustdesk'], "Missing managed mobile boundary"
-          assert not ({'default', 'flutter', 'gpui-host', 'test-lan-direct', 'hwcodec', 'mediacodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
+          assert not ({'default', 'flutter', 'gpui-host', 'hwcodec', 'mediacodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
+          assert ('test-lan-direct' in graph['rustdesk']) == (os.environ['FLAVOR'] == 'testdirect'), "Test-only capability mismatch"
           assert not ({'capture', 'wayland', 'drm', 'hwcodec', 'mediacodec', 'vram', 'quartz', 'x11'} & graph['scrap']), "Unexpected scrap capture/hardware capability"
           PY
           fi
-          if [ "$FLAVOR" = management ]; then
+          if [ "$FLAVOR" != smoke ]; then
             bindgen_args="$(cargo ndk-env --platform 29 --target aarch64-linux-android --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android"])')"
             env "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=$bindgen_args --target=aarch64-linux-android29" \
               cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
@@ -207,7 +220,9 @@ jobs:
           "$TOOLS/aapt" dump badging "$APK" | tee dist/gpui-android/manifest-badging.txt
           "$TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > dist/gpui-android/manifest-tree.txt
           grep -q "launchable-activity: name='org.xscc.gpui.smoke.SmokeActivity'" dist/gpui-android/manifest-badging.txt
-          python3 .github/scripts/verify-gpui-android-apk.py "$APK" --expected-package "$APPLICATION_ID" --expected-library "$NATIVE_LIBRARY" --permission-mode "$FLAVOR" --badging dist/gpui-android/manifest-badging.txt --manifest-tree dist/gpui-android/manifest-tree.txt | tee dist/gpui-android/native-validation.txt
+          test_args=()
+          if [ "$FLAVOR" = testdirect ]; then test_args+=(--test-lan-direct); fi
+          python3 .github/scripts/verify-gpui-android-apk.py "$APK" --expected-package "$APPLICATION_ID" --expected-library "$NATIVE_LIBRARY" --permission-mode "$PERMISSION_MODE" "${test_args[@]}" --badging dist/gpui-android/manifest-badging.txt --manifest-tree dist/gpui-android/manifest-tree.txt | tee dist/gpui-android/native-validation.txt
           unzip -p "$APK" "lib/arm64-v8a/lib$NATIVE_LIBRARY.so" > "$RUNNER_TEMP/gpui-smoke.so"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeTextChanged$' "$RUNNER_TEMP/gpui-symbols.txt"
@@ -215,17 +230,24 @@ jobs:
           mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
           test "${#GAME_AARS[@]}" -eq 1
           privacy_args=()
-          if [ "$FLAVOR" = management ]; then privacy_args+=(--management); fi
+          if [ "$FLAVOR" != smoke ]; then privacy_args+=(--management); fi
           python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
           cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
           scope="$FLAVOR-preview"
-          if [ "$FLAVOR" = management ]; then scope=software-video-pointer-keyboard-audio-preview; fi
+          if [ "$FLAVOR" != smoke ]; then scope=software-video-pointer-keyboard-audio-preview; fi
           printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope"             > dist/gpui-android/BUILD-INFO.txt
-          if [ "$FLAVOR" = management ]; then
+          if [ "$FLAVOR" != smoke ]; then
             printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
+          fi
+          if [ "$FLAVOR" = testdirect ]; then
+            python3 -c "import sys; sys.path.insert(0, '.github/scripts'); from gpui_mobile_test_gate import WARNING; print(WARNING)" > dist/gpui-android/TEST-ONLY.txt
+            printf 'test_lan_direct=true\nidentity_authentication=false\nhost_test_opt_in_required=true\n' >> dist/gpui-android/BUILD-INFO.txt
+            mv "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-LAN-direct-${GITHUB_SHA:0:12}.apk"
+          else
+            printf 'test_lan_direct=false\n' >> dist/gpui-android/BUILD-INFO.txt
           fi
           (cd dist/gpui-android && sha256sum *.apk Cargo.lock > SHA256SUMS)
 

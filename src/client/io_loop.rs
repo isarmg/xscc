@@ -111,9 +111,9 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Err(err) = tokio::task::spawn_blocking(client::get_hwcodec_config).await {
             log::error!("Local hardware codec probe task failed: {err}");
         }
-        #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
         let test_lan = crate::test_lan::is_peer(&self.handler.get_id());
-        #[cfg(not(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios")))))]
+        #[cfg(not(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios"))))))]
         let test_lan = false;
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
@@ -736,7 +736,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
-                    #[cfg(all(feature = "test-lan-direct", not(any(target_os = "android", target_os = "ios"))))]
+                    #[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
                     if crate::test_lan::is_peer(&self.handler.get_id()) {
                         let message = self.handler.lc.read().unwrap().create_login_msg(
                             String::new(), String::new(), Vec::new(),

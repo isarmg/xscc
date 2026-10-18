@@ -505,6 +505,16 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: 
 
 #[cfg(feature = "test-lan-direct")]
 pub async fn connect_test_lan(endpoint: &str) -> ResultType<SessionHandle> {
+    connect_test_lan_mode(endpoint, false).await
+}
+
+#[cfg(all(feature = "test-lan-direct", any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+pub async fn connect_test_lan_mobile(endpoint: &str, interactive: bool) -> ResultType<SessionHandle> {
+    connect_test_lan_mode(endpoint, interactive).await
+}
+
+#[cfg(feature = "test-lan-direct")]
+async fn connect_test_lan_mode(endpoint: &str, _interactive: bool) -> ResultType<SessionHandle> {
     let endpoint = crate::test_lan::target(endpoint)?;
     let handler = Handler::default();
     handler.event(SessionEvent::Connecting);
@@ -521,13 +531,37 @@ pub async fn connect_test_lan(endpoint: &str) -> ResultType<SessionHandle> {
         None,
         None,
     );
+    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+    {
+        let mut config = session.lc.write().unwrap();
+        config.mobile_touch_enabled = _interactive;
+        config.mobile_keyboard_enabled = _interactive;
+        config.mobile_audio_allowed = true;
+        let mailbox = Arc::downgrade(&handler.0);
+        match crate::client::mobile_audio::MobileAudio::new(move || {
+            if let Some(mailbox) = mailbox.upgrade() {
+                mailbox.updates.notify_one();
+            }
+        }) {
+            Ok(audio) => config.mobile_audio = Some(audio),
+            Err(error) => handler.event(SessionEvent::Error(format!(
+                "Audio playback unavailable: {error}"
+            ))),
+        }
+    }
     let round = session.connection_round_state.lock().unwrap().new_round();
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
     *session.sender.write().unwrap() = Some(sender.clone());
     let running = session.clone();
     tokio::spawn(async move {
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        let audio = running.lc.read().unwrap().mobile_audio.clone();
         let mut remote = Remote::new(running, receiver, sender);
         remote.io_loop(round).await;
+        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+        if let Some(audio) = audio {
+            audio.stop();
+        }
         handler.0.closed.store(true, Ordering::Release);
         handler.0.connected.store(false, Ordering::Release);
         handler.0.frame.pop();
@@ -745,6 +779,16 @@ fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "test-lan-direct")]
+    #[tokio::test]
+    async fn test_lan_view_and_interactive_modes_reject_non_lan_targets() {
+        for interactive in [false, true] {
+            for endpoint in ["8.8.8.8", "127.0.0.1", "example.com", "192.168.1.2:0"] {
+                assert!(super::connect_test_lan_mode(endpoint, interactive).await.is_err());
+            }
+        }
+    }
+
     use super::*;
     #[test]
     fn disconnect_discards_queued_and_late_decoder_frames() {

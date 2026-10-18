@@ -17,6 +17,8 @@ crate-type = ["cdylib"]
 default = ["mobile-management"]
 mobile-management = []
 mobile-session = ["dep:librustdesk", "dep:image", "dep:base"]
+# Temporary testing only; omit from production and remove after testing.
+test-lan-direct = ["mobile-session", "librustdesk/test-lan-direct"]
 # This compatibility feature enables shared appearance only, never media.
 live-session = []
 

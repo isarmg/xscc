@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from gpui_mobile_test_gate import verify_test_capability, WARNING
 
 
 def command(*args):
@@ -63,18 +64,28 @@ def preview_capabilities(view_only, playback_preview=False):
     }
 
 
-def package(binary, output, view_only=False, playback_preview=False):
+def package(binary, output, view_only=False, playback_preview=False, test_lan_direct=False):
     require(binary.is_file(), 'Missing built device executable')
+    require(not test_lan_direct or playback_preview, 'Test LAN mode requires interactive playback')
+    verify_test_capability(binary.read_bytes(), test_lan_direct)
     template = Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist'
     info = plistlib.loads(template.read_bytes())
     validate_metadata(info)
+    if test_lan_direct:
+        info['CFBundleIdentifier'] = 'org.sarmg.xscc.gpui.testdirect'
+        info['CFBundleDisplayName'] = 'XSCC TEST LAN'
+        info['NSLocalNetworkUsageDescription'] = '仅限测试：连接你明确启用测试监听的局域网主机，无身份认证。'
     build = validate_binary(binary)
     sha = os.environ.get('GITHUB_SHA') or command('git', 'rev-parse', 'HEAD')
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
     mode = 'interactive-playback-preview' if playback_preview else ('view-only' if view_only else 'management')
+    if test_lan_direct:
+        mode = 'TEST-LAN-direct'
     name = f'xscc-gpui-{mode}-{sha[:12]}-ios26-arm64-unsigned.ipa'
     output.mkdir(parents=True, exist_ok=True)
+    if test_lan_direct:
+        (output / 'TEST-ONLY.txt').write_text(WARNING + '\n')
     ipa = (output / name).resolve()
     with tempfile.TemporaryDirectory(prefix='xscc-gpui-ios-') as temporary:
         payload = Path(temporary) / 'Payload'
@@ -107,6 +118,8 @@ def package(binary, output, view_only=False, playback_preview=False):
                   if view_only else 'GPUI management preview: binding and authorized host list; no video session'),
         'declared_capabilities': preview_capabilities(view_only, playback_preview),
         'audio_default_enabled': False,
+        'test_lan_direct': test_lan_direct,
+        'test_warning': WARNING if test_lan_direct else None,
         'signing': 'UNSIGNED: requires your own matching provisioning and app signature before installation',
         'verified': ['ARM64 device executable', 'minimum iOS 26.0', 'system dynamic dependencies', 'Payload layout'],
         'not_verified': ['physical-device launch', 'management interaction on device', 'authorized remote connection and first video frame', 'physical-device touch delivery and gestures', 'physical-device software-keyboard input', 'physical-device audio playback, interruptions and route changes', 'signing and provisioning'],
@@ -116,7 +129,13 @@ def package(binary, output, view_only=False, playback_preview=False):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] not in ('--view-only', '--playback-preview')):
-        raise SystemExit('Usage: package-gpui-ios.py DEVICE_EXECUTABLE OUTPUT_DIRECTORY [--view-only | --playback-preview]')
-    package(Path(sys.argv[1]), Path(sys.argv[2]),
-            view_only='--view-only' in sys.argv[3:], playback_preview='--playback-preview' in sys.argv[3:])
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('binary', type=Path)
+    parser.add_argument('output', type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--view-only', action='store_true')
+    mode.add_argument('--playback-preview', action='store_true')
+    parser.add_argument('--test-lan-direct', action='store_true')
+    args = parser.parse_args()
+    package(args.binary, args.output, args.view_only, args.playback_preview, args.test_lan_direct)

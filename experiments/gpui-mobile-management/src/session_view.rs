@@ -46,6 +46,8 @@ pub struct SessionView {
     runtime: tokio::runtime::Handle,
     manager: Option<Arc<NativeManager>>,
     selected: Option<String>,
+    #[cfg(feature = "test-lan-direct")]
+    test_lan: bool,
     session: Option<SessionHandle>,
     connecting: Option<tokio::task::JoinHandle<()>>,
     updates: Option<tokio::task::JoinHandle<()>>,
@@ -140,6 +142,8 @@ impl SessionView {
             runtime,
             manager: None,
             selected: None,
+            #[cfg(feature = "test-lan-direct")]
+            test_lan: false,
             session: None,
             connecting: None,
             updates: None,
@@ -184,6 +188,10 @@ impl SessionView {
         }
         drop(self.session.take());
         self.selected = None;
+        #[cfg(feature = "test-lan-direct")]
+        {
+            self.test_lan = false;
+        }
         self.presentation.invalidate();
         self.notice = "会话已断开".into();
         // Dropping a queued result also disconnects its session handle.
@@ -219,7 +227,31 @@ impl SessionView {
         cx.notify();
     }
 
+    #[cfg(feature = "test-lan-direct")]
+    pub fn connect_test_lan(&mut self, endpoint: String, cx: &mut Context<Self>) {
+        self.stop();
+        self.selected = Some(endpoint.clone());
+        self.test_lan = true;
+        let generation = self.generation;
+        let sender = self.sender.clone();
+        let wake = self.wake.clone();
+        let interactive = self.direct_touch;
+        self.notice = "TEST ONLY：正在建立临时局域网直连…".into();
+        self.connecting = Some(self.runtime.spawn(async move {
+            let result = gpui_session::connect_test_lan_mobile(&endpoint, interactive)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = sender.send(Reply::Connected(generation, result));
+            wake.notify_one();
+        }));
+        cx.notify();
+    }
+
     fn authorized(&self) -> bool {
+        #[cfg(feature = "test-lan-direct")]
+        if self.test_lan {
+            return self.selected.is_some();
+        }
         let (Some(manager), Some(id)) = (&self.manager, &self.selected) else {
             return false;
         };
@@ -826,6 +858,11 @@ impl Render for SessionView {
                         view.release_input();
                         view.direct_touch = !view.direct_touch;
                         if let Some(id) = selected {
+                            #[cfg(feature = "test-lan-direct")]
+                            if view.test_lan {
+                                view.connect_test_lan(id, cx);
+                                return;
+                            }
                             view.connect(id, cx);
                         }
                         cx.notify();

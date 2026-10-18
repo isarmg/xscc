@@ -41,6 +41,12 @@ android {
             buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
             manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC GPUI 管理预览']
         }
+        testdirect {
+            dimension 'client'
+            applicationId 'org.sarmg.xscc.gpui.testdirect'
+            buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
+            manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC TEST LAN']
+        }
     }
 
     defaultConfig {

@@ -19,6 +19,7 @@ on:
       - 'res/vcpkg-triplets/**'
       - 'packaging/gpui-ios/**'
       - '.github/scripts/*gpui-ios*'
+      - '.github/scripts/*gpui*mobile*'
       - '.github/workflows/gpui-ios-management.yml'
 permissions:
   contents: read
@@ -29,6 +30,16 @@ jobs:
   device-preview:
     runs-on: macos-26
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mode: interactive-playback-preview
+            features: mobile-session
+            package_flags: --playback-preview
+          - mode: TEST-LAN-direct
+            features: mobile-session,test-lan-direct
+            package_flags: --playback-preview --test-lan-direct
     env:
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
@@ -52,6 +63,7 @@ jobs:
           echo "sdk=$(xcrun --sdk iphoneos --show-sdk-version)" >> "$GITHUB_OUTPUT"
           echo "xcode=$(xcodebuild -version | awk '/Build version/ {print $3}')" >> "$GITHUB_OUTPUT"
           python3 .github/scripts/test-gpui-ios-package.py
+          python3 .github/scripts/test-gpui-mobile-test-gate.py
           mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
           brew install nasm
       - name: Read-only simulator capability probe (not app acceptance)
@@ -139,18 +151,21 @@ jobs:
           IPHONEOS_DEPLOYMENT_TARGET: '26.0'
         run: |
           test "$(rustc --print deployment-target --target aarch64-apple-ios)" = 'IPHONEOS_DEPLOYMENT_TARGET=26.0'
-          cargo check --locked --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
-          cargo check --tests --locked --target aarch64-apple-ios --features mobile-session
-          cargo clippy --locked --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
-          cargo build --locked --release --target aarch64-apple-ios --features mobile-session --bin xscc-gpui-mobile-management
+          cargo check --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
+          cargo check --tests --locked --target aarch64-apple-ios --features "${{ matrix.features }}"
+          cargo clippy --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
+          cargo build --locked --release --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios --playback-preview
+          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios ${{ matrix.package_flags }}
+          if [ "${{ matrix.mode }}" = TEST-LAN-direct ]; then
+            cat dist-gpui-ios/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
           cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
           echo 'Native GPUI interactive playback preview: management, software video, direct control or view-only, software-keyboard text and control keys. Foreground audio playback is opt-in per session and initially off; microphone and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input, audio playback, interruptions and route changes remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-interactive-playback-preview-ios26-arm64-unsigned-${{ github.sha }}
+          name: xscc-gpui-${{ matrix.mode }}-ios26-arm64-unsigned-${{ github.sha }}
           path: dist-gpui-ios/
           if-no-files-found: error
   simulator-smoke:
