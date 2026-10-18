@@ -53,8 +53,8 @@ jobs:
             library: xscc_gpui_android_management
             package: org.sarmg.xscc.gpui.preview
             permission_mode: management
-          - flavor: testdirect
-            variant: Testdirect
+          - flavor: landirect
+            variant: Landirect
             workspace: experiments/gpui-mobile-management
             library: xscc_gpui_android_management
             package: org.sarmg.xscc.gpui.testdirect
@@ -159,7 +159,7 @@ jobs:
           FEATURES=()
           if [ "$FLAVOR" != smoke ]; then
             FEATURES=(--no-default-features --features mobile-management,mobile-session)
-            if [ "$FLAVOR" = testdirect ]; then FEATURES=(--no-default-features --features mobile-management,mobile-session,test-lan-direct); fi
+            if [ "$FLAVOR" = landirect ]; then FEATURES=(--no-default-features --features mobile-management,mobile-session,test-lan-direct); fi
             cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}|{f}' > "$RUNNER_TEMP/management-dependencies.txt"
             python3 - "$RUNNER_TEMP/management-dependencies.txt" <<'PY'
           import os, sys
@@ -171,7 +171,7 @@ jobs:
           assert not ({'flutter_rust_bridge', 'flutter_rust_bridge_macros', 'dart-sys', 'enigo', 'clipboard', 'hwcodec'} & graph.keys()), "Unexpected Flutter/host/hardware dependency"
           assert {'gpui-mobile-session', 'managed'} <= graph['rustdesk'], "Missing managed mobile boundary"
           assert not ({'default', 'flutter', 'gpui-host', 'hwcodec', 'mediacodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
-          assert ('test-lan-direct' in graph['rustdesk']) == (os.environ['FLAVOR'] == 'testdirect'), "Test-only capability mismatch"
+          assert ('test-lan-direct' in graph['rustdesk']) == (os.environ['FLAVOR'] == 'landirect'), "Test-only capability mismatch"
           assert not ({'capture', 'wayland', 'drm', 'hwcodec', 'mediacodec', 'vram', 'quartz', 'x11'} & graph['scrap']), "Unexpected scrap capture/hardware capability"
           PY
           fi
@@ -221,7 +221,7 @@ jobs:
           "$TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > dist/gpui-android/manifest-tree.txt
           grep -q "launchable-activity: name='org.xscc.gpui.smoke.SmokeActivity'" dist/gpui-android/manifest-badging.txt
           test_args=()
-          if [ "$FLAVOR" = testdirect ]; then test_args+=(--test-lan-direct); fi
+          if [ "$FLAVOR" = landirect ]; then test_args+=(--test-lan-direct); fi
           python3 .github/scripts/verify-gpui-android-apk.py "$APK" --expected-package "$APPLICATION_ID" --expected-library "$NATIVE_LIBRARY" --permission-mode "$PERMISSION_MODE" "${test_args[@]}" --badging dist/gpui-android/manifest-badging.txt --manifest-tree dist/gpui-android/manifest-tree.txt | tee dist/gpui-android/native-validation.txt
           unzip -p "$APK" "lib/arm64-v8a/lib$NATIVE_LIBRARY.so" > "$RUNNER_TEMP/gpui-smoke.so"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
@@ -242,7 +242,7 @@ jobs:
             printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
           fi
-          if [ "$FLAVOR" = testdirect ]; then
+          if [ "$FLAVOR" = landirect ]; then
             python3 -c "import sys; sys.path.insert(0, '.github/scripts'); from gpui_mobile_test_gate import WARNING; print(WARNING)" > dist/gpui-android/TEST-ONLY.txt
             printf 'test_lan_direct=true\nidentity_authentication=false\nhost_test_opt_in_required=true\n' >> dist/gpui-android/BUILD-INFO.txt
             mv "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-LAN-direct-${GITHUB_SHA:0:12}.apk"

@@ -14,8 +14,12 @@ use std::{
 use xscc::protocol::InstanceRole;
 use xscc_native_management::manager::Status;
 
-#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "test-lan-direct"))]
-const TEST_LAN_WARNING: &str = "TEST ONLY · 临时 IP 直连，无身份认证，仅限隔离测试网络。正式发布删除。";
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "test-lan-direct"
+))]
+const TEST_LAN_WARNING: &str =
+    "TEST ONLY · 临时 IP 直连，无身份认证，仅限隔离测试网络。正式发布删除。";
 
 pub struct Panel {
     commands: tokio::sync::mpsc::Sender<Command>,
@@ -23,7 +27,10 @@ pub struct Panel {
     lifecycle: tokio::sync::watch::Sender<bool>,
     server: Entity<TextField>,
     code: Entity<TextField>,
-    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "test-lan-direct"))]
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "test-lan-direct"
+    ))]
     test_lan_address: Entity<TextField>,
     status: Option<Status>,
     initialized: bool,
@@ -105,10 +112,12 @@ impl Panel {
             lifecycle: lifecycle_sender,
             server: cx.new(|cx| TextField::new("https://服务端地址", false, cx)),
             code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
-            #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "test-lan-direct"))]
-            test_lan_address: cx.new(|cx| {
-                TextField::new("测试主机私网 IPv4，如 192.168.1.20:21119", false, cx)
-            }),
+            #[cfg(all(
+                any(target_os = "ios", target_os = "android"),
+                feature = "test-lan-direct"
+            ))]
+            test_lan_address: cx
+                .new(|cx| TextField::new("测试主机私网 IPv4，如 192.168.1.20:21119", false, cx)),
             status: None,
             initialized: false,
             active,
@@ -277,14 +286,21 @@ impl Render for Panel {
                     cx.notify();
                 },
             )));
-        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "test-lan-direct"))]
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "test-lan-direct"
+        ))]
         {
             content = content.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(div().text_color(rgb(palette.danger)).child(TEST_LAN_WARNING))
+                    .child(
+                        div()
+                            .text_color(rgb(palette.danger))
+                            .child(TEST_LAN_WARNING),
+                    )
                     .child(self.test_lan_address.clone())
                     .child(
                         div()
@@ -297,7 +313,8 @@ impl Render for Panel {
                                 if !view.active || view.test_lan_address.read(cx).is_composing() {
                                     return;
                                 }
-                                let endpoint = view.test_lan_address.read(cx).value().trim().to_owned();
+                                let endpoint =
+                                    view.test_lan_address.read(cx).value().trim().to_owned();
                                 window.dismiss_virtual_keyboard();
                                 view.session.update(cx, |session, cx| {
                                     session.connect_test_lan(endpoint, cx)

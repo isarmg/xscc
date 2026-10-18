@@ -71,14 +71,14 @@ interruptions, route changes and system-volume behavior need physical-device tes
 frame, display, pointer and IME behavior still require physical-device acceptance
 against the intended server; successful packaging alone does not prove a session.
 
-Only management builds the pinned NDK ARM64 codec dependencies (the same native
+Management and TEST LAN direct build the pinned NDK ARM64 codec dependencies (the same native
 dependency script/cache used by the Flutter candidate, without Flutter codegen).
 The dependency gate rejects Flutter, host/capture and hardware-codec features.
 Smoke continues to build without these codec dependencies or Internet access.
 
-The two flavors share the IME bridge, source privacy patch and all final DEX,
-JNI, signature and 16 KB gates. Smoke has no Internet permission; management
-adds only Internet. Each may use its exact application-ID-scoped AndroidX
+All flavors share the IME bridge, source privacy patch and all final DEX,
+JNI, signature and 16 KB gates. Smoke has no Internet permission; management and TEST LAN direct
+add only Internet. Each may use its exact application-ID-scoped AndroidX
 signature permission for non-exported receivers. Backup remains disabled.
 There are no recording, storage or accessibility permissions, and no Flutter
 credential migration. Each package uses its own Android private application
@@ -86,7 +86,7 @@ storage. These APKs remain disposable-debug-key previews.
 
 ## TEST-only LAN direct APK
 
-The separate `testdirect` flavor is named **XSCC TEST LAN** and uses application
+The separate `landirect` flavor is named **XSCC TEST LAN** and uses application
 ID `org.sarmg.xscc.gpui.testdirect`. CI enables `test-lan-direct` only for this
 flavor and publishes a `TEST-LAN-direct` APK with `TEST-ONLY.txt`. The ordinary
 `management` flavor still excludes this feature. Dependency and binary-marker

@@ -98,7 +98,7 @@ packaging do not establish those results.
 ### Temporary TEST LAN direct packages
 
 The mobile CI jobs also build separate `TEST-LAN-direct` candidates with the
-explicit `test-lan-direct` Cargo feature. Android uses the `testdirect` flavor;
+explicit `test-lan-direct` Cargo feature. Android uses the `landirect` flavor;
 iOS packaging uses `--playback-preview --test-lan-direct`. Both use the distinct
 `org.sarmg.xscc.gpui.testdirect` application identifier and `XSCC TEST LAN` label.
 The normal managed candidates and management-only simulator keep the feature off.

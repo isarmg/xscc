@@ -9,7 +9,7 @@ public final class SmokeActivity extends AndroidImeBridge {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if ("management".equals(BuildConfig.FLAVOR)) {
+        if ("management".equals(BuildConfig.FLAVOR) || "landirect".equals(BuildConfig.FLAVOR)) {
             setVolumeControlStream(AudioManager.STREAM_MUSIC);
         }
     }
