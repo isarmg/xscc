@@ -1,0 +1,152 @@
+name: Actual desktop UI screenshots
+on:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - '.github/workflows/desktop-ui-screenshots.yml'
+      - '.github/scripts/capture-windows-ui.ps1'
+      - '.github/scripts/capture-linux-ui.sh'
+      - '.github/scripts/capture-macos-ui.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_SHA: 112f8b718405f740c1e747f61011f634450753c7
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify fixed package provenance
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id: 39096404676})).data;
+            const artifact = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 12125432383})).data;
+            if (run.head_sha !== process.env.SOURCE_SHA || artifact.workflow_run.head_sha !== process.env.SOURCE_SHA || artifact.expired || artifact.digest !== 'sha256:aeb0a65dd8737e59b6c9bead2a96fc11e561c425afe80c9fabdbab0373676a81') throw new Error('Unexpected Windows artifact provenance');
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: '12125432383'
+          run-id: '39096404676'
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Verify checksums and capture actual application window
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem downloaded -File -Recurse
+          $checksums = @($files | Where-Object Name -like '*SHA256SUMS.txt')
+          if ($checksums.Count -ne 1) { throw 'Missing unique checksum manifest' }
+          foreach ($line in Get-Content $checksums[0].FullName) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([^/\\]+)$') { throw 'Malformed checksum manifest' }
+            $expected = $Matches[1]; $name = $Matches[2]
+            $file = Join-Path $checksums[0].DirectoryName $name
+            if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw "Checksum mismatch: $name" }
+          }
+          $package = @($files | Where-Object Name -like '*-portable.zip')
+          if ($package.Count -ne 1) { throw 'Missing unique portable controller package' }
+          Expand-Archive $package[0].FullName "$env:RUNNER_TEMP/controller" -Force
+          $metadata = @(Get-ChildItem "$env:RUNNER_TEMP/controller" -Filter build-info.json -Recurse)
+          if ($metadata.Count -ne 1) { throw 'Missing application metadata' }
+          if ((Get-Content $metadata[0].FullName -Raw | ConvertFrom-Json).source_sha -ne $env:SOURCE_SHA) { throw 'Package source SHA mismatch' }
+          $exe = @(Get-ChildItem "$env:RUNNER_TEMP/controller" -Filter xscc-controller.exe -Recurse)
+          if ($exe.Count -ne 1) { throw 'Missing unique controller executable' }
+          ./.github/scripts/capture-windows-ui.ps1 -Executable $exe[0].FullName -OutputDirectory screenshots/windows
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-ui-windows-112f8b7
+          path: screenshots/windows/
+          if-no-files-found: warn
+          retention-days: 14
+  linux:
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    timeout-minutes: 20
+    steps:
+      - name: Install Wayland virtual-display and packaged application runtime
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates git curl unzip tar python3 python3-pil jq dbus sway grim fonts-noto-cjk libvulkan1 mesa-vulkan-drivers \
+            libayatana-appindicator3-1 libasound2t64 libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgtk-3-0t64 libpulse0 libva2 libxfixes3 libssl3t64 libdbus-1-3 libwayland-client0 libxkbcommon0 libfontconfig1 libfreetype6 libunwind8 libvdpau1 libxtst6 libxi6 libxrandr2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify fixed package provenance
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id: 39096404694})).data;
+            const artifact = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 12125720155})).data;
+            if (run.head_sha !== process.env.SOURCE_SHA || artifact.workflow_run.head_sha !== process.env.SOURCE_SHA || artifact.expired || artifact.digest !== 'sha256:39c5fb7c28af12649431d8122568b94559d7a3b0b3266177db044e3b91c233ad') throw new Error('Unexpected Linux artifact provenance');
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: '12125720155'
+          run-id: '39096404694'
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Capture actual controller in Wayland with software Vulkan
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=$(find downloaded -name build-manifest.txt -print -quit)
+          grep -Fx "source=$SOURCE_SHA" "$manifest"
+          package_dir=$(dirname "$manifest")
+          (cd "$package_dir" && sha256sum -c ./*.sha256)
+          mkdir -p /tmp/controller "$GITHUB_WORKSPACE/screenshots/linux"
+          tar -xzf "$package_dir/xscc-controller-0.1.0-beta.1-linux-x86_64.tar.gz" -C /tmp/controller
+          exe=/tmp/controller/xscc-controller-0.1.0-beta.1-linux-x86_64/xscc-controller
+          ldd "$exe" | tee screenshots/linux/dependencies.txt
+          ! grep -q 'not found' screenshots/linux/dependencies.txt
+          useradd --create-home --shell /bin/bash screenshot
+          chown -R screenshot:screenshot /tmp/controller "$GITHUB_WORKSPACE/screenshots/linux"
+          runuser -u screenshot -- env SOURCE_SHA="$SOURCE_SHA" bash .github/scripts/capture-linux-ui.sh "$exe" "$GITHUB_WORKSPACE/screenshots/linux"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-ui-linux-wayland-software-gpu-112f8b7
+          path: screenshots/linux/
+          if-no-files-found: warn
+          retention-days: 14
+  macos:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify fixed package provenance
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const run = (await github.rest.actions.getWorkflowRun({...context.repo, run_id: 39096404694})).data;
+            const artifact = (await github.rest.actions.getArtifact({...context.repo, artifact_id: 12124867269})).data;
+            if (run.head_sha !== process.env.SOURCE_SHA || artifact.workflow_run.head_sha !== process.env.SOURCE_SHA || artifact.expired || artifact.digest !== 'sha256:4c94de1905235fa6bb8184c66f884c8c2d1a9d7f21c9473ef5e3a5ca28b34edf') throw new Error('Unexpected macOS artifact provenance');
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: '12124867269'
+          run-id: '39096404694'
+          github-token: ${{ github.token }}
+          path: downloaded
+      - name: Verify archive and capture actual application window
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest=$(find downloaded -name build-manifest.txt -print -quit)
+          grep -Fx "source=$SOURCE_SHA" "$manifest"
+          package_dir=$(dirname "$manifest")
+          (cd "$package_dir" && shasum -a 256 -c SHA256SUMS)
+          mkdir -p "$RUNNER_TEMP/macos-app"
+          ditto -x -k "$package_dir/xscc-controller-0.1.0-beta.1-macos26-arm64-unsigned.zip" "$RUNNER_TEMP/macos-app"
+          APP_SOURCE_SHA="$SOURCE_SHA" python3 .github/scripts/capture-macos-ui.py "$RUNNER_TEMP/macos-app/XSCC-controller.app" screenshots/macos
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: actual-ui-macos-112f8b7
+          path: screenshots/macos/
+          if-no-files-found: warn
+          retention-days: 14

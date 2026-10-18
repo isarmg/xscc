@@ -1,0 +1,71 @@
+name: Android actual UI screenshot
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/management-prep]
+    paths:
+      - '.github/workflows/android-ui-screenshot.yml'
+      - '.github/scripts/capture-android-ui.sh'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  screenshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: 112f8b718405f740c1e747f61011f634450753c7
+      SOURCE_RUN: '39096404687'
+      SOURCE_ARTIFACT: '12125290318'
+      SOURCE_ZIP_SHA256: 404714a804bb835f902f4fdb88a2dabae803d01c0be6b7582c21cc883d014f1d
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Download and verify the existing ARM64 application
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/android-ui source-apk
+          gh api "repos/$GH_REPO/actions/artifacts/$SOURCE_ARTIFACT" > evidence/android-ui/source-artifact.json
+          python3 - <<'PY'
+          import json, os
+          artifact = json.load(open('evidence/android-ui/source-artifact.json'))
+          assert not artifact['expired']
+          assert artifact['id'] == int(os.environ['SOURCE_ARTIFACT'])
+          assert artifact['workflow_run']['id'] == int(os.environ['SOURCE_RUN'])
+          assert artifact['workflow_run']['head_sha'] == os.environ['SOURCE_SHA']
+          assert artifact['name'] == 'xscc-gpui-android-landirect-' + os.environ['SOURCE_SHA']
+          PY
+          gh api "repos/$GH_REPO/actions/artifacts/$SOURCE_ARTIFACT/zip" > "$RUNNER_TEMP/android-source.zip"
+          echo "$SOURCE_ZIP_SHA256  $RUNNER_TEMP/android-source.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/android-source.zip" -d source-apk
+          (cd source-apk && sha256sum --check SHA256SUMS)
+          cp source-apk/BUILD-INFO.txt evidence/android-ui/source-BUILD-INFO.txt
+          grep -qx "commit=$SOURCE_SHA" evidence/android-ui/source-BUILD-INFO.txt
+      - name: Install official emulator and ARM-translation-capable system image
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'emulator' 'platform-tools' 'system-images;android-30;google_apis;x86_64' </dev/null
+          { id; ls -l /dev/kvm || true; } > evidence/android-ui/kvm-access.txt 2>&1
+          if ! test -c /dev/kvm || ! test -r /dev/kvm || ! test -w /dev/kvm; then
+            echo 'Existing runner permissions do not allow KVM; no device permissions were changed.' | tee -a evidence/android-ui/kvm-access.txt
+            exit 1
+          fi
+          "$ANDROID_HOME/emulator/emulator" -accel-check | tee -a evidence/android-ui/kvm-access.txt
+      - name: Run the unchanged ARM64 APK and capture the actual Android screen
+        run: |
+          bash .github/scripts/capture-android-ui.sh \
+            "source-apk/xscc-gpui-android-arm64-TEST-IP-direct-${SOURCE_SHA:0:12}.apk" \
+            evidence/android-ui
+      - name: Upload actual screenshots and diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-ui-112f8b718405-emulator-${{ github.run_id }}
+          path: evidence/android-ui/
+          if-no-files-found: error
+          retention-days: 14
