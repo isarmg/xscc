@@ -239,7 +239,7 @@ impl Platform for AndroidPlatform {
                 let raw: jni::sys::jobject = app.activity_as_ptr().cast();
                 // Activity owns this borrowed reference; AndroidApp keeps it alive.
                 let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&raw)? };
-                crate::clipboard::read_text(env, activity)
+                crate::clipboard::read_text(env, &activity)
             })();
             if result.is_err() {
                 // Never log clipboard data or Java exception text.
