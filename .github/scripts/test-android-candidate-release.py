@@ -91,7 +91,8 @@ class PublishingTests(unittest.TestCase):
             url = p.publish(github, p.SOURCE, p.RUN, Path('/unused'))
             self.assertEqual(url, github.release['html_url'])
             self.assertEqual(len(github.writes), 4)
-            self.assertEqual(github.writes[-1], ('PATCH', {'draft': False, 'prerelease': True, 'make_latest': 'false'}))
+            self.assertEqual(github.writes[-1], ('PATCH', {'tag_name': p.TAG, 'target_commitish': p.SOURCE,
+                                                        'draft': False, 'prerelease': True, 'make_latest': 'false'}))
             writes = copy.deepcopy(github.writes)
             self.assertEqual(p.publish(github, p.SOURCE, p.RUN, Path('/unused')), url)
             self.assertEqual(github.writes, writes)

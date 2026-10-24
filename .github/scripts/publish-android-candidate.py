@@ -291,7 +291,8 @@ def publish(github, source, run_id, tools):
         if not release['draft']:
             return release['html_url']
         release = github.json('/releases/' + str(release['id']), 'PATCH',
-                              {'draft': False, 'prerelease': True, 'make_latest': 'false'})
+                              {'tag_name': TAG, 'target_commitish': SOURCE,
+                               'draft': False, 'prerelease': True, 'make_latest': 'false'})
         check_release(release)
         require(not release['draft'], 'Release remained a draft')
         check_assets(release['assets'], complete=True)
