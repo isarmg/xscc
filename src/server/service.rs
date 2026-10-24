@@ -291,15 +291,26 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
                     log::debug!("Enter {} service inner loop", sp.name());
                     let tm = time::Instant::now();
                     if let Err(err) = callback(sp.clone()) {
-                        if err
-                            .downcast_ref::<super::video_pipeline::VideoRestart>()
-                            .is_some()
+                        if let Some(reason) =
+                            err.downcast_ref::<super::video_pipeline::VideoRestart>()
                         {
-                            log::debug!("Reconfigure {} service: {}", sp.name(), err);
-                            error_timeout = HIBERNATE_TIMEOUT;
                             #[cfg(windows)]
-                            crate::platform::windows::try_change_desktop();
-                            continue;
+                            let ready = {
+                                crate::platform::windows::try_change_desktop();
+                                reason.retry_after_platform_update(
+                                    crate::platform::windows::desktop_changed,
+                                )
+                            };
+                            #[cfg(not(windows))]
+                            let ready = {
+                                let _ = reason;
+                                true
+                            };
+                            if ready {
+                                log::debug!("Reconfigure {} service: {}", sp.name(), err);
+                                error_timeout = HIBERNATE_TIMEOUT;
+                                continue;
+                            }
                         }
                         log::error!("Error of {} service: {}", sp.name(), err);
                         if tm.elapsed() > time::Duration::from_millis(MAX_ERROR_TIMEOUT) {

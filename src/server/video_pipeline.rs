@@ -41,6 +41,15 @@ pub(super) enum VideoRestart {
 }
 
 impl VideoRestart {
+    #[cfg(any(windows, test))]
+    pub(super) fn retry_after_platform_update(
+        self,
+        desktop_changed: impl FnOnce() -> bool,
+    ) -> bool {
+        // OpenInputDesktop/SetThreadDesktop failures leave the old thread desktop selected.
+        self != Self::DesktopChanged || !desktop_changed()
+    }
+
     pub(super) fn reuse_capture(self) -> bool {
         matches!(
             self,
@@ -396,6 +405,16 @@ mod tests {
         ] {
             assert!(!reason.reuse_capture());
         }
+    }
+
+    #[test]
+    fn an_unavailable_input_desktop_keeps_using_error_backoff_until_selection_succeeds() {
+        // The Windows API may repeatedly deny opening the secure desktop without changing state.
+        for _ in 0..3 {
+            assert!(!VideoRestart::DesktopChanged.retry_after_platform_update(|| true));
+        }
+        assert!(VideoRestart::DesktopChanged.retry_after_platform_update(|| false));
+        assert!(VideoRestart::Refresh.retry_after_platform_update(|| panic!("unrelated restart")));
     }
 
     async fn tcp_pair(small_buffers: bool) -> (hbb_common::Stream, hbb_common::Stream) {
