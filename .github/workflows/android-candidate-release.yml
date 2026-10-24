@@ -1,0 +1,47 @@
+name: Publish verified Android candidate
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Verified APK source commit (not the publisher workflow commit)'
+        required: true
+        default: a617241a6bd19090f3d301c056359a7e3a781fd3
+        type: string
+      run_id:
+        description: Successful Android candidate run
+        required: true
+        default: '40102224654'
+        type: string
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: android-candidate-release-0.1.0-beta.3.1
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Test candidate publishing guards
+        run: python3 .github/scripts/test-android-candidate-release.py
+      - name: Locate Android APK verification tools
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_HOME"
+          if [ ! -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ] || [ ! -x "$ANDROID_HOME/build-tools/36.0.0/aapt" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
+      - name: Verify and publish the existing candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish-android-candidate.py \
+            --source-sha "$SOURCE_SHA" --run-id "$SOURCE_RUN" \
+            --android-tools "$ANDROID_HOME/build-tools/36.0.0"
