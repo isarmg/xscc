@@ -158,39 +158,6 @@ impl RemoteVideo {
         cx.notify();
     }
 
-    #[cfg(feature = "test-lan-direct")]
-    pub fn connect_test_lan(
-        &mut self,
-        endpoint: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.connecting || self.session.is_some() {
-            return;
-        }
-        self.generation = self.generation.wrapping_add(1);
-        let generation = self.generation;
-        self.connecting = true;
-        self.video.invalidate();
-        self.notice = "正在连接局域网测试地址…".into();
-        let sender = self.sender.clone();
-        let wake = self.wake.clone();
-        self.runtime.spawn(async move {
-            let result = gpui_session::connect_test_lan(&endpoint)
-                .await
-                .map_err(|error| error.to_string());
-            if let Err(error) = sender.send(Reply::Connect(generation, result))
-                && let Reply::Connect(_, Ok(session)) = error.0
-            {
-                session.disconnect();
-            }
-            wake.notify_one();
-        });
-        self.focus.focus(window, cx);
-        self.publish(cx);
-        cx.notify();
-    }
-
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
         self.close();
         self.publish(cx);

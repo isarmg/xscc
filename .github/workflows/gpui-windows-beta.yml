@@ -30,15 +30,10 @@ on:
       - '.github/scripts/*gpui*'
   workflow_dispatch:
     inputs:
-      test_lan_direct:
-        description: 'TEST ONLY: include unauthenticated unrestricted IP direct capability; never promote these packages'
-        required: true
-        default: true
-        type: boolean
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.1 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.2 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.1'
+        default: '0.1.0-beta.2'
         type: string
 permissions:
   contents: read
@@ -65,9 +60,9 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-${{ matrix.role }}
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
-      XSCC_PACKAGE_MODE: ${{ (github.event_name == 'push' || inputs.test_lan_direct) && 'test-lan-direct' || 'managed' }}
+      XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.1' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.2' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -75,7 +70,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.1'
+            throw 'Expected a numeric version such as 0.1.0-beta.2'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -156,7 +151,6 @@ jobs:
       - name: Build standalone release executable
         run: |
           $features = '${{ matrix.features }}'
-          if ($env:XSCC_PACKAGE_MODE -eq 'test-lan-direct') { $features += ',test-lan-direct' }
           cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features $features --bin xscc-gpui-validation --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
       - name: Prepare and verify final application manifest
@@ -192,7 +186,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.1' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.2' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

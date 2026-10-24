@@ -1,0 +1,49 @@
+name: Publish verified GPUI multi-platform prerelease
+on:
+  push:
+    tags: ['gpui-v*']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: gpui-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate immutable beta tag
+        run: |
+          [[ "$RELEASE_TAG" =~ ^gpui-v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]
+          source=$(git rev-parse HEAD)
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$source"
+          echo "SOURCE_SHA=$source" >> "$GITHUB_ENV"
+      - name: Collect verified candidates from all five platforms
+        run: python3 .github/scripts/collect-gpui-release.py --sha "$SOURCE_SHA" --version "${RELEASE_TAG#gpui-v}" --output release-assets
+      - name: Publish complete prerelease
+        run: |
+          set -euo pipefail
+          notes="docs/releases/gpui-${RELEASE_TAG#gpui-v}.md"
+          test -f "$notes"
+          gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease --title "XSCC GPUI ${RELEASE_TAG#gpui-v}" --notes-file "$notes"
+          gh release upload "$RELEASE_TAG" release-assets/*
+          python3 - <<'PY'
+          import json, pathlib, subprocess, os
+          release = json.loads(subprocess.check_output(['gh', 'release', 'view', os.environ['RELEASE_TAG'], '--json', 'assets,isDraft'], text=True))
+          expected = {file.name: file.stat().st_size for file in pathlib.Path('release-assets').iterdir()}
+          actual = {asset['name']: asset['size'] for asset in release['assets']}
+          if not release['isDraft'] or actual != expected:
+              raise SystemExit('Uploaded release assets do not match the verified candidates')
+          PY
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false

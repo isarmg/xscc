@@ -1,4 +1,4 @@
-// XCSS content-blocks palettes and Mac mini contour, pinned to:
+// Contour adapted from XCSS; dashboard palettes are maintained locally.
 // https://github.com/isarmg/xcss/tree/d0a41861d949f2b0626249b25a35f562fb59b592/web/admin-ui
 use gpui::WindowAppearance;
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
@@ -13,25 +13,34 @@ pub struct Palette {
     pub accent: u32,
     pub danger: u32,
     pub border: u32,
+    pub accent_soft: u32,
+    pub on_accent: u32,
+    pub success: u32,
 }
 
 pub const LIGHT: Palette = Palette {
-    page: 0xffffff,
-    panel: 0xf2f2f2,
-    text: 0x1f1f1f,
-    muted: 0x5f5f5f,
-    accent: 0x444444,
-    danger: 0xa73d46,
-    border: 0xe3e3e3,
+    page: 0xf5f7fb,
+    panel: 0xffffff,
+    text: 0x19243b,
+    muted: 0x65738b,
+    accent: 0x365ce6,
+    danger: 0xb83a48,
+    border: 0xe2e8f1,
+    accent_soft: 0xeaf0ff,
+    on_accent: 0xffffff,
+    success: 0x18794e,
 };
 pub const DARK: Palette = Palette {
-    page: 0x151a1d,
-    panel: 0x252c31,
-    text: 0xedf2f4,
-    muted: 0xa4b0b7,
-    accent: 0x5fa8c8,
-    danger: 0xff8a92,
-    border: 0x354047,
+    page: 0x101725,
+    panel: 0x192337,
+    text: 0xedf2fc,
+    muted: 0xa3b0c7,
+    accent: 0x9ab5ff,
+    danger: 0xff99a6,
+    border: 0x2c3a52,
+    accent_soft: 0x26395c,
+    on_accent: 0x101725,
+    success: 0x78d9ac,
 };
 
 pub fn palette(appearance: WindowAppearance) -> Palette {
@@ -42,14 +51,14 @@ pub fn palette(appearance: WindowAppearance) -> Palette {
 }
 
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
-pub const CONTROL_EXTENT: f32 = 27.;
-pub const PANEL_EXTENT: f32 = 42.;
+pub const CONTROL_EXTENT: f32 = 10.;
+pub const PANEL_EXTENT: f32 = 18.;
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
 pub const CONTROL_HEIGHT: f32 = 44.;
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
-pub const BODY_SIZE: f32 = 16.;
+pub const BODY_SIZE: f32 = 14.;
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
-pub const LINE_HEIGHT: f32 = 24.;
+pub const LINE_HEIGHT: f32 = 22.;
 
 // Evaluate the source degree-seven curve once at compile time. A 24-segment
 // polygon bounds chord error below .115px for extents up to 42px; no per-frame

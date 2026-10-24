@@ -1,4 +1,5 @@
 use crate::{
+    dashboard as ui,
     remote_video::{RemoteVideo, VideoState},
     text_field::{self, TextField},
     theme,
@@ -33,14 +34,6 @@ struct ManagementPanel {
     password: Entity<TextField>,
     address_host: Entity<TextField>,
     address_port: Entity<TextField>,
-    #[cfg(feature = "test-lan-direct")]
-    lan_endpoint: Entity<TextField>,
-    #[cfg(all(
-        target_os = "windows",
-        feature = "native-host",
-        feature = "test-lan-direct"
-    ))]
-    test_host: Arc<Mutex<crate::test_host::TestHost>>,
     host: bool,
     initialized: bool,
     status: Option<Status>,
@@ -159,43 +152,7 @@ impl ManagementPanel {
             .update(cx, |video, cx| video.connect(device_id, window, cx));
     }
 
-    #[cfg(feature = "test-lan-direct")]
-    fn connect_test_lan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host
-            || !self.initialized
-            || self.action_pending
-            || self.video_state.connecting
-            || self.video_state.has_session
-        {
-            return;
-        }
-        let endpoint = self.lan_endpoint.read(cx).value().trim().to_owned();
-        self.video
-            .update(cx, |video, cx| video.connect_test_lan(endpoint, window, cx));
-    }
-
     fn form_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        #[cfg(feature = "test-lan-direct")]
-        if !self.host
-            && self
-                .lan_endpoint
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        {
-            let key = &event.keystroke;
-            if key.key == "enter"
-                && !key.modifiers.shift
-                && !key.modifiers.control
-                && !key.modifiers.alt
-                && !key.modifiers.platform
-                && !self.lan_endpoint.read(cx).is_composing()
-            {
-                self.connect_test_lan(window, cx);
-                cx.stop_propagation();
-            }
-            return;
-        }
         let fields = if self.host {
             vec![
                 self.address_host.clone(),
@@ -292,97 +249,129 @@ impl ManagementPanel {
         let palette = theme::palette(window.appearance());
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
         let idle = self.can_act();
-        let can_refresh = idle && !self.status_pending;
-        let status_text = self
-            .status
-            .as_ref()
-            .map(|status| management_status(status.configured, &status.phase))
-            .unwrap_or(if self.initialized {
-                "正在读取绑定状态…"
-            } else {
-                "本机服务启动失败，请重新启动应用。"
-            });
+        let online = self.status_error.is_none()
+            && self
+                .status
+                .as_ref()
+                .is_some_and(|status| status.phase == "online");
+        let status_text = if self.status_error.is_some() {
+            "状态待同步"
+        } else {
+            self.status
+                .as_ref()
+                .map(|status| management_status(status.configured, &status.phase))
+                .unwrap_or(if self.initialized {
+                    "正在读取状态"
+                } else {
+                    "本机服务不可用"
+                })
+        };
         div()
             .flex()
             .items_center()
             .justify_between()
             .flex_wrap()
-            .gap_2()
+            .gap_4()
+            .pb_4()
+            .border_b_1()
+            .border_color(rgb(palette.border))
             .child(
                 div()
                     .flex()
-                    .flex_col()
-                    .child(if self.host {
-                        "XSCC 被控端"
-                    } else {
-                        "XSCC 控制端"
-                    })
-                    .child(div().text_color(rgb(palette.muted)).child(status_text)),
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size(px(44.))
+                            .rounded_xl()
+                            .bg(rgb(palette.accent))
+                            .text_color(rgb(palette.on_accent))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_size(px(19.))
+                            .child("X"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(20.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(if self.host {
+                                        "XSCC 被控端"
+                                    } else {
+                                        "XSCC 控制端"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(palette.muted))
+                                    .child(if self.host {
+                                        "管理这台设备的远程访问"
+                                    } else {
+                                        "你的设备，随时连接"
+                                    }),
+                            ),
+                    ),
             )
             .child(
                 div()
                     .flex()
+                    .items_center()
                     .flex_wrap()
                     .gap_2()
+                    .child(ui::badge(
+                        status_text,
+                        if online {
+                            palette.success
+                        } else {
+                            palette.muted
+                        },
+                        palette.panel,
+                    ))
                     .when(!configured, |row| {
                         row.child(
-                            div()
-                                .id("login-menu")
-                                .px_3()
-                                .py_1()
-                                .relative()
-                                .min_h(px(theme::CONTROL_HEIGHT))
-                                .flex()
-                                .items_center()
-                                .child(theme::surface(
-                                    rgb(palette.panel),
-                                    None,
-                                    theme::CONTROL_EXTENT,
-                                ))
-                                .cursor_pointer()
-                                .child(if self.show_login {
-                                    "收起登录"
+                            ui::button(
+                                "login-menu",
+                                if self.show_login {
+                                    "收起绑定"
                                 } else {
-                                    "登录"
-                                })
-                                .on_click(cx.listener(|view, _, _, cx| {
+                                    "绑定实例"
+                                },
+                                true,
+                                self.initialized,
+                                palette,
+                            )
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if view.initialized {
                                     view.show_login = !view.show_login;
                                     cx.notify();
-                                })),
+                                }
+                            })),
                         )
                     })
                     .child(
-                        div()
-                            .id("refresh")
-                            .px_3()
-                            .py_1()
-                            .relative()
-                            .min_h(px(theme::CONTROL_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .child(theme::surface(
-                                rgb(palette.panel),
-                                None,
-                                theme::CONTROL_EXTENT,
-                            ))
-                            .text_color(rgb(if can_refresh {
-                                palette.accent
+                        ui::button(
+                            "refresh",
+                            if self.status_pending {
+                                "刷新中…"
                             } else {
-                                palette.muted
-                            }))
-                            .child(if self.status_pending {
-                                "正在刷新…"
-                            } else {
-                                "刷新状态"
-                            })
-                            .when(can_refresh, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.refresh();
-                                        cx.notify();
-                                    }))
-                            }),
+                                "刷新"
+                            },
+                            false,
+                            idle,
+                            palette,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.refresh();
+                            cx.notify();
+                        })),
                     )
                     .when(
                         configured
@@ -391,96 +380,174 @@ impl ManagementPanel {
                             }),
                         |row| {
                             row.child(
-                                div()
-                                    .id("resume")
-                                    .px_3()
-                                    .py_1()
-                                    .relative()
-                                    .min_h(px(theme::CONTROL_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .child(theme::surface(
-                                        rgb(palette.panel),
-                                        None,
-                                        theme::CONTROL_EXTENT,
-                                    ))
-                                    .text_color(rgb(if idle {
-                                        palette.accent
-                                    } else {
-                                        palette.muted
-                                    }))
-                                    .child("重新连接服务端")
-                                    .when(idle, |button| {
-                                        button.cursor_pointer().on_click(cx.listener(
-                                            |view, _, _, cx| {
-                                                view.action(Command::Resume);
-                                                cx.notify();
-                                            },
-                                        ))
+                                ui::button("resume", "重新连接", true, idle, palette).on_click(
+                                    cx.listener(|view, _, _, cx| {
+                                        view.action(Command::Resume);
+                                        cx.notify();
                                     }),
+                                ),
                             )
                         },
                     )
                     .when(configured, |row| {
                         row.child(
-                            div()
-                                .id("unbind")
-                                .px_3()
-                                .py_1()
-                                .relative()
-                                .min_h(px(theme::CONTROL_HEIGHT))
-                                .flex()
-                                .items_center()
-                                .child(theme::surface(
-                                    rgb(palette.panel),
-                                    None,
-                                    theme::CONTROL_EXTENT,
-                                ))
-                                .text_color(rgb(if idle { palette.danger } else { palette.muted }))
-                                .when(idle, |button| button.cursor_pointer())
-                                .child(if self.confirm_unbind {
-                                    "确认解绑并关闭连接"
+                            ui::button(
+                                "unbind",
+                                if self.confirm_unbind {
+                                    "确认解绑并断开"
                                 } else {
-                                    "解绑此实例"
-                                })
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    if !view.can_act() {
-                                        return;
-                                    }
-                                    if view.confirm_unbind {
-                                        view.video.update(cx, |video, cx| video.disconnect(cx));
-                                        view.action(Command::Unbind);
-                                    } else {
-                                        view.confirm_unbind = true;
-                                    }
-                                    cx.notify();
-                                })),
+                                    "解绑实例"
+                                },
+                                false,
+                                idle,
+                                palette,
+                            )
+                            .text_color(rgb(palette.danger))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if !view.can_act() {
+                                    return;
+                                }
+                                if view.confirm_unbind {
+                                    view.video.update(cx, |video, cx| video.disconnect(cx));
+                                    view.action(Command::Unbind);
+                                } else {
+                                    view.confirm_unbind = true;
+                                }
+                                cx.notify();
+                            })),
                         )
                     })
                     .when(self.confirm_unbind, |row| {
                         row.child(
-                            div()
-                                .id("cancel-unbind")
-                                .relative()
-                                .min_h(px(theme::CONTROL_HEIGHT))
-                                .flex()
-                                .items_center()
-                                .child(theme::surface(
-                                    rgb(palette.panel),
-                                    None,
-                                    theme::CONTROL_EXTENT,
-                                ))
-                                .px_3()
-                                .py_1()
-                                .cursor_pointer()
-                                .child("取消")
-                                .on_click(cx.listener(|view, _, _, cx| {
+                            ui::button("cancel-unbind", "取消", false, true, palette).on_click(
+                                cx.listener(|view, _, _, cx| {
                                     view.confirm_unbind = false;
                                     cx.notify();
-                                })),
+                                }),
+                            ),
                         )
                     }),
             )
+    }
+
+    fn render_binding(&self, palette: theme::Palette, cx: &mut Context<Self>) -> gpui::Div {
+        ui::card(palette)
+            .child(ui::heading(
+                "绑定管理实例",
+                "输入管理端提供的信息，加载你的授权设备。",
+                palette,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_color(rgb(palette.muted)).child("服务端地址"))
+                    .child(self.server.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(div().text_color(rgb(palette.muted)).child(if self.host {
+                        "被控端实例密码"
+                    } else {
+                        "控制端实例密码"
+                    }))
+                    .child(self.password.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(
+                        ui::button(
+                            "enroll",
+                            if self.action_pending {
+                                "正在绑定…"
+                            } else {
+                                "绑定并连接"
+                            },
+                            true,
+                            self.can_act(),
+                            palette,
+                        )
+                        .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child("实例密码由管理端提供，仅用于绑定此设备。"),
+                    ),
+            )
+    }
+
+    fn render_addresses(
+        &self,
+        current: &str,
+        palette: theme::Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let configured = self.status.as_ref().is_some_and(|status| status.configured);
+        ui::card(palette)
+            .child(ui::heading(
+                "设备连接地址",
+                "向已授权的控制端上报可访问地址，留空则自动获取。",
+                palette,
+            ))
+            .child(
+                div()
+                    .rounded_lg()
+                    .p_3()
+                    .bg(rgb(palette.page))
+                    .text_color(rgb(palette.muted))
+                    .child(format!("当前地址：{current}")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(170.))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child("域名或 IP")
+                            .child(self.address_host.clone()),
+                    )
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child("端口")
+                            .child(self.address_port.clone()),
+                    ),
+            )
+            .when(configured, |section| {
+                section.child(
+                    ui::button(
+                        "save-address",
+                        if self.action_pending {
+                            "正在保存…"
+                        } else {
+                            "保存地址"
+                        },
+                        false,
+                        self.can_act(),
+                        palette,
+                    )
+                    .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
+                )
+            })
     }
 }
 
@@ -488,7 +555,6 @@ impl Render for ManagementPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = theme::palette(window.appearance());
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
-        let idle = self.can_act();
         let peers = self
             .status
             .as_ref()
@@ -499,12 +565,12 @@ impl Render for ManagementPanel {
             .as_ref()
             .map(|status| {
                 if status.addresses.is_empty() {
-                    "自动采集本机地址".into()
+                    "自动获取本机地址".into()
                 } else {
                     status
                         .addresses
                         .iter()
-                        .map(|address| format!("{} / 端口 {}", address.host, address.port))
+                        .map(|address| format_peer_address(&address.host, address.port))
                         .collect::<Vec<_>>()
                         .join("，")
                 }
@@ -524,320 +590,102 @@ impl Render for ManagementPanel {
         let panel_width = if !self.host && self.video_state.connected {
             (f32::from(window.viewport_size().width) * 0.38).min(420.)
         } else {
-            f32::from(window.viewport_size().width) - 32.
+            f32::from(window.viewport_size().width) - 48.
         };
-        #[cfg(feature = "test-lan-direct")]
-        let card_width = (panel_width - 24.).max(1.).min(420.);
+        let content_width = (panel_width - 32.).max(1.);
         let can_connect = current_peers
             && correct_role
             && !self.host
             && !self.video_state.connecting
             && !self.video_state.has_session
-            && !self.action_pending
-            && self.status_error.is_none();
-        let panel = div()
-            .id("management-panel")
-            .size_full()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_3()
-            .bg(rgb(palette.page))
-            .text_color(rgb(palette.text))
-            .text_size(px(theme::BODY_SIZE))
-            .line_height(px(theme::LINE_HEIGHT))
+            && !self.action_pending;
+        let online_count = if current_peers {
+            peers.iter().filter(|peer| peer.online).count().to_string()
+        } else {
+            "—".into()
+        };
+        let panel = div().id("management-panel").size_full().overflow_y_scroll()
+            .flex().flex_col().gap_5().p_4()
+            .bg(rgb(palette.page)).text_color(rgb(palette.text))
+            .text_size(px(theme::BODY_SIZE)).line_height(px(theme::LINE_HEIGHT))
             .on_key_down(cx.listener(Self::form_key_down))
-            .when(
-                configured
-                    && self
-                        .status
-                        .as_ref()
-                        .is_some_and(|status| status.role.is_some())
-                    && !correct_role,
-                |root| {
-                    root.child(
-                    "实例角色不适用于此端。请在服务器创建对应角色的实例，然后主动解绑并重新绑定。",
-                )
-                },
-            )
-            .when(!self.notice.is_empty(), |root| {
-                root.child(self.notice.clone())
-            })
-            .when_some(self.status_error.clone(), |root, error| {
-                root.child(div().text_color(rgb(palette.danger)).child(format!(
-                    "暂时无法刷新状态，设备列表可能已过期。请检查本机服务或点击刷新。详情：{error}"
-                )))
-            })
-            .when(self.host && self.initialized, |root| {
-                root.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(format!("当前上报访问地址：{current_addresses}"))
-                        .child("访问地址（留空自动获取）")
-                        .child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(self.address_host.clone())
-                                .child(self.address_port.clone()),
-                        )
-                        .when(configured, |section| {
-                            section.child(
-                                div()
-                                    .id("save-address")
-                                    .px_3()
-                                    .py_1()
-                                    .relative()
-                                    .min_h(px(theme::CONTROL_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .child(theme::surface(
-                                        rgb(palette.panel),
-                                        None,
-                                        theme::CONTROL_EXTENT,
-                                    ))
-                                    .text_color(rgb(if idle {
-                                        palette.accent
-                                    } else {
-                                        palette.muted
-                                    }))
-                                    .when(idle, |button| button.cursor_pointer())
-                                    .child(if self.action_pending {
-                                        "正在保存…"
-                                    } else {
-                                        "保存访问地址"
-                                    })
-                                    .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
-                            )
-                        }),
-                )
-            })
-            .when(
-                self.show_login && !configured && self.initialized && self.status.is_some(),
-                |root| {
-                    root.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child("登录并绑定实例")
-                            .child("服务端地址")
-                            .child(self.server.clone())
-                            .child("实例密码")
-                            .child(self.password.clone())
-                            .child(
-                                div()
-                                    .id("enroll")
-                                    .px_3()
-                                    .py_2()
-                                    .relative()
-                                    .min_h(px(theme::CONTROL_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .child(theme::surface(
-                                        rgb(palette.accent),
-                                        None,
-                                        theme::CONTROL_EXTENT,
-                                    ))
-                                    .text_color(rgb(palette.page))
-                                    .when(idle, |button| button.cursor_pointer())
-                                    .child(if !self.initialized || self.action_pending {
-                                        "正在绑定…"
-                                    } else {
-                                        "绑定实例"
-                                    })
-                                    .on_click(
-                                        cx.listener(|view, _, window, cx| view.enroll(window, cx)),
-                                    ),
-                            ),
-                    )
-                },
-            );
-        #[cfg(feature = "test-lan-direct")]
-        let panel = panel.when(!self.host && !self.video_state.connected, |root| {
-            let enabled = self.initialized
-                && !self.action_pending
-                && !self.video_state.connecting
-                && !self.video_state.has_session;
-            root.child(
-                div()
-                    .relative()
-                    .w(px(card_width))
-                    .h(px(card_width * 2. / 3.))
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .p_3()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(theme::surface(
-                        rgb(palette.panel),
-                        None,
-                        theme::PANEL_EXTENT,
-                    ))
-                    .child("IP 直连 · 仅测试")
-                    .child(
-                        div()
-                            .text_color(rgb(palette.danger))
-                            .child("无验证：任何可达设备可控制"),
-                    )
-                    .child("系统未知 · 状态未知")
-                    .child(self.lan_endpoint.clone())
-                    .child(
-                        div()
-                            .id("test-lan-connect")
-                            .px_3()
-                            .py_1()
-                            .relative()
-                            .min_h(px(theme::CONTROL_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .child(theme::surface(
-                                rgb(palette.page),
-                                None,
-                                theme::CONTROL_EXTENT,
-                            ))
-                            .text_color(rgb(if enabled {
-                                palette.accent
-                            } else {
-                                palette.muted
-                            }))
-                            .child("连接 IP")
-                            .when(enabled, |button| {
-                                button.cursor_pointer().on_click(cx.listener(
-                                    |view, _, window, cx| view.connect_test_lan(window, cx),
-                                ))
-                            }),
-                    ),
-            )
-        });
-        #[cfg(all(target_os = "windows", feature = "native-host", feature = "test-lan-direct"))]
-        let panel = panel.when(self.host, |root| {
-            let (active, message, address) = {
-                let host = self.test_host.lock().unwrap();
-                (host.active(), host.message.clone(), host.address)
-            };
-            let addresses = address.map(gpui_host::test_direct_addresses).unwrap_or_default();
-            root.child(div().p_4().flex().flex_col().gap_2()
-                .child("IP 直连 · 仅测试")
-                .child(div().text_color(rgb(palette.danger)).child("无身份验证、无接入确认：任何能到达监听端口的设备均可控制此电脑，包括公网设备。"))
-                .child("监听地址（留空使用 0.0.0.0:21119；不需要绑定管理服务器）")
-                .child(self.lan_endpoint.clone())
-                .child(message)
-                .children(addresses.into_iter().map(|address| format!("手机可填写：{address}")))
-                .child("手机不填端口时使用 21119；通配地址不是手机连接目标。退出此窗口会停止测试监听。")
-                .child(div().id("test-direct-host-toggle").px_3().py_2().cursor_pointer()
-                    .text_color(rgb(palette.accent))
-                    .child(if active { "停止 IP 直连" } else { "开启 IP 直连（测试）" })
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        let mut host = view.test_host.lock().unwrap();
-                        if host.active() {
-                            host.stop();
-                        } else {
-                            host.start(view.lan_endpoint.read(cx).value());
-                        }
-                        cx.notify();
-                    }))))
-        });
-        panel
-            .child(if self.host {
-                "允许接入的控制端"
-            } else {
-                "授权主机"
-            })
-            .when(peers.is_empty(), |root| {
-                root.child(div().text_color(rgb(palette.muted)).child(if !configured {
-                    "请从上方登录并绑定实例。"
-                } else if !correct_role {
-                    "请检查服务端连接与实例角色。"
-                } else {
-                    "暂无授权设备。"
-                }))
-            })
-            .child(
-                div()
-                    .id("peers")
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .when(!self.host, |grid| {
-                        grid.grid()
-                            .flex_shrink_0()
-                            .grid_cols(crate::window_layout::card_columns(panel_width - 24.))
-                            .gap_3()
+            .child(ui::heading(
+                if self.host { "访问工作台" } else { "设备工作台" },
+                if self.host { "查看本机连接信息，管理获准访问的设备。" } else { "在一个地方查看并连接你的授权设备。" }, palette))
+            .when(!self.notice.is_empty(), |root| root.child(
+                div().p_3().rounded_lg().bg(rgb(palette.accent_soft)).child(self.notice.clone())))
+            .when_some(self.status_error.clone(), |root, error| root.child(
+                ui::card(palette).gap_2().text_color(rgb(palette.danger))
+                    .child("设备状态暂不可用")
+                    .child(div().text_size(px(13.)).child(format!("列表可能已过期，请刷新或检查本机服务。{error}")))))
+            .when(configured && self.status.as_ref().is_some_and(|status| status.role.is_some()) && !correct_role, |root| root.child(
+                ui::card(palette).text_color(rgb(palette.danger))
+                    .child("此实例角色与当前应用不匹配。请在管理端创建对应角色的实例，再解绑并重新绑定。")))
+            .when(configured && !self.video_state.has_session, |root| root.child(
+                div().flex_shrink_0().grid().grid_cols(if content_width < 560. { 1 } else { 3 }).gap_3()
+                    .child(ui::metric(if self.host { "授权控制端" } else { "授权设备" }, if configured { peers.len().to_string() } else { "—".into() }, "由管理端分配访问权限", palette))
+                    .child(ui::metric("当前在线", online_count, if current_peers { "已同步最新设备状态" } else { "连接管理端后同步" }, palette))
+                    .child(ui::metric("管理连接", if current_peers { "已连接" } else if configured { "待连接" } else { "未绑定" }.into(), "使用实例授权建立连接", palette))))
+            .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
+            .when(configured, |root| {
+                let status = self.status.as_ref();
+                root.child(ui::card(palette).gap_2()
+                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("当前管理实例"))
+                    .when_some(status.and_then(|status| status.server.as_ref()), |card, server| {
+                        card.child(div().text_color(rgb(palette.muted)).overflow_hidden().child(server.clone()))
                     })
-                    .children(peers.iter().map(|peer| {
-                        let id = peer.binding.device_id.to_string();
-                        let available = can_connect
-                            && peer.online
-                            && matches!(peer.role, InstanceRole::Controlled);
-                        div()
-                            .id(gpui::SharedString::from(id.clone()))
-                            .p_4()
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .when(!self.host, |card| {
-                                card.min_w_0()
-                                    .w_full()
-                                    .aspect_ratio(3. / 2.)
-                                    .overflow_hidden()
-                                    .justify_between()
-                            })
-                            .child(theme::surface(
-                                rgb(palette.panel),
-                                None,
-                                theme::PANEL_EXTENT,
-                            ))
-                            .child(
-                                div()
-                                    .when(!self.host, |text| text.truncate())
-                                    .child(peer.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .when(!self.host, |text| text.truncate())
-                                    .text_color(rgb(palette.muted))
-                                    .child(if peer.addresses.is_empty() {
-                                        "未上报地址".into()
-                                    } else {
-                                        peer.addresses
-                                            .iter()
-                                            .map(|address| {
-                                                format_peer_address(&address.host, address.port)
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("，")
-                                    }),
-                            )
-                            .when(!self.host, |card| card.child("系统未知（未上报）"))
-                            .child(
-                                div()
-                                    .text_color(rgb(if available {
-                                        palette.accent
-                                    } else {
-                                        palette.muted
-                                    }))
-                                    .child(crate::window_layout::peer_status(if self.host {
-                                        Some(peer.online)
-                                    } else {
-                                        current_peers.then_some(peer.online)
-                                    })),
-                            )
-                            .when(available, |row| {
-                                row.cursor_pointer().on_click(cx.listener(
-                                    move |view, _, window, cx| {
-                                        view.connect(id.clone(), window, cx);
-                                        cx.notify();
-                                    },
-                                ))
-                            })
-                    })),
-            )
+                    .when_some(status.and_then(|status| status.binding.as_ref()), |card, binding| {
+                        card.child(div().text_size(px(12.)).text_color(rgb(palette.muted)).child(format!("实例编号：{}", binding.device_id)))
+                    }))
+            })
+            .when(self.host && self.initialized, |root| root.child(self.render_addresses(&current_addresses, palette, cx)))
+            .child(div().flex().items_center().justify_between().gap_2()
+                .child(div().text_size(px(18.)).font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(if self.host { "允许访问的控制端" } else { "我的设备" }))
+                .child(div().text_size(px(12.)).text_color(rgb(palette.muted)).child(format!("{} 台设备", peers.len()))))
+            .when(peers.is_empty(), |root| {
+                let (title, description) = if !configured {
+                    ("从第一台设备开始", "绑定管理实例后，获准连接的设备会显示在这里。")
+                } else if !correct_role {
+                    ("需要检查实例角色", "请确认此实例属于当前控制端或被控端。")
+                } else if !current_peers {
+                    ("等待设备状态同步", "连接管理端后即可获取最新授权列表。")
+                } else {
+                    ("暂无授权设备", "请在管理端为此实例添加访问授权。")
+                };
+                root.child(ui::card(palette).items_center().justify_center().py_8().gap_3()
+                    .child(ui::monitor(palette))
+                    .child(div().text_size(px(17.)).font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                    .child(div().text_color(rgb(palette.muted)).child(description))
+                    .when(!configured && !self.show_login, |empty| empty.child(
+                        ui::button("empty-bind", "绑定管理实例", true, self.initialized, palette)
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if view.initialized { view.show_login = true; cx.notify(); }
+                            })))))
+            })
+            .child(div().id("peers").flex_shrink_0().grid().grid_cols(crate::window_layout::card_columns(content_width)).gap_4()
+                .children(peers.iter().map(|peer| {
+                    let id = peer.binding.device_id.to_string();
+                    let available = can_connect && peer.online && matches!(peer.role, InstanceRole::Controlled);
+                    let address = if peer.addresses.is_empty() { "等待设备上报地址".into() } else {
+                        peer.addresses.iter().map(|address| format_peer_address(&address.host, address.port)).collect::<Vec<_>>().join("，")
+                    };
+                    ui::card(palette).id(gpui::SharedString::from(id.clone())).gap_3()
+                        .child(div().flex().items_center().justify_between().gap_2()
+                            .child(div().flex_1().min_w_0().truncate().font_weight(gpui::FontWeight::SEMIBOLD).text_size(px(16.)).child(peer.name.clone()))
+                            .child(ui::badge(crate::window_layout::peer_status(current_peers.then_some(peer.online)), if current_peers && peer.online { palette.success } else { palette.muted }, palette.page)))
+                        .child(div().h(px(96.)).rounded_lg().bg(rgb(palette.page)).flex().items_center().justify_center().child(ui::monitor(palette)))
+                        .child(div().text_size(px(12.)).text_color(rgb(palette.muted)).overflow_hidden().child(address))
+                        .when(!self.host, |card| card.child(
+                            div().relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center().justify_between().px_3().py_2()
+                                .child(theme::surface(rgb(if available { palette.accent_soft } else { palette.page }), None, theme::CONTROL_EXTENT))
+                                .text_color(rgb(if available { palette.accent } else { palette.muted }))
+                                .child(if available { "连接设备" } else if self.video_state.connecting { "正在连接…" } else if self.video_state.has_session { "会话进行中" } else if !current_peers { "等待状态同步" } else { "暂不可连接" })
+                                .child(if available { "→" } else { "" })))
+                        .when(available, |card| card.cursor_pointer().hover(|style| style.opacity(0.9))
+                            .on_click(cx.listener(move |view, _, window, cx| { view.connect(id.clone(), window, cx); cx.notify(); })))
+                })));
+        panel
             .when(!self.host && !self.video_state.notice.is_empty(), |root| {
                 root.child(div().child(self.video_state.notice.clone()))
             })
@@ -1057,7 +905,7 @@ impl Render for Client {
             .size_full()
             .flex()
             .flex_col()
-            .when(!fullscreen_video, |root| root.gap_3().p_4())
+            .when(!fullscreen_video, |root| root.gap_4().p_6())
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .font_family(self.font.clone())
@@ -1110,26 +958,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
     let app_error = startup_error.clone();
     let handle = runtime.handle().clone();
     let host = cfg!(feature = "native-host");
-    #[cfg(all(
-        target_os = "windows",
-        feature = "native-host",
-        feature = "test-lan-direct"
-    ))]
-    let test_host = Arc::new(Mutex::new(crate::test_host::TestHost::default()));
     gpui::application().run(move |cx: &mut App| {
-        #[cfg(all(
-            target_os = "windows",
-            feature = "native-host",
-            feature = "test-lan-direct"
-        ))]
-        {
-            let test_host = test_host.clone();
-            cx.on_app_quit(move |_| {
-                test_host.lock().unwrap().stop();
-                async {}
-            })
-            .detach();
-        }
         text_field::init(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -1179,21 +1008,19 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     .detach();
                 let video = cx.new(|cx| RemoteVideo::new(handle.clone(), window, cx));
                 let video_state = video.read(cx).state();
-                let font: gpui::SharedString = if window
-                    .text_system()
-                    .all_font_names()
-                    .iter()
-                    .any(|name| name == "Sarmg Maple")
-                {
-                    "Sarmg Maple"
+                let fonts = window.text_system().all_font_names();
+                let preferred = if cfg!(target_os = "windows") {
+                    ["Microsoft YaHei UI", "Segoe UI", "Arial"]
                 } else if cfg!(target_os = "macos") {
-                    "Menlo"
-                } else if cfg!(target_os = "linux") {
-                    "monospace"
+                    ["PingFang SC", "Helvetica Neue", "Arial"]
                 } else {
-                    "Consolas"
-                }
-                .into();
+                    ["Noto Sans CJK SC", "Noto Sans", "DejaVu Sans"]
+                };
+                let font: gpui::SharedString = preferred
+                    .into_iter()
+                    .find(|candidate| fonts.iter().any(|name| name.as_str() == *candidate))
+                    .unwrap_or("sans-serif")
+                    .into();
                 let management = cx.new(|cx| {
                     let (sender, receiver) = mpsc::channel();
                     let subscriptions = vec![cx.subscribe_in(
@@ -1231,12 +1058,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             if view
                                 .update(cx, |view: &mut ManagementPanel, cx| {
                                     view.refresh();
-                                    #[cfg(all(
-                                        target_os = "windows",
-                                        feature = "native-host",
-                                        feature = "test-lan-direct"
-                                    ))]
-                                    view.test_host.lock().unwrap().poll();
                                     cx.notify();
                                 })
                                 .is_err()
@@ -1256,16 +1077,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         address_host: cx
                             .new(|cx| TextField::new("新的域名或 IP（不含端口）", false, cx)),
                         address_port: cx.new(|cx| TextField::new("端口（默认 21118）", false, cx)),
-                        #[cfg(feature = "test-lan-direct")]
-                        lan_endpoint: cx.new(|cx| {
-                            TextField::new("IPv4 或 IPv6，带端口如 [::1]:21119", false, cx)
-                        }),
-                        #[cfg(all(
-                            target_os = "windows",
-                            feature = "native-host",
-                            feature = "test-lan-direct"
-                        ))]
-                        test_host: test_host.clone(),
                         host,
                         initialized,
                         status: None,
@@ -1273,7 +1084,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         status_error: None,
                         action_pending: false,
                         confirm_unbind: false,
-                        show_login: false,
+                        show_login: true,
                         notice: initial_notice,
                         video: video.clone(),
                         video_state,

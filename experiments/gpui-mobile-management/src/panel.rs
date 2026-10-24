@@ -14,24 +14,12 @@ use std::{
 use xscc::protocol::InstanceRole;
 use xscc_native_management::manager::Status;
 
-#[cfg(all(
-    any(target_os = "ios", target_os = "android"),
-    feature = "test-lan-direct"
-))]
-const TEST_LAN_WARNING: &str =
-    "TEST ONLY · 临时 IP 直连，无身份认证；任何可达设备均可控制主机。正式发布删除。";
-
 pub struct Panel {
     commands: tokio::sync::mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
     lifecycle: tokio::sync::watch::Sender<bool>,
     server: Entity<TextField>,
     code: Entity<TextField>,
-    #[cfg(all(
-        any(target_os = "ios", target_os = "android"),
-        feature = "test-lan-direct"
-    ))]
-    test_lan_address: Entity<TextField>,
     status: Option<Status>,
     initialized: bool,
     active: bool,
@@ -115,23 +103,12 @@ impl Panel {
             lifecycle: lifecycle_sender,
             server: cx.new(|cx| TextField::new("https://服务端地址", false, cx)),
             code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
-            #[cfg(all(
-                any(target_os = "ios", target_os = "android"),
-                feature = "test-lan-direct"
-            ))]
-            test_lan_address: cx.new(|cx| {
-                TextField::new(
-                    "测试主机 IP 或 IP:端口；IPv6 带端口时使用 [地址]:端口",
-                    false,
-                    cx,
-                )
-            }),
             status: None,
             initialized: false,
             active,
             busy: false,
             confirm_unbind: false,
-            binding_expanded: false,
+            binding_expanded: true,
             session_visible: false,
             notice: "正在读取本机绑定…".into(),
             #[cfg(all(
@@ -284,7 +261,7 @@ impl Render for Panel {
                 );
         }
         let enabled = self.enabled();
-        let button = |id: &'static str, label: &'static str| {
+        let button = |id: &'static str, label: &'static str, primary: bool| {
             div()
                 .id(id)
                 .relative()
@@ -294,9 +271,18 @@ impl Render for Panel {
                 .flex()
                 .items_center()
                 .justify_center()
+                .text_color(rgb(if primary {
+                    palette.on_accent
+                } else {
+                    palette.text
+                }))
                 .opacity(if enabled { 1. } else { 0.5 })
                 .child(theme::surface(
-                    rgb(palette.panel),
+                    rgb(if primary {
+                        palette.accent
+                    } else {
+                        palette.panel
+                    }),
                     Some(rgb(palette.border)),
                     theme::CONTROL_EXTENT,
                 ))
@@ -314,7 +300,24 @@ impl Render for Panel {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(div().text_2xl().child("XSCC"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_2xl()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("XSCC"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .text_color(rgb(palette.muted))
+                                    .child("设备工作台"),
+                            ),
+                    )
                     .child(
                         div()
                             .id("toggle-server-binding")
@@ -323,7 +326,7 @@ impl Render for Panel {
                             .px_3()
                             .py_2()
                             .child(theme::surface(
-                                rgb(palette.panel),
+                                rgb(palette.accent_soft),
                                 Some(rgb(palette.border)),
                                 theme::CONTROL_EXTENT,
                             ))
@@ -345,23 +348,33 @@ impl Render for Panel {
                 .child(self.server.clone())
                 .child(self.code.clone())
                 .child(
-                    button("enroll", "绑定 / 重新授权")
+                    button("enroll", "绑定 / 重新授权", true)
                         .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
                 )
-                .child(button("resume", "重新连接服务端").on_click(cx.listener(
-                    |view, _, window, cx| {
-                        window.dismiss_virtual_keyboard();
-                        view.action(Command::Resume, cx);
-                        cx.notify();
-                    },
-                )));
+                .child(
+                    button("resume", "重新连接服务端", false).on_click(cx.listener(
+                        |view, _, window, cx| {
+                            window.dismiss_virtual_keyboard();
+                            view.action(Command::Resume, cx);
+                            cx.notify();
+                        },
+                    )),
+                );
             if let Some(status) = &self.status {
                 let state = match status.phase.as_str() {
                     "online" => "在线",
                     "offline" => "离线",
                     _ => status.phase.as_str(),
                 };
-                content = content.child(div().child(format!("服务端：{state}")));
+                content = content.child(
+                    div()
+                        .text_color(rgb(if status.phase == "online" {
+                            palette.success
+                        } else {
+                            palette.muted
+                        }))
+                        .child(format!("服务端：{state}")),
+                );
                 if let Some(server) = &status.server {
                     content = content.child(
                         div()
@@ -385,6 +398,7 @@ impl Render for Panel {
                             } else {
                                 "解除绑定"
                             },
+                            false,
                         )
                         .on_click(cx.listener(|view, _, window, cx| {
                             if !view.enabled() {
@@ -402,7 +416,7 @@ impl Render for Panel {
                     if self.confirm_unbind {
                         content = content
                             .child("解除本机绑定后，需要重新输入实例密码。")
-                            .child(button("cancel-unbind", "取消").on_click(cx.listener(
+                            .child(button("cancel-unbind", "取消", false).on_click(cx.listener(
                                 |view, _, _, cx| {
                                     view.confirm_unbind = false;
                                     cx.notify();
@@ -412,7 +426,12 @@ impl Render for Panel {
                 }
             }
         }
-        content = content.child(div().text_lg().child("主机"));
+        content = content.child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("我的设备"),
+        );
         let peers: Vec<_> = self
             .status
             .as_ref()
@@ -421,7 +440,11 @@ impl Render for Panel {
             .filter(|peer| peer.role == InstanceRole::Controlled)
             .collect();
         if peers.is_empty() {
-            content = content.child(div().text_color(rgb(palette.muted)).child("暂无授权主机"));
+            content = content.child(
+                div()
+                    .text_color(rgb(palette.muted))
+                    .child("绑定管理实例并添加访问授权后，设备会显示在这里。"),
+            );
         }
         for peer in peers {
             let id = peer.binding.device_id.to_string();
@@ -442,7 +465,7 @@ impl Render for Panel {
                 .id(gpui::SharedString::from(format!("host-{id}")))
                 .relative()
                 .w_full()
-                .aspect_ratio(3. / 2.)
+                .min_h(px(180.))
                 .p_4()
                 .flex()
                 .flex_col()
@@ -464,7 +487,6 @@ impl Render for Panel {
                         } else {
                             format!("地址：{addresses}")
                         })
-                        .child("系统：未知")
                         .child(if peer.online {
                             "状态：在线"
                         } else {
@@ -491,51 +513,6 @@ impl Render for Panel {
                 cx.notify();
             }));
             content = content.child(card);
-        }
-        #[cfg(all(
-            any(target_os = "ios", target_os = "android"),
-            feature = "test-lan-direct"
-        ))]
-        {
-            content = content.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_color(rgb(palette.danger))
-                            .child(TEST_LAN_WARNING),
-                    )
-                    .child(self.test_lan_address.clone())
-                    .child(
-                        div()
-                            .id("XSCC_MOBILE_TEST_IP_DIRECT_V2")
-                            .relative()
-                            .min_h(px(44.))
-                            .p_3()
-                            .child(theme::surface(
-                                rgb(palette.panel),
-                                Some(rgb(palette.border)),
-                                theme::CONTROL_EXTENT,
-                            ))
-                            .opacity(if self.active { 1. } else { 0.5 })
-                            .child("连接输入的 IP（测试）")
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                if !view.active || view.test_lan_address.read(cx).is_composing() {
-                                    return;
-                                }
-                                let endpoint =
-                                    view.test_lan_address.read(cx).value().trim().to_owned();
-                                window.dismiss_virtual_keyboard();
-                                view.session.update(cx, |session, cx| {
-                                    session.connect_test_lan(endpoint, cx)
-                                });
-                                view.session_visible = true;
-                                cx.notify();
-                            })),
-                    ),
-            );
         }
         if !self.notice.is_empty() {
             content = content.child(

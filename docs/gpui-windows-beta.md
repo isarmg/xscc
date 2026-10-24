@@ -1,5 +1,11 @@
 # GPUI Windows beta packaging / Windows beta 打包
 
+## 界面更新（2026-10-24）
+
+控制端和被控端采用统一的设备工作台：管理连接、授权设备和在线状态分别展示，未绑定时直接提供实例绑定表单；访问地址、解绑及会话控制仍使用原有管理操作。界面跟随系统深浅主题，并优先使用系统中文无衬线字体。
+
+桌面和移动界面已移除临时 IP 直连入口及其界面会话路径。Windows、Linux、macOS 候选包固定为 `managed`，iOS/Android 候选工作流不再发布 IP 测试变体。底层测试模块仅保留用于已有内部回归，不属于默认应用入口。此前下载或安装的二进制不会随源码编辑自动更新，需重新构建并安装后验证界面。
+
 ## Scope / 范围
 
 The independent `GPUI Windows beta candidates` workflow builds two variants of

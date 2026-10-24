@@ -20,15 +20,10 @@ on:
       - '.github/workflows/gpui-unix-beta.yml'
   workflow_dispatch:
     inputs:
-      test_lan_direct:
-        description: 'TEST ONLY: include unauthenticated unrestricted IP direct capability; never promote these packages'
-        required: true
-        default: true
-        type: boolean
       package_version:
         description: 'Unsigned beta candidate version (no release publication)'
         required: true
-        default: '0.1.0-beta.1'
+        default: '0.1.0-beta.2'
         type: string
 permissions:
   contents: read
@@ -36,8 +31,8 @@ concurrency:
   group: gpui-unix-beta-${{ github.ref }}
   cancel-in-progress: false
 env:
-  XSCC_PACKAGE_MODE: ${{ (github.event_name == 'push' || inputs.test_lan_direct) && 'test-lan-direct' || 'managed' }}
-  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.1' }}
+  XSCC_PACKAGE_MODE: managed
+  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.2' }}
   VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
 jobs:
   linux:

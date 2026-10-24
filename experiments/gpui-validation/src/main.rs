@@ -8,6 +8,11 @@
     feature = "live-session"
 ))]
 mod client;
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
+))]
+mod dashboard;
 #[cfg(any(
     all(
         any(target_os = "windows", target_os = "linux", target_os = "macos"),
@@ -28,12 +33,6 @@ mod presentation;
     feature = "live-session"
 ))]
 mod remote_video;
-#[cfg(all(
-    target_os = "windows",
-    feature = "native-host",
-    feature = "test-lan-direct"
-))]
-mod test_host;
 #[cfg(all(
     any(target_os = "windows", target_os = "linux", target_os = "macos"),
     feature = "live-session"

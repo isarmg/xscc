@@ -53,12 +53,6 @@ jobs:
             library: xscc_gpui_android_management
             package: org.sarmg.xscc.gpui.preview
             permission_mode: management
-          - flavor: landirect
-            variant: Landirect
-            workspace: experiments/gpui-mobile-management
-            library: xscc_gpui_android_management
-            package: org.sarmg.xscc.gpui.testdirect
-            permission_mode: management
     env:
       FLAVOR: ${{ matrix.flavor }}
       VARIANT: ${{ matrix.variant }}

@@ -37,9 +37,6 @@ jobs:
           - mode: interactive-playback-preview
             features: mobile-session
             package_flags: --playback-preview
-          - mode: TEST-IP-direct
-            features: mobile-session,test-lan-direct
-            package_flags: --playback-preview --test-lan-direct
     env:
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'

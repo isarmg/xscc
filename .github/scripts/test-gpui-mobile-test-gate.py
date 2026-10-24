@@ -22,19 +22,17 @@ class MobileTestGateTests(unittest.TestCase):
                 with self.subTest(binary=binary, test_mode=test_mode), self.assertRaises(ValueError):
                     verify_test_capability(binary, test_mode)
 
-    def test_android_lan_flavor_avoids_reserved_test_prefix(self):
+    def test_application_workflows_only_produce_managed_candidates(self):
         root = Path(__file__).resolve().parents[2]
-        gradle = (root / 'packaging/gpui-android/app/build.gradle').read_text()
-        workflow = (root / '.github/workflows/gpui-android-smoke.yml').read_text()
-        self.assertIn('        landirect {', gradle)
-        self.assertIn("appLabel: 'XSCC TEST IP'", gradle)
-        self.assertNotIn('        testdirect {', gradle)
-        self.assertIn('flavor: landirect\n            variant: Landirect', workflow)
-        source = root / 'packaging/gpui-android/app/src'
-        self.assertEqual((source / 'landirect/AndroidManifest.xml').read_text(),
-                         (source / 'management/AndroidManifest.xml').read_text())
-        activity = (source / 'main/java/org/xscc/gpui/smoke/SmokeActivity.java').read_text()
-        self.assertIn('"management".equals(BuildConfig.FLAVOR) || "landirect".equals(BuildConfig.FLAVOR)', activity)
+        android = (root / '.github/workflows/gpui-android-smoke.yml').read_text()
+        ios = (root / '.github/workflows/gpui-ios-management.yml').read_text()
+        self.assertIn('flavor: management', android)
+        self.assertNotIn('flavor: landirect', android)
+        self.assertNotIn('mode: TEST-IP-direct', ios)
+        for platform in ('windows', 'unix'):
+            workflow = (root / f'.github/workflows/gpui-{platform}-beta.yml').read_text()
+            self.assertIn('XSCC_PACKAGE_MODE: managed', workflow)
+            self.assertNotIn('inputs.test_lan_direct', workflow)
 
     def test_ios_packager_rejects_mislabeled_binary_before_native_tools(self):
         spec = importlib.util.spec_from_file_location('ios_package', Path(__file__).with_name('package-gpui-ios.py'))
