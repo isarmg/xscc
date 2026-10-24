@@ -227,8 +227,27 @@ impl Platform for AndroidPlatform {
         true
     }
     fn read_from_clipboard(&self) -> Option<ClipboardItem> {
-        log::warn!("Android clipboard is not supported in the rendering slice");
-        None
+        // This is reached only from an explicit paste command. Do not inspect
+        // clipboard availability while rendering, focusing or in the background.
+        if !self.0.resumed.get() || !self.0.focused.get() || self.0.destroyed.get() {
+            return None;
+        }
+        let app = &self.0.app;
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let result: jni::errors::Result<Option<String>> = vm.attach_current_thread(|env| {
+            let result = (|| {
+                let raw: jni::sys::jobject = app.activity_as_ptr().cast();
+                // Activity owns this borrowed reference; AndroidApp keeps it alive.
+                let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&raw)? };
+                crate::clipboard::read_text(env, activity)
+            })();
+            if result.is_err() {
+                // Never log clipboard data or Java exception text.
+                let _ = env.exception_clear();
+            }
+            result
+        });
+        result.ok().flatten().map(ClipboardItem::new_string)
     }
     fn write_to_clipboard(&self, _: ClipboardItem) {
         log::warn!("Android clipboard is not supported in the rendering slice");

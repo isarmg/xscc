@@ -38,8 +38,10 @@ android {
         management {
             dimension 'client'
             applicationId 'org.sarmg.xscc.gpui.preview'
+            versionCode 2
+            versionName '0.1.0-beta.3.1'
             buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
-            manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC GPUI 管理预览']
+            manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC 控制端预览']
         }
         landirect {
             dimension 'client'
@@ -63,9 +65,22 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    signingConfigs {
+        if (System.getenv('XSCC_ANDROID_PREVIEW_KEYSTORE')) {
+            previewRelease {
+                storeFile file(System.getenv('XSCC_ANDROID_PREVIEW_KEYSTORE'))
+                storePassword System.getenv('XSCC_ANDROID_PREVIEW_PASSWORD')
+                keyAlias 'xscc-preview'
+                keyPassword System.getenv('XSCC_ANDROID_PREVIEW_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig(
+                System.getenv('XSCC_ANDROID_PREVIEW_KEYSTORE')
+                    ? signingConfigs.previewRelease : signingConfigs.debug
+            )
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'privacy-rules.pro'
             optimization {

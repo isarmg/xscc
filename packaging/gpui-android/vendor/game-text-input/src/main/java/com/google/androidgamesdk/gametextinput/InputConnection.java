@@ -53,6 +53,11 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     private final Editable mEditable;
     private Listener listener;
     private boolean mSoftKeyboardActive;
+    // IMEs may commit password text without a batch. Publish complete edits in
+    // either case, and coalesce nested BaseInputConnection calls/IME batches.
+    private int mBatchDepth;
+    private int mEditDepth;
+    private boolean mStateDirty;
 
     /*
      * This class filters EOL characters from the input. For details of how InputFilter.filter
@@ -194,12 +199,16 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     public final void setState(State state) {
         if (state == null)
             return;
+        // A newly focused editor invalidates the old IME session, including a
+        // batch whose stale endBatchEdit will correctly be rejected by GPUI.
+        mBatchDepth = 0;
+        mStateDirty = false;
         mEditable.clear();
         mEditable.clearSpans();
         mEditable.insert(0, (CharSequence) state.text);
-        setSelection(state.selectionStart, state.selectionEnd);
+        super.setSelection(state.selectionStart, state.selectionEnd);
         if (state.composingRegionStart != state.composingRegionEnd) {
-            setComposingRegion(state.composingRegionStart, state.composingRegionEnd);
+            super.setComposingRegion(state.composingRegionStart, state.composingRegionEnd);
         }
         restartInput();
     }
@@ -231,10 +240,9 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
             return false;
         }
         // Don't call sendKeyEvent as it might produce an infinite loop.
-        if (processKeyEvent(keyEvent)) {
+        if (edit(() -> processKeyEvent(keyEvent))) {
             // IMM seems to cache the content of Editable, so we update it with restartInput
             // Also it caches selection and composing region, so let's notify it about updates.
-            stateUpdated();
             immUpdateSelection();
             restartInput();
             return true;
@@ -251,7 +259,7 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     // From BaseInputConnection
     @Override
     public boolean setSelection(int start, int end) {
-        return super.setSelection(start, end);
+        return edit(() -> super.setSelection(start, end));
     }
 
     // From BaseInputConnection
@@ -260,24 +268,49 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
         if (text == null) {
             return false;
         }
-        return super.setComposingText(text, newCursorPosition);
+        return edit(() -> super.setComposingText(text, newCursorPosition));
     }
 
     @Override
     public boolean setComposingRegion(int start, int end) {
-        return super.setComposingRegion(start, end);
+        return edit(() -> super.setComposingRegion(start, end));
     }
 
     // From BaseInputConnection
     @Override
     public boolean finishComposingText() {
-        return super.finishComposingText();
+        return edit(() -> super.finishComposingText());
+    }
+
+    @Override
+    public boolean beginBatchEdit() {
+        ++mBatchDepth;
+        return true;
     }
 
     @Override
     public boolean endBatchEdit() {
-        stateUpdated();
-        return super.endBatchEdit();
+        if (mBatchDepth > 0) {
+            --mBatchDepth;
+        }
+        if (mBatchDepth == 0 && mStateDirty) {
+            stateUpdated();
+        }
+        return mBatchDepth > 0;
+    }
+
+    private boolean edit(java.util.function.BooleanSupplier operation) {
+        ++mEditDepth;
+        try {
+            boolean result = operation.getAsBoolean();
+            mStateDirty |= result;
+            return result;
+        } finally {
+            --mEditDepth;
+            if (mEditDepth == 0 && mBatchDepth == 0 && mStateDirty) {
+                stateUpdated();
+            }
+        }
     }
 
     @Override
@@ -293,19 +326,19 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     // From BaseInputConnection
     @Override
     public boolean commitText(CharSequence text, int newCursorPosition) {
-        return super.commitText(text, newCursorPosition);
+        return edit(() -> super.commitText(text, newCursorPosition));
     }
 
     // From BaseInputConnection
     @Override
     public boolean deleteSurroundingText(int beforeLength, int afterLength) {
-        return super.deleteSurroundingText(beforeLength, afterLength);
+        return edit(() -> super.deleteSurroundingText(beforeLength, afterLength));
     }
 
     // From BaseInputConnection
     @Override
     public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
-        return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+        return edit(() -> super.deleteSurroundingTextInCodePoints(beforeLength, afterLength));
     }
 
     // From BaseInputConnection
@@ -495,6 +528,11 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     }
 
     private final void stateUpdated() {
+        if (mBatchDepth > 0 || mEditDepth > 0) {
+            mStateDirty = true;
+            return;
+        }
+        mStateDirty = false;
         Pair selection = this.getSelection();
         Pair cr = this.getComposingRegion();
         State state = new State(

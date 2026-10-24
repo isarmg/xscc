@@ -7,6 +7,7 @@ No SDK, Gradle download, or production test hooks are needed.
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -279,6 +280,7 @@ int Java_org_xscc_gpui_BridgeTest_lastAction(void *env, void *cls) { return acti
 '''
 
 def main():
+    subprocess.run([sys.executable, str(ROOT / '.github/scripts/test-gpui-android-edit-notifications.py')], check=True)
     java = shutil.which('java')
     cc = shutil.which('cc')
     if not java or not cc:

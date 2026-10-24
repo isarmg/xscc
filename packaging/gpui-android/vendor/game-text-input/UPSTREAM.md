@@ -16,7 +16,15 @@ Local patches:
 - For single-line, unmodified Enter/Numpad Enter key pairs, send the editor
   action only on initial ACTION_DOWN (repeat count zero). Consume release and
   repeat without another action, preventing duplicate remote Return commands.
-  Multiline input and other editing/lifecycle paths retain upstream behavior.
+  Multiline editor-action handling retains upstream behavior.
+- Publish complete state after successful standalone text, selection, composing
+  and deletion operations. Some IMEs issue these without their own batch. A
+  nested edit transaction coalesces BaseInputConnection's internal method calls;
+  nested IME batches publish only after the outermost batch ends.
+- Native setState resets any abandoned batch on a field/session change and
+  installs its selection/composition without echoing that snapshot as user input.
+  Password contents remain inside the focused editor/IME path; no text logging
+  or copy/cut behavior is introduced.
 The two `Log.i` diagnostics about invalid cursor-request lengths remain.
 
 R8 removed the debug output calls, but actual 4.4.0 DEX still executed

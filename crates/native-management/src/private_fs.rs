@@ -164,9 +164,88 @@ mod platform {
     }
     pub fn publish(from: &Path, to: &Path, create: bool) -> io::Result<()> {
         if create {
+            #[cfg(target_os = "android")]
+            {
+                publish_without_replace(from, to)
+            }
+            #[cfg(not(target_os = "android"))]
             fs::hard_link(from, to)
         } else {
             fs::rename(from, to)
+        }
+    }
+
+    #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+    fn publish_without_replace(from: &Path, to: &Path) -> io::Result<()> {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+        let from = CString::new(from.as_os_str().as_bytes()).map_err(|_| invalid())?;
+        let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| invalid())?;
+        // Android SELinux forbids app hard links. Use the syscall rather than
+        // the libc wrapper (API 30+) to preserve our Android 10 / API 29 minimum.
+        // RENAME_NOREPLACE keeps creation atomic without replacing an identity.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        #[test]
+        fn android_publish_creates_single_link_and_never_replaces_identity() {
+            let root = tempfile::tempdir().unwrap();
+            let pending = root.path().join("pending");
+            let identity = root.path().join("installation.uuid");
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            private_options(&mut options);
+            let mut file = options.open(&pending).unwrap();
+            file.write_all(b"original").unwrap();
+            file.sync_all().unwrap();
+
+            publish_without_replace(&pending, &identity).unwrap();
+            sync_directory(root.path()).unwrap();
+            assert!(!pending.exists());
+            check_file(&file).unwrap();
+            assert_eq!(fs::read(&identity).unwrap(), b"original");
+
+            fs::write(&pending, b"replacement").unwrap();
+            let error = publish_without_replace(&pending, &identity).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+            assert_eq!(fs::read(&identity).unwrap(), b"original");
+            assert_eq!(fs::read(&pending).unwrap(), b"replacement");
+        }
+
+        #[test]
+        fn android_publish_does_not_follow_or_replace_existing_symlink() {
+            let root = tempfile::tempdir().unwrap();
+            let pending = root.path().join("pending");
+            let identity = root.path().join("installation.uuid");
+            let destination = root.path().join("destination");
+            fs::write(&pending, b"new identity").unwrap();
+            fs::write(&destination, b"untouched").unwrap();
+            symlink(&destination, &identity).unwrap();
+
+            let error = publish_without_replace(&pending, &identity).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+            assert!(fs::symlink_metadata(&identity).unwrap().is_symlink());
+            assert_eq!(fs::read(&destination).unwrap(), b"untouched");
+            assert_eq!(fs::read(&pending).unwrap(), b"new identity");
         }
     }
 }

@@ -10,9 +10,12 @@ packages its actual `libxscc_gpui_android_smoke.so` with GameActivity 4.4.0.
 Rust android-activity 0.6.1 supplies the native GameActivity glue; Gradle supplies
 the matching Java side, without a second Prefab/CMake native implementation.
 
-The release-optimized APK uses the runner's disposable Android debug key.
-This is a test signature, not a production identity; later runs may require
-uninstalling the prior smoke package. No signing secret is required or retained.
+The release-optimized smoke APK uses the runner's disposable Android debug key.
+The management preview uses a fixed repository preview signing identity, supplied
+from Actions secrets rather than committed source. This lets subsequent preview
+versions update the same installation. The previous disposable-key management
+preview has a different signer and cannot be updated in place by this identity.
+The smoke package remains disposable and does not consume a signing secret.
 
 CI checks the signature, package/min/target SDK/ABI, required library, ELF
 AArch64 LOAD segment alignment and uncompressed native ZIP 16 KB alignment.
@@ -37,9 +40,10 @@ References: [GameActivity integration](https://developer.android.com/games/agdk/
 ## IME logging privacy gate
 
 GameActivity 4.4.0 ships Java debug logs that include input text. The fixed
-upstream InputConnection source under `vendor/game-text-input` removes only its
-30 debug-log statements and their argument expressions; its provenance records
-the upstream revision and SHA256. A SHA-pinned AAR filter removes exactly the
+upstream InputConnection source under `vendor/game-text-input` removes its
+30 debug-log statements and their argument expressions. Local input fixes also
+publish standalone edits and coalesce nested batches; `UPSTREAM.md` records these
+patches separately from the original upstream revision and SHA256. A SHA-pinned AAR filter removes exactly the
 three replaced class files and preserves all other AAR entries. Only the
 R8-optimized release variant is enabled here; debug APK generation is disabled.
 The local rules remove debug/verbose log calls while retaining info/warn/error
@@ -57,7 +61,7 @@ alone is not evidence. Physical-device IME behavior and logcat still need testin
 ## Management preview flavor
 
 The management flavor uses `org.sarmg.xscc.gpui.preview` and displays
-“XSCC GPUI 管理预览”. It builds the Android library from
+“XSCC 控制端预览”. It builds the Android library from
 `experiments/gpui-mobile-management` with `mobile-management,mobile-session`, reusing the
 native management UI. This preview includes the existing software-video receive/decode path and
 pointer/touch controls, natural software-keyboard commits and a control-key bar,
@@ -80,7 +84,8 @@ JNI, signature and 16 KB gates. Smoke has no Internet permission; management and
 add only Internet. Each may use its exact application-ID-scoped AndroidX
 signature permission for non-exported receivers. Backup remains disabled.
 There are no recording, storage or accessibility permissions, and no credential migration from other applications. Each package uses its own Android private application
-storage. These APKs remain disposable-debug-key previews.
+storage. These remain preview APKs; management has a stable preview signer,
+while smoke and internal TEST IP builds keep disposable signatures.
 
 ## TEST-only LAN direct APK
 
@@ -102,3 +107,20 @@ added. Actual-device connections and input still require device testing.
 
 Remove this flavor, feature and test entry points before production release;
 renaming a TEST artifact does not make it a production package.
+
+## Management input and first-start fixes
+
+The management preview version is `0.1.0-beta.3.1` (version code 2). Address and
+instance-password fields expose paste from an explicit long-press menu; opening
+the menu does not inspect the clipboard. Only plain clipboard text is accepted,
+and protected password fields still do not expose copy or cut. This is local form
+editing, separate from remote clipboard synchronization, which remains disabled.
+Android creation of protected management files uses atomic no-replace rename
+rather than hard links, which the application SELinux domain does not permit.
+
+For an authorized local signed build, set `XSCC_ANDROID_PREVIEW_KEYSTORE` to the
+private keystore path and `XSCC_ANDROID_PREVIEW_PASSWORD` in the process environment.
+The key alias is `xscc-preview`. CI obtains the keystore from the encrypted Actions
+secret `XSCC_ANDROID_PREVIEW_KEYSTORE_B64`; neither key material nor passwords belong
+in source or distributable artifacts. Device acceptance still checks first launch,
+password typing, long-press paste, background/resume and actual server binding.

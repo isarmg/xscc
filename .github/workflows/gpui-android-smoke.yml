@@ -197,8 +197,26 @@ jobs:
           echo "$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
 
-      - name: Assemble disposable-debug-key release APK
-        run: gradle --no-daemon -p packaging/gpui-android :app:assemble${VARIANT}Release
+      - name: Prepare stable management-preview signature
+        if: matrix.flavor == 'management'
+        env:
+          XSCC_PREVIEW_KEYSTORE_B64: ${{ secrets.XSCC_ANDROID_PREVIEW_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$XSCC_PREVIEW_KEYSTORE_B64"
+          umask 077
+          printf '%s' "$XSCC_PREVIEW_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/xscc-preview.jks"
+
+      - name: Assemble optimized release APK
+        env:
+          XSCC_ANDROID_PREVIEW_PASSWORD: ${{ secrets.XSCC_ANDROID_PREVIEW_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "$FLAVOR" = management ]; then
+            test -n "$XSCC_ANDROID_PREVIEW_PASSWORD"
+            export XSCC_ANDROID_PREVIEW_KEYSTORE="$RUNNER_TEMP/xscc-preview.jks"
+          fi
+          gradle --no-daemon -p packaging/gpui-android :app:assemble${VARIANT}Release
 
       - name: Verify actual APK and package evidence
         id: verify-apk
@@ -230,10 +248,12 @@ jobs:
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
           scope="$FLAVOR-preview"
+          signing=disposable-debug-key
+          if [ "$FLAVOR" = management ]; then signing=repository-preview-key; fi
           if [ "$FLAVOR" != smoke ]; then scope=software-video-pointer-keyboard-audio-preview; fi
-          printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=disposable-debug-key\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope"             > dist/gpui-android/BUILD-INFO.txt
+          printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=%s\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope" "$signing"             > dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" != smoke ]; then
-            printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
+            printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nlocal_field_paste=explicit-foreground-text-only\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
           fi
           if [ "$FLAVOR" = landirect ]; then

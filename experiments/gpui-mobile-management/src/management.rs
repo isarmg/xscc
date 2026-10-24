@@ -65,15 +65,17 @@ pub fn application_directory() -> Result<PathBuf, String> {
 
 fn open(directory: PathBuf) -> Result<Arc<NativeManager>, String> {
     let root = PrivateDirectory::create(&directory, "xscc-managed")
-        .map_err(|error| format!("Protected management storage unavailable: {error}"))?;
-    let manager =
-        NativeManager::open(root, Arc::new(Controller)).map_err(|error| error.to_string())?;
+        .map_err(|error| format!("Private management directory unavailable: {error}"))?;
+    let manager = NativeManager::open(root, Arc::new(Controller))
+        .map_err(|error| format!("Management store initialization failed: {error}"))?;
     #[cfg(all(
         any(target_os = "ios", target_os = "android"),
         feature = "mobile-session"
     ))]
     librustdesk::platform::gpui_mobile::initialize(&directory, manager.clone())
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("Remote session initialization failed: {error}"))?;
+    #[cfg(target_os = "android")]
+    log::info!("XSCC protected management storage ready");
     Ok(manager)
 }
 

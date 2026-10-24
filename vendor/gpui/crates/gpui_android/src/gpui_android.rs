@@ -2,6 +2,7 @@
 #![cfg(target_os = "android")]
 
 mod application;
+mod clipboard;
 mod dispatcher;
 mod fonts;
 mod geometry;
