@@ -15,33 +15,34 @@ import urllib.request
 import zipfile
 
 REPOSITORY = 'isarmg/xscc'
-SOURCE = 'a617241a6bd19090f3d301c056359a7e3a781fd3'
-RUN = 40102224654
-ARTIFACT = 12562494413
-RELEASE = 422787896
-VERSION = '0.1.0-beta.3.1'
+SOURCE = '9918623889e2e4e77e988c254a590496a53595e4'
+RUN = 40109234041
+ARTIFACT = 12566012112
+RELEASE = 422829541
+VERSION = '0.1.0-beta.3.2'
 TAG = 'android-v' + VERSION
-ZIP_SHA = 'c5697b08d08d13468fbf68f1ef4cb107b28448d076e7500d839717d40da92bcb'
-APK_SHA = 'fe4deddba8b45df711aca3cbb7689189eacb85526c8a42cead3b8d2c732770ea'
-APK_SIZE = 57158580
+ZIP_SHA = 'cb1c1ab5e0d20d46527ee93b4c7420706494d45cedba94933ef5b92acfcf4ca0'
+APK_SHA = '69bfdd7ca7a3eef57ea9d6586e80c8ed566e5726450f14412ac5304869475d91'
+APK_SIZE = 57160484
 CERT_SHA = '7e2584d12ca65c34bc01facc08b77657764c6405f0c9e2050bdd1df84b2753c9'
 ARTIFACT_NAME = 'xscc-gpui-android-management-' + SOURCE
 ARTIFACT_APK = 'xscc-gpui-android-arm64-management-' + SOURCE[:12] + '.apk'
 APK_NAME = 'XSCC-Android-' + VERSION + '-arm64.apk'
 API = 'https://api.github.com/repos/' + REPOSITORY
-INSTALL_BYTES = """XSCC 安卓控制端预览版 0.1.0-beta.3.1
-适用：Android 10及以上，ARM64。版本号2，应用名“XSCC 控制端预览”。
+INSTALL_BYTES = """XSCC 安卓控制端预览版 0.1.0-beta.3.2
+适用：Android 10及以上，ARM64。版本号3，应用名“XSCC 控制端预览”。
 
-本版修复密码键盘提交、输入框长按粘贴、同一输入框重建连接后的批次状态、Android首次受保护管理存储初始化，以及显式私网HTTP/WS管理连接。
+本版修复实例绑定密码输入：仅清理首尾空白，提交前按共享协议检查36位小写英文字母或数字。内部字符与大小写不会被静默改写；无效输入保留以便修正，错误说明不会显示密码。
 
-旧预览包使用一次性随机签名，与本版固定预览签名不同，首次替换需要先卸载旧预览包。卸载会清除该应用的本机数据；如实例此前已经绑定，使用服务端管理页的“重置实例密码”生成新密码后重新绑定。从本版开始，同一固定签名的后续版本可覆盖升级。
+已安装beta.3.1的用户可直接覆盖安装本版：包名与固定预览签名保持一致，版本号由2升至3，本机绑定和设置保留，无需先卸载。
+更早使用一次性随机签名的旧预览包与固定预览签名不同，只有这些旧包首次替换需要卸载。卸载会清除本机数据；若实例已绑定，须在服务端“重置实例密码”后重新绑定。
 
-输入框长按可打开粘贴/全选菜单。服务端地址与实例密码可粘贴；密码字段仍按密码显示。本地输入框粘贴不依赖远程会话。
+保留beta.3.1的密码键盘提交、长按粘贴、受保护管理存储和私网HTTP/WS管理连接修复。本地输入框粘贴不依赖远程会话，远程剪贴板同步仍未启用。
 
-已通过原生跨编译、Java编辑与连接回归、DEX隐私、APK签名、ARM64及16KiB对齐门禁；尚未在本机连接的安卓设备上进行实机验收。
-源码：a617241a6bd19090f3d301c056359a7e3a781fd3
-构建：https://github.com/isarmg/xscc/actions/runs/40102224654
-APK SHA256：fe4deddba8b45df711aca3cbb7689189eacb85526c8a42cead3b8d2c732770ea
+APK已通过CI原生跨编译、DEX隐私、签名、ARM64及16KiB对齐门禁；尚未进行本机连接安卓设备的实机验收。
+源码：9918623889e2e4e77e988c254a590496a53595e4
+构建：https://github.com/isarmg/xscc/actions/runs/40109234041
+APK SHA256：69bfdd7ca7a3eef57ea9d6586e80c8ed566e5726450f14412ac5304869475d91
 固定预览证书SHA256：7e2584d12ca65c34bc01facc08b77657764c6405f0c9e2050bdd1df84b2753c9
 """.encode("utf-8")
 
@@ -188,7 +189,7 @@ def validate_apk(apk, tools):
             'APK signature or preview signer mismatch')
     manifest = output('aapt', 'dump', 'badging')
     package = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'", manifest, re.M)
-    require(package is not None and package.groups() == ('org.sarmg.xscc.gpui.preview', '2', VERSION),
+    require(package is not None and package.groups() == ('org.sarmg.xscc.gpui.preview', '3', VERSION),
             'Actual APK package or version mismatch')
 
 
@@ -272,7 +273,7 @@ def publish(github, source, run_id, tools):
             release = github.json('/releases', 'POST', {
                 'tag_name': TAG, 'target_commitish': SOURCE, 'draft': True,
                 'prerelease': True, 'make_latest': 'false',
-                'name': 'Android ' + VERSION + ': input, paste and storage fixes',
+                'name': 'Android ' + VERSION + ': binding password input fix',
                 'body': 'Android ARM64 preview hotfix. Source: ' + SOURCE + '\nBuild: https://github.com/' + REPOSITORY + '/actions/runs/' + str(RUN),
             })
             check_release(release)

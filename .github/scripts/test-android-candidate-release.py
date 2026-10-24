@@ -102,5 +102,23 @@ class PublishingTests(unittest.TestCase):
             self.assertEqual(github.writes, writes)
 
 
+class ApkIdentityTests(unittest.TestCase):
+    def test_beta32_version_code_and_fixed_signer_are_checked(self):
+        signature = ('Signer #1 certificate SHA-256 digest: ' + p.CERT_SHA + '\n'
+                     'Verified using v2 scheme (APK Signature Scheme v2): true\n')
+        manifest = "package: name='org.sarmg.xscc.gpui.preview' versionCode='3' versionName='" + p.VERSION + "'\n"
+        def run(command, **_):
+            return p.subprocess.CompletedProcess(command, 0, signature if command[0].endswith('apksigner') else manifest, '')
+        with patch.object(p.subprocess, 'run', side_effect=run):
+            p.validate_apk(Path('/fixture.apk'), Path('/fixture-tools'))
+            manifest = manifest.replace("versionCode='3'", "versionCode='2'")
+            with self.assertRaises(p.InvalidCandidate):
+                p.validate_apk(Path('/fixture.apk'), Path('/fixture-tools'))
+            manifest = manifest.replace("versionCode='2'", "versionCode='3'")
+            signature = signature.replace(p.CERT_SHA, '0' * 64)
+            with self.assertRaises(p.InvalidCandidate):
+                p.validate_apk(Path('/fixture.apk'), Path('/fixture-tools'))
+
+
 if __name__ == '__main__':
     unittest.main()

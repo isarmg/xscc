@@ -5,18 +5,18 @@ on:
       source_sha:
         description: 'Verified APK source commit (not the publisher workflow commit)'
         required: true
-        default: a617241a6bd19090f3d301c056359a7e3a781fd3
+        default: 9918623889e2e4e77e988c254a590496a53595e4
         type: string
       run_id:
         description: Successful Android candidate run
         required: true
-        default: '40102224654'
+        default: '40109234041'
         type: string
 permissions:
   actions: read
   contents: write
 concurrency:
-  group: android-candidate-release-0.1.0-beta.3.1
+  group: android-candidate-release-0.1.0-beta.3.2
   cancel-in-progress: false
 jobs:
   publish:
