@@ -23,6 +23,9 @@ Local patches:
   nested IME batches publish only after the outermost batch ends.
 - Native setState resets any abandoned batch on a field/session change and
   installs its selection/composition without echoing that snapshot as user input.
+  A same-field InputConnection replacement also resets the delegate's batch
+  counters/dirty flag, without changing its text, selection or composition;
+  expired generation/epoch sessions remain unable to edit it.
   Password contents remain inside the focused editor/IME path; no text logging
   or copy/cut behavior is introduced.
 The two `Log.i` diagnostics about invalid cursor-request lengths remain.

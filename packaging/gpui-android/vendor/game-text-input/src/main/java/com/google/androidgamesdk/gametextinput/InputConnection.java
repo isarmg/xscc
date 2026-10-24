@@ -201,8 +201,7 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
             return;
         // A newly focused editor invalidates the old IME session, including a
         // batch whose stale endBatchEdit will correctly be rejected by GPUI.
-        mBatchDepth = 0;
-        mStateDirty = false;
+        resetEditBatch();
         mEditable.clear();
         mEditable.clearSpans();
         mEditable.insert(0, (CharSequence) state.text);
@@ -280,6 +279,12 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     @Override
     public boolean finishComposingText() {
         return edit(() -> super.finishComposingText());
+    }
+
+    /** Abandon a replaced IME connection's batch without changing its document. */
+    public final void resetEditBatch() {
+        mBatchDepth = 0;
+        mStateDirty = false;
     }
 
     @Override

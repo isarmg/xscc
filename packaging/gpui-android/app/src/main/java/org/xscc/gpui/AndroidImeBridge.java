@@ -179,6 +179,8 @@ public class AndroidImeBridge extends GameActivity {
                 return null;
             }
             // Every replacement also invalidates the previous connection within this field.
+            // A stale session cannot deliver its matching endBatchEdit anymore.
+            delegate.resetEditBatch();
             ++epoch;
             return new SessionConnection(delegate, generation, epoch);
         }

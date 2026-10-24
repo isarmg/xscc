@@ -29,6 +29,7 @@ methods = '\n'.join(method(signature) for signature in [
     'public boolean setComposingText(CharSequence text, int newCursorPosition)',
     'public boolean setComposingRegion(int start, int end)',
     'public boolean finishComposingText()',
+    'public final void resetEditBatch()',
     'public boolean beginBatchEdit()',
     'public boolean endBatchEdit()',
     'private boolean edit(java.util.function.BooleanSupplier operation)',
@@ -112,6 +113,14 @@ public class EditNotifications extends Base {
         t.commitText("new",1);
         check(t.updates.size()==1&&t.updates.get(0).text.equals("new"),"stale batch blocked new focus");
         t.endBatchEdit();check(t.updates.size()==1,"unmatched batch duplicated edit");
+        // Same-field InputConnection replacement preserves the document, but its
+        // new IME must not wait for the now-stale session's endBatchEdit.
+        t.updates.clear();t.beginBatchEdit();t.commitText("pending",1);
+        String retained=t.mEditable.text;int cursor=t.mEditable.end;
+        t.resetEditBatch();
+        check(t.mEditable.text.equals(retained)&&t.mEditable.end==cursor,"connection reset changed document");
+        t.commitText("next",1);
+        check(t.updates.size()==1&&t.updates.get(0).text.endsWith("next"),"same-field stale batch blocked new commit");
         System.out.println("Vendored IME standalone password/delete, nested batch and focus reset regressions passed");
     }
 }

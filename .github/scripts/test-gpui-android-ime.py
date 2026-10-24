@@ -108,6 +108,8 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     public State state = new State("", 0, 0, -1, -1);
     public int edits;
     private boolean visible;
+    private int batchDepth;
+    private boolean dirty;
     private final View view;
     private EditorInfo info;
     private GameActivity listener;
@@ -119,14 +121,16 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
     public final boolean getSoftKeyboardActive() { return visible; }
     public final EditorInfo getEditorInfo() { return info; }
     public final void setEditorInfo(EditorInfo info) { this.info = info; }
-    public final void setState(State state) { this.state = state; if (listener != null) listener.stateChanged(state, false); restartInput(); }
+    public final void setState(State state) { resetEditBatch(); this.state = state; if (listener != null) listener.stateChanged(state, false); restartInput(); }
     public void restartInput() { view.onCreateInputConnection(new EditorInfo()); }
-    public boolean commitText(CharSequence text, int cursor) { ++edits; state.text = text.toString(); return endBatchEdit(); }
+    public boolean commitText(CharSequence text, int cursor) { ++edits; state.text = text.toString(); dirty = true; if (batchDepth == 0) endBatchEdit(); return true; }
     public boolean setComposingText(CharSequence text, int cursor) { return commitText(text, cursor); }
     public boolean setComposingRegion(int start, int end) { ++edits; state.composingRegionStart = start; state.composingRegionEnd = end; return true; }
     public boolean setSelection(int start, int end) { ++edits; state.selectionStart = start; state.selectionEnd = end; return true; }
     public boolean finishComposingText() { ++edits; state.composingRegionStart = state.composingRegionEnd = -1; return true; }
-    public boolean endBatchEdit() { if (listener != null) listener.stateChanged(state, false); return true; }
+    public final void resetEditBatch() { batchDepth = 0; dirty = false; }
+    public boolean beginBatchEdit() { ++batchDepth; return true; }
+    public boolean endBatchEdit() { if (batchDepth > 0) --batchDepth; if (batchDepth == 0 && dirty) { dirty = false; if (listener != null) listener.stateChanged(state, false); } return batchDepth > 0; }
     public boolean performEditorAction(int action) { ++edits; if (listener != null) listener.onEditorAction(action); return true; }
     public boolean onKey(View view, int code, KeyEvent event) { return commitText("hardware", 1); }
     public CharSequence getTextBeforeCursor(int length, int flags) { return state.text; }
@@ -246,6 +250,17 @@ public final class BridgeTest extends AndroidImeBridge {
         rejectEveryMethod(current);
         current = surface.onCreateInputConnection(new EditorInfo());
         check(current.commitText("new", 1) && lastGeneration() == 13, "same-field replacement");
+        // Replacing a connection in the same field has no native setState, so
+        // the bridge must abandon the old session's unfinished batch itself.
+        int beforeBatch = callbacks();
+        check(current.beginBatchEdit() && current.commitText("unfinished", 1), "start unfinished batch");
+        check(callbacks() == beforeBatch, "batch leaked intermediate edit");
+        InputConnection abandonedBatch = current;
+        current = surface.onCreateInputConnection(new EditorInfo());
+        check(bridge.original.state.text.equals("unfinished"), "connection reset changed document");
+        check(!abandonedBatch.endBatchEdit(), "old batch end bypassed epoch guard");
+        check(current.commitText("reconnected", 1) && callbacks() == beforeBatch + 1
+                && lastGeneration() == 13, "same-field abandoned batch blocked new input");
         InputConnection beforeHide = current;
         bridge.hideIme(14);
         check(bridge.original.state.text.isEmpty(), "hide did not clear backing text");
