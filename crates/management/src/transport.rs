@@ -1,4 +1,4 @@
-//! Product WSS transport. No generic Client platform, URL passthrough or Manager credential logging.
+//! Product management transport with loopback WS development support.
 use crate::{
     engine::{ExecutionDeadline, Executor, Journal},
     host::RustDeskHost,
@@ -582,7 +582,14 @@ async fn send_frame(socket: &mut Socket, message: Message) -> Result<(), Transpo
 }
 
 pub fn validate_manager_endpoint(url: &Url) -> Result<(), TransportError> {
-    if url.scheme() != "wss"
+    let local_ws = url.scheme() == "ws"
+        && match url.host() {
+            Some(url::Host::Domain("localhost")) => true,
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            _ => false,
+        };
+    if (url.scheme() != "wss" && !local_ws)
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()

@@ -21,7 +21,7 @@ jobs:
         run: |
           cargo metadata --no-deps --locked --offline --format-version 1 > "$RUNNER_TEMP/xscc-metadata.json"
           python3 - <<'PY_LAYOUT'
-          import json, os
+          import json, os, re, subprocess
           from pathlib import Path
           metadata = json.loads((Path(os.environ['RUNNER_TEMP']) / 'xscc-metadata.json').read_text())
           root = Path(metadata['workspace_root']).resolve()
@@ -33,6 +33,13 @@ jobs:
           assert Path(dependency['path']).resolve() == root / 'crates/management'
           assert dependency['source'] is None
           assert management['id'] in metadata['workspace_members']
+          manifests = subprocess.check_output([
+              'git', 'ls-files', '--', '*Cargo.toml', '*Cargo.lock',
+              '*package.json', '*package-lock.json', '.gitmodules',
+          ], text=True).splitlines()
+          external_support = re.compile(r'github[.]com[/:]isarmg/(?:xcss|xcsc)(?:[./?#"\s]|$)', re.I)
+          for manifest in manifests:
+              assert not external_support.search((root / manifest).read_text()), manifest
           PY_LAYOUT
   library:
     strategy:

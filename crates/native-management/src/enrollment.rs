@@ -38,15 +38,22 @@ pub enum EnrollmentError {
 
 type Result<T> = std::result::Result<T, EnrollmentError>;
 
-/// A single HTTPS origin is also the protected-store namespace. Paths and URL
-/// credentials are rejected instead of silently changing the server selected.
+/// A single origin is also the protected-store namespace. HTTP is supported for
+/// explicit loopback development origins; external servers require HTTPS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerOrigin(Url);
 
 impl ServerOrigin {
     pub fn parse(value: &str) -> Result<Self> {
         let url = Url::parse(value).map_err(|_| EnrollmentError::Configuration)?;
-        if url.scheme() != "https"
+        let local_http = url.scheme() == "http"
+            && match url.host() {
+                Some(url::Host::Domain("localhost")) => true,
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                _ => false,
+            };
+        if (url.scheme() != "https" && !local_http)
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -71,8 +78,12 @@ impl ServerOrigin {
 
     pub fn connection_url(&self) -> Result<Url> {
         let mut url = self.endpoint(protocol::CONNECT_PATH);
-        url.set_scheme("wss")
-            .map_err(|_| EnrollmentError::Configuration)?;
+        url.set_scheme(if self.0.scheme() == "http" {
+            "ws"
+        } else {
+            "wss"
+        })
+        .map_err(|_| EnrollmentError::Configuration)?;
         Ok(url)
     }
 }
@@ -147,7 +158,7 @@ pub struct EnrollmentClient {
 impl EnrollmentClient {
     pub fn new(server: ServerOrigin) -> Result<Self> {
         let http = Client::builder()
-            .https_only(true)
+            .https_only(server.0.scheme() == "https")
             .use_rustls_tls()
             .redirect(Policy::none())
             .no_proxy()
@@ -467,9 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn server_origin_requires_https_without_ambient_url_state() {
+    fn server_origin_limits_cleartext_to_loopback_without_ambient_url_state() {
         for value in [
             "http://example.com",
+            "http://192.168.1.1:18104",
+            "http://localhost.example.com:18104",
+            "http://user:secret@localhost:18104",
+            "http://localhost:18104/path",
+            "http://localhost:18104/?token=x",
             "https://user:secret@example.com",
             "https://example.com/path",
             "https://example.com/?token=x",
@@ -480,12 +496,59 @@ mod tests {
                 Err(EnrollmentError::Configuration)
             );
         }
+        for host in ["localhost", "127.0.0.1", "[::1]"] {
+            let server = ServerOrigin::parse(&format!("http://{host}:18104")).unwrap();
+            assert_eq!(
+                server.connection_url().unwrap().as_str(),
+                format!("ws://{host}:18104/xscc/v2/connect")
+            );
+        }
         let server = ServerOrigin::parse("https://EXAMPLE.com:443").unwrap();
         assert_eq!(server.as_str(), "https://example.com/");
         assert_eq!(
             server.connection_url().unwrap().as_str(),
             "wss://example.com/xscc/v2/connect"
         );
+    }
+
+    #[tokio::test]
+    async fn loopback_http_enrollment_reaches_the_local_server() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let manager_id = Uuid::new_v4();
+        let device_id = Uuid::new_v4();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut request = [0; 4096];
+            let length = stream.read(&mut request).await.unwrap();
+            assert!(
+                String::from_utf8_lossy(&request[..length])
+                    .starts_with(&format!("POST {} ", protocol::PAIRING_PATH))
+            );
+            let body =
+                serde_json::json!({"manager_id": manager_id, "device_id": device_id}).to_string();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let client =
+            EnrollmentClient::new(ServerOrigin::parse(&format!("http://{address}")).unwrap())
+                .unwrap();
+        let pairing = client.pairing(&"a".repeat(36)).await.unwrap();
+        assert_eq!(pairing.manager_id, manager_id);
+        assert_eq!(pairing.device_id, device_id);
+        server.await.unwrap();
     }
 
     #[test]

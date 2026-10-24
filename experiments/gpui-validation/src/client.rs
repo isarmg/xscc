@@ -101,7 +101,7 @@ impl ManagementPanel {
         let server = self.server.read(cx).value().trim().to_owned();
         let authorization_code = self.password.read(cx).value().to_owned();
         if server.is_empty() || authorization_code.is_empty() {
-            self.notice = "请填写 HTTPS 服务端地址和实例密码。".into();
+            self.notice = "请填写服务端地址和实例密码。".into();
             cx.notify();
             return;
         }
@@ -1072,7 +1072,8 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         sender,
                         receiver,
                         wake,
-                        server: cx.new(|cx| TextField::new("HTTPS 服务端地址", false, cx)),
+                        server: cx
+                            .new(|cx| TextField::new("服务端地址（本机可用 HTTP）", false, cx)),
                         password: cx.new(|cx| TextField::new("实例密码", true, cx)),
                         address_host: cx
                             .new(|cx| TextField::new("新的域名或 IP（不含端口）", false, cx)),

@@ -11,6 +11,28 @@ use std::sync::{
 use tokio::{net::TcpListener, sync::Notify};
 use tokio_tungstenite::{accept_async, connect_async};
 use xscs_protocol::*;
+#[test]
+fn cleartext_management_connections_are_limited_to_loopback() {
+    for endpoint in [
+        "wss://manager.example/xscc/v2/connect",
+        "ws://localhost:18104/xscc/v2/connect",
+        "ws://127.0.0.1:18104/xscc/v2/connect",
+        "ws://[::1]:18104/xscc/v2/connect",
+    ] {
+        assert!(ManagerConnection::new(endpoint, Zeroizing::new("a".repeat(64))).is_ok());
+    }
+    for endpoint in [
+        "ws://manager.example/xscc/v2/connect",
+        "ws://192.168.1.1:18104/xscc/v2/connect",
+        "ws://localhost.example.com:18104/xscc/v2/connect",
+        "ws://user:secret@localhost:18104/xscc/v2/connect",
+        "ws://localhost:18104/xscc/v2/connect?token=x",
+        "ws://localhost:18104/other",
+    ] {
+        assert!(ManagerConnection::new(endpoint, Zeroizing::new("a".repeat(64))).is_err());
+    }
+}
+
 #[derive(Clone, Default)]
 struct Facts(Arc<Mutex<BTreeMap<String, ExecutionRecord>>>);
 #[async_trait]

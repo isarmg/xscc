@@ -101,7 +101,7 @@ impl Panel {
             commands,
             events: incoming,
             lifecycle: lifecycle_sender,
-            server: cx.new(|cx| TextField::new("https://服务端地址", false, cx)),
+            server: cx.new(|cx| TextField::new("服务端地址（本机可用 HTTP）", false, cx)),
             code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
             status: None,
             initialized: false,
@@ -204,7 +204,7 @@ impl Panel {
         let server = self.server.read(cx).value().trim().to_owned();
         let code = self.code.read(cx).value().to_owned();
         if server.is_empty() || code.is_empty() {
-            self.notice = "请填写 HTTPS 服务端地址和控制端实例密码。".into();
+            self.notice = "请填写服务端地址和控制端实例密码。".into();
         } else {
             self.code.update(cx, |field, cx| field.clear(window, cx));
             window.dismiss_virtual_keyboard();

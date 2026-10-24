@@ -39,6 +39,23 @@ Browser clients and other architectures are not build targets. CPU/GPU suitabili
 
 Linux Deb packaging measures GLIBC requirements from all staged ELF files and records the highest requirement in the libc6 dependency. RPM uses its automatic ELF dependencies. AppImage recipes use Ubuntu 26.04 libraries.
 
+## Repository-owned support
+
+The controller, host and mobile management applications build without sibling
+`xcss` or `xcsc` checkouts, Git dependencies or package downloads. The contour
+implementation and palettes used by both GPUI applications live in
+`experiments/gpui-validation/src/theme.rs`; its source URL records attribution.
+The `xscs-protocol` dependency remains pinned to the server protocol crate and
+does not import the server support library. Native management CI checks this
+dependency boundary alongside the workspace layout.
+
+For a local server on the same machine, use `http://127.0.0.1:18104` or
+`http://localhost:18104` in the instance binding form. IPv6 loopback `[::1]` is
+also supported when the server listens there. These origins use HTTP and WS;
+external addresses continue to require HTTPS and WSS. The local path uses the
+same instance enrollment, credentials and authorization as other managed
+connections; administrator passwords are not instance binding passwords.
+
 ## Checks
 
 Prepare the platform's native dependencies as shown in `.github/workflows/flutter-build.yml`. CI generates the native Flutter bridge using its pinned code generator.
