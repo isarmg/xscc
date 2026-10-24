@@ -112,7 +112,7 @@ jobs:
         id: native-dependencies
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-        run: ./flutter/build_android_deps.sh arm64-v8a
+        run: bash .github/scripts/build-gpui-android-native-deps.sh arm64-v8a
 
       - name: Save successful native dependency binary archives
         if: matrix.flavor != 'smoke' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'

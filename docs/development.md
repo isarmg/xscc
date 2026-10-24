@@ -12,15 +12,24 @@ cargo test --locked -p xscc -p xscc-native-management
 
 协议来自清单中固定的 xscs Git revision。临时联调可使用 Cargo 命令行 patch；不要提交针对外部工作目录的 path 依赖或临时覆盖后的锁文件。
 
-管理库测试覆盖宿主回调、持久结果重放、摘要确认、绑定隔离、授权观察失效、地址上报和严格 TLS 入口。原生管理库还覆盖平台存储、身份恢复及双向会话证明。Windows、Linux、macOS 26 CI 均明确运行两个管理包的测试；移动 CI 使用实际 aarch64 iOS/Android target 检查管理库，Android 使用 API 29 的 NDK 编译器，iOS 最低版本 26。应用 CI 在 `feat/management-prep` 也会触发原生检查。完整构建与实际运行验收应分别记录。
+管理库测试覆盖宿主回调、持久结果重放、摘要确认、绑定隔离、授权观察失效、地址上报和严格 TLS 入口。原生管理库还覆盖平台存储、身份恢复及双向会话证明。Windows、Linux、macOS 26 CI 均明确运行两个管理包的测试；移动 CI 使用实际 aarch64 iOS/Android target 检查管理库，Android 使用 API 29 的 NDK 编译器，iOS 最低版本 26。GPUI 应用 CI 在 `main` 和 `feat/management-prep` 触发对应原生检查。完整构建与实际运行验收应分别记录。
 
-原生构建在本仓库根目录执行，沿用 `.cargo/config.toml`、`docs/BUILD-TOOLCHAIN.md` 和导入的应用构建工作流；遵守 `AGENTS.md`，不在本地运行 Flutter Rust Bridge 代码生成器。目录与来源说明见 [源码整合](rustdesk-source.md)。
+产品只从 GPUI 应用 manifest 构建，复用根工作区的 Rust 核心及 `.cargo/config.toml`。桌面控制端 / 被控端分别启用 `live-session` / `native-host`；移动控制端启用 `mobile-management,mobile-session`。工具链见 [原生构建](BUILD-TOOLCHAIN.md)，入口见 [项目首页](../README.md)，来源见 [源码整合](rustdesk-source.md)。旧前端构建和桥接生成不属于 GPUI 产品流程。
 
-桥接 CI 生成接口后单独分析新增的管理界面，检查 Dart 与原生接口一致。2026-10-15 的本机临时联调使用测试 CA、TLS 代理、当前 xscs 数据库和两个 `NativeManager`，验证 HTTPS 注册、WSS 列表、地址上报、双向配对证明、状态脱敏、两端撤权与解绑。该联调没有运行捕获、媒体或输入，不作为物理设备串流验收。
+管理层的历史联调验证了 HTTPS 注册、WSS 列表、地址上报、双向配对证明、状态脱敏、撤权与解绑。当前 GPUI UI 直接调用同一原生管理所有者；这些管理测试仍不替代捕获、媒体、输入和物理设备串流验收。
 
 macOS 离线 DMG 更新必须同时提供签名元数据：`--update update.dmg --metadata rustdesk-update.json --signature rustdesk-update.json.sig`。裸 DMG 参数会被拒绝；当前在线更新入口继续使用自己的发行校验流程。
 
 Linux DRM 光标 IPC 的每条 `DrmCursor` 消息必须明确携带布尔字段 `hot_measured`；缺失字段会被拒绝。生产者测量与接收端推断的热点继续分别按显式 `true` / `false` 处理。
+
+## GPUI 产品构建
+
+```sh
+cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features live-session
+cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features native-host
+```
+
+移动应用在 `experiments/gpui-mobile-management` 构建，安装包必须经过对应 Android / iOS 原生打包与验证；见 [移动维护说明](gpui-mobile.md)。这些路径沿用 `experiments/` 目录名，产品界面均为 GPUI。
 
 ## GPUI 桌面应用
 

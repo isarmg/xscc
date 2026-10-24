@@ -3,7 +3,7 @@
 The ARM64/API 29+ smoke flavor exercises the experimental GPUI Android window,
 touch input and activity/surface lifecycle. It is not a remote-control client:
 no management login, remote stream, host service or network permission is added.
-It does not replace the Flutter beta (package: `org.xscc.gpui.smoke`).
+Its package is `org.xscc.gpui.smoke`; the controller product uses the management flavor below.
 
 CI builds the independent `experiments/gpui-android-smoke` Rust workspace and
 packages its actual `libxscc_gpui_android_smoke.so` with GameActivity 4.4.0.
@@ -71,8 +71,7 @@ interruptions, route changes and system-volume behavior need physical-device tes
 frame, display, pointer and IME behavior still require physical-device acceptance
 against the intended server; successful packaging alone does not prove a session.
 
-Management and TEST IP direct build the pinned NDK ARM64 codec dependencies (the same native
-dependency script/cache used by the Flutter candidate, without Flutter codegen).
+Management and internal TEST IP direct builds use the pinned NDK ARM64 codec dependencies through the dedicated GPUI native dependency script and cache.
 The dependency gate rejects Flutter, host/capture and hardware-codec features.
 Smoke continues to build without these codec dependencies or Internet access.
 
@@ -80,8 +79,7 @@ All flavors share the IME bridge, source privacy patch and all final DEX,
 JNI, signature and 16 KB gates. Smoke has no Internet permission; management and TEST IP direct
 add only Internet. Each may use its exact application-ID-scoped AndroidX
 signature permission for non-exported receivers. Backup remains disabled.
-There are no recording, storage or accessibility permissions, and no Flutter
-credential migration. Each package uses its own Android private application
+There are no recording, storage or accessibility permissions, and no credential migration from other applications. Each package uses its own Android private application
 storage. These APKs remain disposable-debug-key previews.
 
 ## TEST-only LAN direct APK

@@ -1,3 +1,5 @@
+> 历史来源资料：下文保留导入时的上游说明。旧 Flutter / Sciter 构建、下载与运行命令不属于当前 XSCC 产品流程。当前唯一产品 UI 为 GPUI，请从 [项目首页](../README.md) 和 [原生构建工具链](BUILD-TOOLCHAIN.md) 进入。
+
 <p align="center">
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#免费的公共服务器">服务器</a> •

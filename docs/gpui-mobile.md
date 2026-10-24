@@ -1,45 +1,46 @@
-# GPUI mobile: management preview boundary
+# GPUI mobile native application
 
-The first deliverable is the independent
-[`gpui-mobile-management`](../experiments/gpui-mobile-management/README.md) iOS 26 /
-iPadOS 26 ARM64 management preview. Its unsigned IPA is a self-signing input, not a
-complete remote-control release. Existing Flutter mobile packages remain the
-working baseline, subject to their own device acceptance.
+Android ARM64 (API 29+) and iOS / iPadOS 26 ARM64 use the same
+[`gpui-mobile-management`](../experiments/gpui-mobile-management/README.md)
+product UI workspace. The `mobile-management,mobile-session` build includes
+authorized screen sessions, touch, software-keyboard commits and opt-in remote
+audio. The management-only default is a diagnostic variant. The existing
+`experiments/` path and preview package identifiers are retained; they do not
+select another frontend.
 
-## What the vendored backend actually provides
+## Platform backends and packages
 
-`vendor/gpui/crates/gpui_ios` implements UIKit application/scene lifecycle,
-Metal-backed window presentation, native text input, touch delivery, safe areas
-and keyboard occlusion. `gpui_platform::current_platform` selects it on iOS.
-Existing framework-validation builds only proved compilation/linking of the
-framework probe; they did not exercise a production controller session or install
-an application on an iPhone/iPad.
+`gpui_ios` provides UIKit lifecycle, Metal presentation, native text input,
+touch, safe areas and keyboard occlusion. `gpui_android` provides the ARM64
+GameActivity window/rendering and lifecycle path, with the protected Java IME
+integration used by the management APK. Both are selected by the vendored
+`gpui_platform` facade.
 
-The starting facade had no Android branch or `gpui_android` crate. A separate
-[Android backend smoke slice](../packaging/gpui-android/README.md) now introduces a
-GameActivity-based rendering, touch, font and lifecycle implementation for ARM64 /
-API 29+. Its CI and physical-device verification are pending; it does not provide
-IME, management binding or remote streaming. This iOS management app is not an
-Android deliverable. Android cannot be enabled by adding it to the desktop cfg.
+Android native build and final APK gates are described in
+[`packaging/gpui-android`](../packaging/gpui-android/README.md). Its `smoke`
+flavor is a separate no-network platform test, not the controller product.
+iOS native device packaging produces an unsigned preview IPA; installation
+requires the user's valid Apple signing identity and provisioning profile.
+Dedicated native CI checks compilation, linkage and packages. Physical-device
+streaming, touch, IME, audio and lifecycle acceptance remain separate evidence.
 
 ## File and runtime boundaries
 
-- `experiments/gpui-mobile-management`: separate workspace/lock, executable-owned
-  Tokio runtime, in-process manager adapter, management UI and native sandbox path.
-- Shared desktop `theme.rs` and `text_field.rs`: imported by path. The existing
-  theme only gains an opt-in `mobile-management` feature gate. Desktop defaults
-  and production UI paths are unchanged.
-- `crates/native-management`: reused as-is for protected storage, UUID, enrollment,
-  policy/revocation, management connection, controller-role restrictions and unbind.
-- `packaging/gpui-ios` and the dedicated workflow: minimum OS/device family,
-  unsigned bundle construction and archive validation.
+- `experiments/gpui-mobile-management`: application-owned Tokio runtime,
+  in-process manager adapter, GPUI management/session UI and native sandbox path.
+- Shared desktop `theme.rs`, `text_field.rs` and `presentation.rs`: reuse the
+  GPUI appearance, text editing and owned-frame image path.
+- `crates/native-management`: protected storage, enrollment, policy/revocation,
+  controller-role restrictions and unbind. All sessions use the same owner.
+- `src/gpui_session.rs` and the native client: authorization, session proofs,
+  existing transport/login and software decode under `gpui-mobile-session`.
+- `packaging/gpui-ios` / `packaging/gpui-android` and their native workflows:
+  application identities, SDK/ABI restrictions and package validation.
 
-No root desktop cfg is loosened. `librustdesk`, desktop host/listener/IPC, Flutter
-and codecs are excluded from this slice. The forthcoming session adapter must
-reuse the existing server authorization, session proofs and decoder business
-logic; it must not invent another protocol, bypass grants, or own a second identity.
-Android may reuse the management adapter and appearance after its backend is
-validated and IME is implemented; storage and lifecycle entry remain platform-specific.
+Mobile products are foreground controllers. They do not enable desktop host,
+capture or desktop IPC. GPUI calls the Rust core directly; there is no Dart UI
+or Flutter bridge in this product path. Retained legacy frontend sources are
+not another supported mobile entry.
 
 ## Verification limits
 
@@ -55,8 +56,7 @@ Neither a green build nor an unsigned IPA is a claim that remote control works.
 The iOS preview has an opt-in software-decoded session path with direct touch and an explicit view-only mode. It links the existing
 Rust client with `gpui-mobile-session` and no default features, attaches the already
 opened manager, and reuses authorization, TCP login, software decode and the BGRA
-presentation helper. Desktop and Flutter cfg behavior is retained when this feature
-is off. Clipboard remains disabled in protocol options and locally. Foreground
+presentation helper. The management-only variant omits media when this feature is off. Clipboard remains disabled in protocol options and locally. Foreground
 output-only audio is opt-in per session, using the existing Opus decoder and CPAL
 output; it never requests microphone access.
 The direct-touch mode enables pointer input only through an explicit session
@@ -87,34 +87,18 @@ shows a retry message; the user explicitly enables sound again. The mobile packe
 queue is capped at 64 frames / 256 KiB, rejects frames above 64 KiB, and discards
 packets resident locally for over 150 ms. A discard resets decoder/resampler
 continuity and clears PCM; mobile PCM capacity is also 150 ms. These are local
-resource/queue budgets, not measured end-to-end latency. Desktop/Flutter playback
-keeps its prior path and buffer policy.
+resource/queue budgets, not measured end-to-end latency. Desktop playback keeps its own native path and buffer policy.
 
 Physical-device acceptance must cover audible remote mono/stereo playback, system
 volume, mute/disconnect without old audio replay, headset/Bluetooth route changes,
 focus/phone interruption, background/foreground and reconnect. Compilation and
 packaging do not establish those results.
 
-### Temporary TEST IP direct packages
+### Internal direct-connection compatibility
 
-The mobile CI jobs also build separate `TEST-IP-direct` candidates with the
-explicit `test-lan-direct` Cargo feature. Android uses the `landirect` flavor;
-iOS packaging uses `--playback-preview --test-lan-direct`. Both use the distinct
-`org.sarmg.xscc.gpui.testdirect` application identifier and `XSCC TEST IP` label.
-The normal managed candidates and management-only simulator keep the feature off.
-Packaging checks the actual native binary marker against the selected mode.
-
-These packages carry `TEST-ONLY.txt`: the direct path has no identity authentication
-or per-session host confirmation and requires a matching desktop host explicitly
-started in test mode. Any reachable IPv4/IPv6 address is allowed, with no private
-address or subnet restriction; anyone reaching the test listener can control the
-host. Use desktop and mobile TEST packages from the same source revision, and
-replace older hosts that still enforce private-subnet restrictions. See
-[test host setup](test-lan-direct.md). The iOS local-network prompt describes this
-test connection; users still grant any OS permission themselves. No Bonjour,
-ATS exception, microphone permission or new Android permission is added. The IPA
-remains unsigned and requires the user's provisioning and signature. Build success
-does not establish physical-device connection or input acceptance.
-
-Remove the temporary feature, test UI, test package variants and backend test
-entry points before production release. Never promote a renamed test artifact.
+Product mobile workflows publish the managed GPUI application and the separate
+no-network Android smoke test. They do not publish temporary IP-direct packages,
+and the normal UI has no temporary IP entry. Retained `test-lan-direct` module
+and packaging checks serve internal regression work only. An internally built
+test artifact is not a managed product or a release candidate; its authentication
+and host setup limits are documented in [the internal test notes](test-lan-direct.md).

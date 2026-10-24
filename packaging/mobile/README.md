@@ -1,3 +1,5 @@
+> Historical packaging notes. The Flutter candidate workflows have been retired from the GPUI product path. Current Android and iOS applications use [the GPUI mobile workspace](../../experiments/gpui-mobile-management/README.md) and its dedicated native package gates. The instructions below describe older artifacts only.
+
 # XSCC Flutter mobile test candidates
 
 These candidates reuse the existing Flutter mobile client and native Rust session engine. They are not GPUI mobile applications or production releases. Mobile devices are controllers only. Bind a controller instance with the management server's authorization code; allowed hosts and revocation remain server-managed. Desktop-only test-LAN mode is not included.

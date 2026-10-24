@@ -2,7 +2,7 @@
 
 Target: macOS 26, Apple Silicon (`aarch64-apple-darwin`). Controller and Host are
 separate foreground applications. This path uses the vendored GPUI macOS/Metal
-backend and native Rust session core. It does not use Flutter or bridge codegen.
+backend and native Rust session core. This is the macOS product UI entry.
 
 ## Build on an Apple Silicon Mac
 
@@ -20,14 +20,14 @@ cargo build --locked --release \
   --target aarch64-apple-darwin --features live-session
 python3 .github/scripts/package-gpui-macos.py \
   --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-gpui-validation" \
-  --role controller --version 0.1.0-beta.1 \
+  --role controller --version 0.1.0-beta.3 \
   --output "$PWD/dist/XSCC Controller.app"
 ```
 
 Build Host separately with `--features native-host`, a different
 `CARGO_TARGET_DIR`, `--role host`, and `--output "$PWD/dist/XSCC Host.app"`.
 The macOS native core dependency enables `screencapturekit` for system audio.
-Do not enable `flutter`. Hardware codecs remain capability-probed; Apple Silicon
+Hardware codecs remain capability-probed; Apple Silicon
 is not itself proof that a specific codec/profile works in a live session.
 
 The packager checks the actual Mach-O executable, arm64-only architecture,
@@ -61,7 +61,7 @@ in System Settings and restart when macOS requires it. Controller should not be
 blocked on Host capture/input privileges merely to control another computer.
 
 Do not infer permission from a successful build or bundle creation. macOS privacy
-identity depends on the final application/signature; grants for the old Flutter
+identity depends on the final application/signature; grants for an older
 application do not establish permission for these separate bundles.
 
 ## Rendering, input and audio boundaries

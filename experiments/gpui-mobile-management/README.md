@@ -3,7 +3,7 @@
 This is an **iOS 26 / iPadOS 26 / Android API29+ ARM64 preview**. The default build remains
 management-only. The explicit `mobile-session` build adds the software-decoded screen and direct-touch
 session slice; device connection and first-frame acceptance are still required. It is a separate application with bundle identifier
-`org.sarmg.xscc.gpui.preview`; the delivered Flutter applications remain unchanged.
+`org.sarmg.xscc.gpui.preview`. This workspace is the GPUI mobile product entry; its historical directory name and preview identifiers are retained.
 The unsigned IPA must be signed by the user with their own valid Apple identity
 and provisioning profile before device installation. CI does not create signing
 credentials or claim physical-device acceptance.
@@ -26,10 +26,9 @@ Implemented paths use the real `xscc-native-management::NativeManager`:
 On iOS the app uses Foundation's user-domain Application Support directory; on
 Android it uses AndroidApp.internal_data_path. Both use the manager's protected
 `xscc-managed` child directory in the application sandbox. It does not
-reuse a desktop home directory, Flutter's app sandbox, or a second management
-identity for each window/session. The standalone preview has its own installation
-identity because it is a separate app; future media integration must use this same
-manager, its grants and session checks.
+reuse a desktop home directory, another application sandbox, or a second management
+identity for each window/session. The application has its own installation
+identity; media sessions use this same manager, its grants and session checks.
 
 ## Optional screen and touch session slice
 
@@ -37,8 +36,7 @@ The `mobile-session` feature adds a real “view screen” action to online auth
 controlled devices. It attaches the existing `Arc<NativeManager>` to the native
 session adapter, reuses its target/proof/periodic authorization checks and existing
 TCP application login/decoder, and uploads owned BGRA frames through GPUI. There
-is one manager and one application-owned Tokio runtime; no Flutter bridge, desktop
-IPC, host listener, capture, additional binding store or QUIC feature is enabled.
+is one manager and one application-owned Tokio runtime. GPUI calls the Rust core directly; desktop IPC, host listener, capture, additional binding store and QUIC remain disabled.
 
 The UI defaults to direct touch: tap to left-click, move one finger beyond the
 threshold to drag, and move two fingers to scroll. A second finger releases an
@@ -153,17 +151,15 @@ protected IME bridge and final-DEX privacy gates. The management flavor has
 INTERNET permission; the smoke flavor retains its no-network contract. Omit
 `mobile-session` for management only. The session build uses the existing pinned
 Android codec dependencies (VPX/AOM software decode), without `mediacodec`,
-`hwcodec`, `flutter` or capture features. GameActivity owns the Android context;
-this entry never invokes Flutter JNI initialization or replaces ndk_context.
+`hwcodec` or capture features. GameActivity owns the Android context and the native entry does not replace ndk_context.
 The root session configuration home is the same private directory, without
 reading another application's credentials. The existing NativeManager TLS and
 authorization policy remain in force.
 
 The entry obtains its private directory only from AndroidApp.internal_data_path;
-it never uses HOME, a desktop configuration path, external storage or Flutter
-credentials. NativeManager creates the existing xscc-managed directory and owns
+it never uses HOME, a desktop configuration path, external storage or another application's credentials. NativeManager creates the existing xscc-managed directory and owns
 the installation UUID, binding and runtime task. The appId is
-org.sarmg.xscc.gpui.preview, separate from both smoke and Flutter; each app has its
+org.sarmg.xscc.gpui.preview, separate from smoke; each app has its
 own installation identity and requires its own server-authorized enrollment.
 Initial management activity follows the actual Android window focus/visibility;
 the shared lifecycle observer handles subsequent foreground/background changes.

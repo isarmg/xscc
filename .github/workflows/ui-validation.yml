@@ -1,4 +1,4 @@
-name: UI framework validation
+name: GPUI framework validation
 on:
   push:
     branches: [main, feat/management-prep]
@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-26]
-        framework: [slint, gpui]
+        framework: [gpui]
     runs-on: ${{ matrix.os }}
     env:
       MACOSX_DEPLOYMENT_TARGET: "26.0"
@@ -78,19 +78,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        framework: [slint, gpui]
-        platform: [ios, android]
-        # The native GPUI facade has no Android platform backend yet.
-        exclude:
-          - framework: gpui
-            platform: android
+        framework: [gpui]
+        # Android application checks run in gpui-android-smoke.yml.
+        platform: [ios]
         include:
           - platform: ios
             target: aarch64-apple-ios
             os: macos-26
-          - platform: android
-            target: aarch64-linux-android
-            os: ubuntu-24.04
     runs-on: ${{ matrix.os }}
     env:
       IPHONEOS_DEPLOYMENT_TARGET: "26.0"

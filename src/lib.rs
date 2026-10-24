@@ -60,11 +60,11 @@ pub(crate) mod update_hash;
 mod manual_update;
 mod version;
 pub use version::*;
-#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
+#[cfg(feature = "flutter")]
 mod bridge_generated;
-#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
+#[cfg(feature = "flutter")]
 pub mod flutter;
-#[cfg(any(feature = "flutter", all(any(target_os = "android", target_os = "ios"), not(feature = "gpui-mobile-session"))))]
+#[cfg(feature = "flutter")]
 pub mod flutter_ffi;
 use common::*;
 mod auth_2fa;

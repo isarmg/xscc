@@ -29,9 +29,9 @@ From the repository root:
 .github/scripts/check-gpui-linux.sh check all
 .github/scripts/check-gpui-linux.sh test all
 cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features live-session
-.github/scripts/package-gpui-linux.sh controller 0.1.0-beta.1 /path/to/release/xscc-gpui-validation /path/to/artifacts
+.github/scripts/package-gpui-linux.sh controller 0.1.0-beta.3 /path/to/release/xscc-gpui-validation /path/to/artifacts
 cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features native-host
-.github/scripts/package-gpui-linux.sh host 0.1.0-beta.1 /path/to/release/xscc-gpui-validation /path/to/artifacts
+.github/scripts/package-gpui-linux.sh host 0.1.0-beta.3 /path/to/release/xscc-gpui-validation /path/to/artifacts
 ```
 
 Package each executable immediately after its role-specific build: both builds
@@ -53,7 +53,7 @@ and functional acceptance require native desktops.
 - Foreground input uses the portal RemoteDesktop session. The legacy `--server`
   path selects uinput helpers and is outside this package's supported scope.
 - Linux host audio starts the existing `_pa` listener in a dedicated thread at
-  GPUI host initialization; that listener was previously started only by Flutter.
+  GPUI host initialization, so native capture can feed the existing audio service.
   It serves the audio service using a PulseAudio monitor source. Playback also
   uses PulseAudio; PipeWire desktops need PulseAudio compatibility (`pipewire-pulse`).
   Missing devices and listener errors use the existing backend logging. Thread
@@ -76,9 +76,8 @@ missing libraries before launch. Do not add blanket permissions to make a test p
 
 ## Validation boundary
 
-The local source investigation reached the `glib-sys` native dependency check and
-was blocked by missing `glib-2.0.pc`; this is not a successful live Linux compile.
-Script syntax, dependency-error reporting and archive structure can be checked
-without a compositor. Native CI compilation and physical-device acceptance must
-be reported separately. The Linux host audio hook changes only `gpui-host` builds;
-Flutter, controller, Windows and macOS startup paths remain unchanged.
+Native CI compiles and tests the actual controller/host feature sets and checks
+their packages. Local library tests and archive checks can run without a compositor;
+they do not establish a working Wayland capture or input session. The Linux audio
+listener hook is limited to `gpui-host`; other GPUI platforms retain their own
+native startup and permission paths.

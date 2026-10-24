@@ -3,12 +3,8 @@
     windows_subsystem = "windows"
 )]
 
-use librustdesk::*;
-
 fn main() {
-    if !common::global_init() {
-        eprintln!("Global initialization failed.");
-        return;
-    }
-    common::global_clean();
+    eprintln!(
+        "The XSCC desktop application uses GPUI. Start it with:\n  cargo run --manifest-path experiments/gpui-validation/Cargo.toml --features live-session"
+    );
 }

@@ -36,10 +36,10 @@ fn finish_macos_update(result: hbb_common::ResultType<()>) -> Option<CoreMainAct
     }
 }
 
-/// Shared startup for the Flutter application and background commands.
+/// Shared desktop startup and background commands.
 ///
 /// [Note]
-/// If it returns [`None`], then the process will terminate, and flutter gui will not be started.
+/// If it returns [`None`], then the process will terminate without starting a UI.
 /// If it returns [`Some`], the action determines whether to start the UI or report failure.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<CoreMainAction> {

@@ -7,7 +7,10 @@ xscc/
   Cargo.toml / Cargo.lock     统一的原生应用工作区
   src/                       原生应用，包括 management 进程适配层
   libs/                      共享协议、直接传输、捕获等
-  flutter/                   原生应用 UI
+  experiments/gpui-validation/          桌面 GPUI 控制端 / 被控端
+  experiments/gpui-mobile-management/   移动 GPUI 控制端
+  vendor/gpui/                本仓库维护的原生 GUI 框架
+  flutter/                   旧前端源码与历史回归夹具，非产品入口
   crates/management/
     Cargo.toml               包名 xscc，Apache-2.0
     src/ / tests/             已有内嵌管理库与测试
@@ -16,7 +19,7 @@ xscc/
   LICENCE                    来源应用许可证
 ```
 
-应用的 Cargo 包名仍为 `rustdesk`，避免改变原生桥接、打包和平台工程现有约定。其 xscc 依赖指向 `crates/management`，不再从 GitHub 获取另一份管理库。根目录工作区和 Cargo.lock 同时包含应用与管理库；公共管理协议继续固定 xscs 的 Git revision。
+共享原生核心的 Cargo 包名仍为 `rustdesk`，保持已有平台与依赖约定；产品 UI 从独立 GPUI 应用 manifest 构建。其 xscc 依赖指向 `crates/management`，不再从 GitHub 获取另一份管理库。根目录工作区和 Cargo.lock 同时包含应用与管理库；公共管理协议继续固定 xscs 的 Git revision。
 
 首次归并提交 `f8458ed` 只做代码归并、路径和构建清单适配，不更改原生运行行为。来源快照已有的直接加密传输、主控串流偏好、注册和受保护绑定存储基础保留；完整管理任务生命周期、授权列表接入和原生会话执行仍按验收计划推进。硬件、编码、画质等设置由主控端选择。
 
@@ -37,7 +40,7 @@ cargo metadata --locked --format-version 1 > /dev/null
 cargo test --locked -p base --lib
 ```
 
-完整平台依赖与工具链见 `docs/BUILD-TOOLCHAIN.md`；桥接输入和生成约束见 `AGENTS.md`。源码归并不代表已完成 Windows、Wayland、macOS、iOS 和 Android 原生构建与运行验收。
+完整平台依赖与工具链见 `docs/BUILD-TOOLCHAIN.md`；唯一产品 UI 入口及角色特性见根 README。历史前端代码仍需按依赖边界审查后移除，不能连同原生核心使用的夹具或工具脚本一起盲删。源码归并不代表已完成 Windows、Wayland、macOS、iOS 和 Android 原生构建与运行验收。
 
 应用原有 README 保存在 `docs/upstream-rustdesk-README.md`，许可证和第三方声明保留原样。`rustdesk-source.json` 是一次性来源归属记录，不包含后续同步或构建依赖。
 

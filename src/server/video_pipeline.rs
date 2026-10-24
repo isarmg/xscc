@@ -467,6 +467,17 @@ mod tests {
         Message::parse_from_bytes(&bytes).unwrap()
     }
 
+    async fn assert_writer_pending(task: &mut JoinHandle<ResultType<()>>, phase: &str) {
+        if !task.is_finished() {
+            return;
+        }
+        match task.await {
+            Ok(Ok(())) => panic!("slow writer unexpectedly completed {phase}"),
+            Ok(Err(error)) => panic!("slow writer send failed {phase}: {error:#}"),
+            Err(error) => panic!("slow writer task failed {phase}: {error}"),
+        }
+    }
+
     #[tokio::test(crate = "hbb_common::tokio")]
     async fn two_tcp_viewers_isolate_a_stalled_writer_and_preserve_the_fast_reference_chain() {
         let (slow_local, mut slow_peer) = tcp_pair(true).await;
@@ -476,13 +487,41 @@ mod tests {
         let slow_writer = slow.set_streaming(true).unwrap();
         let fast_writer = fast.set_streaming(true).unwrap();
         let blocked_writer = slow_writer.clone();
-        let blocked = tokio::spawn(async move {
-            blocked_writer
-                .send(Payload::Message(encoded_frame(0, 2 * 1024 * 1024)), true)
-                .await
+        let completed = Arc::new(AtomicU64::new(0));
+        let writer_completed = completed.clone();
+        let mut blocked: JoinHandle<ResultType<()>> = tokio::spawn(async move {
+            // Reuse one allocation; kernel TCP buffers differ substantially across platforms.
+            let frame = encoded_frame(0, 65536);
+            for _ in 0..1024 {
+                blocked_writer
+                    .send(Payload::Message(frame.clone()), true)
+                    .await?;
+                writer_completed.fetch_add(1, Ordering::Release);
+            }
+            Err(anyhow!(
+                "slow TCP writer accepted the entire 64-MiB safety limit"
+            ))
         });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert!(!blocked.is_finished());
+        let observation_started = std::time::Instant::now();
+        let mut unchanged_since = observation_started;
+        let mut last_completed = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert_writer_pending(&mut blocked, "before backpressure").await;
+            let count = completed.load(Ordering::Acquire);
+            if count != last_completed {
+                last_completed = count;
+                unchanged_since = std::time::Instant::now();
+            }
+            if unchanged_since.elapsed() >= Duration::from_millis(50) {
+                break;
+            }
+            assert!(
+                observation_started.elapsed() < Duration::from_secs(3),
+                "no sustained TCP backpressure; {count} complete 64-KiB writes"
+            );
+        }
+        println!("slow TCP backpressure observed after {last_completed} complete 64-KiB writes");
         // The slow peer does not consume video, but its input/control direction still works.
         slow_peer.send_raw(vec![55]).await.unwrap();
         assert_eq!(
@@ -510,7 +549,7 @@ mod tests {
             "healthy TCP viewer: 120 ordered 32-KiB frames in {:?}, stalled peer remained blocked",
             started.elapsed()
         );
-        assert!(!blocked.is_finished());
+        assert_writer_pending(&mut blocked, "during healthy viewer transfer").await;
         for index in 1..=VIDEO_QUEUE {
             slow_writer
                 .send_video(encoded_frame(index as i64, 32))

@@ -15,15 +15,17 @@ The independent `GPUI Windows beta candidates` workflow builds two variants of
 - Host: `--features native-host`, packaged as `xscc-host.exe`.
 
 Each variant uses an isolated Cargo target directory. Both use the original
-`xscc-gpui-validation` binary target before packaging. The workflow never calls
-Flutter, Dart, the old RustDesk installer, driver installers, signing services,
-or update-feed publishers. Existing workflows are unchanged. Native libraries use the root vcpkg manifest and pinned revision, matching the
+`xscc-gpui-validation` binary target before packaging. The workflow builds the GPUI application and native Rust core directly. Driver
+installers, signing services and update-feed publishers are outside this candidate
+build. Native libraries use the root vcpkg manifest and pinned revision, matching the
 existing Windows native dependency set. Actual codec capability depends on the
 machine and selected build features; no zero-copy claim is made and no driver is
 installed.
 
-The current presentation path copies decoded pixels into an owned, packed BGRA8
-frame (explicit row stride), then uploads it through GPUI's image renderer. It
+The presentation path transfers ownership of decoded packed BGRA8 pixels to
+GPUI, compacts padded rows only when needed, and reuses same-size DirectX atlas
+allocations through ordered uploads. The frame owner returns to a bounded pool
+after the final image reference is released. It
 retains only the latest pending frame. Coalesced frame/session notifications wake
 the UI; the two-second management refresh is independent of video presentation.
 Hardware codec negotiation does not imply direct GPU-texture presentation.
@@ -202,13 +204,11 @@ revisions. This workflow does not automate publication or create placeholders.
 
 ## Existing paths / 现有路径
 
-At checkout `6227e14efbae64de9cfbef32d5cd6e046a6258b4`, the GPUI crate is named
-`xscc-gpui-validation` at `0.1.0`; the fetched repository tag is `v1.0.0`.
-These are distinct from the main management crates' `2.0.0-dev` version.
-The legacy RustDesk Windows pipeline uses Flutter, per-machine MSI custom
-actions and optional `SIGN_BASE_URL`/`SIGN_SECRET_KEY` signing. Their presence
-in YAML does not establish that valid signing credentials are configured.
-This preview does not reuse that pipeline or make a signed-build claim.
+The GPUI Cargo package remains `xscc-gpui-validation` at `0.1.0`, while the
+management crates use `2.0.0-dev`. The candidate `PACKAGE_VERSION` and actual
+source SHA are recorded separately by packaging. A Cargo package version does
+not identify a published release or establish a signed-build claim. The desktop
+product entries are the separately built Controller and Host described above.
 
 NSIS references: [normal-user execution level](https://nsis.sourceforge.io/Reference/RequestExecutionLevel)
 and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html).
