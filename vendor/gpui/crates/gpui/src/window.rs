@@ -5262,6 +5262,43 @@ impl Window {
         Ok(())
     }
 
+    /// Invalidate a previous image, reusing its GPU allocation when uploads are ordered.
+    /// As with `drop_image`, retained scene references to the old image are invalidated.
+    /// Size changes, device loss, and unsupported backends use the normal fresh-image path.
+    pub fn replace_image(
+        &mut self,
+        previous: Arc<RenderImage>,
+        next: &RenderImage,
+    ) -> Result<bool> {
+        if previous.frame_count() == 1 && next.frame_count() == 1 {
+            let old = RenderImageParams {
+                image_id: previous.id,
+                frame_index: 0,
+            };
+            let new = RenderImageParams {
+                image_id: next.id,
+                frame_index: 0,
+            };
+            if let Some(bytes) = next.as_bytes(0) {
+                match self
+                    .sprite_atlas
+                    .replace(&old.into(), new.into(), next.size(0), bytes)
+                {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {}
+                    Err(error) => {
+                        // The caller relinquishes the old image even when its upload fails.
+                        // Do not strand its old cache key after the final CPU owner drops.
+                        self.drop_image(previous)?;
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        self.drop_image(previous)?;
+        Ok(false)
+    }
+
     /// Returns whether every frame of an image is present in the sprite atlas.
     #[cfg(any(test, feature = "test-support"))]
     pub fn has_image_atlas_entry(&self, data: &RenderImage) -> bool {

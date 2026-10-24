@@ -317,6 +317,14 @@ fn percentile_f64(values: &[f64], p: f64) -> f64 {
 }
 
 pub fn run(sc: &Scenario) -> Report {
+    run_with_streaming(sc, false)
+}
+
+pub(super) fn run_streaming(sc: &Scenario) -> Report {
+    run_with_streaming(sc, true)
+}
+
+fn run_with_streaming(sc: &Scenario, streaming: bool) -> Report {
     let mut network_rng = Rng::new(sc.seed);
     let mut probe_rng = Rng::new(sc.seed ^ 0x5052_4F42_45);
     let mut encoder = Encoder {
@@ -336,6 +344,9 @@ pub fn run(sc: &Scenario) -> Report {
         .collect();
 
     let mut qos = super::smoke::session(sc.limit, sc.quality);
+    if streaming {
+        qos.user_streaming_mode(1, true);
+    }
     qos.abr_config = sc.abr;
     if sc.abr {
         qos.new_display("sim".to_owned());
@@ -371,7 +382,12 @@ pub fn run(sc: &Scenario) -> Report {
         // The video loop reports the bitrate as soon as it applies a new ratio.
         let fps = qos.fps();
         let ratio = qos.ratio();
-        let bitrate_kbps = BASE_KBPS * ratio as f64;
+        let nominal_scale = if streaming {
+            sc.limit as f64 / 30.0
+        } else {
+            1.0
+        };
+        let bitrate_kbps = BASE_KBPS * nominal_scale * ratio as f64;
         qos.store_bitrate(bitrate_kbps as u32);
         let produce_rate = match sc.content {
             Content::Video => fps as f64,

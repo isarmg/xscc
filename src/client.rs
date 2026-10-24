@@ -1470,6 +1470,14 @@ impl LoginConfigHandler {
                 *self.custom_fps.lock().unwrap() = Some(custom_fps as _);
             }
         }
+        if self.conn_type == ConnType::DEFAULT_CONN {
+            msg.streaming_mode = if self.streaming_enabled() {
+                BoolOption::Yes
+            } else {
+                BoolOption::No
+            }
+            .into();
+        }
         if self.streaming_enabled() {
             msg.custom_fps = self.streaming_target_fps();
             *self.custom_fps.lock().unwrap() = Some(msg.custom_fps as _);
@@ -1677,6 +1685,31 @@ impl LoginConfigHandler {
         // This message replaces the peer's cap, so the last adaptive cap is no longer current.
         self.last_auto_fps = None;
         msg_out
+    }
+
+    /// GPUI's cadence selection is temporary for this session; no preference is persisted.
+    #[cfg(feature = "gpui-session")]
+    pub(crate) fn set_session_streaming_fps(&mut self, fps: i32) -> Message {
+        let streaming = fps > 30;
+        self.config.options.insert(keys::OPTION_STREAMING_MODE.into(),
+            if streaming { "Y" } else { "" }.into());
+        self.config.options.insert(keys::OPTION_STREAMING_FPS.into(), fps.to_string());
+        let mut message = self.set_custom_fps(fps, false);
+        message.mut_misc().mut_option().streaming_mode =
+            if streaming { BoolOption::Yes } else { BoolOption::No }.into();
+        message
+    }
+
+    /// Update the cap and streaming mode together. Unrelated cap messages leave mode unset.
+    pub fn streaming_option_message(&mut self) -> Message {
+        let mut message = self.set_custom_fps(self.streaming_target_fps(), false);
+        message.mut_misc().mut_option().streaming_mode = if self.streaming_enabled() {
+            BoolOption::Yes
+        } else {
+            BoolOption::No
+        }
+        .into();
+        message
     }
 
     pub fn streaming_enabled(&self) -> bool {
@@ -2044,6 +2077,10 @@ pub fn start_video_thread<F, T>(
                             let frame_result = handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma);
                             match frame_result {
                                 Ok(true) => {
+                                    #[cfg(feature = "gpui-session")]
+                                    session
+                                        .ui_handler
+                                        .on_video_decoded(display, start.elapsed());
                                     let presentation_fps = {
                                         let lc = session.lc.read().unwrap();
                                         lc.streaming_enabled().then(|| lc.streaming_target_fps())
@@ -2994,6 +3031,56 @@ mod retry_tests {
 #[cfg(test)]
 mod fps_tests {
     use super::*;
+
+    #[test]
+    fn streaming_options_explicitly_enable_disable_and_do_not_affect_incremental_caps() {
+        let mut handler = LoginConfigHandler::default();
+        handler.conn_type = ConnType::DEFAULT_CONN;
+        handler
+            .config
+            .options
+            .insert(keys::OPTION_STREAMING_MODE.into(), "Y".into());
+        handler
+            .config
+            .options
+            .insert(keys::OPTION_STREAMING_FPS.into(), "90".into());
+        let initial = handler.get_option_message(false).unwrap();
+        assert_eq!(initial.streaming_mode.enum_value(), Ok(BoolOption::Yes));
+        assert_eq!(initial.custom_fps, 90);
+        let enabled = handler.streaming_option_message();
+        assert_eq!(
+            enabled.misc().option().streaming_mode.enum_value(),
+            Ok(BoolOption::Yes)
+        );
+        assert_eq!(enabled.misc().option().custom_fps, 90);
+        assert_eq!(
+            handler
+                .set_custom_fps(24, false)
+                .misc()
+                .option()
+                .streaming_mode
+                .enum_value(),
+            Ok(BoolOption::NotSet)
+        );
+        handler
+            .config
+            .options
+            .insert(keys::OPTION_STREAMING_MODE.into(), String::new());
+        assert_eq!(
+            handler
+                .get_option_message(false)
+                .unwrap()
+                .streaming_mode
+                .enum_value(),
+            Ok(BoolOption::No)
+        );
+        let disabled = handler.streaming_option_message();
+        assert_eq!(
+            disabled.misc().option().streaming_mode.enum_value(),
+            Ok(BoolOption::No)
+        );
+        assert_eq!(disabled.misc().option().custom_fps, 30);
+    }
 
     #[test]
     fn changing_target_fps_invalidates_the_previous_adaptive_cap() {

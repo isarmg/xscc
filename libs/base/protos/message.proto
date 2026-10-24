@@ -458,6 +458,7 @@ message OptionMessage {
   BoolOption follow_remote_window = 16;
 
   BoolOption show_my_cursor = 19;
+  BoolOption streaming_mode = 20;
 }
 
 message TestDelay {

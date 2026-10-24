@@ -1,0 +1,38 @@
+2026-10-24 原生串流性能优化与验证口径
+
+本次采纳了静态分析中可由当前源码证实的瓶颈，并修正其中过时的移动端与指标判断。
+
+实现内容：
+1. 显式串流模式通过新增可选协议字段 streaming_mode 协商。缺省 NotSet 保持旧行为；用户目标帧率与网络短期 pacing 分开，防止恢复时每加 1fps 都重建硬编、连续发关键帧。码率沿用各 codec 已有 30fps 校准值按目标帧率缩放，保留 ABR 与质量控制。软件帧时长与目标帧率一致，PTS 仍为毫秒。绕过当前 hwcodec 中错误的 FFmpeg 动态 FPS setter。
+2. 显式 TCP 串流独立读写，有界队列按控制、音频、视频优先调度。视频最多排队 2 个完整消息，溢出只关闭慢会话，不任意丢弃参考帧。显示切换与视频共用 FIFO。No/Yes 切换先原子迁移旧队列，关闭通知和 Raw 发送等写完再退出。WS 保留原路径，实验性 QUIC 保留原有独立 lanes。
+3. 有意的编码重配置使用类型化原因，不再被当成普通采集失败指数退避。可安全复用捕获器及最后一帧 YUV，静止画面新增订阅者能收到首个关键帧。显示、隐私、桌面、采集失败等仍按需重建；持续 UAC 条件保留退避。VRAM 不跨 ReleaseFrame 使用旧 desktop texture。
+4. TCP secretbox 使用原地 detached 加解密，保持原 MAC 前缀、nonce、v0/v1 密钥协商与计数格式。拆分时保留半包 decoder 状态、读写缓冲、包长限制和双向加密序号。
+5. DXGI 去掉未初始化 POD 的 assume_init，缓存同描述符 staging 纹理与旋转输出视图。仍在复制前 Unmap，在获取新画面时 Map 同步；尺寸、格式、采样与设备变化不复用旧资源。desktop 输入视图仍只用于当前有效帧。
+6. GPUI 使用 Frame 所有权交接与有界回收池，最多缓存 3 个、每个不超过 64MiB 的 Vec；紧密 BGRA 不再整帧复制。RenderImage 持有 owner 至最后一个引用释放。DirectX/WGPU 仅通过有序上传复用同尺寸 atlas，Metal、上传失败、设备丢失、尺寸变化走新图像回退。没有声称接通硬件解码纹理零拷贝。
+7. 接收、解码输出、UI 提交 FPS 按墙钟分别计量，另有解码 p50/p95、UI 排队 p95 与 mailbox 丢帧。原解码能力估计继续用于 QoS；UI 提交不等同物理显示完成。
+
+已获得的局部证据：
+- WSL secretbox 1MiB x 512 输入，同一手工测试旧 roundtrip 4795ms、原地路径 3743ms（0.781）。包含分配与内存复制，是局部吞吐观察，不能换算为会话 FPS。
+- 空闲 CPU 紧密 BGRA 基准旧复制路径：1080p p50/p95 1.686/2.480ms，4K 7.145/9.203ms。所有权交接不复制像素，分别省去每帧 8,294,400 / 33,177,600 字节复制。该内核不包含锁、解码、GPU 上传或扫描输出。
+- 实际 VP8、VP9、AV1 创建、首帧编码、关键帧标记、120/60fps 配置与毫秒 PTS 回归通过。
+- 原协议密文固定向量、原地内存复用、认证失败、半包迁移、包长限制与阻塞写入时接收回执通过。
+- 实际 TCP 两连接压力与迁移/退出回归通过。120 x 32KiB 为合成载荷完整性/FIFO 验证，不是 H264 可解码性或端到端 120fps 验收。
+- QoS 原测试、20-seed 网络仿真、新串流起播与稳定 encoder 目标测试通过。严重超载仍需有界发送队列处理，不能仅凭 QoS 声称消除所有延迟。
+- GPUI owner 生命周期、atlas 更新/失败/尺寸/设备重置、像素布局与上传字节回归通过。Windows GPUI check 与严格 Clippy 通过。
+
+完整原生单元测试及 Windows/Linux/macOS/Android/iOS 候选构建由仓库 CI 验证；main 合并以最终候选通过相关检查为条件。物理 GPU、实际扫描输出帧率、不同显卡/显示器/NAT/移动设备的端到端画质与延迟需要独立实机测量。
+
+边界与取舍：共享编码组仍采用现有多观看者 QoS；混合 legacy 订阅仍保留其 barrier。未采用缺乏测量依据的新 bpp 常数、默认开启实验性 QUIC/FEC、没有 decoder lease/fence 的跨帧 GPU 裸指针复用，以及没有热路径收益依据的全仓库重排或 unwrap 清理。
+
+复现入口：
+- cargo test --locked -p hbb_common --lib tcp::tests
+- cargo test --locked -p hbb_common --lib benchmark_in_place_crypto -- --ignored --nocapture
+- cargo test --locked -p scrap --lib codec::streaming_tests::
+- cargo test --locked -p scrap --lib codec::rate_control::tests::
+- cargo test --locked --lib --no-default-features --features use_dasp,gpui-host,hwcodec server::video_
+- rustc --edition 2021 -O tests/presentation_bench.rs -o /tmp/presentation-bench && /tmp/presentation-bench
+- 原生平台 CI 含相应库和新增 GPUI owner/atlas/upload 测试；Linux 使用系统 codec 开发包时需额外启用 linux-pkg-config。
+
+API 约束参考：
+https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutputduplication-releaseframe
+https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-updatesubresource

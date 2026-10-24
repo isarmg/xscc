@@ -6,7 +6,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/aom_ffi.rs"));
 
-use crate::codec::{base_bitrate, codec_thread_num};
+use crate::codec::{base_bitrate, bitrate_for_fps, codec_thread_num, frame_duration};
 use crate::{codec::EncoderApi, EncodeFrame, STRIDE_ALIGN};
 use crate::{common::GoogleImage, generate_call_macro, generate_call_ptr_macro, Error, Result};
 use crate::{EncodeInput, EncodeYuvFormat, Pixfmt};
@@ -54,6 +54,8 @@ pub struct AomEncoder {
     height: usize,
     i444: bool,
     yuvfmt: EncodeYuvFormat,
+    streaming_fps: Option<u32>,
+    quality: f32,
 }
 
 // https://webrtc.googlesource.com/src/+/refs/heads/main/modules/video_coding/codecs/av1/libaom_av1_encoder.cc
@@ -228,6 +230,8 @@ impl EncoderApi for AomEncoder {
                     height: config.height as _,
                     i444,
                     yuvfmt: Self::get_yuvfmt(config.width, config.height, i444),
+                    streaming_fps: None,
+                    quality: config.quality,
                 })
             }
             _ => Err(anyhow!("encoder type mismatch")),
@@ -263,9 +267,24 @@ impl EncoderApi for AomEncoder {
         let (q_min, q_max) = Self::calc_q_values(ratio);
         c.rc_min_quantizer = q_min;
         c.rc_max_quantizer = q_max;
-        c.rc_target_bitrate = Self::bitrate(self.width as _, self.height as _, ratio);
+        c.rc_target_bitrate = bitrate_for_fps(
+            Self::bitrate(self.width as _, self.height as _, ratio),
+            self.streaming_fps,
+        );
         call_aom!(aom_codec_enc_config_set(&mut self.ctx, &c));
+        self.quality = ratio;
         Ok(())
+    }
+
+    fn set_frame_rate(&mut self, fps: u32) -> ResultType<bool> {
+        let mut c = unsafe { *self.ctx.config.enc.to_owned() };
+        c.rc_target_bitrate = bitrate_for_fps(
+            Self::bitrate(self.width as _, self.height as _, self.quality),
+            Some(fps),
+        );
+        call_aom!(aom_codec_enc_config_set(&mut self.ctx, &c));
+        self.streaming_fps = Some(fps);
+        Ok(true)
     }
 
     fn bitrate(&self) -> u32 {
@@ -310,7 +329,7 @@ impl AomEncoder {
             data.as_ptr() as _,
         ));
         let pts = webrtc::kTimeBaseDen / 1000 * ms;
-        let duration = webrtc::kTimeBaseDen / 1000;
+        let duration = frame_duration(self.streaming_fps, webrtc::kTimeBaseDen as _);
         call_aom!(aom_codec_encode(
             &mut self.ctx,
             &image,

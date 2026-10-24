@@ -833,6 +833,21 @@ impl Render for ManagementPanel {
                         self.video_state.current_monitor + 1,
                         self.video_state.target_fps.value()
                     )];
+                    if let Some(fps) = quality.received_fps {
+                        details.push(format!("接收 {} FPS", fps));
+                    }
+                    if let Some(fps) = quality.submitted_fps {
+                        details.push(format!("UI提交 {} FPS", fps));
+                    }
+                    if let (Some(p50), Some(p95)) = (quality.decode_p50_ms, quality.decode_p95_ms) {
+                        details.push(format!("解码 p50/p95 {:.1}/{:.1} ms", p50, p95));
+                    }
+                    if let Some(p95) = quality.ui_queue_p95_ms {
+                        details.push(format!("UI排队 p95 {:.1} ms", p95));
+                    }
+                    if let Some(dropped) = quality.mailbox_dropped {
+                        details.push(format!("邮箱替换 {} 帧", dropped));
+                    }
                     if let Some(fps) = quality.decoded_fps {
                         details.push(format!("解码 {} FPS", fps));
                     }

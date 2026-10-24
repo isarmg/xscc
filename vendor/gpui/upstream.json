@@ -28,9 +28,11 @@
     "crates/gpui/Cargo.toml",
     "crates/gpui/examples/README.md",
     "crates/gpui/examples/windows_shared_surface.rs",
+    "crates/gpui/src/assets.rs",
     "crates/gpui/src/elements/surface.rs",
     "crates/gpui/src/geometry.rs",
     "crates/gpui/src/gpui.rs",
+    "crates/gpui/src/platform.rs",
     "crates/gpui/src/scene.rs",
     "crates/gpui/src/shared_string.rs",
     "crates/gpui/src/style.rs",
@@ -38,6 +40,8 @@
     "crates/gpui_linux/Cargo.toml",
     "crates/gpui_platform/Cargo.toml",
     "crates/gpui_platform/src/gpui_platform.rs",
+    "crates/gpui_wgpu/src/wgpu_atlas.rs",
+    "crates/gpui_windows/src/directx_atlas.rs",
     "crates/gpui_windows/src/directx_renderer.rs",
     "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs",
     "crates/http_client/Cargo.toml",
@@ -55,7 +59,8 @@
     "Expose core APIs through gpui_platform so the application uses one GPUI dependency.",
     "Use Wayland-only Linux defaults and facade features.",
     "Merge SharedString into gpui without changing its public re-export or serialization.",
-    "Remove Web backend, two network-image demos, unused GitHub downloader and performance harness; preserve the three style correctness tests."
+    "Remove Web backend, two network-image demos, unused GitHub downloader and performance harness; preserve the three style correctness tests.",
+    "Own packed BGRA pixel storage through RenderImage and reuse same-size image atlas allocations only on ordered-upload DirectX/WGPU backends; retain fresh-image fallback on Metal, resizing, device loss and upload failure."
   ],
   "initial_workspace_member_count": 28,
   "removed_crates": [

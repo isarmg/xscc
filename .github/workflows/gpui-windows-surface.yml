@@ -1,7 +1,7 @@
 name: Experimental GPUI Windows surface WARP proof
 on:
   push:
-    branches: [feat/management-prep]
+    branches: [main, feat/management-prep]
     paths:
       - 'experiments/windows-texture-bridge/gpui-surface/**'
       - 'vendor/gpui/**'
@@ -32,6 +32,18 @@ jobs:
         run: |
           Write-Host 'Compile-only experimental surface proof. No display, physical-GPU, decoder, latency, or zero-copy validation is claimed.'
           & ./xscc/experiments/windows-texture-bridge/gpui-surface/check.ps1 -Mode Build
+      - name: Test owned image lifetime and atlas replacement fallback
+        working-directory: xscc/vendor/gpui
+        run: |
+          foreach ($filter in @('atlas_tests', 'assets::tests')) {
+            $output = & cargo +1.99.0 test --locked -p gpui --no-default-features --lib $filter 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | Write-Output
+            if ($exitCode -ne 0) { throw "GPUI test failed: $filter" }
+            if (($output -join "`n") -notmatch 'test result: ok\. [1-9][0-9]* passed;') {
+              throw "GPUI test filter matched no passing tests: $filter"
+            }
+          }
       - name: Build the private WARP draw test without running it
         working-directory: xscc/vendor/gpui
         run: |

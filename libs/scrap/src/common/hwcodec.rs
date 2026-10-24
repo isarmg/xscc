@@ -1,5 +1,8 @@
 use crate::{
-    codec::{base_bitrate, codec_thread_num, enable_hwcodec_option, EncoderApi, EncoderCfg},
+    codec::{
+        base_bitrate, bitrate_for_fps, codec_thread_num, enable_hwcodec_option, EncoderApi,
+        EncoderCfg,
+    },
     convert::*,
     CodecFormat, EncodeInput, ImageFormat, ImageRgb, Pixfmt, HW_STRIDE_ALIGN,
 };
@@ -58,60 +61,16 @@ pub struct HwRamEncoder {
     pub pixfmt: AVPixelFormat,
     bitrate: u32, //kbs
     config: HwRamEncoderConfig,
+    streaming_fps: Option<u32>,
 }
 
 impl EncoderApi for HwRamEncoder {
-    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self>
-    where
-        Self: Sized,
-    {
-        match cfg {
-            EncoderCfg::HWRAM(config) => {
-                let rc = Self::rate_control(&config);
-                let mut bitrate =
-                    Self::bitrate(&config.name, config.width, config.height, config.quality);
-                bitrate = Self::check_bitrate_range(&config, bitrate);
-                let gop = config.keyframe_interval.unwrap_or(DEFAULT_GOP as _) as i32;
-                let ctx = EncodeContext {
-                    name: config.name.clone(),
-                    mc_name: config.mc_name.clone(),
-                    width: config.width as _,
-                    height: config.height as _,
-                    pixfmt: DEFAULT_PIXFMT,
-                    align: HW_STRIDE_ALIGN as _,
-                    kbs: bitrate as i32,
-                    fps: DEFAULT_FPS,
-                    gop,
-                    quality: DEFAULT_HW_QUALITY,
-                    rc,
-                    q: -1,
-                    thread_count: codec_thread_num(16) as _, // ffmpeg's thread_count is used for cpu
-                };
-                let format = match Encoder::format_from_name(config.name.clone()) {
-                    Ok(format) => format,
-                    Err(_) => {
-                        return Err(anyhow!(format!(
-                            "failed to get format from name:{}",
-                            config.name
-                        )))
-                    }
-                };
-                match Encoder::new(ctx.clone()) {
-                    Ok(encoder) => Ok(HwRamEncoder {
-                        encoder,
-                        format,
-                        pixfmt: ctx.pixfmt,
-                        bitrate,
-                        config,
-                    }),
-                    Err(err) => Err(anyhow!(
-                        "Failed to create hardware encoder {}: {err:?}",
-                        config.name
-                    )),
-                }
-            }
-            _ => Err(anyhow!("encoder type mismatch")),
-        }
+    fn new(cfg: EncoderCfg, i444: bool) -> ResultType<Self> {
+        Self::create(cfg, i444, None)
+    }
+
+    fn new_streaming(cfg: EncoderCfg, i444: bool, fps: u32) -> ResultType<Self> {
+        Self::create(cfg, i444, Some(fps))
     }
 
     fn encode_to_message(&mut self, input: EncodeInput, ms: i64) -> ResultType<VideoFrame> {
@@ -185,7 +144,14 @@ impl EncoderApi for HwRamEncoder {
         );
         if bitrate > 0 {
             bitrate = Self::check_bitrate_range(&self.config, bitrate);
-            self.encoder.set_bitrate(bitrate as _).ok();
+            if self.streaming_fps.is_some() {
+                bitrate = bitrate_for_fps(bitrate, self.streaming_fps);
+                self.encoder
+                    .set_bitrate(bitrate as _)
+                    .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
+            } else {
+                self.encoder.set_bitrate(bitrate as _).ok();
+            }
             self.bitrate = bitrate;
         }
         self.config.quality = ratio;
@@ -216,6 +182,58 @@ impl EncoderApi for HwRamEncoder {
 }
 
 impl HwRamEncoder {
+    fn create(cfg: EncoderCfg, _i444: bool, streaming_fps: Option<u32>) -> ResultType<Self> {
+        match cfg {
+            EncoderCfg::HWRAM(config) => {
+                let rc = Self::rate_control(&config);
+                let mut bitrate =
+                    Self::bitrate(&config.name, config.width, config.height, config.quality);
+                bitrate = Self::check_bitrate_range(&config, bitrate);
+                bitrate = bitrate_for_fps(bitrate, streaming_fps);
+                let gop = config.keyframe_interval.unwrap_or(DEFAULT_GOP as _) as i32;
+                let ctx = EncodeContext {
+                    name: config.name.clone(),
+                    mc_name: config.mc_name.clone(),
+                    width: config.width as _,
+                    height: config.height as _,
+                    pixfmt: DEFAULT_PIXFMT,
+                    align: HW_STRIDE_ALIGN as _,
+                    kbs: bitrate as i32,
+                    fps: streaming_fps.map(|fps| fps as i32).unwrap_or(DEFAULT_FPS),
+                    gop,
+                    quality: DEFAULT_HW_QUALITY,
+                    rc,
+                    q: -1,
+                    thread_count: codec_thread_num(16) as _, // ffmpeg's thread_count is used for cpu
+                };
+                let format = match Encoder::format_from_name(config.name.clone()) {
+                    Ok(format) => format,
+                    Err(_) => {
+                        return Err(anyhow!(format!(
+                            "failed to get format from name:{}",
+                            config.name
+                        )))
+                    }
+                };
+                match Encoder::new(ctx.clone()) {
+                    Ok(encoder) => Ok(HwRamEncoder {
+                        encoder,
+                        format,
+                        pixfmt: ctx.pixfmt,
+                        bitrate,
+                        config,
+                        streaming_fps,
+                    }),
+                    Err(err) => Err(anyhow!(
+                        "Failed to create hardware encoder {}: {err:?}",
+                        config.name
+                    )),
+                }
+            }
+            _ => Err(anyhow!("encoder type mismatch")),
+        }
+    }
+
     pub fn try_get(format: CodecFormat) -> Option<CodecInfo> {
         let mut info = None;
         let best = CodecInfo::prioritized(HwCodecConfig::get().ram_encode);

@@ -57,6 +57,8 @@ pub struct Capturer {
     duplication: ComPtr<IDXGIOutputDuplication>,
     fastlane: bool,
     surface: ComPtr<IDXGISurface>,
+    staging_texture: ComPtr<ID3D11Texture2D>,
+    staging_desc: Option<D3D11_TEXTURE2D_DESC>,
     texture: ComPtr<ID3D11Texture2D>,
     width: usize,
     height: usize,
@@ -76,10 +78,8 @@ impl Capturer {
         let mut device = ptr::null_mut();
         let mut context = ptr::null_mut();
         let mut duplication = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut desc = unsafe { mem::MaybeUninit::uninit().assume_init() };
-        #[allow(invalid_value)]
-        let mut adapter_desc1 = unsafe { mem::MaybeUninit::uninit().assume_init() };
+        let mut desc = unsafe { mem::zeroed() };
+        let mut adapter_desc1 = unsafe { mem::zeroed() };
         let mut gdi_capturer = None;
 
         let mut res = if display.gdi {
@@ -175,6 +175,8 @@ impl Capturer {
             fastlane: desc.DesktopImageInSystemMemory == TRUE
                 && desc.ModeDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT,
             surface: ComPtr(ptr::null_mut()),
+            staging_texture: ComPtr(ptr::null_mut()),
+            staging_desc: None,
             texture: ComPtr(ptr::null_mut()),
             width: display.width() as usize,
             height: display.height() as usize,
@@ -414,7 +416,9 @@ impl Capturer {
             video_device,
             video_processor_enum,
             video_processor,
-            texture: (rotated_texture, false),
+            texture: rotated_texture,
+            texture_desc: None,
+            output_view: ComPtr(ptr::null_mut()),
         }
     }
 
@@ -442,8 +446,7 @@ impl Capturer {
             return Err(io::ErrorKind::AddrNotAvailable.into());
         }
         let mut frame = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut info = mem::MaybeUninit::uninit().assume_init();
+        let mut info = mem::zeroed();
 
         wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
         self.frame_state = FrameState::Acquired;
@@ -453,30 +456,29 @@ impl Capturer {
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
 
-        #[allow(invalid_value)]
-        let mut rect = mem::MaybeUninit::uninit().assume_init();
+        let mut rect = mem::zeroed();
         if self.fastlane {
             wrap_hresult((*self.duplication.0).MapDesktopSurface(&mut rect))?;
             self.frame_state = FrameState::Mapped;
         } else {
-            self.surface = ComPtr(self.ohgodwhat(frame.0)?);
+            self.copy_to_staging(frame.0)?;
             wrap_hresult((*self.surface.0).Map(&mut rect, DXGI_MAP_READ))?;
             self.frame_state = FrameState::Mapped;
         }
         Ok((rect.pBits, rect.Pitch))
     }
 
-    // copy from GPU memory to system memory
-    unsafe fn ohgodwhat(&mut self, frame: *mut IDXGIResource) -> io::Result<*mut IDXGISurface> {
+    unsafe fn copy_to_staging(&mut self, frame: *mut IDXGIResource) -> io::Result<()> {
         let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-        (*frame).QueryInterface(
+        wrap_hresult((*frame).QueryInterface(
             &IID_ID3D11Texture2D,
             &mut texture as *mut *mut _ as *mut *mut _,
-        );
+        ))?;
         let texture = ComPtr(texture);
-
-        #[allow(invalid_value)]
-        let mut texture_desc = mem::MaybeUninit::uninit().assume_init();
+        if texture.is_null() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let mut texture_desc = mem::zeroed();
         (*texture.0).GetDesc(&mut texture_desc);
 
         let mut source = texture.0;
@@ -484,30 +486,43 @@ impl Capturer {
             source = self.tonemap(texture.0, &texture_desc)?;
             (*source).GetDesc(&mut texture_desc);
         }
-
         texture_desc.Usage = D3D11_USAGE_STAGING;
         texture_desc.BindFlags = 0;
         texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         texture_desc.MiscFlags = 0;
 
-        let mut readable = ptr::null_mut();
-        wrap_hresult((*self.device.0).CreateTexture2D(
-            &mut texture_desc,
-            ptr::null(),
-            &mut readable,
-        ))?;
-        (*readable).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
-        let readable = ComPtr(readable);
-
-        let mut surface = ptr::null_mut();
-        (*readable.0).QueryInterface(
-            &IID_IDXGISurface,
-            &mut surface as *mut *mut _ as *mut *mut _,
-        );
-
-        (*self.context.0).CopyResource(readable.0 as *mut _, source as *mut _);
-
-        Ok(surface)
+        if !self
+            .staging_desc
+            .as_ref()
+            .map_or(false, |cached| same_texture_desc(cached, &texture_desc))
+        {
+            let mut readable = ptr::null_mut();
+            wrap_hresult((*self.device.0).CreateTexture2D(
+                &texture_desc,
+                ptr::null(),
+                &mut readable,
+            ))?;
+            let readable = ComPtr(readable);
+            if readable.is_null() {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            (*readable.0).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
+            let mut surface = ptr::null_mut();
+            wrap_hresult((*readable.0).QueryInterface(
+                &IID_IDXGISurface,
+                &mut surface as *mut *mut _ as *mut *mut _,
+            ))?;
+            if surface.is_null() {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
+            self.surface = ComPtr(surface);
+            self.staging_texture = readable;
+            self.staging_desc = Some(texture_desc);
+        }
+        // release_frame unmaps the previous read before this copy. Map below waits for this
+        // frame's GPU copy, so reuse cannot return a stale frame or overwrite a mapped read.
+        (*self.context.0).CopyResource(self.staging_texture.0 as *mut _, source as *mut _);
+        Ok(())
     }
 
     pub fn frame<'a>(&'a mut self, timeout: UINT) -> io::Result<Frame<'a>> {
@@ -594,8 +609,7 @@ impl Capturer {
             }
             self.release_frame()?;
             let mut frame = ptr::null_mut();
-            #[allow(invalid_value)]
-            let mut info = mem::MaybeUninit::uninit().assume_init();
+            let mut info = mem::zeroed();
 
             wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
             self.frame_state = FrameState::Acquired;
@@ -606,11 +620,14 @@ impl Capturer {
             }
 
             let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
-            (*frame.0).QueryInterface(
+            wrap_hresult((*frame.0).QueryInterface(
                 &IID_ID3D11Texture2D,
                 &mut texture as *mut *mut _ as *mut *mut _,
-            );
+            ))?;
             let texture = ComPtr(texture);
+            if texture.is_null() {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
             self.texture = texture;
 
             let mut frame_desc: D3D11_TEXTURE2D_DESC = mem::zeroed();
@@ -642,14 +659,27 @@ impl Capturer {
                     desc.Width = desc.Height;
                     desc.Height = tmp;
                 }
-                if !self.rotate.texture.1 {
-                    self.rotate.texture.1 = true;
-                    let mut rotated_texture: *mut ID3D11Texture2D = ptr::null_mut();
-                    desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-                    (*self.device.0).CreateTexture2D(&desc, ptr::null(), &mut rotated_texture);
-                    self.rotate.texture.0 = ComPtr(rotated_texture);
+                desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+                if !self
+                    .rotate
+                    .texture_desc
+                    .as_ref()
+                    .map_or(false, |cached| same_texture_desc(cached, &desc))
+                {
+                    self.rotate.output_view = ComPtr(ptr::null_mut());
+                    self.rotate.texture = ComPtr(ptr::null_mut());
+                    let result = self.rotate.create_output(self.device.0, &desc);
+                    match result {
+                        Ok(()) => self.rotate.texture_desc = Some(desc),
+                        Err(err) => hbb_common::throttled_log!(
+                            std::time::Duration::from_secs(1),
+                            warn,
+                            "Rotation output unavailable: {err}"
+                        ),
+                    }
                 }
-                if !self.rotate.texture.0.is_null()
+                if !self.rotate.texture.is_null()
+                    && !self.rotate.output_view.is_null()
                     && desc.Width == self.width as u32
                     && desc.Height == self.height as u32
                 {
@@ -670,32 +700,18 @@ impl Capturer {
                     );
                     if !input_view.is_null() {
                         let input_view = ComPtr(input_view);
-                        let mut output_view_desc: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC =
-                            mem::zeroed();
-                        output_view_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-                        output_view_desc.u.Texture2D_mut().MipSlice = 0;
-                        let mut output_view = ptr::null_mut();
-                        (*self.rotate.video_device.0).CreateVideoProcessorOutputView(
-                            self.rotate.texture.0 .0 as *mut _,
-                            self.rotate.video_processor_enum.0 as *mut _,
-                            &output_view_desc,
-                            &mut output_view,
-                        );
-                        if !output_view.is_null() {
-                            let output_view = ComPtr(output_view);
-                            let mut stream_data: D3D11_VIDEO_PROCESSOR_STREAM = mem::zeroed();
-                            stream_data.Enable = TRUE;
-                            stream_data.pInputSurface = input_view.0;
-                            (*self.rotate.video_context.0).VideoProcessorBlt(
-                                self.rotate.video_processor.0,
-                                output_view.0,
-                                0,
-                                1,
-                                &stream_data,
-                            );
-                            final_texture = self.rotate.texture.0 .0 as *mut c_void;
-                            rotation = 0;
-                        }
+                        let mut stream_data: D3D11_VIDEO_PROCESSOR_STREAM = mem::zeroed();
+                        stream_data.Enable = TRUE;
+                        stream_data.pInputSurface = input_view.0;
+                        wrap_hresult((*self.rotate.video_context.0).VideoProcessorBlt(
+                            self.rotate.video_processor.0,
+                            self.rotate.output_view.0,
+                            0,
+                            1,
+                            &stream_data,
+                        ))?;
+                        final_texture = self.rotate.texture.0 as *mut c_void;
+                        rotation = 0;
                     }
                 }
             }
@@ -793,8 +809,7 @@ impl Displays {
         let mut all = Vec::new();
         let mut i: DWORD = 0;
         loop {
-            #[allow(invalid_value)]
-            let mut d: DISPLAY_DEVICEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            let mut d: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
             d.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
             let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut d as _, 0) };
             if ok == FALSE {
@@ -814,8 +829,7 @@ impl Displays {
                 gdi: true,
             };
             disp.desc.DeviceName = d.DeviceName;
-            #[allow(invalid_value)]
-            let mut m: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            let mut m: DEVMODEW = unsafe { std::mem::zeroed() };
             m.dmSize = std::mem::size_of::<DEVMODEW>() as _;
             m.dmDriverExtra = 0;
             let ok = unsafe {
@@ -874,8 +888,7 @@ impl Displays {
         // We get the display's details.
 
         let desc = unsafe {
-            #[allow(invalid_value)]
-            let mut desc = mem::MaybeUninit::uninit().assume_init();
+            let mut desc = mem::zeroed();
             (*output.0).GetDesc(&mut desc);
             desc
         };
@@ -997,8 +1010,7 @@ impl Display {
     pub fn adapter_luid(&self) -> Option<i64> {
         unsafe {
             if !self.adapter.is_null() {
-                #[allow(invalid_value)]
-                let mut adapter_desc1 = mem::MaybeUninit::uninit().assume_init();
+                let mut adapter_desc1 = mem::zeroed();
                 if wrap_hresult((*self.adapter.0).GetDesc1(&mut adapter_desc1)).is_ok() {
                     let luid = ((adapter_desc1.AdapterLuid.HighPart as i64) << 32)
                         | adapter_desc1.AdapterLuid.LowPart as i64;
@@ -1035,5 +1047,52 @@ struct Rotate {
     video_device: ComPtr<ID3D11VideoDevice>,
     video_processor_enum: ComPtr<ID3D11VideoProcessorEnumerator>,
     video_processor: ComPtr<ID3D11VideoProcessor>,
-    texture: (ComPtr<ID3D11Texture2D>, bool),
+    texture: ComPtr<ID3D11Texture2D>,
+    texture_desc: Option<D3D11_TEXTURE2D_DESC>,
+    output_view: ComPtr<ID3D11VideoProcessorOutputView>,
+}
+
+impl Rotate {
+    unsafe fn create_output(
+        &mut self,
+        device: *mut ID3D11Device,
+        desc: &D3D11_TEXTURE2D_DESC,
+    ) -> io::Result<()> {
+        let mut texture = ptr::null_mut();
+        wrap_hresult((*device).CreateTexture2D(desc, ptr::null(), &mut texture))?;
+        let texture = ComPtr(texture);
+        if texture.is_null() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let mut desc: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC = mem::zeroed();
+        desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        desc.u.Texture2D_mut().MipSlice = 0;
+        let mut view = ptr::null_mut();
+        wrap_hresult((*self.video_device.0).CreateVideoProcessorOutputView(
+            texture.0 as *mut _,
+            self.video_processor_enum.0 as *mut _,
+            &desc,
+            &mut view,
+        ))?;
+        if view.is_null() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        self.texture = texture;
+        self.output_view = ComPtr(view);
+        Ok(())
+    }
+}
+
+fn same_texture_desc(a: &D3D11_TEXTURE2D_DESC, b: &D3D11_TEXTURE2D_DESC) -> bool {
+    a.Width == b.Width
+        && a.Height == b.Height
+        && a.MipLevels == b.MipLevels
+        && a.ArraySize == b.ArraySize
+        && a.Format == b.Format
+        && a.SampleDesc.Count == b.SampleDesc.Count
+        && a.SampleDesc.Quality == b.SampleDesc.Quality
+        && a.Usage == b.Usage
+        && a.BindFlags == b.BindFlags
+        && a.CPUAccessFlags == b.CPUAccessFlags
+        && a.MiscFlags == b.MiscFlags
 }

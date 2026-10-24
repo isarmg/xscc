@@ -74,3 +74,18 @@ The Web backend, two network-image demos, unused optional GitHub downloader,
 and six associated tooling packages are removed. The three style tests formerly
 run through the performance harness now use ordinary `#[test]` attributes with
 the same assertions. Core tests, benchmark support, and Windows WARP tests remain.
+
+## Video image ownership and ordered uploads
+
+`RenderImage::from_bgra` retains an owned, packed pixel buffer until the final
+image reference is released. `Window::replace_image` explicitly invalidates the
+previous image, like `drop_image`, and reuses a same-sized atlas tile only when
+the backend provides an ordered upload. DirectX uses its existing
+`UpdateSubresource` upload; WGPU snapshots upload bytes and submits them on its
+existing render queue. Metal retains the fresh-image path. Size changes,
+device loss, unsupported backends and failed uploads retain the fresh-image
+fallback. No decoder texture is imported or reused through this API.
+
+Core image/atlas tests cover retained ownership, replacement failure, changed
+size and device reset. WGPU tests cover upload storage reuse and pixel swizzling.
+Physical GPU throughput and actual screen presentation require device testing.

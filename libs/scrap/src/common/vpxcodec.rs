@@ -8,7 +8,7 @@ use hbb_common::log;
 use hbb_common::ResultType;
 use base::message_proto::{Chroma, EncodedVideoFrame, EncodedVideoFrames, VideoFrame};
 
-use crate::codec::{base_bitrate, codec_thread_num, EncoderApi};
+use crate::codec::{base_bitrate, bitrate_for_fps, codec_thread_num, frame_duration, EncoderApi};
 use crate::{EncodeInput, EncodeYuvFormat, GoogleImage, Pixfmt, STRIDE_ALIGN};
 
 use super::vpx::{vp8e_enc_control_id::*, vpx_codec_err_t::*, *};
@@ -39,6 +39,8 @@ pub struct VpxEncoder {
     id: VpxVideoCodecId,
     i444: bool,
     yuvfmt: EncodeYuvFormat,
+    streaming_fps: Option<u32>,
+    quality: f32,
 }
 
 pub struct VpxDecoder {
@@ -165,6 +167,8 @@ impl EncoderApi for VpxEncoder {
                     id: config.codec,
                     i444,
                     yuvfmt: Self::get_yuvfmt(config.width, config.height, i444),
+                    streaming_fps: None,
+                    quality: config.quality,
                 })
             }
             _ => Err(anyhow!("encoder type mismatch")),
@@ -205,9 +209,24 @@ impl EncoderApi for VpxEncoder {
         let (q_min, q_max) = Self::calc_q_values(ratio);
         c.rc_min_quantizer = q_min;
         c.rc_max_quantizer = q_max;
-        c.rc_target_bitrate = Self::bitrate(self.width as _, self.height as _, ratio);
+        c.rc_target_bitrate = bitrate_for_fps(
+            Self::bitrate(self.width as _, self.height as _, ratio),
+            self.streaming_fps,
+        );
         call_vpx!(vpx_codec_enc_config_set(&mut self.ctx, &c));
+        self.quality = ratio;
         Ok(())
+    }
+
+    fn set_frame_rate(&mut self, fps: u32) -> ResultType<bool> {
+        let mut c = unsafe { *self.ctx.config.enc.to_owned() };
+        c.rc_target_bitrate = bitrate_for_fps(
+            Self::bitrate(self.width as _, self.height as _, self.quality),
+            Some(fps),
+        );
+        call_vpx!(vpx_codec_enc_config_set(&mut self.ctx, &c));
+        self.streaming_fps = Some(fps);
+        Ok(true)
     }
 
     fn bitrate(&self) -> u32 {
@@ -256,8 +275,8 @@ impl VpxEncoder {
             &mut self.ctx,
             &image,
             pts as _,
-            1, // Duration
-            0, // Flags
+            frame_duration(self.streaming_fps, 1000) as _, // Duration
+            0,                                             // Flags
             VPX_DL_REALTIME as _,
         ));
 

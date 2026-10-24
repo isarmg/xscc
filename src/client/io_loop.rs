@@ -706,6 +706,25 @@ impl<T: InvokeUiSession> Remote<T> {
             }
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
+                    #[cfg(feature = "gpui-session")]
+                    {
+                        use video_frame::Union;
+                        let frames = match &vf.union {
+                            Some(
+                                Union::Vp9s(frames)
+                                | Union::H264s(frames)
+                                | Union::H265s(frames)
+                                | Union::Vp8s(frames)
+                                | Union::Av1s(frames),
+                            ) => frames.frames.len(),
+                            Some(Union::Rgb(_) | Union::Yuv(_)) => 1,
+                            // Protobuf unions are non-exhaustive for future protocol variants.
+                            _ => 0,
+                        };
+                        self.handler
+                            .ui_handler
+                            .on_video_received(vf.display as usize, frames);
+                    }
                     if !self.first_frame {
                         self.first_frame = true;
                         self.handler.close_success();

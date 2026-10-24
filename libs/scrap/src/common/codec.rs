@@ -46,6 +46,25 @@ lazy_static::lazy_static! {
     static ref USABLE_ENCODING: Arc<Mutex<Option<SupportedEncoding>>> = Arc::new(Mutex::new(None));
 }
 
+#[path = "rate_control.rs"]
+mod rate_control;
+pub(crate) use rate_control::{bitrate_for_fps, frame_duration};
+
+#[derive(Debug)]
+pub struct EncoderReconfigure;
+
+impl std::fmt::Display for EncoderReconfigure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("encoder requires reconfiguration")
+    }
+}
+
+impl std::error::Error for EncoderReconfigure {}
+
+pub fn encoder_needs_reconfigure(error: &hbb_common::anyhow::Error) -> bool {
+    error.downcast_ref::<EncoderReconfigure>().is_some()
+}
+
 pub const ENCODE_NEED_SWITCH: &'static str = "ENCODE_NEED_SWITCH";
 
 #[derive(Debug, Clone)]
@@ -62,6 +81,22 @@ pub trait EncoderApi {
     fn new(cfg: EncoderCfg, i444: bool) -> ResultType<Self>
     where
         Self: Sized;
+
+    fn new_streaming(cfg: EncoderCfg, i444: bool, fps: u32) -> ResultType<Self>
+    where
+        Self: Sized,
+    {
+        let mut encoder = Self::new(cfg, i444)?;
+        if !encoder.set_frame_rate(fps)? {
+            bail!("encoder does not support a streaming frame rate");
+        }
+        Ok(encoder)
+    }
+
+    // False asks the caller to rebuild only the encoder with the new frame rate.
+    fn set_frame_rate(&mut self, _fps: u32) -> ResultType<bool> {
+        Ok(false)
+    }
 
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame>;
 
@@ -85,6 +120,7 @@ pub trait EncoderApi {
 
 pub struct Encoder {
     pub codec: Box<dyn EncoderApi>,
+    streaming_fps: Option<u32>,
 }
 
 impl Deref for Encoder {
@@ -137,15 +173,18 @@ impl Encoder {
         match config {
             EncoderCfg::VPX(_) => Ok(Encoder {
                 codec: Box::new(VpxEncoder::new(config, i444)?),
+                streaming_fps: None,
             }),
             EncoderCfg::AOM(_) => Ok(Encoder {
                 codec: Box::new(AomEncoder::new(config, i444)?),
+                streaming_fps: None,
             }),
 
             #[cfg(feature = "hwcodec")]
             EncoderCfg::HWRAM(_) => match HwRamEncoder::new(config, i444) {
                 Ok(hw) => Ok(Encoder {
                     codec: Box::new(hw),
+                    streaming_fps: None,
                 }),
                 Err(e) => {
                     // Initialization can fail temporarily (for example, busy hardware).
@@ -158,6 +197,7 @@ impl Encoder {
             EncoderCfg::VRAM(_) => match VRamEncoder::new(config, i444) {
                 Ok(tex) => Ok(Encoder {
                     codec: Box::new(tex),
+                    streaming_fps: None,
                 }),
                 Err(e) => {
                     log::error!("new vram encoder failed: {e:?}");
@@ -165,6 +205,46 @@ impl Encoder {
                 }
             },
         }
+    }
+
+    pub fn new_streaming(config: EncoderCfg, i444: bool, fps: u32) -> ResultType<Self> {
+        Self::validate_frame_rate(fps)?;
+        let codec: Box<dyn EncoderApi> = match config {
+            EncoderCfg::VPX(_) => Box::new(VpxEncoder::new_streaming(config, i444, fps)?),
+            EncoderCfg::AOM(_) => Box::new(AomEncoder::new_streaming(config, i444, fps)?),
+            #[cfg(feature = "hwcodec")]
+            EncoderCfg::HWRAM(_) => Box::new(HwRamEncoder::new_streaming(config, i444, fps)?),
+            #[cfg(feature = "vram")]
+            EncoderCfg::VRAM(_) => Box::new(VRamEncoder::new_streaming(config, i444, fps)?),
+        };
+        Ok(Self {
+            codec,
+            streaming_fps: Some(fps),
+        })
+    }
+
+    /// Nominal streaming rate; network/decoder feedback may pace input below it.
+    pub fn frame_rate(&self) -> Option<u32> {
+        self.streaming_fps
+    }
+
+    pub fn set_frame_rate(&mut self, fps: u32) -> ResultType<bool> {
+        Self::validate_frame_rate(fps)?;
+        if self.streaming_fps == Some(fps) {
+            return Ok(true);
+        }
+        if self.streaming_fps.is_none() || !self.codec.set_frame_rate(fps)? {
+            return Ok(false);
+        }
+        self.streaming_fps = Some(fps);
+        Ok(true)
+    }
+
+    fn validate_frame_rate(fps: u32) -> ResultType<()> {
+        if !(1..=120).contains(&fps) {
+            bail!("unsupported streaming frame rate: {fps}");
+        }
+        Ok(())
     }
 
     pub fn update(update: EncodingUpdate) {
@@ -1172,5 +1252,67 @@ mod ios_thread_tests {
         assert_eq!(super::ios_codec_thread_limit(1, 64), 1);
         assert_eq!(super::ios_codec_thread_limit(8, 64), 2);
         assert_eq!(super::ios_codec_thread_limit(8, 1), 1);
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+
+    #[test]
+    fn software_encoders_apply_streaming_rate_and_keep_millisecond_pts() {
+        let configs = [
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: 640,
+                height: 480,
+                quality: BR_BALANCED,
+                codec: VpxVideoCodecId::VP8,
+                keyframe_interval: None,
+            }),
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: 640,
+                height: 480,
+                quality: BR_BALANCED,
+                codec: VpxVideoCodecId::VP9,
+                keyframe_interval: None,
+            }),
+            EncoderCfg::AOM(AomEncoderConfig {
+                width: 640,
+                height: 480,
+                quality: BR_BALANCED,
+                keyframe_interval: None,
+            }),
+        ];
+        for config in configs {
+            let legacy = Encoder::new(config.clone(), false).unwrap();
+            let at_30 = legacy.bitrate();
+            assert_eq!(legacy.frame_rate(), None);
+            let mut streaming = Encoder::new_streaming(config.clone(), false, 120).unwrap();
+            assert_eq!(streaming.frame_rate(), Some(120));
+            assert_eq!(streaming.bitrate(), at_30 * 4);
+            let fmt = streaming.yuvfmt();
+            let yuv = vec![128; fmt.v + fmt.stride[2] * fmt.h / 2];
+            let packet = streaming
+                .encode_to_message(EncodeInput::YUV(&yuv), 1000)
+                .unwrap();
+            let frames = match packet.union.as_ref().unwrap() {
+                video_frame::Union::Vp8s(frames)
+                | video_frame::Union::Vp9s(frames)
+                | video_frame::Union::Av1s(frames) => frames,
+                _ => panic!("unexpected software codec"),
+            };
+            assert!(!frames.frames.is_empty());
+            assert!(frames.frames[0].key);
+            assert_eq!(frames.frames[0].pts, 1000);
+            assert!(streaming.set_frame_rate(60).unwrap());
+            assert_eq!(streaming.frame_rate(), Some(60));
+            assert_eq!(streaming.bitrate(), at_30 * 2);
+            streaming.set_quality(BR_SPEED).unwrap();
+            assert_eq!(
+                streaming.bitrate(),
+                (base_bitrate(640, 480) as f32 * BR_SPEED) as u32 * 2
+            );
+            assert!(Encoder::new_streaming(config, false, 0).is_err());
+        }
     }
 }

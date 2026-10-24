@@ -1,7 +1,7 @@
 name: GPUI Android native candidates
 on:
   push:
-    branches: [feat/management-prep]
+    branches: [main, feat/management-prep]
     paths:
       - 'experiments/gpui-android-smoke/**'
       - 'experiments/gpui-mobile-management/**'

@@ -100,3 +100,102 @@ fn constrained_startup_does_not_leave_a_large_queue() {
         }
     }
 }
+
+#[test]
+fn explicit_streaming_starts_at_the_cap_and_legacy_keeps_its_guard() {
+    for cap in [3, 30, 60, 90, 120] {
+        let mut legacy = session(cap, true);
+        legacy.update_display_data("startup", 0);
+        assert_eq!(legacy.fps(), INIT_FPS.min(cap));
+        assert_eq!(legacy.streaming_fps(), None);
+        let mut streaming = session(cap, true);
+        streaming.user_streaming_mode(1, true);
+        assert_eq!(streaming.fps(), cap);
+        assert_eq!(streaming.streaming_fps(), Some(cap));
+        assert_eq!(streaming.streaming_encoder_fps(), Some(cap));
+        reply(&mut streaming, 10);
+        assert_eq!(streaming.fps(), cap);
+    }
+}
+
+#[test]
+fn streaming_options_preserve_congestion_and_viewer_limits() {
+    let mut qos = session(120, false);
+    qos.user_streaming_mode(1, true);
+    reply(&mut qos, 10);
+    reply(&mut qos, 1210);
+    let reduced = qos.fps();
+    assert!(reduced < 120, "streaming still reacts to a saturated path");
+    qos.user_streaming_mode(1, true);
+    qos.user_custom_fps(1, 120);
+    assert_eq!(
+        qos.fps(),
+        reduced,
+        "incremental options cannot restart probing"
+    );
+    qos.user_custom_fps(1, 30);
+    assert_eq!(
+        qos.streaming_encoder_fps(),
+        Some(120),
+        "decoder feedback only paces frames"
+    );
+    qos.user_streaming_mode(1, true);
+    assert_eq!(
+        qos.streaming_encoder_fps(),
+        Some(30),
+        "explicit user target reconfigures the encoder"
+    );
+    assert!(qos.fps() <= 30, "a decoder's lower cap applies immediately");
+    qos.user_streaming_mode(1, false);
+    assert_eq!(qos.streaming_fps(), None);
+    assert_eq!(qos.fps(), INIT_FPS);
+
+    qos.user_streaming_mode(1, true);
+    qos.on_connection_open(2);
+    qos.update_display_data("startup", 0);
+    assert!(
+        qos.fps() <= INIT_FPS,
+        "a new legacy viewer retains its startup guard"
+    );
+    qos.on_connection_close(2);
+    assert_eq!(qos.fps(), 30);
+}
+
+#[test]
+fn streaming_network_simulation_keeps_fast_start_and_congestion_feedback() {
+    use super::sim::{self, EncoderModel};
+    for cap in [60, 90, 120] {
+        for seed in sim::SEEDS {
+            let mut sc = sim::scenarios()
+                .into_iter()
+                .find(|sc| sc.name == "city_relay_60")
+                .unwrap();
+            sc.limit = cap;
+            sc.encoder = EncoderModel::Cbr;
+            sc.seed = seed;
+            let clean = sim::run_streaming(&sc);
+            println!(
+                "streaming clean cap={cap} seed={seed} p95_queue={} p95_age={} avg_fps={}",
+                clean.queue_p95_ms, clean.frame_age_p95_ms, clean.mean_target_fps
+            );
+            assert_eq!(clean.time_to_90pct_ms, Some(0));
+            assert!(clean.queue_p95_ms < 150);
+            assert!(clean.mean_target_fps >= cap as f64 * 0.95);
+            sc.link.capacity_kbps = vec![(0, 8000.0)];
+            let limited = sim::run_streaming(&sc);
+            println!(
+                "streaming limited cap={cap} seed={seed} p95_queue={} p95_age={} avg_fps={}",
+                limited.queue_p95_ms, limited.frame_age_p95_ms, limited.mean_target_fps
+            );
+            assert!(limited.frame_age_p95_ms < 3000);
+            assert!(limited
+                .trace
+                .iter()
+                .any(|(_, fps, _, ratio)| *fps < cap || *ratio < BR_BALANCED));
+            assert!(limited
+                .trace
+                .iter()
+                .all(|(_, fps, _, _)| (5..=cap).contains(fps)));
+        }
+    }
+}

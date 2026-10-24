@@ -45,7 +45,15 @@ pub struct RenderImage {
     pub id: ImageId,
     /// The scale factor of this image on render.
     pub(crate) scale_factor: f32,
-    data: SmallVec<[Frame; 1]>,
+    data: RenderImageData,
+}
+
+enum RenderImageData {
+    Frames(SmallVec<[Frame; 1]>),
+    OwnedBgra {
+        size: Size<DevicePixels>,
+        pixels: Box<dyn AsRef<[u8]> + Send + Sync>,
+    },
 }
 
 impl PartialEq for RenderImage {
@@ -64,26 +72,69 @@ impl RenderImage {
         Self {
             id: ImageId(NEXT_ID.fetch_add(1, SeqCst)),
             scale_factor: 1.0,
-            data: data.into(),
+            data: RenderImageData::Frames(data.into()),
         }
+    }
+
+    /// Own a complete packed BGRA frame without copying its pixel allocation.
+    /// The owner remains alive until the final image reference is released.
+    /// Pixels use the same straight (unassociated) alpha as `new`; the renderer
+    /// applies target compositing. Opaque video should provide alpha 255.
+    /// This constructor neither premultiplies nor scans/converts the pixels.
+    pub fn from_bgra(
+        width: u32,
+        height: u32,
+        pixels: impl AsRef<[u8]> + Send + Sync + 'static,
+    ) -> Result<Self> {
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(4));
+        anyhow::ensure!(
+            width > 0
+                && height > 0
+                && width <= i32::MAX as u32
+                && height <= i32::MAX as u32
+                && expected == Some(pixels.as_ref().len()),
+            "owned image requires complete packed BGRA pixels"
+        );
+        let mut image = Self::new(SmallVec::new());
+        image.data = RenderImageData::OwnedBgra {
+            size: size(width.into(), height.into()),
+            pixels: Box::new(pixels),
+        };
+        Ok(image)
     }
 
     /// Convert this image into a byte slice.
     pub fn as_bytes(&self, frame_index: usize) -> Option<&[u8]> {
-        self.data
-            .get(frame_index)
-            .map(|frame| frame.buffer().as_raw().as_slice())
+        match &self.data {
+            RenderImageData::Frames(frames) => frames
+                .get(frame_index)
+                .map(|frame| frame.buffer().as_raw().as_slice()),
+            RenderImageData::OwnedBgra { pixels, .. } => {
+                (frame_index == 0).then(|| pixels.as_ref().as_ref())
+            }
+        }
     }
 
     /// Get the size of this image, in pixels.
     pub fn size(&self, frame_index: usize) -> Size<DevicePixels> {
-        self.data
-            .get(frame_index)
-            .map(|frame| {
-                let (width, height) = frame.buffer().dimensions();
-                size(width.into(), height.into())
-            })
-            .unwrap_or_default()
+        match &self.data {
+            RenderImageData::Frames(frames) => frames
+                .get(frame_index)
+                .map(|frame| {
+                    let (width, height) = frame.buffer().dimensions();
+                    size(width.into(), height.into())
+                })
+                .unwrap_or_default(),
+            RenderImageData::OwnedBgra { size, .. } => {
+                if frame_index == 0 {
+                    *size
+                } else {
+                    Size::default()
+                }
+            }
+        }
     }
 
     /// Get the size of this image, in pixels for display, adjusted for the scale factor.
@@ -92,17 +143,21 @@ impl RenderImage {
             .map(|v| (v.0 as f32 / self.scale_factor).into())
     }
 
-    /// Get the delay of this frame from the previous
+    /// Get the delay of this frame from the previous.
     pub fn delay(&self, frame_index: usize) -> Delay {
-        self.data
-            .get(frame_index)
-            .map(|frame| frame.delay())
-            .unwrap_or(Delay::from_numer_denom_ms(100, 1))
+        match &self.data {
+            RenderImageData::Frames(frames) => frames.get(frame_index).map(|frame| frame.delay()),
+            RenderImageData::OwnedBgra { .. } => None,
+        }
+        .unwrap_or(Delay::from_numer_denom_ms(100, 1))
     }
 
     /// Get the number of frames for this image.
     pub fn frame_count(&self) -> usize {
-        self.data.len()
+        match &self.data {
+            RenderImageData::Frames(frames) => frames.len(),
+            RenderImageData::OwnedBgra { .. } => 1,
+        }
     }
 }
 
@@ -110,7 +165,7 @@ impl fmt::Debug for RenderImage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ImageData")
             .field("id", &self.id)
-            .field("size", &self.data.first().map(|f| f.buffer().dimensions()))
+            .field("size", &self.size(0))
             .finish()
     }
 }
@@ -119,6 +174,53 @@ impl fmt::Debug for RenderImage {
 mod tests {
     use super::*;
     use smallvec::SmallVec;
+
+    #[test]
+    fn owned_bgra_keeps_original_allocation_until_last_image_reference() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Pixels {
+            bytes: Vec<u8>,
+            drops: Arc<AtomicUsize>,
+        }
+        impl AsRef<[u8]> for Pixels {
+            fn as_ref(&self) -> &[u8] {
+                &self.bytes
+            }
+        }
+        impl Drop for Pixels {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let drops = Arc::new(AtomicUsize::new(0));
+        let bytes = vec![1, 2, 3, 255];
+        let pointer = bytes.as_ptr();
+        let image = Arc::new(
+            RenderImage::from_bgra(
+                1,
+                1,
+                Pixels {
+                    bytes,
+                    drops: drops.clone(),
+                },
+            )
+            .unwrap(),
+        );
+        assert_eq!(image.as_bytes(0).unwrap().as_ptr(), pointer);
+        assert_eq!(image.frame_count(), 1);
+        assert_eq!(image.size(0), size(1.into(), 1.into()));
+        assert!(image.as_bytes(1).is_none());
+        let retained = image.clone();
+        drop(image);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(retained);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(RenderImage::from_bgra(1, 2, vec![0; 4]).is_err());
+        assert!(RenderImage::from_bgra(0, 0, Vec::<u8>::new()).is_err());
+    }
 
     #[test]
     fn empty_render_image_does_not_panic() {

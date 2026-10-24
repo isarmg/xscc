@@ -761,11 +761,15 @@ impl Render for SessionView {
                     ),
                 )
                 .child(div().child(format!(
-                        "解码 {} FPS · 接收 {} · RTT {} ms · {}（目标帧率不代表实际呈现）",
+                        "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · {}",
+                        self.quality.received_fps.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
                         self.quality
                             .decoded_fps
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "—".into()),
+                        self.quality.submitted_fps.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
+                        self.quality.decode_p95_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()),
+                        self.quality.ui_queue_p95_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()),
                         self.quality.receive_rate.as_deref().unwrap_or("—"),
                         self.quality
                             .round_trip_ms

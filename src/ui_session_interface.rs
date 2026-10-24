@@ -542,9 +542,7 @@ impl<T: InvokeUiSession> Session<T> {
                 || (k == base::config::keys::OPTION_STREAMING_FPS && lc.streaming_enabled()));
         lc.set_option(k, v);
         if streaming_change {
-            let fps = lc.streaming_target_fps();
-            lc.last_auto_fps = None;
-            let msg = lc.set_custom_fps(fps, false);
+            let msg = lc.streaming_option_message();
             drop(lc);
             self.send(Data::Message(msg));
         }
@@ -1344,6 +1342,10 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn update_block_input_state(&self, on: bool);
     fn adapt_size(&self);
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb);
+    #[cfg(feature = "gpui-session")]
+    fn on_video_received(&self, _display: usize, _frames: usize) {}
+    #[cfg(feature = "gpui-session")]
+    fn on_video_decoded(&self, _display: usize, _elapsed: std::time::Duration) {}
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool);
     #[cfg(any(target_os = "android", target_os = "ios"))]
     fn clipboard(&self, content: String);

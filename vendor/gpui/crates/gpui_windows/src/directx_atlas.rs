@@ -83,6 +83,16 @@ impl PlatformAtlas for DirectXAtlas {
         self.0.lock().get_or_insert_with(key, build)
     }
 
+    fn replace(
+        &self,
+        old: &AtlasKey,
+        new: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> anyhow::Result<bool> {
+        self.0.lock().replace(old, new, size, bytes)
+    }
+
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
@@ -103,6 +113,15 @@ impl AtlasBackend for DirectXAtlasTextures {
             .ok_or_else(|| anyhow::anyhow!("allocated tile refers to a missing texture"))?;
         texture.upload(&self.device_context, tile.bounds, bytes);
         Ok(tile)
+    }
+
+    fn update(&mut self, tile: AtlasTile, bytes: &[u8]) -> anyhow::Result<bool> {
+        let Some(texture) = self.texture(tile.texture_id) else {
+            return Ok(false);
+        };
+        // Existing upload APIs snapshot CPU bytes and order writes with earlier GPU use.
+        texture.upload(&self.device_context, tile.bounds, bytes);
+        Ok(true)
     }
 
     fn remove(&mut self, tile: AtlasTile) {

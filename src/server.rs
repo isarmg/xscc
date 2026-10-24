@@ -65,6 +65,7 @@ pub mod display_service;
 pub mod portable_service;
 mod service;
 mod video_qos;
+mod video_pipeline;
 pub mod video_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;

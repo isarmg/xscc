@@ -11,9 +11,17 @@ cargo test --locked --manifest-path "$manifest" --no-default-features --features
 # Root defaults enable Flutter; always test the same native feature set that ships.
 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
 cargo test --locked -p xscc-native-management --target "$target"
+cargo test --locked -p hbb_common --lib --target "$target" tcp::tests
+cargo test --locked -p scrap --lib --target "$target" codec::rate_control::tests::
+cargo test --locked -p scrap --lib --target "$target" codec::streaming_tests::
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
     # Select only the excluded dependency package while reusing the root lockfile.
     cargo test --locked -p rust-pulsectl --lib --target "$target"
+    for filter in upload_staging_reuses_allocation_after_snapshot swizzle_upload_data; do
+        output=$(cargo test --locked -p gpui_wgpu --lib --target "$target" "$filter" 2>&1) || { printf '%s\n' "$output"; exit 1; }
+        printf '%s\n' "$output"
+        grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$output" || { echo "No passing upload tests: $filter" >&2; exit 1; }
+    done
 fi
 # Exercise both modes on each native role without doubling release builds.
 cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features,test-lan-direct" --target "$target"

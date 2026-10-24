@@ -1,6 +1,6 @@
 use crate::{bail, bytes_codec::BytesCodec, ResultType};
 use anyhow::Context as AnyhowCtx;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use protobuf::Message;
 use sodiumoxide::crypto::{
@@ -15,10 +15,10 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf},
     net::{lookup_host, TcpListener, TcpSocket, ToSocketAddrs},
 };
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Framed, FramedParts};
 
 pub trait TcpStreamTrait: AsyncRead + AsyncWrite + Unpin {}
 pub struct DynTcpStream(pub Box<dyn TcpStreamTrait + Send + Sync>);
@@ -68,6 +68,21 @@ pub struct FramedStream(
     pub u64,
 );
 
+/// Read half of a framed connection after its key exchange has completed.
+pub struct FramedStreamReader {
+    stream: Framed<ReadHalf<DynTcpStream>, BytesCodec>,
+    local_addr: SocketAddr,
+    encrypt: Option<Encrypt>,
+}
+
+/// The single owner of the connection's send order and encryption sequence.
+pub struct FramedStreamWriter {
+    stream: Framed<WriteHalf<DynTcpStream>, BytesCodec>,
+    local_addr: SocketAddr,
+    encrypt: Option<Encrypt>,
+    send_timeout: u64,
+}
+
 impl Deref for FramedStream {
     type Target = Framed<DynTcpStream, BytesCodec>;
 
@@ -96,7 +111,10 @@ impl DerefMut for DynTcpStream {
     }
 }
 
-pub(crate) fn new_socket(addr: std::net::SocketAddr, reuse: bool) -> Result<TcpSocket, std::io::Error> {
+pub(crate) fn new_socket(
+    addr: std::net::SocketAddr,
+    reuse: bool,
+) -> Result<TcpSocket, std::io::Error> {
     let socket = match addr {
         std::net::SocketAddr::V4(..) => TcpSocket::new_v4()?,
         std::net::SocketAddr::V6(..) => TcpSocket::new_v6()?,
@@ -172,14 +190,18 @@ impl FramedStream {
 
     #[inline]
     pub async fn send(&mut self, msg: &impl Message) -> ResultType<()> {
-        self.send_raw(msg.write_to_bytes()?).await
+        let bytes = match self.2.as_mut() {
+            Some(key) => key.enc_message(msg)?,
+            None => msg.write_to_bytes()?,
+        };
+        self.send_bytes(Bytes::from(bytes)).await
     }
 
     #[inline]
     pub async fn send_raw(&mut self, msg: Vec<u8>) -> ResultType<()> {
         let mut msg = msg;
         if let Some(key) = self.2.as_mut() {
-            msg = key.enc(&msg);
+            msg = key.enc_owned(msg);
         }
         self.send_bytes(bytes::Bytes::from(msg)).await?;
         Ok(())
@@ -217,6 +239,34 @@ impl FramedStream {
         }
     }
 
+    /// Split only after negotiation: moving both buffers and the decoder state also preserves
+    /// any frame that arrived together with the last handshake message.
+    pub fn into_split(self) -> (FramedStreamReader, FramedStreamWriter) {
+        let boundary = self.0.backpressure_boundary();
+        let parts = self.0.into_parts();
+        let (read, write) = tokio::io::split(parts.io);
+        let mut read_parts = FramedParts::new(read, parts.codec);
+        read_parts.read_buf = parts.read_buf;
+        let reader = Framed::from_parts(read_parts);
+        let mut write_parts = FramedParts::new(write, parts.codec);
+        write_parts.write_buf = parts.write_buf;
+        let mut writer = Framed::from_parts(write_parts);
+        writer.set_backpressure_boundary(boundary);
+        (
+            FramedStreamReader {
+                stream: reader,
+                local_addr: self.1,
+                encrypt: self.2.clone(),
+            },
+            FramedStreamWriter {
+                stream: writer,
+                local_addr: self.1,
+                encrypt: self.2,
+                send_timeout: self.3,
+            },
+        )
+    }
+
     pub fn set_key(&mut self, key: Key) {
         self.2 = Some(Encrypt::new(key));
     }
@@ -235,6 +285,85 @@ impl FramedStream {
         let mut nonce = Nonce([0u8; secretbox::NONCEBYTES]);
         nonce.0[..std::mem::size_of_val(&seqnum)].copy_from_slice(&seqnum.to_le_bytes());
         nonce
+    }
+}
+
+impl FramedStreamReader {
+    pub async fn next(&mut self) -> Option<Result<BytesMut, Error>> {
+        let mut result = self.stream.next().await;
+        if let Some(Ok(bytes)) = &mut result {
+            if let Some(key) = self.encrypt.as_mut() {
+                if let Err(err) = key.dec(bytes) {
+                    return Some(Err(err));
+                }
+            }
+        }
+        result
+    }
+
+    pub async fn next_timeout(&mut self, ms: u64) -> Option<Result<BytesMut, Error>> {
+        crate::timeout(ms, self.next()).await.unwrap_or_default()
+    }
+
+    pub fn set_max_packet_length(&mut self, n: usize) {
+        self.stream.codec_mut().set_max_packet_length(n);
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn is_secured(&self) -> bool {
+        self.encrypt.is_some()
+    }
+}
+
+impl FramedStreamWriter {
+    pub async fn send(&mut self, msg: &impl Message) -> ResultType<()> {
+        let bytes = match self.encrypt.as_mut() {
+            Some(key) => key.enc_message(msg)?,
+            None => msg.write_to_bytes()?,
+        };
+        self.send_bytes(Bytes::from(bytes)).await
+    }
+
+    pub async fn send_raw(&mut self, bytes: Vec<u8>) -> ResultType<()> {
+        let bytes = match self.encrypt.as_mut() {
+            Some(key) => key.enc_owned(bytes),
+            None => bytes,
+        };
+        self.send_bytes(Bytes::from(bytes)).await
+    }
+
+    /// As on FramedStream, these bytes are already sealed, or belong to a raw connection.
+    pub async fn send_bytes(&mut self, bytes: Bytes) -> ResultType<()> {
+        if self.send_timeout > 0 {
+            crate::timeout(self.send_timeout, self.stream.send(bytes)).await??;
+        } else {
+            self.stream.send(bytes).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close(&mut self) -> ResultType<()> {
+        if self.send_timeout > 0 {
+            crate::timeout(self.send_timeout, self.stream.close()).await??;
+        } else {
+            self.stream.close().await?;
+        }
+        Ok(())
+    }
+
+    pub fn set_send_timeout(&mut self, ms: u64) {
+        self.send_timeout = ms;
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn is_secured(&self) -> bool {
+        self.encrypt.is_some()
     }
 }
 
@@ -371,20 +500,56 @@ impl Encrypt {
         }
         self.2 += 1;
         let nonce = FramedStream::get_nonce(self.2);
-        match secretbox::open(bytes, &nonce, self.3.as_ref().unwrap_or(&self.0)) {
-            Ok(res) => {
-                bytes.clear();
-                bytes.put_slice(&res);
-                Ok(())
-            }
-            Err(()) => Err(Error::new(ErrorKind::Other, "decryption error")),
+        let error = || Error::new(ErrorKind::Other, "decryption error");
+        if bytes.len() < secretbox::MACBYTES {
+            return Err(error());
         }
+        let tag = secretbox::Tag::from_slice(&bytes[..secretbox::MACBYTES]).ok_or_else(error)?;
+        secretbox::open_detached(
+            &mut bytes[secretbox::MACBYTES..],
+            &tag,
+            &nonce,
+            self.3.as_ref().unwrap_or(&self.0),
+        )
+        .map_err(|()| error())?;
+        bytes.advance(secretbox::MACBYTES);
+        Ok(())
     }
 
     pub fn enc(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(secretbox::MACBYTES + data.len());
+        bytes.resize(secretbox::MACBYTES, 0);
+        bytes.extend_from_slice(data);
+        self.enc_prefixed(&mut bytes);
+        bytes
+    }
+
+    pub fn enc_owned(&mut self, mut bytes: Vec<u8>) -> Vec<u8> {
+        let len = bytes.len();
+        bytes.resize(len + secretbox::MACBYTES, 0);
+        bytes.copy_within(..len, secretbox::MACBYTES);
+        self.enc_prefixed(&mut bytes);
+        bytes
+    }
+
+    fn enc_message(&mut self, msg: &impl Message) -> ResultType<Vec<u8>> {
+        msg.check_initialized()?;
+        let mut bytes = Vec::with_capacity(secretbox::MACBYTES + msg.compute_size() as usize);
+        bytes.resize(secretbox::MACBYTES, 0);
+        {
+            let mut output = protobuf::CodedOutputStream::vec(&mut bytes);
+            msg.write_to_with_cached_sizes(&mut output)?;
+            output.flush()?;
+        }
+        self.enc_prefixed(&mut bytes);
+        Ok(bytes)
+    }
+
+    fn enc_prefixed(&mut self, bytes: &mut [u8]) {
         self.1 += 1;
         let nonce = FramedStream::get_nonce(self.1);
-        secretbox::seal(&data, &nonce, &self.0)
+        let tag = secretbox::seal_detached(&mut bytes[secretbox::MACBYTES..], &nonce, &self.0);
+        bytes[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
     }
 
     pub fn decode(
@@ -432,6 +597,182 @@ mod tests {
         b.dec(&mut buf).unwrap();
         assert_eq!(&buf[..], msg);
         sealed
+    }
+
+    #[test]
+    fn in_place_crypto_matches_released_frames_and_reuses_storage() {
+        let key = Key([0x41; secretbox::KEYBYTES]);
+        let mut sender = Encrypt::new(key.clone());
+        let mut receiver = Encrypt::new(key.clone());
+        for (sequence, len) in [0, 1, 1024, 64 * 1024, 1024 * 1024].iter().copied().enumerate() {
+            let plaintext = vec![0x7b; len];
+            let expected = secretbox::seal(
+                &plaintext,
+                &FramedStream::get_nonce(sequence as u64 + 1),
+                &key,
+            );
+            let mut owned = Vec::with_capacity(len + secretbox::MACBYTES);
+            owned.extend_from_slice(&plaintext);
+            let allocation = owned.as_ptr();
+            let sealed = sender.enc_owned(owned);
+            assert_eq!(sealed.as_ptr(), allocation);
+            assert_eq!(sealed, expected);
+            let mut frame = BytesMut::from(sealed.as_slice());
+            let allocation = frame.as_ptr();
+            receiver.dec(&mut frame).unwrap();
+            assert_eq!(frame.as_ptr(), unsafe {
+                allocation.add(secretbox::MACBYTES)
+            });
+            assert_eq!(frame.as_ref(), plaintext);
+        }
+    }
+
+    #[test]
+    fn in_place_crypto_rejects_tampering_and_short_ciphertexts() {
+        let key = Key([0x42; secretbox::KEYBYTES]);
+        let mut sender = Encrypt::new(key.clone());
+        let mut receiver = Encrypt::new(key);
+        let mut frame = BytesMut::from(sender.enc(b"authenticated").as_slice());
+        frame[secretbox::MACBYTES] ^= 1;
+        let before = frame.clone();
+        assert!(receiver.dec(&mut frame).is_err());
+        assert_eq!(frame, before);
+        assert!(receiver.dec(&mut BytesMut::from(&b"short"[..])).is_err());
+    }
+
+    fn duplex_connection(stream: tokio::io::DuplexStream) -> FramedStream {
+        FramedStream(
+            Framed::new(DynTcpStream(Box::new(stream)), BytesCodec::new()),
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            0,
+        )
+    }
+
+    #[tokio::test]
+    async fn split_read_progresses_while_video_write_is_blocked() {
+        let (local, remote) = tokio::io::duplex(64);
+        let (mut reader, mut writer) = duplex_connection(local).into_split();
+        let mut peer = duplex_connection(remote);
+        let writing = tokio::spawn(async move { writer.send_raw(vec![0x7b; 1024 * 1024]).await });
+        peer.send_raw(b"input-ack".to_vec()).await.unwrap();
+        let received = crate::timeout(1000, reader.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.as_ref(), b"input-ack");
+        assert!(
+            !writing.is_finished(),
+            "the peer has not drained the video frame"
+        );
+        writing.abort();
+    }
+
+    #[tokio::test]
+    async fn split_preserves_partial_decoder_and_both_encryption_sequences() {
+        use tokio_util::codec::{Decoder, Encoder};
+        let (local, remote) = tokio::io::duplex(1024);
+        let mut stream = duplex_connection(local);
+        let mut peer = duplex_connection(remote);
+        let key = Key([0x43; secretbox::KEYBYTES]);
+        stream.set_key(key.clone());
+        peer.set_key(key);
+        stream.send_raw(b"before split".to_vec()).await.unwrap();
+        assert_eq!(
+            peer.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"before split"
+        );
+        peer.send_raw(b"received before split".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            stream.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"received before split"
+        );
+
+        let encrypted = peer.2.as_mut().unwrap().enc(b"buffered during handshake");
+        let mut buffered = BytesMut::new();
+        let mut codec = BytesCodec::new();
+        codec.encode(Bytes::from(encrypted), &mut buffered).unwrap();
+        let mut prefix = buffered.split_to(3);
+        assert!(stream.codec_mut().decode(&mut prefix).unwrap().is_none());
+        prefix.extend_from_slice(&buffered);
+        *stream.read_buffer_mut() = prefix;
+
+        // An already-buffered write must be sent before a later writer call.
+        let encrypted = stream.2.as_mut().unwrap().enc(b"pending write");
+        codec
+            .encode(Bytes::from(encrypted), stream.write_buffer_mut())
+            .unwrap();
+        let (mut reader, mut writer) = stream.into_split();
+        assert_eq!(
+            reader.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"buffered during handshake"
+        );
+        writer.send_raw(b"after split".to_vec()).await.unwrap();
+        assert_eq!(
+            peer.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"pending write"
+        );
+        assert_eq!(peer.next_timeout(1000).await.unwrap().unwrap().as_ref(), b"after split");
+        peer.send_raw(b"input after split".to_vec()).await.unwrap();
+        assert_eq!(
+            reader.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"input after split"
+        );
+    }
+
+    #[tokio::test]
+    async fn split_reader_keeps_negotiated_packet_cap() {
+        let (local, remote) = tokio::io::duplex(64);
+        let mut stream = duplex_connection(local);
+        stream.codec_mut().set_max_packet_length(4);
+        let (mut reader, _writer) = stream.into_split();
+        let mut peer = duplex_connection(remote);
+        peer.send_raw(vec![0; 5]).await.unwrap();
+        assert_eq!(
+            reader.next().await.unwrap().unwrap_err().kind(),
+            ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    #[ignore = "manual transport throughput measurement"]
+    fn benchmark_in_place_crypto() {
+        use std::{hint::black_box, time::Instant};
+        const COUNT: usize = 512;
+        let payload = vec![0x7b; 1024 * 1024];
+        let key = Key([0x44; secretbox::KEYBYTES]);
+        let start = Instant::now();
+        for sequence in 1..=COUNT {
+            let serialized = payload.clone();
+            let sealed =
+                secretbox::seal(&serialized, &FramedStream::get_nonce(sequence as u64), &key);
+            let mut bytes = BytesMut::from(sealed.as_slice());
+            let opened =
+                secretbox::open(&bytes, &FramedStream::get_nonce(sequence as u64), &key).unwrap();
+            bytes.clear();
+            bytes.extend_from_slice(&opened);
+            black_box(bytes);
+        }
+        let legacy = start.elapsed();
+        let start = Instant::now();
+        let mut sender = Encrypt::new(key.clone());
+        let mut receiver = Encrypt::new(key);
+        for _ in 0..COUNT {
+            let sealed = sender.enc_owned(payload.clone());
+            let mut bytes = BytesMut::from(sealed.as_slice());
+            receiver.dec(&mut bytes).unwrap();
+            black_box(bytes);
+        }
+        let in_place = start.elapsed();
+        eprintln!(
+            "crypto_roundtrip_1mib count={COUNT} legacy_ms={} in_place_ms={} ratio={:.3}",
+            legacy.as_millis(),
+            in_place.as_millis(),
+            in_place.as_secs_f64() / legacy.as_secs_f64()
+        );
     }
 
     #[test]

@@ -262,6 +262,7 @@ impl UserDelay {
 struct UserData {
     auto_adjust_fps: Option<u32>, // reserve for compatibility
     custom_fps: Option<u32>,
+    streaming_target_fps: Option<u32>,
     quality: Option<(i64, Quality)>, // (time, quality)
     delay: UserDelay,
     joined_at: Option<Instant>, // set by on_connection_open; the start-up guard's clock
@@ -354,6 +355,25 @@ impl VideoQoS {
         }
     }
 
+    pub fn streaming_fps(&self) -> Option<u32> {
+        self.users
+            .values()
+            .any(|user| user.streaming_target_fps.is_some())
+            .then(|| self.fps())
+    }
+
+    // Keep the nominal encoder rate stable while network/decoder feedback paces
+    // frames below it. Reopening hardware on every one-FPS recovery emits I-frames.
+    pub fn streaming_encoder_fps(&self) -> Option<u32> {
+        self.streaming_fps().map(|_| {
+            self.users
+                .values()
+                .map(|user| user.streaming_target_fps.unwrap_or_else(|| user.fps_cap()))
+                .min()
+                .unwrap_or(FPS)
+        })
+    }
+
     // Store bitrate for later use
     pub fn store_bitrate(&mut self, bitrate: u32) {
         self.bitrate_store = bitrate;
@@ -414,7 +434,35 @@ impl VideoQoS {
         }
         if let Some(user) = self.users.get_mut(&id) {
             user.custom_fps = Some(fps);
+            if user.streaming_target_fps.is_some() {
+                user.delay.fps = user.delay.fps.map(|current| current.min(user.fps_cap()));
+                self.adjust_fps();
+            }
         }
+    }
+
+    pub fn user_streaming_mode(&mut self, id: i32, enabled: bool) {
+        let now = self.now();
+        let Some(user) = self.users.get_mut(&id) else {
+            return;
+        };
+        let was_enabled = user.streaming_target_fps.is_some();
+        user.streaming_target_fps = enabled.then(|| user.fps_cap());
+        if was_enabled == enabled {
+            return;
+        }
+        if enabled {
+            // Explicit streaming starts at its requested cap. Repeated options and
+            // adaptive FPS updates must not erase evidence of congestion.
+            if !user.delay.needs_bitrate_reduction() && user.delay.fps_before_congestion.is_none() {
+                user.delay.fps = Some(user.fps_cap());
+            }
+            user.delay.startup_good_samples = u8::MAX;
+        } else {
+            user.delay = UserDelay::default();
+            user.joined_at = Some(now);
+        }
+        self.adjust_fps();
     }
 
     pub fn user_auto_adjust_fps(&mut self, id: i32, fps: u32) {
@@ -816,8 +864,9 @@ impl VideoQoS {
         // Every viewer inside its first second keeps the stream at INIT_FPS to
         // ensure stability; each viewer carries its own start-up clock.
         if self.users.values().any(|u| {
-            u.joined_at
-                .is_some_and(|joined| self.since(joined).as_secs() < 1)
+            u.streaming_target_fps.is_none()
+                && u.joined_at
+                    .is_some_and(|joined| self.since(joined).as_secs() < 1)
         }) {
             fps = fps.min(INIT_FPS);
         }

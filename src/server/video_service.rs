@@ -18,6 +18,7 @@
 // to-do:
 // https://slhck.info/video/2017/03/01/rate-control.html
 
+use super::video_pipeline::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
 #[cfg(target_os = "linux")]
 use crate::common::SimpleCallOnReturn;
@@ -39,7 +40,7 @@ use scrap::{
     aom::AomEncoderConfig,
     codec::{Encoder, EncoderCfg},
     vpxcodec::{VpxEncoderConfig, VpxVideoCodecId},
-    CodecFormat, Display, EncodeInput, TraitCapturer, TraitPixelBuffer,
+    CodecFormat, Display, EncodeInput, EncodeYuvFormat, TraitCapturer, TraitPixelBuffer,
 };
 #[cfg(windows)]
 use std::io::ErrorKind::ConnectionReset;
@@ -182,13 +183,13 @@ impl VideoFrameController {
     }
 
     fn set_send(&mut self, tm: Instant, conn_ids: HashSet<i32>) {
-        if !conn_ids.is_empty() {
-            self.cur = tm;
-            self.send_conn_ids = conn_ids;
-            DISPLAY_CONN_IDS
-                .lock()
-                .unwrap()
-                .insert(self.display_idx, self.send_conn_ids.clone());
+        self.cur = tm;
+        self.send_conn_ids = conn_ids;
+        let mut displays = DISPLAY_CONN_IDS.lock().unwrap();
+        if self.send_conn_ids.is_empty() {
+            displays.remove(&self.display_idx);
+        } else {
+            displays.insert(self.display_idx, self.send_conn_ids.clone());
         }
     }
 
@@ -219,7 +220,9 @@ impl VideoFrameController {
             if let Some(tm) = instant {
                 log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
             }
-            fetched_conn_ids.insert(id);
+            if self.send_conn_ids.contains(&id) {
+                fetched_conn_ids.insert(id);
+            }
         }
     }
 }
@@ -515,7 +518,7 @@ fn get_capturer(
 }
 
 fn run(vs: VideoService) -> ResultType<()> {
-    let mut _raii = Raii::new(vs.idx, vs.sp.name());
+    let mut raii = Raii::new(vs.idx, vs.sp.name());
     // Wayland only support one video capturer for now. It is ok to call ensure_inited() here.
     //
     // ensure_inited() is needed because clear() may be called.
@@ -548,7 +551,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     let display_idx = vs.idx;
     #[cfg(windows)]
     let dxgi_recovery_state = vs.dxgi_recovery_state.clone();
-    let sp = vs.sp;
+    let sp = vs.sp.clone();
     let mut c = get_capturer(vs.source, display_idx, last_portable_service_running)?;
     #[cfg(windows)]
     // ACCESS_LOST marks the next successful capturer creation as a recovery. This timestamp is
@@ -569,40 +572,89 @@ fn run(vs: VideoService) -> ResultType<()> {
         log::info!("disable dxgi with option, fall back to gdi");
         c.set_gdi();
     }
+    let mut cached = CaptureFrameCache::default();
+    loop {
+        let result = run_encoder(
+            &vs,
+            &sp,
+            &mut c,
+            &mut raii,
+            &mut cached,
+            last_portable_service_running,
+            #[cfg(windows)]
+            dxgi_recovery_started,
+            #[cfg(windows)]
+            &dxgi_recovery_state,
+        );
+        if let Err(error) = &result {
+            if let Some(reason) = error.downcast_ref::<VideoRestart>() {
+                if reason.reuse_capture() {
+                    // DXGI desktop surfaces are invalid after ReleaseFrame; only owned YUV is replayable.
+                    if cached.texture {
+                        return Err(VideoRestart::CaptureBackendChanged.into());
+                    }
+                    log::debug!("Reconfigure encoder while retaining capture: {reason:?}");
+                    continue;
+                }
+            }
+        }
+        return result;
+    }
+}
+
+#[derive(Default)]
+struct CaptureFrameCache {
+    yuv: Vec<u8>,
+    format: Option<EncodeYuvFormat>,
+    valid: bool,
+    texture: bool,
+}
+
+fn same_yuv_layout(left: &EncodeYuvFormat, right: &EncodeYuvFormat) -> bool {
+    left.pixfmt == right.pixfmt
+        && left.w == right.w
+        && left.h == right.h
+        && left.stride == right.stride
+        && left.u == right.u
+        && left.v == right.v
+}
+
+fn run_encoder(
+    vs: &VideoService,
+    sp: &GenericService,
+    c: &mut CapturerInfo,
+    raii: &mut Raii,
+    cached: &mut CaptureFrameCache,
+    last_portable_service_running: bool,
+    #[cfg(windows)] dxgi_recovery_started: Option<Instant>,
+    #[cfg(windows)] dxgi_recovery_state: &Arc<Mutex<DxgiRecoveryState>>,
+) -> ResultType<()> {
+    let display_idx = vs.idx;
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let mut spf = video_qos.spf();
     let mut quality = video_qos.ratio();
     drop(video_qos);
     let requested_codec = Encoder::negotiated_codec();
-    let (mut encoder, encoder_cfg, codec_format, use_i444) = match setup_encoder(
-        &c,
-        sp.name(),
-        quality,
-        last_portable_service_running,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            if !allow_software_encoder_fallback(requested_codec) {
-                return Err(anyhow!(
-                    "Failed to initialize {requested_codec:?} hardware encoder: {err:#}"
-                ));
+    let (mut encoder, encoder_cfg, codec_format, use_i444) =
+        match setup_encoder(&c, sp.name(), quality, last_portable_service_running) {
+            Ok(result) => result,
+            Err(err) => {
+                if !allow_software_encoder_fallback(requested_codec) {
+                    return Err(anyhow!(
+                        "Failed to initialize {requested_codec:?} hardware encoder: {err:#}"
+                    ));
+                }
+                log::error!("Failed to create encoder: {err:?}, fallback to VP9");
+                Encoder::set_fallback(&EncoderCfg::VPX(VpxEncoderConfig {
+                    width: c.width as _,
+                    height: c.height as _,
+                    quality,
+                    codec: VpxVideoCodecId::VP9,
+                    keyframe_interval: None,
+                }));
+                setup_encoder(&c, sp.name(), quality, last_portable_service_running)?
             }
-            log::error!("Failed to create encoder: {err:?}, fallback to VP9");
-            Encoder::set_fallback(&EncoderCfg::VPX(VpxEncoderConfig {
-                width: c.width as _,
-                height: c.height as _,
-                quality,
-                codec: VpxVideoCodecId::VP9,
-                keyframe_interval: None,
-            }));
-            setup_encoder(
-                &c,
-                sp.name(),
-                quality,
-                last_portable_service_running,
-            )?
-        }
-    };
+        };
     #[cfg(feature = "vram")]
     c.set_output_texture(encoder.input_texture());
     #[cfg(target_os = "android")]
@@ -634,7 +686,19 @@ fn run(vs: VideoService) -> ResultType<()> {
     #[cfg(windows)]
     start_uac_elevation_check();
 
-    let mut yuv = Vec::new();
+    let yuv_format = encoder.yuvfmt();
+    if cached
+        .format
+        .as_ref()
+        .is_some_and(|format| !same_yuv_layout(format, &yuv_format))
+    {
+        return Err(VideoRestart::CaptureBackendChanged.into());
+    }
+    #[cfg(feature = "vram")]
+    if encoder.input_texture() && cached.valid {
+        return Err(VideoRestart::CaptureBackendChanged.into());
+    }
+    let mut replay_cached = cached.valid;
     let mut mid_data = Vec::new();
     let mut repeat_encode_counter = 0;
     let repeat_encode_max = 10;
@@ -645,6 +709,13 @@ fn run(vs: VideoService) -> ResultType<()> {
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
 
     while sp.ok() {
+        // A static desktop still needs a fresh reference frame for newly joined viewers.
+        sp.snapshot(|subscribers| {
+            if subscribers.has_subscribes() {
+                bail!(VideoRestart::NewSubscriber);
+            }
+            Ok(())
+        })?;
         #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
         check_qos(
@@ -665,7 +736,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                 let _ = try_broadcast_display_changed(&sp, display_idx, &c, true);
             }
             log::info!("switch to refresh");
-            bail!("SWITCH");
+            bail!(VideoRestart::Refresh);
         }
         if codec_format != Encoder::negotiated_codec() {
             log::info!(
@@ -673,22 +744,22 @@ fn run(vs: VideoService) -> ResultType<()> {
                 codec_format,
                 Encoder::negotiated_codec()
             );
-            bail!("SWITCH");
+            bail!(VideoRestart::CodecChanged);
         }
         #[cfg(windows)]
         if last_portable_service_running != crate::portable_service::client::running() {
             log::info!("switch due to portable service running changed");
-            bail!("SWITCH");
+            bail!(VideoRestart::PortableChanged);
         }
         if Encoder::use_i444(&encoder_cfg) != use_i444 {
             log::info!("switch due to i444 changed");
-            bail!("SWITCH");
+            bail!(VideoRestart::ChromaChanged);
         }
         #[cfg(all(windows, feature = "vram"))]
         if c.is_gdi() && encoder.input_texture() {
             log::info!("changed to gdi when using vram");
             VRamEncoder::set_fallback_gdi(sp.name(), true);
-            bail!("SWITCH");
+            bail!(VideoRestart::CaptureBackendChanged);
         }
         if vs.source.is_monitor() {
             check_privacy_mode_changed(&sp, display_idx, &c)?;
@@ -698,7 +769,7 @@ fn run(vs: VideoService) -> ResultType<()> {
             if crate::platform::windows::desktop_changed()
                 && !crate::portable_service::client::running()
             {
-                bail!("Desktop changed");
+                bail!(VideoRestart::DesktopChanged);
             }
         }
         let now = time::Instant::now();
@@ -713,82 +784,102 @@ fn run(vs: VideoService) -> ResultType<()> {
 
         let time = now - start;
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
-        let res = match c.frame(spf) {
-            Ok(frame) => {
-                repeat_encode_counter = 0;
-                if frame.valid() {
-                    let screenshot_key = (vs.source, display_idx);
-                    let screenshot = SCREENSHOTS.lock().unwrap().remove(&screenshot_key);
-                    if let Some(mut screenshot) = screenshot {
-                        let restore_vram = screenshot.restore_vram;
-                        let (msg, w, h, data) = match &frame {
-                            scrap::Frame::PixelBuffer(f) => match get_rgba_from_pixelbuf(f) {
-                                Ok(rgba) => ("".to_owned(), f.width(), f.height(), rgba),
-                                Err(e) => {
-                                    let serr = e.to_string();
-                                    log::error!(
-                                        "Failed to convert the pix format into rgba, {}",
-                                        &serr
-                                    );
-                                    (format!("Convert pixfmt: {}", serr), 0, 0, vec![])
+        let res = if replay_cached {
+            replay_cached = false;
+            let ids = handle_one_frame(
+                display_idx,
+                &sp,
+                EncodeInput::YUV(&cached.yuv),
+                ms,
+                &mut encoder,
+                &mut encode_fail_counter,
+                &mut first_frame,
+                &mut encoder_warmed_up,
+            )?;
+            frame_controller.set_send(now, ids);
+            send_counter += 1;
+            Ok(())
+        } else {
+            match c.frame(spf) {
+                Ok(frame) => {
+                    repeat_encode_counter = 0;
+                    if frame.valid() {
+                        let screenshot_key = (vs.source, display_idx);
+                        let screenshot = SCREENSHOTS.lock().unwrap().remove(&screenshot_key);
+                        if let Some(mut screenshot) = screenshot {
+                            let restore_vram = screenshot.restore_vram;
+                            let (msg, w, h, data) = match &frame {
+                                scrap::Frame::PixelBuffer(f) => match get_rgba_from_pixelbuf(f) {
+                                    Ok(rgba) => ("".to_owned(), f.width(), f.height(), rgba),
+                                    Err(e) => {
+                                        let serr = e.to_string();
+                                        log::error!(
+                                            "Failed to convert the pix format into rgba, {}",
+                                            &serr
+                                        );
+                                        (format!("Convert pixfmt: {}", serr), 0, 0, vec![])
+                                    }
+                                },
+                                scrap::Frame::Texture(_) => {
+                                    if restore_vram {
+                                        // Already set one time, just ignore to break infinite loop.
+                                        // Though it's unreachable, this branch is kept to avoid infinite loop.
+                                        (
+                                            "Please change codec and try again.".to_owned(),
+                                            0,
+                                            0,
+                                            vec![],
+                                        )
+                                    } else {
+                                        #[cfg(all(windows, feature = "vram"))]
+                                        VRamEncoder::set_not_use(sp.name(), true);
+                                        screenshot.restore_vram = true;
+                                        SCREENSHOTS
+                                            .lock()
+                                            .unwrap()
+                                            .insert(screenshot_key, screenshot);
+                                        raii.try_vram = false;
+                                        bail!(VideoRestart::Screenshot);
+                                    }
                                 }
-                            },
-                            scrap::Frame::Texture(_) => {
-                                if restore_vram {
-                                    // Already set one time, just ignore to break infinite loop.
-                                    // Though it's unreachable, this branch is kept to avoid infinite loop.
-                                    (
-                                        "Please change codec and try again.".to_owned(),
-                                        0,
-                                        0,
-                                        vec![],
-                                    )
-                                } else {
-                                    #[cfg(all(windows, feature = "vram"))]
-                                    VRamEncoder::set_not_use(sp.name(), true);
-                                    screenshot.restore_vram = true;
-                                    SCREENSHOTS
-                                        .lock()
-                                        .unwrap()
-                                        .insert(screenshot_key, screenshot);
-                                    _raii.try_vram = false;
-                                    bail!("SWITCH");
-                                }
+                            };
+                            std::thread::spawn(move || {
+                                handle_screenshot(screenshot, msg, w, h, data);
+                            });
+                            if restore_vram {
+                                bail!(VideoRestart::Screenshot);
                             }
-                        };
-                        std::thread::spawn(move || {
-                            handle_screenshot(screenshot, msg, w, h, data);
-                        });
-                        if restore_vram {
-                            bail!("SWITCH");
                         }
-                    }
 
-                    let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data)?;
-                    let send_conn_ids = handle_one_frame(
-                        display_idx,
-                        &sp,
-                        frame,
-                        ms,
-                        &mut encoder,
-                        &mut encode_fail_counter,
-                        &mut first_frame,
-                        &mut encoder_warmed_up,
-                    )?;
-                    frame_controller.set_send(now, send_conn_ids);
-                    send_counter += 1;
-                }
-                #[cfg(windows)]
-                {
-                    #[cfg(feature = "vram")]
-                    if try_gdi == 1 && !c.is_gdi() {
-                        VRamEncoder::set_fallback_gdi(sp.name(), false);
+                        cached.texture = matches!(frame, scrap::Frame::Texture(_));
+                        cached.format = (!cached.texture).then(|| encoder.yuvfmt());
+                        let frame = frame.to(encoder.yuvfmt(), &mut cached.yuv, &mut mid_data)?;
+                        cached.valid = !cached.texture;
+                        let send_conn_ids = handle_one_frame(
+                            display_idx,
+                            &sp,
+                            frame,
+                            ms,
+                            &mut encoder,
+                            &mut encode_fail_counter,
+                            &mut first_frame,
+                            &mut encoder_warmed_up,
+                        )?;
+                        frame_controller.set_send(now, send_conn_ids);
+                        send_counter += 1;
                     }
-                    try_gdi = 0;
+                    #[cfg(windows)]
+                    {
+                        #[cfg(feature = "vram")]
+                        if try_gdi == 1 && !c.is_gdi() {
+                            VRamEncoder::set_fallback_gdi(sp.name(), false);
+                        }
+                        try_gdi = 0;
+                    }
+                    Ok(())
                 }
-                Ok(())
+                Err(err) => Err(err),
             }
-            Err(err) => Err(err),
         };
 
         match res {
@@ -807,14 +898,14 @@ fn run(vs: VideoService) -> ResultType<()> {
                         try_gdi += 1;
                     }
                 }
-                if !encoder.latency_free() && yuv.len() > 0 {
+                if !encoder.latency_free() && !cached.yuv.is_empty() {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
                         let send_conn_ids = handle_one_frame(
                             display_idx,
                             &sp,
-                            EncodeInput::YUV(&yuv),
+                            EncodeInput::YUV(&cached.yuv),
                             ms,
                             &mut encoder,
                             &mut encode_fail_counter,
@@ -847,7 +938,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                             log::debug!(
                                 "dxgi access lost, restart capture: attempt {attempt}, error: {err:?}"
                             );
-                            bail!("SWITCH");
+                            bail!(VideoRestart::CaptureLost);
                         }
                         log::warn!(
                             "dxgi access lost after {DXGI_RECOVERY_LIMIT} restarts in {} seconds, fall back to gdi: {err:?}",
@@ -931,7 +1022,11 @@ fn setup_encoder(
     let encoder_cfg =
         get_encoder_config(&c, name.to_string(), quality, last_portable_service_running)?;
     let use_i444 = Encoder::use_i444(&encoder_cfg);
-    let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
+    let requested_fps = VIDEO_QOS.lock().unwrap().streaming_encoder_fps();
+    let encoder = match requested_fps {
+        Some(fps) => Encoder::new_streaming(encoder_cfg.clone(), use_i444, fps)?,
+        None => Encoder::new(encoder_cfg.clone(), use_i444)?,
+    };
     Encoder::set_fallback(&encoder_cfg);
     let codec_format = Encoder::negotiated_codec();
     Ok((encoder, encoder_cfg, codec_format, use_i444))
@@ -1050,8 +1145,7 @@ fn check_change_scale(hardware: bool) -> ResultType<()> {
     log::info!("old_scale: {old_scale}, new_scale: {new_scale}");
     if old_scale != new_scale {
         log::info!("switch due to scale changed, {old_scale} -> {new_scale}");
-        // switch is not a must, but it is better to do so.
-        bail!("SWITCH");
+        bail!(VideoRestart::ScaleChanged);
     }
     Ok(())
 }
@@ -1072,7 +1166,7 @@ fn check_privacy_mode_changed(
         }
         log::info!("switch due to privacy mode changed");
         try_broadcast_display_changed(&sp, display_idx, ci, true).ok();
-        bail!("SWITCH");
+        bail!(VideoRestart::PrivacyChanged);
     }
     Ok(())
 }
@@ -1098,7 +1192,7 @@ fn handle_one_frame(
         // so that new sub and old sub share the same encoder after switch
         if sps.has_subscribes() {
             log::info!("switch due to new subscriber");
-            bail!("SWITCH");
+            bail!(VideoRestart::NewSubscriber);
         }
         Ok(())
     })?;
@@ -1121,6 +1215,10 @@ fn handle_one_frame(
             if !cfg!(target_os = "android") {
                 log::error!("encode fail: {e:?}, times: {}", *encode_fail_counter,);
             }
+            if scrap::codec::encoder_needs_reconfigure(&e) {
+                encoder.disable();
+                bail!(VideoRestart::EncoderReconfiguration);
+            }
             let max_fail_times = if cfg!(target_os = "android") && encoder.is_hardware() {
                 9
             } else {
@@ -1133,16 +1231,8 @@ fn handle_one_frame(
                 if encoder.is_hardware() {
                     encoder.disable();
                     log::error!("switch due to encoding fails, first frame: {first}, error: {e:?}");
-                    bail!("SWITCH");
+                    return Err(e.context("hardware encoder failed after repeated input"));
                 }
-            }
-            match e.to_string().as_str() {
-                scrap::codec::ENCODE_NEED_SWITCH => {
-                    encoder.disable();
-                    log::error!("switch due to encoder need switch");
-                    bail!("SWITCH");
-                }
-                _ => {}
             }
         }
     }
@@ -1202,7 +1292,7 @@ fn try_broadcast_display_changed(
                 sps.send_shared(msg_out.clone());
                 Ok(())
             })?;
-            bail!("SWITCH");
+            bail!(VideoRestart::DisplayChanged);
         }
     }
     Ok(())
@@ -1259,27 +1349,39 @@ fn check_qos(
     second_instant: &mut Instant,
     name: &str,
 ) -> ResultType<()> {
-    let mut video_qos = VIDEO_QOS.lock().unwrap();
-    *spf = video_qos.spf();
-    if *ratio != video_qos.ratio() {
-        *ratio = video_qos.ratio();
-        if encoder.support_changing_quality() {
-            allow_err!(encoder.set_quality(*ratio));
-            video_qos.store_bitrate(encoder.bitrate());
-        } else {
-            // Now only vaapi doesn't support changing quality
-            if !video_qos.in_vbr_state() && !video_qos.latest_quality().is_custom() {
-                log::info!("switch to change quality");
-                bail!("SWITCH");
-            }
+    let (requested_fps, requested_ratio, in_vbr, custom_quality) = {
+        let mut qos = VIDEO_QOS.lock().unwrap();
+        *spf = qos.spf();
+        if second_instant.elapsed() > Duration::from_secs(1) {
+            *second_instant = Instant::now();
+            qos.update_display_data(name, *send_counter);
+            *send_counter = 0;
+        }
+        (
+            qos.streaming_encoder_fps(),
+            qos.ratio(),
+            qos.in_vbr_state(),
+            qos.latest_quality().is_custom(),
+        )
+    };
+    // Driver reconfiguration can block; it must never hold the global QoS mutex.
+    if encoder.frame_rate() != requested_fps {
+        match requested_fps {
+            Some(fps) if encoder.frame_rate().is_some() && encoder.set_frame_rate(fps)? => {}
+            _ => bail!(VideoRestart::FrameRateChanged),
         }
     }
-    if second_instant.elapsed() > Duration::from_secs(1) {
-        *second_instant = Instant::now();
-        video_qos.update_display_data(&name, *send_counter);
-        *send_counter = 0;
+    if *ratio != requested_ratio {
+        *ratio = requested_ratio;
+        if encoder.support_changing_quality() {
+            allow_err!(encoder.set_quality(*ratio));
+            let bitrate = encoder.bitrate();
+            VIDEO_QOS.lock().unwrap().store_bitrate(bitrate);
+        } else if !in_vbr && !custom_quality {
+            log::info!("switch to change quality");
+            bail!(VideoRestart::QualityChanged);
+        }
     }
-    drop(video_qos);
     Ok(())
 }
 
@@ -1368,6 +1470,31 @@ mod tests {
     };
 
     #[test]
+    fn retained_capture_frame_requires_the_exact_encoder_plane_layout() {
+        let format = scrap::EncodeYuvFormat {
+            pixfmt: scrap::Pixfmt::NV12,
+            w: 1920,
+            h: 1080,
+            stride: vec![1920, 1920],
+            u: 1920 * 1080,
+            v: 0,
+        };
+        assert!(super::same_yuv_layout(&format, &format));
+        let mut changed = format.clone();
+        changed.stride[0] += 16;
+        assert!(!super::same_yuv_layout(&format, &changed));
+        changed = format.clone();
+        changed.pixfmt = scrap::Pixfmt::I444;
+        assert!(!super::same_yuv_layout(&format, &changed));
+        changed = format.clone();
+        changed.h += 1;
+        assert!(!super::same_yuv_layout(&format, &changed));
+        changed = format.clone();
+        changed.u += 1;
+        assert!(!super::same_yuv_layout(&format, &changed));
+    }
+
+    #[test]
     fn hardware_encoder_failure_does_not_allow_software_fallback() {
         for codec in [scrap::CodecFormat::H264, scrap::CodecFormat::H265] {
             assert!(!super::allow_software_encoder_fallback(codec));
@@ -1402,7 +1529,20 @@ mod tests {
         let mut fetched = HashSet::new();
         controller.try_wait_next(&mut fetched, 0);
         FRAME_FETCHED_NOTIFIERS.lock().unwrap().remove(&idx);
-        assert_eq!(fetched, HashSet::from([1, 2, 99]));
+        assert_eq!(fetched, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn removing_the_last_legacy_viewer_removes_the_frame_barrier() {
+        let idx = usize::MAX - 2;
+        let mut controller = VideoFrameController::new(idx);
+        controller.set_send(Instant::now(), HashSet::from([7]));
+        controller.set_send(Instant::now(), HashSet::new());
+        assert!(controller.send_conn_ids.is_empty());
+        assert!(!super::DISPLAY_CONN_IDS.lock().unwrap().contains_key(&idx));
+        let mut fetched = HashSet::new();
+        controller.try_wait_next(&mut fetched, 3_000);
+        assert!(fetched.is_empty());
     }
 
     #[test]

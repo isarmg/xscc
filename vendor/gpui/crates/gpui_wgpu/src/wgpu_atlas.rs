@@ -35,6 +35,7 @@ struct WgpuAtlasTextures {
     color_texture_format: wgpu::TextureFormat,
     storage: WgpuAtlasStorage,
     pending_uploads: Vec<PendingUpload>,
+    upload_buffers: Vec<Vec<u8>>,
     next_texture_generation: u64,
 }
 
@@ -58,6 +59,7 @@ impl WgpuAtlas {
             color_texture_format,
             storage: WgpuAtlasStorage::default(),
             pending_uploads: Vec::new(),
+            upload_buffers: Vec::new(),
             next_texture_generation: 0,
         })))
     }
@@ -119,6 +121,16 @@ impl PlatformAtlas for WgpuAtlas {
         self.0.lock().get_or_insert_with(key, build)
     }
 
+    fn replace(
+        &self,
+        old: &AtlasKey,
+        new: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        self.0.lock().replace(old, new, size, bytes)
+    }
+
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
     }
@@ -134,6 +146,15 @@ impl AtlasBackend for WgpuAtlasTextures {
         let tile = self.allocate(size, kind).context("failed to allocate")?;
         self.upload_texture(tile.texture_id, tile.bounds, bytes);
         Ok(tile)
+    }
+
+    fn update(&mut self, tile: AtlasTile, bytes: &[u8]) -> Result<bool> {
+        if self.storage.get(tile.texture_id).is_none() {
+            return Ok(false);
+        }
+        // Existing upload APIs snapshot CPU bytes and order writes with earlier GPU use.
+        self.upload_texture(tile.texture_id, tile.bounds, bytes);
+        Ok(true)
     }
 
     fn remove(&mut self, tile: AtlasTile) {
@@ -254,46 +275,56 @@ impl WgpuAtlasTextures {
     }
 
     fn upload_texture(&mut self, id: AtlasTextureId, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
-        let data = self
-            .storage
-            .get(id)
-            .map(|texture| swizzle_upload_data(bytes, texture.format))
-            .unwrap_or_else(|| bytes.to_vec());
-
+        let format = self.storage.get(id).map(|texture| texture.format);
+        // Multiple updates before a draw need only the newest bytes for this tile.
+        if let Some(upload) = self
+            .pending_uploads
+            .iter_mut()
+            .find(|upload| upload.id == id && upload.bounds == bounds)
+        {
+            fill_upload_data(&mut upload.data, bytes, format);
+            return;
+        }
+        let mut data = self.upload_buffers.pop().unwrap_or_default();
+        fill_upload_data(&mut data, bytes, format);
         self.pending_uploads
             .push(PendingUpload { id, bounds, data });
     }
 
     fn flush_uploads(&mut self) {
         for upload in self.pending_uploads.drain(..) {
-            let Some(texture) = self.storage.get(upload.id) else {
-                continue;
-            };
-            let bytes_per_pixel = texture.bytes_per_pixel();
+            if let Some(texture) = self.storage.get(upload.id) {
+                let bytes_per_pixel = texture.bytes_per_pixel();
 
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: upload.bounds.origin.x.0 as u32,
-                        y: upload.bounds.origin.y.0 as u32,
-                        z: 0,
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: upload.bounds.origin.x.0 as u32,
+                            y: upload.bounds.origin.y.0 as u32,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &upload.data,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(upload.bounds.size.width.0 as u32 * bytes_per_pixel as u32),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: upload.bounds.size.width.0 as u32,
-                    height: upload.bounds.size.height.0 as u32,
-                    depth_or_array_layers: 1,
-                },
-            );
+                    &upload.data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(
+                            upload.bounds.size.width.0 as u32 * bytes_per_pixel as u32,
+                        ),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width: upload.bounds.size.width.0 as u32,
+                        height: upload.bounds.size.height.0 as u32,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            if self.upload_buffers.len() < 3 && upload.data.capacity() <= 64 * 1024 * 1024 {
+                self.upload_buffers.push(upload.data);
+            }
         }
     }
 }
@@ -378,17 +409,21 @@ impl WgpuAtlasTexture {
     }
 }
 
-fn swizzle_upload_data(bytes: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
-    match format {
-        wgpu::TextureFormat::Rgba8Unorm => {
-            let mut data = bytes.to_vec();
-            for pixel in data.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-            data
+fn fill_upload_data(data: &mut Vec<u8>, bytes: &[u8], format: Option<wgpu::TextureFormat>) {
+    data.clear();
+    data.extend_from_slice(bytes);
+    if format == Some(wgpu::TextureFormat::Rgba8Unorm) {
+        for pixel in data.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
         }
-        _ => bytes.to_vec(),
     }
+}
+
+#[cfg(test)]
+fn swizzle_upload_data(bytes: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
+    let mut data = Vec::new();
+    fill_upload_data(&mut data, bytes, Some(format));
+    data
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
@@ -546,6 +581,26 @@ mod tests {
         assert_eq!(second_tile.texture_id, first_tile.texture_id);
         assert_ne!(second_generation, first_generation);
         Ok(())
+    }
+
+    #[test]
+    fn upload_staging_reuses_allocation_after_snapshot() {
+        let mut staging = vec![0; 16];
+        let pointer = staging.as_ptr();
+        fill_upload_data(
+            &mut staging,
+            &[1, 2, 3, 4],
+            Some(wgpu::TextureFormat::Rgba8Unorm),
+        );
+        assert_eq!(staging.as_ptr(), pointer);
+        assert_eq!(staging, [3, 2, 1, 4]);
+        fill_upload_data(
+            &mut staging,
+            &[5, 6, 7, 8],
+            Some(wgpu::TextureFormat::Bgra8Unorm),
+        );
+        assert_eq!(staging.as_ptr(), pointer);
+        assert_eq!(staging, [5, 6, 7, 8]);
     }
 
     #[test]

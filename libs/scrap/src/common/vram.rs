@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    codec::{enable_vram_option, EncoderApi, EncoderCfg},
+    codec::{bitrate_for_fps, enable_vram_option, EncoderApi, EncoderCfg, EncoderReconfigure},
     hwcodec::HwCodecConfig,
     AdapterDevice, CodecFormat, EncodeInput, EncodeYuvFormat, Pixfmt,
 };
@@ -50,47 +50,17 @@ pub struct VRamEncoder {
     bitrate: u32,
     last_frame_len: usize,
     same_bad_len_counter: usize,
+    streaming_fps: Option<u32>,
+    quality: f32,
 }
 
 impl EncoderApi for VRamEncoder {
-    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self>
-    where
-        Self: Sized,
-    {
-        match cfg {
-            EncoderCfg::VRAM(config) => {
-                let bitrate = Self::bitrate(
-                    config.feature.data_format,
-                    config.width,
-                    config.height,
-                    config.quality,
-                );
-                let gop = config.keyframe_interval.unwrap_or(MAX_GOP as _) as i32;
-                let ctx = EncodeContext {
-                    f: config.feature.clone(),
-                    d: DynamicContext {
-                        device: Some(config.device.device),
-                        width: config.width as _,
-                        height: config.height as _,
-                        kbitrate: bitrate as _,
-                        framerate: 30,
-                        gop,
-                    },
-                };
-                match Encoder::new(ctx.clone()) {
-                    Ok(encoder) => Ok(VRamEncoder {
-                        encoder,
-                        ctx,
-                        format: config.feature.data_format,
-                        bitrate,
-                        last_frame_len: 0,
-                        same_bad_len_counter: 0,
-                    }),
-                    Err(_) => Err(anyhow!(format!("Failed to create encoder"))),
-                }
-            }
-            _ => Err(anyhow!("encoder type mismatch")),
-        }
+    fn new(cfg: EncoderCfg, i444: bool) -> ResultType<Self> {
+        Self::create(cfg, i444, None)
+    }
+
+    fn new_streaming(cfg: EncoderCfg, i444: bool, fps: u32) -> ResultType<Self> {
+        Self::create(cfg, i444, Some(fps))
     }
 
     fn encode_to_message(
@@ -134,7 +104,7 @@ impl EncoderApi for VRamEncoder {
                         self.same_bad_len_counter,
                         self.last_frame_len
                     );
-                    bail!(crate::codec::ENCODE_NEED_SWITCH);
+                    bail!(EncoderReconfigure);
                 }
             } else {
                 self.same_bad_len_counter = 0;
@@ -179,12 +149,48 @@ impl EncoderApi for VRamEncoder {
             self.ctx.d.height as _,
             ratio,
         );
-        if bitrate > 0 {
+        if self.streaming_fps.is_some() {
+            let bitrate = bitrate_for_fps(bitrate, self.streaming_fps);
+            self.encoder
+                .set_bitrate(bitrate as _)
+                .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
+            self.bitrate = bitrate;
+            self.ctx.d.kbitrate = bitrate as _;
+            self.quality = ratio;
+        } else if bitrate > 0 {
             if self.encoder.set_bitrate((bitrate) as _).is_ok() {
                 self.bitrate = bitrate;
             }
         }
         Ok(())
+    }
+
+    fn set_frame_rate(&mut self, fps: u32) -> ResultType<bool> {
+        // The pinned MFX backend has no FPS reset. FFmpeg's exported FPS setter
+        // calls set_bitrate, so both require a fresh encoder with millisecond PTS.
+        if !matches!(self.ctx.f.driver, Driver::NV | Driver::AMF) {
+            return Ok(false);
+        }
+        let bitrate = bitrate_for_fps(
+            Self::bitrate(
+                self.ctx.f.data_format,
+                self.ctx.d.width as _,
+                self.ctx.d.height as _,
+                self.quality,
+            ),
+            Some(fps),
+        );
+        if self.encoder.set_framerate(fps as _).is_err()
+            || self.encoder.set_bitrate(bitrate as _).is_err()
+        {
+            // A failed/partial native reset is recovered by replacing this encoder.
+            return Ok(false);
+        }
+        self.ctx.d.framerate = fps as _;
+        self.ctx.d.kbitrate = bitrate as _;
+        self.streaming_fps = Some(fps);
+        self.bitrate = bitrate;
+        Ok(true)
     }
 
     fn bitrate(&self) -> u32 {
@@ -209,6 +215,46 @@ impl EncoderApi for VRamEncoder {
 }
 
 impl VRamEncoder {
+    fn create(cfg: EncoderCfg, _i444: bool, streaming_fps: Option<u32>) -> ResultType<Self> {
+        match cfg {
+            EncoderCfg::VRAM(config) => {
+                let bitrate = Self::bitrate(
+                    config.feature.data_format,
+                    config.width,
+                    config.height,
+                    config.quality,
+                );
+                let bitrate = bitrate_for_fps(bitrate, streaming_fps);
+                let gop = config.keyframe_interval.unwrap_or(MAX_GOP as _) as i32;
+                let ctx = EncodeContext {
+                    f: config.feature.clone(),
+                    d: DynamicContext {
+                        device: Some(config.device.device),
+                        width: config.width as _,
+                        height: config.height as _,
+                        kbitrate: bitrate as _,
+                        framerate: streaming_fps.unwrap_or(30) as _,
+                        gop,
+                    },
+                };
+                match Encoder::new(ctx.clone()) {
+                    Ok(encoder) => Ok(VRamEncoder {
+                        encoder,
+                        ctx,
+                        format: config.feature.data_format,
+                        bitrate,
+                        last_frame_len: 0,
+                        same_bad_len_counter: 0,
+                        streaming_fps,
+                        quality: config.quality,
+                    }),
+                    Err(_) => Err(anyhow!(format!("Failed to create encoder"))),
+                }
+            }
+            _ => Err(anyhow!("encoder type mismatch")),
+        }
+    }
+
     pub fn try_get(device: &AdapterDevice, format: CodecFormat) -> Option<FeatureContext> {
         let v: Vec<_> = Self::available(format)
             .drain(..)

@@ -36,15 +36,18 @@ impl VideoPresentation {
             return Err("远程画面像素布局无效。".into());
         }
         let extent = (frame.width, frame.height);
-        // GPUI RenderImage consumes BGRA bytes despite the image crate's container name.
-        let pixels = image::RgbaImage::from_raw(frame.width, frame.height, frame.bgra)
-            .ok_or_else(|| "远程画面尺寸无效。".to_owned())?;
-        let next = Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]));
-        if let Some(previous) = self.image.replace(next) {
+        let submitted = frame.submission();
+        let next = Arc::new(
+            RenderImage::from_bgra(frame.width, frame.height, frame)
+                .map_err(|error| error.to_string())?,
+        );
+        if let Some(previous) = self.image.take() {
             window
-                .drop_image(previous)
+                .replace_image(previous, &next)
                 .map_err(|error| error.to_string())?;
         }
+        self.image = Some(next);
+        submitted();
         Ok(Some(extent))
     }
 }

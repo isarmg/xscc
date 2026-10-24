@@ -6,23 +6,72 @@ use crate::{
 use base::message_proto::*;
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
+mod metrics;
+mod pixels;
+
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "gpui-mobile-session"
+))]
+pub use crate::client::mobile_audio::AudioStatus;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
+    Arc, Mutex, RwLock,
 };
+use std::time::{Duration, Instant};
 use xscc_native_management::manager::Request;
-#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
-pub use crate::client::mobile_audio::AudioStatus;
 
-#[derive(Debug)]
 pub struct Frame {
     pub display: usize,
     pub width: u32,
     pub height: u32,
     /// Bytes per row, always width * 4 for the packed BGRA8 payload.
     pub stride: usize,
-    /// Owned CPU pixels. The decoder can reuse its buffer after this copy returns.
+    /// Decoder allocation transferred to the UI; it returns to the bounded pool on drop.
     pub bgra: Vec<u8>,
+    ready_at: Instant,
+    metrics_epoch: u64,
+    recycle: Arc<ArrayQueue<Vec<u8>>>,
+    metrics: Arc<Mutex<metrics::Metrics>>,
+}
+
+impl Frame {
+    /// Receipt to invoke once the UI accepts this frame, excluding GPU completion/scanout.
+    pub fn submission(&self) -> impl FnOnce() + use<> {
+        let metrics = self.metrics.clone();
+        let ready_at = self.ready_at;
+        let epoch = self.metrics_epoch;
+        move || {
+            let mut metrics = metrics.lock().unwrap();
+            if metrics.epoch() == epoch {
+                metrics.submitted(ready_at.elapsed());
+            }
+        }
+    }
+}
+impl AsRef<[u8]> for Frame {
+    fn as_ref(&self) -> &[u8] {
+        &self.bgra
+    }
+}
+impl Drop for Frame {
+    fn drop(&mut self) {
+        // Bound both the number and size of allocations retained after resolution changes.
+        if self.bgra.capacity() <= 64 * 1024 * 1024 {
+            let _ = self.recycle.push(std::mem::take(&mut self.bgra));
+        }
+    }
+}
+impl std::fmt::Debug for Frame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("display", &self.display)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("stride", &self.stride)
+            .field("bytes", &self.bgra.len())
+            .finish()
+    }
 }
 
 /// Input-only commands; authentication and other protocol messages are not representable.
@@ -93,8 +142,16 @@ pub struct Monitor {
 
 #[derive(Clone, Debug, Default)]
 pub struct SessionQuality {
-    /// Successful decoder output callbacks per second, before GPUI presentation.
+    /// Received encoded frames per wall-clock second (before queue drops).
+    pub received_fps: Option<i32>,
+    /// Successful decoder outputs per wall-clock second, before UI throttling.
     pub decoded_fps: Option<i32>,
+    /// New images accepted by the UI per wall-clock second, not physical scanout.
+    pub submitted_fps: Option<i32>,
+    pub decode_p50_ms: Option<f32>,
+    pub decode_p95_ms: Option<f32>,
+    pub ui_queue_p95_ms: Option<f32>,
+    pub mailbox_dropped: Option<u64>,
     pub receive_rate: Option<String>,
     pub codec: Option<String>,
     pub round_trip_ms: Option<i32>,
@@ -102,8 +159,22 @@ pub struct SessionQuality {
 
 impl SessionQuality {
     pub fn merge(&mut self, update: Self) {
+        if update.received_fps.is_some() {
+            self.received_fps = update.received_fps;
+        }
+        if update.submitted_fps.is_some() {
+            self.submitted_fps = update.submitted_fps;
+        }
+        if update.mailbox_dropped.is_some() {
+            self.mailbox_dropped = update.mailbox_dropped;
+        }
         if update.decoded_fps.is_some() {
             self.decoded_fps = update.decoded_fps;
+            self.decode_p50_ms = update.decode_p50_ms;
+            self.decode_p95_ms = update.decode_p95_ms;
+        }
+        if update.submitted_fps.is_some() {
+            self.ui_queue_p95_ms = update.ui_queue_p95_ms;
         }
         if update.receive_rate.is_some() {
             self.receive_rate = update.receive_rate;
@@ -152,6 +223,8 @@ struct Mailbox {
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     platform: RwLock<String>,
     frame: ArrayQueue<Frame>,
+    recycle: Arc<ArrayQueue<Vec<u8>>>,
+    metrics: Arc<Mutex<metrics::Metrics>>,
     events: ArrayQueue<SessionEvent>,
     monitors: RwLock<Monitors>,
     connected: AtomicBool,
@@ -165,6 +238,8 @@ impl Default for Mailbox {
             #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
             platform: RwLock::new(String::new()),
             frame: ArrayQueue::new(1),
+            recycle: Arc::new(ArrayQueue::new(3)),
+            metrics: Arc::new(Mutex::new(metrics::Metrics::default())),
             events: ArrayQueue::new(64),
             monitors: RwLock::new(Monitors::default()),
             connected: AtomicBool::new(false),
@@ -327,12 +402,7 @@ impl SessionHandle {
         let Some(sender) = sender.as_ref() else {
             bail!("Session is disconnected");
         };
-        let message = self
-            .session
-            .lc
-            .write()
-            .unwrap()
-            .set_custom_fps(target.value(), false);
+        let message = self.session.lc.write().unwrap().set_session_streaming_fps(target.value());
         sender
             .send(Data::Message(message))
             .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
@@ -572,6 +642,24 @@ async fn connect_test_lan_mode(endpoint: &str, _interactive: bool) -> ResultType
 }
 
 impl InvokeUiSession for Handler {
+    fn on_video_received(&self, display: usize, frames: usize) {
+        let monitors = self.0.monitors.read().unwrap();
+        if !self.0.closed.load(Ordering::Acquire)
+            && monitors.pending.is_none()
+            && monitors.current == display
+        {
+            self.0.metrics.lock().unwrap().received(frames);
+        }
+    }
+    fn on_video_decoded(&self, display: usize, elapsed: Duration) {
+        let monitors = self.0.monitors.read().unwrap();
+        if !self.0.closed.load(Ordering::Acquire)
+            && monitors.pending.is_none()
+            && monitors.current == display
+        {
+            self.0.metrics.lock().unwrap().decoded(elapsed);
+        }
+    }
     fn on_rgba(&self, display: usize, image: &mut scrap::ImageRgb) {
         if self.0.closed.load(Ordering::Acquire) {
             return;
@@ -582,7 +670,7 @@ impl InvokeUiSession for Handler {
                 return;
             }
         }
-        if let Some(frame) = copy_frame(display, image) {
+        if let Some(frame) = take_frame(display, image, &self.0) {
             let monitors = self.0.monitors.read().unwrap();
             if monitors.pending.is_some() || monitors.current != display {
                 return;
@@ -594,6 +682,8 @@ impl InvokeUiSession for Handler {
             // render will take the newest frame from the same mailbox.
             if self.0.frame.force_push(frame).is_none() {
                 self.0.updates.notify_one();
+            } else {
+                self.0.metrics.lock().unwrap().dropped();
             }
         }
     }
@@ -615,6 +705,7 @@ impl InvokeUiSession for Handler {
             monitors.current = display.display as usize;
             monitors.pending = None;
             self.0.frame.pop();
+            self.0.metrics.lock().unwrap().reset();
         }
         self.set_display(
             display.x,
@@ -640,6 +731,7 @@ impl InvokeUiSession for Handler {
                 1.0,
             );
         }
+        self.0.metrics.lock().unwrap().reset();
         self.0.connected.store(true, Ordering::Release);
         self.event(SessionEvent::Connected);
         self.event(SessionEvent::Permission {
@@ -714,10 +806,17 @@ impl InvokeUiSession for Handler {
         if self.0.closed.load(Ordering::Acquire) || monitors.pending.is_some() {
             return;
         }
+        let sample = self.0.metrics.lock().unwrap().snapshot(Instant::now());
         self.event(SessionEvent::Quality {
             index: monitors.current,
             update: SessionQuality {
-                decoded_fps: status.fps.get(&monitors.current).copied(),
+                received_fps: sample.as_ref().map(|s| s.received_fps),
+                decoded_fps: sample.as_ref().map(|s| s.decoded_fps),
+                submitted_fps: sample.as_ref().map(|s| s.submitted_fps),
+                decode_p50_ms: sample.as_ref().and_then(|s| s.decode_p50_ms),
+                decode_p95_ms: sample.as_ref().and_then(|s| s.decode_p95_ms),
+                ui_queue_p95_ms: sample.as_ref().and_then(|s| s.ui_queue_p95_ms),
+                mailbox_dropped: sample.as_ref().map(|s| s.mailbox_dropped),
                 receive_rate: status.speed,
                 codec: status.codec_format.map(|codec| codec.to_string()),
                 round_trip_ms: status.delay.filter(|delay| *delay > 0),
@@ -739,41 +838,26 @@ impl InvokeUiSession for Handler {
     fn handle_screenshot_resp(&self, _: String, _: String) {}
 }
 
-fn copy_frame(display: usize, image: &scrap::ImageRgb) -> Option<Frame> {
+fn take_frame(display: usize, image: &mut scrap::ImageRgb, mailbox: &Mailbox) -> Option<Frame> {
     if matches!(image.fmt, scrap::ImageFormat::Raw) {
         return None;
     }
-    if image.w == 0 || image.h == 0 || image.w > 16384 || image.h > 16384 {
-        return None;
-    }
-    let row = image.w.checked_mul(4)?;
-    let align = image.align.max(1);
-    let stride = row
-        .checked_add(align - 1)?
-        .checked_div(align)?
-        .checked_mul(align)?;
-    if image.raw.len() < stride.checked_mul(image.h)? {
-        return None;
-    }
-    let mut bgra = Vec::with_capacity(row.checked_mul(image.h)?);
-    for source in image.raw.chunks_exact(stride).take(image.h) {
-        bgra.extend_from_slice(&source[..row]);
-    }
-    match image.fmt {
-        scrap::ImageFormat::ABGR => {
-            for pixel in bgra.chunks_exact_mut(4) {
-                pixel.swap(0, 2);
-            }
-        }
-        scrap::ImageFormat::ARGB => {}
-        scrap::ImageFormat::Raw => return None,
-    }
+    let layout = pixels::Layout::new(image.w, image.h, image.align, image.raw.len())?;
+    let mut replacement = mailbox.recycle.pop().unwrap_or_default();
+    // Preserve the decoder's complete destination length, including padding.
+    replacement.resize(image.raw.len(), 0);
+    let mut bgra = std::mem::replace(&mut image.raw, replacement);
+    layout.pack(&mut bgra, matches!(image.fmt, scrap::ImageFormat::ABGR));
     Some(Frame {
         display,
         width: image.w as u32,
         height: image.h as u32,
-        stride: row,
+        stride: layout.row,
         bgra,
+        ready_at: Instant::now(),
+        metrics_epoch: mailbox.metrics.lock().unwrap().epoch(),
+        recycle: mailbox.recycle.clone(),
+        metrics: mailbox.metrics.clone(),
     })
 }
 
@@ -798,10 +882,19 @@ mod tests {
     }
 
     use super::*;
+    use base::message_proto::option_message::BoolOption;
     #[test]
     fn disconnect_discards_queued_and_late_decoder_frames() {
-        let handle = SessionHandle { session: Session::default() };
-        let mut image = scrap::ImageRgb { raw: vec![1, 2, 3, 255], w: 1, h: 1, fmt: scrap::ImageFormat::ARGB, align: 1 };
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let mut image = scrap::ImageRgb {
+            raw: vec![1, 2, 3, 255],
+            w: 1,
+            h: 1,
+            fmt: scrap::ImageFormat::ARGB,
+            align: 1,
+        };
         handle.session.ui_handler.on_rgba(0, &mut image);
         assert!(handle.take_frame().is_some());
         handle.session.ui_handler.on_rgba(0, &mut image);
@@ -813,34 +906,118 @@ mod tests {
 
     #[test]
     fn bgra_keeps_channels_and_removes_padding() {
-        let image = scrap::ImageRgb {
+        let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255, 0, 0, 0, 0, 4, 5, 6, 255, 0, 0, 0, 0],
             w: 1,
             h: 2,
             fmt: scrap::ImageFormat::ARGB,
             align: 8,
         };
-        let frame = copy_frame(0, &image).unwrap();
+        let original = image.raw.clone();
+        let mailbox = Mailbox::default();
+        let frame = take_frame(0, &mut image, &mailbox).unwrap();
         assert_eq!((frame.width, frame.height, frame.stride), (1, 2, 4));
         assert_eq!(frame.bgra, vec![1, 2, 3, 255, 4, 5, 6, 255]);
-        let rgba = scrap::ImageRgb {
+        let mut rgba = scrap::ImageRgb {
+            raw: original,
             fmt: scrap::ImageFormat::ABGR,
             ..image
         };
         assert_eq!(
-            copy_frame(0, &rgba).unwrap().bgra,
+            take_frame(0, &mut rgba, &mailbox).unwrap().bgra,
             vec![3, 2, 1, 255, 6, 5, 4, 255]
         );
-        let raw = scrap::ImageRgb {
+        let mut raw = scrap::ImageRgb {
             fmt: scrap::ImageFormat::Raw,
             ..rgba
         };
-        assert!(copy_frame(0, &raw).is_none());
+        assert!(take_frame(0, &mut raw, &mailbox).is_none());
     }
+    #[test]
+    fn pixels_transfer_without_copy_and_return_only_after_final_consumer_drop() {
+        let mailbox = Mailbox::default();
+        let mut image = scrap::ImageRgb {
+            raw: vec![7; 16],
+            w: 2,
+            h: 2,
+            fmt: scrap::ImageFormat::ARGB,
+            align: 1,
+        };
+        let pointer = image.raw.as_ptr();
+        let frame = Arc::new(take_frame(0, &mut image, &mailbox).unwrap());
+        assert_eq!(frame.bgra.as_ptr(), pointer);
+        assert_ne!(image.raw.as_ptr(), pointer);
+        assert_eq!(image.raw.len(), 16);
+        let retained = frame.clone();
+        drop(frame);
+        assert!(mailbox.recycle.is_empty());
+        drop(retained);
+        assert_eq!(mailbox.recycle.pop().unwrap().as_ptr(), pointer);
+    }
+
+    #[test]
+    fn latest_frame_replacement_recycles_and_is_counted() {
+        let handler = Handler::default();
+        let mut image = scrap::ImageRgb {
+            raw: vec![1; 4],
+            w: 1,
+            h: 1,
+            fmt: scrap::ImageFormat::ARGB,
+            align: 1,
+        };
+        for _ in 0..20 {
+            handler.on_rgba(0, &mut image);
+        }
+        assert_eq!(handler.0.frame.len(), 1);
+        assert!(!handler.0.recycle.is_empty());
+        assert!(handler.0.recycle.len() <= 3);
+        let mut metrics = handler.0.metrics.lock().unwrap();
+        assert_eq!(
+            metrics
+                .snapshot(Instant::now() + Duration::from_secs(1))
+                .unwrap()
+                .mailbox_dropped,
+            19
+        );
+    }
+
+    #[test]
+    fn late_submission_after_monitor_reset_is_not_counted() {
+        let mailbox = Mailbox::default();
+        let mut image = scrap::ImageRgb { raw: vec![1; 4], w: 1, h: 1, fmt: scrap::ImageFormat::ARGB, align: 1 };
+        let frame = take_frame(0, &mut image, &mailbox).unwrap();
+        let submitted = frame.submission();
+        mailbox.metrics.lock().unwrap().reset();
+        submitted();
+        assert_eq!(mailbox.metrics.lock().unwrap().snapshot(Instant::now() + Duration::from_secs(1)).unwrap().submitted_fps, 0);
+    }
+
+    #[test]
+    fn quality_idle_window_clears_latency_but_network_only_updates_preserve_it() {
+        let mut quality = SessionQuality { decoded_fps: Some(60), submitted_fps: Some(60),
+            decode_p50_ms: Some(2.), decode_p95_ms: Some(3.), ui_queue_p95_ms: Some(4.), ..Default::default() };
+        quality.merge(SessionQuality { round_trip_ms: Some(10), ..Default::default() });
+        assert_eq!(quality.decode_p95_ms, Some(3.));
+        assert_eq!(quality.ui_queue_p95_ms, Some(4.));
+        quality.merge(SessionQuality { decoded_fps: Some(0), submitted_fps: Some(0), ..Default::default() });
+        assert!(quality.decode_p95_ms.is_none());
+        assert!(quality.ui_queue_p95_ms.is_none());
+        assert_eq!(quality.round_trip_ms, Some(10));
+    }
+
     #[test]
     fn quality_reports_active_decoder_output_and_merges_partial_network_updates() {
         let handler = Handler::default();
         handler.0.monitors.write().unwrap().current = 1;
+        handler
+            .0
+            .metrics
+            .lock()
+            .unwrap()
+            .restart(Instant::now() - Duration::from_secs(1));
+        for _ in 0..57 {
+            handler.on_video_decoded(1, Duration::from_millis(3));
+        }
         handler.update_quality_status(QualityStatus {
             fps: [(0, 90), (1, 57)].into_iter().collect(),
             speed: Some("123.00kB/s".into()),
@@ -1132,6 +1309,7 @@ mod tests {
                 option,
                 OptionMessage {
                     custom_fps: target.value(),
+                    streaming_mode: if target == TargetFps::Fps30 { BoolOption::No } else { BoolOption::Yes }.into(),
                     ..Default::default()
                 }
             );

@@ -1751,6 +1751,18 @@ pub trait PlatformAtlas {
         key: AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
+    /// Replace one image key in place when the backend provides ordered uploads.
+    /// Unsupported backends leave the old allocation untouched and return false.
+    fn replace(
+        &self,
+        _old: &AtlasKey,
+        _new: AtlasKey,
+        _size: Size<DevicePixels>,
+        _bytes: &[u8],
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
     fn remove(&self, key: &AtlasKey);
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
@@ -1767,6 +1779,12 @@ pub trait AtlasBackend {
         size: Size<DevicePixels>,
         bytes: &[u8],
     ) -> Result<AtlasTile>;
+
+    /// Update an existing tile through an upload ordered with prior GPU reads.
+    /// Returning false or an error must leave the existing pixels unchanged.
+    fn update(&mut self, _tile: AtlasTile, _bytes: &[u8]) -> Result<bool> {
+        Ok(false)
+    }
 
     fn remove(&mut self, tile: AtlasTile);
 }
@@ -1821,6 +1839,46 @@ impl<Backend: AtlasBackend> AtlasState<Backend> {
                 Ok(Some(tile))
             }
         }
+    }
+
+    /// Re-key a same-sized image after a backend-ordered pixel upload.
+    pub fn replace(
+        &mut self,
+        old: &AtlasKey,
+        new: AtlasKey,
+        size: Size<DevicePixels>,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        if !matches!(old, AtlasKey::Image(_))
+            || !matches!(&new, AtlasKey::Image(_))
+            || self.tiles_by_key.contains_key(&new)
+        {
+            return Ok(false);
+        }
+        let Some(tile) = self.tiles_by_key.get(old).copied() else {
+            return Ok(false);
+        };
+        if tile.bounds.size != size {
+            return Ok(false);
+        }
+        let expected = usize::try_from(size.width.0)
+            .ok()
+            .and_then(|width| {
+                usize::try_from(size.height.0)
+                    .ok()
+                    .and_then(|height| width.checked_mul(height))
+            })
+            .and_then(|pixels| pixels.checked_mul(4));
+        anyhow::ensure!(
+            size.width.0 > 0 && size.height.0 > 0 && expected == Some(bytes.len()),
+            "replacement requires complete packed BGRA pixels"
+        );
+        if !self.backend.update(tile, bytes)? {
+            return Ok(false);
+        }
+        self.tiles_by_key.remove(old);
+        self.tiles_by_key.insert(new, tile);
+        Ok(true)
     }
 
     pub fn remove(&mut self, key: &AtlasKey) {
@@ -3549,6 +3607,9 @@ mod atlas_tests {
     struct RecordingAtlasBackend {
         insert_calls: u32,
         fail_next_insert: bool,
+        allow_update: bool,
+        fail_next_update: bool,
+        updated_pixels: Vec<u8>,
         removed_tiles: Vec<AtlasTile>,
     }
 
@@ -3574,6 +3635,16 @@ mod atlas_tests {
             })
         }
 
+        fn update(&mut self, _tile: AtlasTile, bytes: &[u8]) -> Result<bool> {
+            if std::mem::take(&mut self.fail_next_update) {
+                anyhow::bail!("upload failed");
+            }
+            if !self.allow_update {
+                return Ok(false);
+            }
+            self.updated_pixels = bytes.to_vec();
+            Ok(true)
+        }
         fn remove(&mut self, tile: AtlasTile) {
             self.removed_tiles.push(tile);
         }
@@ -3588,6 +3659,59 @@ mod atlas_tests {
 
     fn build_tile() -> Result<Option<(Size<DevicePixels>, Cow<'static, [u8]>)>> {
         Ok(Some((TILE_SIZE, Cow::Borrowed(&[0, 0, 0, 255]))))
+    }
+
+    #[test]
+    fn ordered_replacement_rekeys_without_allocating_or_releasing_the_tile() -> Result<()> {
+        let mut state = AtlasState::new(RecordingAtlasBackend {
+            allow_update: true,
+            ..Default::default()
+        });
+        let old = image_key(100);
+        let new = image_key(101);
+        let tile = state
+            .get_or_insert_with(old.clone(), &mut build_tile)?
+            .unwrap();
+        assert!(state.replace(&old, new.clone(), TILE_SIZE, &[1, 2, 3, 255])?);
+        assert!(!state.contains(&old));
+        assert!(state.contains(&new));
+        assert_eq!(
+            state.get_or_insert_with(new, &mut || anyhow::bail!("must reuse"))?,
+            Some(tile)
+        );
+        assert_eq!(state.backend.insert_calls, 1);
+        assert!(state.backend.removed_tiles.is_empty());
+        assert_eq!(state.backend.updated_pixels, [1, 2, 3, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_failure_size_change_and_device_loss_preserve_fallback() -> Result<()> {
+        let mut state = AtlasState::new(RecordingAtlasBackend::default());
+        let old = image_key(100);
+        let new = image_key(101);
+        state.get_or_insert_with(old.clone(), &mut build_tile)?;
+        assert!(!state.replace(&old, new.clone(), TILE_SIZE, &[1, 2, 3, 255])?);
+        assert!(state.contains(&old));
+        state.backend.allow_update = true;
+        state.backend.fail_next_update = true;
+        assert!(
+            state
+                .replace(&old, new.clone(), TILE_SIZE, &[1, 2, 3, 255])
+                .is_err()
+        );
+        assert!(state.contains(&old));
+        assert!(!state.contains(&new));
+        assert!(!state.replace(&old, new.clone(), size(2.into(), 1.into()), &[0; 8])?);
+        assert!(
+            state
+                .replace(&old, new.clone(), TILE_SIZE, &[0; 3])
+                .is_err()
+        );
+        assert!(state.backend.updated_pixels.is_empty());
+        state.clear(|_| {});
+        assert!(!state.replace(&old, new, TILE_SIZE, &[0; 4])?);
+        Ok(())
     }
 
     #[test]

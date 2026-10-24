@@ -1,4 +1,8 @@
-use super::{input_service::*, *};
+use super::{
+    input_service::*,
+    video_pipeline::{ConnectionTransport, VideoWriter},
+    *,
+};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::clipboard::{update_clipboard, ClipboardSide};
 #[cfg(target_os = "android")]
@@ -27,7 +31,6 @@ use hbb_common::{
         local_permanent_password_storage_is_usable_for_auth,
         preset_permanent_password_storage_is_usable_for_auth, Config, TrustedDevice,
     },
-    futures::{SinkExt, StreamExt},
     get_time, get_version_number,
     password_security::{self as password, ApproveMode},
     sha2::{Digest, Sha256},
@@ -204,6 +207,7 @@ pub struct ConnInner {
     id: i32,
     tx: Option<Sender>,
     tx_video: Option<Sender>,
+    video_writer: Arc<Mutex<Option<VideoWriter>>>,
 }
 
 struct InputMouse {
@@ -264,7 +268,8 @@ impl AuthConnType {
 pub struct Connection {
     inner: ConnInner,
     display_idx: usize,
-    stream: crate::session_transport::SessionTransport,
+    stream: ConnectionTransport,
+    rx_video: mpsc::UnboundedReceiver<(Instant, Arc<Message>)>,
     server: super::ServerPtrWeak,
     hash: Hash,
     timer: crate::RustDeskInterval,
@@ -333,7 +338,26 @@ pub struct Connection {
 
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
-        Self { id, tx, tx_video }
+        Self {
+            id,
+            tx,
+            tx_video,
+            video_writer: Default::default(),
+        }
+    }
+
+    // Enqueue and barrier participation share the same lock as mode publication.
+    pub(super) fn send_video(&self, message: Arc<Message>) -> bool {
+        let writer = self.video_writer.lock().unwrap();
+        if let Some(writer) = writer.as_ref() {
+            // A full queue fails this receiver rather than dropping a P-frame and continuing.
+            let _ = writer.send_video(message);
+            false
+        } else {
+            self.tx_video
+                .as_ref()
+                .is_some_and(|tx| tx.send((Instant::now(), message)).is_ok())
+        }
     }
 }
 
@@ -354,14 +378,11 @@ impl Subscriber for ConnInner {
             },
             _ => false,
         };
-        let tx = if tx_by_video {
-            self.tx_video.as_mut()
-        } else {
-            self.tx.as_mut()
-        };
-        tx.map(|tx| {
+        if tx_by_video {
+            self.send_video(msg);
+        } else if let Some(tx) = self.tx.as_ref() {
             allow_err!(tx.send((Instant::now(), msg)));
-        });
+        }
     }
 }
 
@@ -418,7 +439,7 @@ impl Connection {
         let tx_from_cm = tx_from_cm_holder.clone();
         let (tx_to_cm, rx_to_cm) = mpsc::unbounded_channel::<ipc::Data>();
         let (tx, mut rx) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
-        let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
+        let (tx_video, rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
         let (tx_input, _rx_input) = std_mpsc::channel();
         let (tx_from_authed, mut rx_from_authed) = mpsc::unbounded_channel::<ipc::Data>();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -428,13 +449,15 @@ impl Connection {
                 id,
                 tx: Some(tx),
                 tx_video: Some(tx_video),
+                video_writer: Default::default(),
             },
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,
             // Defer display enumeration until login succeeds. Monitor login replaces this
             // with the primary index returned with the refreshed display snapshot.
             display_idx: 0,
-            stream,
+            stream: ConnectionTransport::new(stream),
+            rx_video,
             server,
             hash,
             timer: crate::rustdesk_interval(time::interval(SEC30)),
@@ -725,7 +748,7 @@ impl Connection {
                     }
                 },
 
-                Some((instant, value)) = rx_video.recv() => {
+                Some((instant, value)) = conn.rx_video.recv() => {
                     if !conn.video_ack_required {
                         if let Some(message::Union::VideoFrame(vf)) = &value.union {
                             video_service::notify_video_frame_fetched(vf.display as usize, id, Some(instant.into()));
@@ -800,10 +823,11 @@ impl Connection {
                 Some(data) = rx_from_authed.recv() => {
                     match data {
                         ipc::Data::Close => {
-                            conn.send(crate::common::make_privacy_mode_msg(
+                            let notification = crate::common::make_privacy_mode_msg(
                                 back_notification::PrivacyModeState::PrvOnByOther,
                                 String::new(),
-                            )).await;
+                            );
+                            allow_err!(conn.stream.send_terminal(&notification).await);
                             conn.on_close("privacy mode", false).await;
                             break;
                         }
@@ -1931,9 +1955,17 @@ impl Connection {
                 return self.send_logon_response_and_keep_alive().await;
             }
 
-            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
-            let managed_target = self.managed_permit.as_ref().is_some_and(|permit| lr.username == format!("managed:{}", permit.controlled.device_id));
-            #[cfg(not(all(feature = "managed", not(any(target_os = "android", target_os = "ios")))))]
+            #[cfg(all(
+                feature = "managed",
+                not(any(target_os = "android", target_os = "ios"))
+            ))]
+            let managed_target = self.managed_permit.as_ref().is_some_and(|permit| {
+                lr.username == format!("managed:{}", permit.controlled.device_id)
+            });
+            #[cfg(not(all(
+                feature = "managed",
+                not(any(target_os = "android", target_os = "ios"))
+            )))]
             let managed_target = false;
             if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id() && !managed_target
             {
@@ -2912,6 +2944,39 @@ impl Connection {
                 .lock()
                 .unwrap()
                 .user_custom_fps(self.inner.id(), o.custom_fps as _);
+        }
+        if let Ok(mode) = o.streaming_mode.enum_value() {
+            if mode != BoolOption::NotSet {
+                let enabled = mode == BoolOption::Yes;
+                let writer_slot = self.inner.video_writer.clone();
+                let mut published = writer_slot.lock().unwrap();
+                let writer = self.stream.set_streaming(enabled);
+                if let Some(writer) = writer.as_ref() {
+                    let id = self.inner.id();
+                    let acknowledge = !self.video_ack_required;
+                    // Old queued reference frames must precede all direct producer frames.
+                    // Overflow marks the writer failed; its reader then closes this session.
+                    allow_err!(
+                        writer.migrate_video(&mut self.rx_video, |instant, message| {
+                            if acknowledge {
+                                if let Some(message::Union::VideoFrame(frame)) = &message.union {
+                                    video_service::notify_video_frame_fetched(
+                                        frame.display as usize,
+                                        id,
+                                        Some(instant.into()),
+                                    );
+                                }
+                            }
+                        })
+                    );
+                }
+                *published = writer;
+                drop(published);
+                video_service::VIDEO_QOS
+                    .lock()
+                    .unwrap()
+                    .user_streaming_mode(self.inner.id(), enabled);
+            }
         }
         if let Some(q) = o.supported_decoding.clone().take() {
             scrap::codec::Encoder::update(scrap::codec::EncodingUpdate::Update(self.inner.id(), q));
@@ -4247,13 +4312,9 @@ mod test {
 
         let (served, _controller, _) = stalled_incoming().await;
         let addr: SocketAddr = "192.0.2.200:1".parse().unwrap();
-        let refused = crate::server::create_tcp_connection(
-            server.clone(),
-            served,
-            addr,
-            Default::default(),
-        )
-        .await;
+        let refused =
+            crate::server::create_tcp_connection(server.clone(), served, addr, Default::default())
+                .await;
         assert!(refused.is_err());
         let ended = hbb_common::timeout(2000, handshakes.remove(0)).await;
         assert!(

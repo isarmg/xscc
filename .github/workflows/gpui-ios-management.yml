@@ -2,7 +2,7 @@ name: GPUI iOS interactive playback preview
 on:
   workflow_dispatch:
   push:
-    branches: [feat/management-prep]
+    branches: [main, feat/management-prep]
     paths:
       - 'experiments/gpui-mobile-management/**'
       - 'experiments/shared/**'

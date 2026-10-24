@@ -1,7 +1,7 @@
 name: GPUI Windows beta candidates
 on:
   push:
-    branches: [feat/management-prep]
+    branches: [main, feat/management-prep]
     paths:
       - 'experiments/gpui-validation/**'
       - 'vendor/gpui/**'
@@ -31,9 +31,9 @@ on:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.2 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.3 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.2'
+        default: '0.1.0-beta.3'
         type: string
 permissions:
   contents: read
@@ -62,7 +62,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.2' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.3' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -70,7 +70,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.2'
+            throw 'Expected a numeric version such as 0.1.0-beta.3'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -130,6 +130,21 @@ jobs:
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test native session and host regression coverage
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
+      - name: Test framed transport wire compatibility and blocked-write isolation
+        if: matrix.role == 'controller'
+        run: cargo test --locked -p hbb_common --lib --target x86_64-pc-windows-msvc tcp::tests
+      - name: Test frame-rate-aware codec budget and timestamp duration
+        if: matrix.role == 'controller'
+        run: |
+          cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::rate_control::tests::
+          if ($LASTEXITCODE -ne 0) { throw 'Codec rate-control tests failed' }
+          cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::streaming_tests::
+          if ($LASTEXITCODE -ne 0) { throw 'Software codec streaming tests failed' }
+      - name: Test video pacing, queue bounds and intentional reconfiguration
+        if: matrix.role == 'host'
+        run: |
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_"
+          if ($LASTEXITCODE -ne 0) { throw 'Video regression tests failed' }
       - name: Test managed IPC peer authorization
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"
       - name: Test host management authorization policy
@@ -148,6 +163,11 @@ jobs:
           if ('${{ matrix.role }}' -eq 'controller') {
             ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "gpui_session::tests::test_ip_view_and_interactive_modes_reject_malformed_targets"
           }
+      - name: Compile optional Windows VRAM reconfiguration path
+        if: matrix.role == 'host'
+        run: |
+          cargo check --locked --manifest-path Cargo.toml --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Build standalone release executable
         run: |
           $features = '${{ matrix.features }}'
@@ -186,7 +206,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.2' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.3' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

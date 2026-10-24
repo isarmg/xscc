@@ -228,20 +228,6 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
         }
     }
 
-    pub fn send_video_frame(&self, msg: Message) -> HashSet<i32> {
-        self.send_video_frame_shared(Arc::new(msg))
-    }
-
-    pub fn send_video_frame_shared(&self, msg: Arc<Message>) -> HashSet<i32> {
-        let mut conn_ids = HashSet::new();
-        let mut lock = self.0.write().unwrap();
-        for s in lock.subscribes.values_mut() {
-            s.send(msg.clone());
-            conn_ids.insert(s.id());
-        }
-        conn_ids
-    }
-
     pub fn send_without(&self, msg: Message, sub: i32) {
         let mut lock = self.0.write().unwrap();
         let msg = Arc::new(msg);
@@ -305,6 +291,16 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
                     log::debug!("Enter {} service inner loop", sp.name());
                     let tm = time::Instant::now();
                     if let Err(err) = callback(sp.clone()) {
+                        if err
+                            .downcast_ref::<super::video_pipeline::VideoRestart>()
+                            .is_some()
+                        {
+                            log::debug!("Reconfigure {} service: {}", sp.name(), err);
+                            error_timeout = HIBERNATE_TIMEOUT;
+                            #[cfg(windows)]
+                            crate::platform::windows::try_change_desktop();
+                            continue;
+                        }
                         log::error!("Error of {} service: {}", sp.name(), err);
                         if tm.elapsed() > time::Duration::from_millis(MAX_ERROR_TIMEOUT) {
                             error_timeout = HIBERNATE_TIMEOUT;
@@ -354,5 +350,22 @@ impl<T: Subscriber + From<ConnInner>> ServiceSwap<T> {
 impl<T: Subscriber + From<ConnInner>> Drop for ServiceSwap<T> {
     fn drop(&mut self) {
         (self.0).0.write().unwrap().swap_new_subscribes();
+    }
+}
+
+impl ServiceTmpl<ConnInner> {
+    pub fn send_video_frame(&self, msg: Message) -> HashSet<i32> {
+        self.send_video_frame_shared(Arc::new(msg))
+    }
+
+    pub fn send_video_frame_shared(&self, msg: Arc<Message>) -> HashSet<i32> {
+        let mut conn_ids = HashSet::new();
+        let mut lock = self.0.write().unwrap();
+        for s in lock.subscribes.values_mut() {
+            if s.send_video(msg.clone()) {
+                conn_ids.insert(s.id());
+            }
+        }
+        conn_ids
     }
 }
