@@ -1,3 +1,6 @@
+#[path = "enrollment_input.rs"]
+mod enrollment_input;
+
 use crate::{
     management::{self, Command, Event},
     text_field::TextField,
@@ -202,10 +205,17 @@ impl Panel {
             return;
         }
         let server = self.server.read(cx).value().trim().to_owned();
-        let code = self.code.read(cx).value().to_owned();
-        if server.is_empty() || code.is_empty() {
-            self.notice = "请填写服务端地址和控制端实例密码。".into();
+        if server.is_empty() {
+            self.notice = "请填写服务端地址。".into();
         } else {
+            let code = match enrollment_input::instance_password(self.code.read(cx).value()) {
+                Ok(code) => code.to_owned(),
+                Err(message) => {
+                    self.notice = message;
+                    cx.notify();
+                    return;
+                }
+            };
             self.code.update(cx, |field, cx| field.clear(window, cx));
             window.dismiss_virtual_keyboard();
             self.action(Command::Enroll { server, code }, cx);

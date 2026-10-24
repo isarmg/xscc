@@ -139,6 +139,14 @@ jobs:
           prefix-key: gpui-android-${{ matrix.flavor }}-r30
           cache-on-failure: true
 
+      - name: Test mobile enrollment input against the shared protocol
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/${{ matrix.workspace }}/target
+          CARGO_BUILD_JOBS: '4'
+          CARGO_PROFILE_DEV_DEBUG: '0'
+          CARGO_PROFILE_TEST_DEBUG: '0'
+        run: cargo test --locked -p xscc-native-management --test mobile_enrollment_input
+
       - name: Cross-compile the selected GPUI library
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
