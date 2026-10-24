@@ -12,18 +12,38 @@ use tokio::{net::TcpListener, sync::Notify};
 use tokio_tungstenite::{accept_async, connect_async};
 use xscs_protocol::*;
 #[test]
-fn cleartext_management_connections_are_limited_to_loopback() {
+fn cleartext_management_connections_are_limited_to_loopback_and_private_ip_literals() {
     for endpoint in [
         "wss://manager.example/xscc/v2/connect",
         "ws://localhost:18104/xscc/v2/connect",
         "ws://127.0.0.1:18104/xscc/v2/connect",
         "ws://[::1]:18104/xscc/v2/connect",
+        "ws://10.0.0.1:18104/xscc/v2/connect",
+        "ws://172.16.0.1:18104/xscc/v2/connect",
+        "ws://172.31.255.254:18104/xscc/v2/connect",
+        "ws://192.168.31.245:18104/xscc/v2/connect",
+        "ws://[fc00::1]:18104/xscc/v2/connect",
+        "ws://[fdff::1]:18104/xscc/v2/connect",
     ] {
         assert!(ManagerConnection::new(endpoint, Zeroizing::new("a".repeat(64))).is_ok());
     }
     for endpoint in [
         "ws://manager.example/xscc/v2/connect",
-        "ws://192.168.1.1:18104/xscc/v2/connect",
+        "ws://8.8.8.8:18104/xscc/v2/connect",
+        "ws://0.0.0.0:18104/xscc/v2/connect",
+        "ws://172.15.255.255:18104/xscc/v2/connect",
+        "ws://172.32.0.0:18104/xscc/v2/connect",
+        "ws://192.169.0.0:18104/xscc/v2/connect",
+        "ws://169.254.1.1:18104/xscc/v2/connect",
+        "ws://100.64.0.1:18104/xscc/v2/connect",
+        "ws://[2001:db8::1]:18104/xscc/v2/connect",
+        "ws://[fe80::1]:18104/xscc/v2/connect",
+        "ws://[::ffff:192.168.31.245]:18104/xscc/v2/connect",
+        "ws://192.168.31.245.example.com:18104/xscc/v2/connect",
+        "ws://user:secret@192.168.31.245:18104/xscc/v2/connect",
+        "ws://192.168.31.245:18104/xscc/v2/connect?token=x",
+        "ws://192.168.31.245:18104/xscc/v2/connect#fragment",
+        "ws://192.168.31.245:18104/other",
         "ws://localhost.example.com:18104/xscc/v2/connect",
         "ws://user:secret@localhost:18104/xscc/v2/connect",
         "ws://localhost:18104/xscc/v2/connect?token=x",

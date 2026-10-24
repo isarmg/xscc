@@ -39,7 +39,7 @@ pub enum EnrollmentError {
 type Result<T> = std::result::Result<T, EnrollmentError>;
 
 /// A single origin is also the protected-store namespace. HTTP is supported for
-/// explicit loopback development origins; external servers require HTTPS.
+/// explicit loopback or private-IP testing origins; public servers require HTTPS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerOrigin(Url);
 
@@ -49,8 +49,10 @@ impl ServerOrigin {
         let local_http = url.scheme() == "http"
             && match url.host() {
                 Some(url::Host::Domain("localhost")) => true,
-                Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                Some(url::Host::Ipv4(address)) => address.is_loopback() || address.is_private(),
+                Some(url::Host::Ipv6(address)) => {
+                    address.is_loopback() || address.is_unique_local()
+                }
                 _ => false,
             };
         if (url.scheme() != "https" && !local_http)
@@ -478,10 +480,27 @@ mod tests {
     }
 
     #[test]
-    fn server_origin_limits_cleartext_to_loopback_without_ambient_url_state() {
+    fn server_origin_limits_cleartext_to_loopback_and_private_ip_literals() {
         for value in [
             "http://example.com",
-            "http://192.168.1.1:18104",
+            "http://8.8.8.8:18104",
+            "http://0.0.0.0:18104",
+            "http://9.255.255.255:18104",
+            "http://11.0.0.0:18104",
+            "http://172.15.255.255:18104",
+            "http://172.32.0.0:18104",
+            "http://192.167.255.255:18104",
+            "http://192.169.0.0:18104",
+            "http://169.254.1.1:18104",
+            "http://100.64.0.1:18104",
+            "http://[2001:db8::1]:18104",
+            "http://[fe80::1]:18104",
+            "http://[::ffff:192.168.31.245]:18104",
+            "http://192.168.31.245.example.com:18104",
+            "http://user:secret@192.168.31.245:18104",
+            "http://192.168.31.245:18104/path",
+            "http://192.168.31.245:18104/?token=x",
+            "http://192.168.31.245:18104/#fragment",
             "http://localhost.example.com:18104",
             "http://user:secret@localhost:18104",
             "http://localhost:18104/path",
@@ -496,7 +515,18 @@ mod tests {
                 Err(EnrollmentError::Configuration)
             );
         }
-        for host in ["localhost", "127.0.0.1", "[::1]"] {
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+            "10.0.0.1",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.31.245",
+            "[fc00::1]",
+            "[fdff::1]",
+        ] {
             let server = ServerOrigin::parse(&format!("http://{host}:18104")).unwrap();
             assert_eq!(
                 server.connection_url().unwrap().as_str(),
@@ -509,6 +539,43 @@ mod tests {
             server.connection_url().unwrap().as_str(),
             "wss://example.com/xscc/v2/connect"
         );
+    }
+
+    #[tokio::test]
+    async fn private_lan_origin_keeps_enrollment_namespace_and_websocket_address() {
+        let server = ServerOrigin::parse("http://192.168.31.245:18104").unwrap();
+        assert_eq!(server.as_str(), "http://192.168.31.245:18104/");
+        assert_eq!(
+            server.connection_url().unwrap().as_str(),
+            "ws://192.168.31.245:18104/xscc/v2/connect"
+        );
+        // Build the real enrollment client/request without depending on a
+        // particular LAN interface being present on the test runner.
+        let client = EnrollmentClient::new(server.clone()).unwrap();
+        let request = client
+            .http
+            .post(client.server.endpoint(protocol::PAIRING_PATH))
+            .json(&PairingRequest {
+                authorization_code: &"a".repeat(36),
+            })
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.url().as_str(),
+            format!("http://192.168.31.245:18104{}", protocol::PAIRING_PATH)
+        );
+        let saved = SavedBinding::restore(
+            server,
+            Binding {
+                manager_id: Uuid::new_v4(),
+                device_id: Uuid::new_v4(),
+                installation_id: Uuid::new_v4(),
+            },
+            Zeroizing::new("a".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(saved.server().as_str(), "http://192.168.31.245:18104/");
+        assert!(saved.connection().is_ok());
     }
 
     #[tokio::test]

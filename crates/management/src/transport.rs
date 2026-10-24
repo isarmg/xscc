@@ -1,4 +1,4 @@
-//! Product management transport with loopback WS development support.
+//! Product management transport with loopback/private-IP WS testing support.
 use crate::{
     engine::{ExecutionDeadline, Executor, Journal},
     host::RustDeskHost,
@@ -585,8 +585,8 @@ pub fn validate_manager_endpoint(url: &Url) -> Result<(), TransportError> {
     let local_ws = url.scheme() == "ws"
         && match url.host() {
             Some(url::Host::Domain("localhost")) => true,
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            Some(url::Host::Ipv4(address)) => address.is_loopback() || address.is_private(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback() || address.is_unique_local(),
             _ => false,
         };
     if (url.scheme() != "wss" && !local_ws)

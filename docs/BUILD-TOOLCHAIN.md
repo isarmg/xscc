@@ -46,12 +46,15 @@ The `xscs-protocol` dependency remains pinned to the server protocol crate and
 does not import the server support library. Native management CI checks this
 dependency boundary alongside the workspace layout.
 
-For a local server on the same machine, use `http://127.0.0.1:18104` or
-`http://localhost:18104` in the instance binding form. IPv6 loopback `[::1]` is
-also supported when the server listens there. These origins use HTTP and WS;
-external addresses continue to require HTTPS and WSS. The local path uses the
-same instance enrollment, credentials and authorization as other managed
-connections; administrator passwords are not instance binding passwords.
+For local/private-network testing, enter `http://127.0.0.1:18104`,
+`http://localhost:18104`, or an explicit private IP such as
+`http://192.168.31.245:18104` in the instance binding form. HTTP accepts only
+loopback, RFC1918 IPv4 literals and IPv6 ULA literals; public IPs and domain
+names require HTTPS. The same origin is used for enrollment, protected-storage
+namespace and subsequent WS (or HTTPS/WSS) connections. User information,
+non-root paths, queries and fragments remain invalid. These tests use the same
+instance credentials and authorization as other managed connections;
+administrator passwords are not instance binding passwords.
 
 ## Checks
 
