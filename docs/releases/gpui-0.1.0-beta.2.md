@@ -2,6 +2,8 @@
 
 控制端和被控端采用新的设备工作台，统一授权设备卡片、绑定表单、状态反馈和深浅主题，并改用中文系统字体。桌面及移动端移除临时 IP 直连入口；本次候选包只提供受管连接。受管访问地址上报、会话授权、屏幕选择和帧率控制保留。
 
+受管客户端的加密和证书依赖同步升级至修复版本：ctutils 0.4.4、rustls-webpki 0.103.16、webpki-root-certs 1.0.10，对应 [RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385.html)、[RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382.html) 和 [RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383.html)。
+
 | 平台 | 产物 |
 | --- | --- |
 | Windows 11 x86_64 | 控制端安装包/便携包、被控端安装包 |
