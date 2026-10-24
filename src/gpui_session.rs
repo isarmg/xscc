@@ -37,7 +37,7 @@ pub struct Frame {
 
 impl Frame {
     /// Receipt to invoke once the UI accepts this frame, excluding GPU completion/scanout.
-    pub fn submission(&self) -> impl FnOnce() + use<> {
+    pub fn submission(&self) -> impl FnOnce() + 'static {
         let metrics = self.metrics.clone();
         let ready_at = self.ready_at;
         let epoch = self.metrics_epoch;

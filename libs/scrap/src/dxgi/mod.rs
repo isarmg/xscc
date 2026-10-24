@@ -507,7 +507,7 @@ impl Capturer {
                 return Err(io::ErrorKind::InvalidData.into());
             }
             (*readable.0).SetEvictionPriority(DXGI_RESOURCE_PRIORITY_MAXIMUM);
-            let mut surface = ptr::null_mut();
+            let mut surface: *mut IDXGISurface = ptr::null_mut();
             wrap_hresult((*readable.0).QueryInterface(
                 &IID_IDXGISurface,
                 &mut surface as *mut *mut _ as *mut *mut _,

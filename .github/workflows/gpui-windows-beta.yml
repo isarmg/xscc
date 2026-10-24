@@ -95,12 +95,19 @@ jobs:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: 9e593bb18ea69cc5095e012465dcd675a822ed0d
           doNotCache: true
+      - name: Record hosted native toolchain image
+        id: native-toolchain
+        run: |
+          if ($env:ImageVersion -notmatch '^[A-Za-z0-9._-]+$') {
+            throw 'Hosted runner image version is unavailable'
+          }
+          "image_version=$env:ImageVersion" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
       - name: Restore native dependency binary archives
         id: native-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-files-Windows-2025-x64-windows-static-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: vcpkg-files-v2-Windows-2025-${{ steps.native-toolchain.outputs.image_version }}-x64-windows-static-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
       - name: Build pinned native dependencies (no driver installation)
         id: native-dependencies
         env:
@@ -124,6 +131,11 @@ jobs:
           "LIBCLANG_PATH=$clang" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Check formatting
         run: cargo fmt --manifest-path experiments/gpui-validation/Cargo.toml -- --check
+      - name: Compile optional Windows VRAM reconfiguration path
+        if: matrix.role == 'host'
+        run: |
+          cargo check --locked --manifest-path Cargo.toml --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Lint Windows preview
         run: cargo clippy --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Test Windows preview
@@ -163,11 +175,6 @@ jobs:
           if ('${{ matrix.role }}' -eq 'controller') {
             ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "gpui_session::tests::test_ip_view_and_interactive_modes_reject_malformed_targets"
           }
-      - name: Compile optional Windows VRAM reconfiguration path
-        if: matrix.role == 'host'
-        run: |
-          cargo check --locked --manifest-path Cargo.toml --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Build standalone release executable
         run: |
           $features = '${{ matrix.features }}'
