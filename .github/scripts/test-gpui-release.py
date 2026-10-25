@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('release', Path(__file__).with_name('collect-gpui-release.py'))
 release = importlib.util.module_from_spec(spec)
@@ -20,6 +21,33 @@ class ReleaseTests(unittest.TestCase):
             for role in ('controller', 'host'):
                 self.assertIn(f'xscc-{role}-0.1.0-beta.2-{platform}-managed-unsigned', names)
         self.assertFalse(any('test-lan-direct' in name for name in names))
+
+    def test_collect_accepts_main_and_feature_only_for_the_exact_successful_source(self):
+        sha = 'a' * 40
+        for branch, source, conclusion, accepted in (
+            ('main', sha, 'success', True),
+            ('feat/management-prep', sha, 'success', True),
+            ('unreviewed', sha, 'success', False),
+            ('main', 'b' * 40, 'success', False),
+            ('main', sha, 'failure', False),
+        ):
+            with self.subTest(branch=branch, source=source, conclusion=conclusion), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / 'release'
+                run = {'id': 17, 'head_sha': source, 'head_branch': branch,
+                       'status': 'completed', 'conclusion': conclusion, 'html_url': 'https://example.invalid/run/17'}
+                def api(endpoint, **parameters):
+                    if endpoint.endswith('/gpui-windows-beta.yml/runs'):
+                        self.assertEqual(parameters, {'head_sha': sha, 'event': 'push', 'per_page': 100})
+                        return {'workflow_runs': [run]}
+                    self.assertEqual(endpoint, 'repos/isarmg/xscc/actions/runs/17/artifacts')
+                    return {'artifacts': []}
+                with mock.patch.object(release, 'expected_artifacts', return_value={'gpui-windows-beta.yml': {}}), mock.patch.object(release, 'api', side_effect=api):
+                    if accepted:
+                        release.collect('isarmg/xscc', sha, '0.1.0-beta.4', output)
+                        self.assertEqual(json.loads((output / 'release-provenance.json').read_text())['source_sha'], sha)
+                    else:
+                        with self.assertRaises(ValueError):
+                            release.collect('isarmg/xscc', sha, '0.1.0-beta.4', output)
 
     def test_metadata_rejects_wrong_revision_and_test_candidates(self):
         with tempfile.TemporaryDirectory() as temporary:

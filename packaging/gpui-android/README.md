@@ -110,7 +110,7 @@ renaming a TEST artifact does not make it a production package.
 
 ## Management input and first-start fixes
 
-The management preview version is `0.1.0-beta.3.2` (version code 3). Address and
+The management preview version is `0.1.0-beta.3.3` (version code 4). Address and
 instance-password fields expose paste from an explicit long-press menu; opening
 the menu does not inspect the clipboard. Only plain clipboard text is accepted,
 and protected password fields still do not expose copy or cut. This is local form
@@ -120,7 +120,11 @@ It validates the shared 36-character lowercase ASCII letter/digit contract
 before submitting, explains invalid input without displaying the password,
 and retains invalid input for correction. Internal characters and case are
 never silently changed. This version retains the beta.3.1 preview signer
-and can be installed over beta.3.1 without removing its local binding.
+and can be installed over beta.3.1 or beta.3.2 without removing its local binding.
+This version repairs managed remote-session handshakes. Update the desktop
+host to beta.4 as well; older hosts used the wrong send path for encrypted
+management proof messages. Peer closure is reported separately from a real
+handshake timeout.
 Android creation of protected management files uses atomic no-replace rename
 rather than hard links, which the application SELinux domain does not permit.
 

@@ -19,13 +19,13 @@ use xscc_native_management::{
 };
 
 async fn send(stream: &mut Stream, message: &WireMessage) -> ResultType<()> {
-    stream.send_bytes(serde_json::to_vec(message)?.into()).await
+    stream.send_raw(serde_json::to_vec(message)?).await
 }
 async fn receive(stream: &mut Stream) -> ResultType<WireMessage> {
-    let packet = stream
-        .next_timeout(CONNECT_TIMEOUT)
+    let packet = hbb_common::timeout(CONNECT_TIMEOUT, stream.next())
         .await
-        .context("Management handshake timed out")??;
+        .context("Management handshake timed out")?
+        .context("Management peer closed during handshake")??;
     if packet.len() > 4096 {
         bail!("Management handshake is too large");
     }
@@ -191,4 +191,149 @@ pub(crate) async fn check_controller(permit: Option<&SessionPermit>) -> bool {
     })
     .await
     .is_ok_and(|v| v == serde_json::Value::Bool(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hbb_common::{sodiumoxide::crypto::sign, tcp, tokio, uuid};
+    use xscc::protocol::{Binding, SessionKey};
+
+    async fn encrypted_pair() -> (Stream, Stream, Vec<u8>) {
+        let listener = tcp::new_listener("127.0.0.1:0", false).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (controller, accepted) = tokio::join!(
+            FramedStream::new(address, None, CONNECT_TIMEOUT),
+            listener.accept()
+        );
+        let (socket, _) = accepted.unwrap();
+        let mut controller = Stream::Tcp(controller.unwrap());
+        let mut host = Stream::from(socket, address);
+        let (public, secret) = sign::gen_keypair();
+        let (accepted, connected) = tokio::join!(
+            base::direct_transport::host::accept_handshake(
+                &mut host,
+                &secret.0,
+                &public.0,
+                "managed-test-host"
+            ),
+            base::direct_transport::client::connect_handshake(&mut controller, &public.0)
+        );
+        accepted.unwrap();
+        let identity = connected.unwrap();
+        assert_eq!(identity, public.0);
+        assert!(controller.is_secured() && host.is_secured());
+        controller.set_max_packet_length(4096);
+        host.set_max_packet_length(4096);
+        (controller, host, identity)
+    }
+
+    #[tokio::test]
+    async fn encrypted_management_handshake_completes_both_direction_proofs() {
+        let (mut controller, mut host, identity) = encrypted_pair().await;
+        let manager_id = uuid::Uuid::new_v4();
+        let binding = || Binding {
+            manager_id,
+            device_id: uuid::Uuid::new_v4(),
+            installation_id: uuid::Uuid::new_v4(),
+        };
+        let key = SessionKey::from_bytes([7; 32]);
+        let permit = SessionPermit {
+            controller: binding(),
+            controlled: binding(),
+            epoch: xscc_native_management::session::epoch(&key),
+        };
+        let client_nonce = nonce().unwrap();
+        send(
+            &mut controller,
+            &WireMessage::Hello {
+                permit: permit.clone(),
+                client_nonce: client_nonce.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let WireMessage::Hello {
+            permit: received_permit,
+            client_nonce: received_nonce,
+        } = receive(&mut host).await.unwrap()
+        else {
+            panic!("host did not receive the encrypted management Hello");
+        };
+        assert_eq!(received_permit, permit);
+        let host_transcript = Transcript {
+            permit: received_permit,
+            client_nonce: received_nonce,
+            host_nonce: nonce().unwrap(),
+            transport_host_key: hex::encode(&identity),
+        };
+        send(
+            &mut host,
+            &WireMessage::Challenge {
+                host_nonce: host_transcript.host_nonce.clone(),
+                proof: host_transcript.proof(&key, true).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        let WireMessage::Challenge { host_nonce, proof } = receive(&mut controller).await.unwrap()
+        else {
+            panic!("controller did not receive the encrypted host proof");
+        };
+        let controller_transcript = Transcript {
+            permit,
+            client_nonce,
+            host_nonce,
+            transport_host_key: hex::encode(identity),
+        };
+        controller_transcript.verify(&key, true, &proof).unwrap();
+        send(
+            &mut controller,
+            &WireMessage::Proof {
+                proof: controller_transcript.proof(&key, false).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+        let WireMessage::Proof { proof } = receive(&mut host).await.unwrap() else {
+            panic!("host did not receive the encrypted controller proof");
+        };
+        host_transcript.verify(&key, false, &proof).unwrap();
+        send(&mut host, &WireMessage::Accepted {}).await.unwrap();
+        assert!(matches!(
+            receive(&mut controller).await.unwrap(),
+            WireMessage::Accepted {}
+        ));
+    }
+
+    #[tokio::test]
+    async fn plaintext_management_frames_are_rejected_after_key_exchange() {
+        let (mut controller, mut host, _) = encrypted_pair().await;
+        // send_bytes is intentionally unsealed; this was the broken management
+        // send path. Application JSON must instead pass through send_raw.
+        controller
+            .send_bytes(
+                serde_json::to_vec(&WireMessage::Accepted {})
+                    .unwrap()
+                    .into(),
+            )
+            .await
+            .unwrap();
+        assert!(receive(&mut host).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn management_peer_close_and_handshake_timeout_are_distinct() {
+        let (controller, mut host, _) = encrypted_pair().await;
+        drop(controller);
+        assert_eq!(
+            receive(&mut host).await.unwrap_err().to_string(),
+            "Management peer closed during handshake"
+        );
+        let (_controller, mut waiting_host, _) = encrypted_pair().await;
+        assert_eq!(
+            receive(&mut waiting_host).await.unwrap_err().to_string(),
+            "Management handshake timed out"
+        );
+    }
 }

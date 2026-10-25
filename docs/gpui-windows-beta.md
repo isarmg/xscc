@@ -6,6 +6,12 @@
 
 桌面和移动界面已移除临时 IP 直连入口及其界面会话路径。Windows、Linux、macOS 候选包固定为 `managed`，iOS/Android 候选工作流不再发布 IP 测试变体。底层测试模块仅保留用于已有内部回归，不属于默认应用入口。此前下载或安装的二进制不会随源码编辑自动更新，需重新构建并安装后验证界面。
 
+## 管理握手热修复（0.1.0-beta.4）
+
+本轮桌面候选包修复受管连接在直接密钥协商后发送 Hello 的加密边界，避免对端因明文消息解密失败而断开。Windows、Linux 与 macOS 两种角色统一使用新包版本 `0.1.0-beta.4`，不复用旧 `beta.3` 标签。详见 [发布说明](releases/gpui-0.1.0-beta.4.md)。
+
+已安装的 Windows Host 先关闭界面，再通过原有卸载程序移除旧服务，最后正常安装新 setup；这两个安装操作可由一次管理员批准的升级助手顺序执行。卸载只移除已知安装文件与专用服务，保留受管身份和配置。升级不得执行解绑、删除管理目录或修改其 ACL；本机验收应比较升级前后的身份与绑定文件摘要。
+
 ## Scope / 范围
 
 The independent `GPUI Windows beta candidates` workflow builds two variants of
@@ -74,10 +80,10 @@ decoder, transport or CPU-to-GPU upload path.
 ## Produce candidates / 构建候选包
 
 1. Commit the intended source and confirm its SHA on GitHub. A push on
-   `feat/management-prep` touching the workflow's bounded paths builds candidates
-   with label `0.1.0-beta.1`; build-info identifies the exact revision.
-2. Alternatively run `workflow_dispatch` on the intended ref with an explicit
-   label such as `0.1.0-beta.2`. Labels name packages only; they do not change crate
+   `main` or `feat/management-prep` touching the workflow's bounded paths builds
+   `0.1.0-beta.4` candidates; build-info identifies the exact revision.
+2. Alternatively run `workflow_dispatch` on the intended ref with the explicit
+   label `0.1.0-beta.4`. Labels name packages only; they do not change crate
    versions, create tags or publish. GitHub may require a manual workflow to be
    present on the default branch; the bounded push trigger covers initial setup.
 3. Require both matrix jobs to pass: formatting, Clippy, unit tests, release

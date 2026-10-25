@@ -86,7 +86,7 @@ def collect(repo, sha, version, output):
     provenance = []
     for workflow, expected in expected_artifacts(version, sha).items():
         runs = api(f'repos/{repo}/actions/workflows/{workflow}/runs', head_sha=sha, event='push', per_page=100)['workflow_runs']
-        runs = [run for run in runs if run['head_sha'] == sha and run['head_branch'] == 'feat/management-prep']
+        runs = [run for run in runs if run['head_sha'] == sha and run['head_branch'] in ('main', 'feat/management-prep')]
         if not runs:
             raise ValueError(f'No source-matched build for {workflow}')
         run = max(runs, key=lambda run: run['id'])
