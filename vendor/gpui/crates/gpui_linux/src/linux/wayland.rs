@@ -17,7 +17,8 @@ use gpui::CursorStyle;
 
 pub(super) fn to_shape(style: CursorStyle) -> Shape {
     match style {
-        CursorStyle::Arrow => Shape::Default,
+        // Hidden is applied with wl_pointer.set_cursor(None), not the shape protocol.
+        CursorStyle::Hidden | CursorStyle::Arrow => Shape::Default,
         CursorStyle::IBeam => Shape::Text,
         CursorStyle::Crosshair => Shape::Crosshair,
         CursorStyle::ClosedHand => Shape::Grabbing,

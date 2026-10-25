@@ -38,12 +38,17 @@
     "crates/gpui/src/style.rs",
     "crates/gpui/src/window.rs",
     "crates/gpui_linux/Cargo.toml",
+    "crates/gpui_linux/src/linux/platform.rs",
+    "crates/gpui_linux/src/linux/wayland.rs",
+    "crates/gpui_linux/src/linux/wayland/client.rs",
+    "crates/gpui_macos/src/window.rs",
     "crates/gpui_platform/Cargo.toml",
     "crates/gpui_platform/src/gpui_platform.rs",
     "crates/gpui_wgpu/src/wgpu_atlas.rs",
     "crates/gpui_windows/src/directx_atlas.rs",
     "crates/gpui_windows/src/directx_renderer.rs",
     "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs",
+    "crates/gpui_windows/src/util.rs",
     "crates/http_client/Cargo.toml",
     "crates/http_client/src/http_client.rs"
   ],
@@ -60,7 +65,8 @@
     "Use Wayland-only Linux defaults and facade features.",
     "Merge SharedString into gpui without changing its public re-export or serialization.",
     "Remove Web backend, two network-image demos, unused GitHub downloader and performance harness; preserve the three style correctness tests.",
-    "Own packed BGRA pixel storage through RenderImage and reuse same-size image atlas allocations only on ordered-upload DirectX/WGPU backends; retain fresh-image fallback on Metal, resizing, device loss and upload failure."
+    "Own packed BGRA pixel storage through RenderImage and reuse same-size image atlas allocations only on ordered-upload DirectX/WGPU backends; retain fresh-image fallback on Metal, resizing, device loss and upload failure.",
+    "Expose Hidden cursor style for application-painted pointers; Windows clears HCURSOR, macOS registers a transparent NSCursor and Wayland clears the pointer surface without using cursor-shape-v1. Optional X11 retains an arrow fallback."
   ],
   "initial_workspace_member_count": 28,
   "removed_crates": [

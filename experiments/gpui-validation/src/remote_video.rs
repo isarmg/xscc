@@ -1,13 +1,15 @@
-use crate::{input, presentation::VideoPresentation, theme};
+use crate::{input, presentation::VideoPresentation};
 use base::message_proto::Message;
 use gpui::{
-    App, Bounds, Context, DispatchPhase, EventEmitter, FocusHandle, Focusable, ImageSource,
-    IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
-    Subscription, Window, canvas, div, img, prelude::*, px, rgb,
+    App, Bounds, Context, CursorStyle, DispatchPhase, EventEmitter, FocusHandle, Focusable,
+    HitboxBehavior, ImageSource, IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render,
+    RenderImage, ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img, prelude::*,
+    px, rgb,
 };
 use librustdesk::gpui_session::{
-    self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
+    self, CursorShape, CursorSnapshot, InputCommand, Monitor, SessionEvent, SessionHandle,
+    SessionQuality, TargetFps,
 };
 use std::{
     cell::Cell,
@@ -56,6 +58,7 @@ pub struct RemoteVideo {
     extent: (u32, u32),
     origin: (i32, i32),
     video: VideoPresentation,
+    cursor_image: Option<(Arc<CursorShape>, Arc<RenderImage>)>,
     keys: HashMap<String, Message>,
     buttons: HashMap<i32, Message>,
     scroll_remainder: (f32, f32),
@@ -125,6 +128,7 @@ impl RemoteVideo {
             extent: (0, 0),
             origin: (0, 0),
             video: VideoPresentation::default(),
+            cursor_image: None,
             keys: HashMap::new(),
             buttons: HashMap::new(),
             scroll_remainder: (0.0, 0.0),
@@ -322,6 +326,11 @@ impl RemoteVideo {
                     self.connected = true;
                     self.notice = "已连接；点击画面后发送键鼠。切换窗口会释放已按下的键。".into();
                     self.set_target_fps(self.target_fps);
+                    if let Some(session) = &self.session
+                        && let Err(error) = session.subscribe_remote_cursor()
+                    {
+                        self.notice = error.to_string();
+                    }
                 }
                 SessionEvent::Disconnected => {
                     self.close();
@@ -373,6 +382,31 @@ impl RemoteVideo {
             changed = true;
         }
         changed
+    }
+
+    fn prepare_cursor_image(
+        &mut self,
+        cursor: &CursorSnapshot,
+        window: &mut Window,
+    ) -> Result<Option<Arc<RenderImage>>, String> {
+        let unchanged = match (&self.cursor_image, &cursor.shape) {
+            (Some((previous, _)), Some(next)) => Arc::ptr_eq(previous, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            if let Some((_, previous)) = self.cursor_image.take() {
+                window
+                    .drop_image(previous)
+                    .map_err(|error| error.to_string())?;
+            }
+            if let Some(shape) = &cursor.shape {
+                let image = RenderImage::from_bgra(shape.width, shape.height, shape.bgra.clone())
+                    .map_err(|error| error.to_string())?;
+                self.cursor_image = Some((shape.clone(), Arc::new(image)));
+            }
+        }
+        Ok(self.cursor_image.as_ref().map(|(_, image)| image.clone()))
     }
 
     fn set_target_fps(&mut self, target: TargetFps) {
@@ -524,6 +558,8 @@ impl RemoteVideo {
                     self.notice = error.to_string();
                     return true;
                 }
+                session
+                    .update_local_cursor_position(message.mouse_event().x, message.mouse_event().y);
                 // Focus-loss releases should use the last drag position, not jump to its start.
                 for pressed in self.buttons.values_mut() {
                     pressed.mut_mouse_event().x = message.mouse_event().x;
@@ -539,6 +575,50 @@ impl RemoteVideo {
         }
         false
     }
+}
+
+fn cursor_placement(
+    viewport: Bounds<Pixels>,
+    extent: (u32, u32),
+    origin: (i32, i32),
+    shape: &CursorShape,
+    position: (i32, i32),
+) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+    let width = f32::from(viewport.size.width);
+    let height = f32::from(viewport.size.height);
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || extent.0 == 0
+        || extent.1 == 0
+    {
+        return None;
+    }
+    let x = i64::from(position.0) - i64::from(origin.0);
+    let y = i64::from(position.1) - i64::from(origin.1);
+    if x < 0 || y < 0 || x >= i64::from(extent.0) || y >= i64::from(extent.1) {
+        return None;
+    }
+    let scale = (width / extent.0 as f32).min(height / extent.1 as f32);
+    let frame = Bounds::new(
+        gpui::point(
+            viewport.origin.x + px((width - extent.0 as f32 * scale) / 2.0),
+            viewport.origin.y + px((height - extent.1 as f32 * scale) / 2.0),
+        ),
+        gpui::size(px(extent.0 as f32 * scale), px(extent.1 as f32 * scale)),
+    );
+    let image = Bounds::new(
+        gpui::point(
+            frame.origin.x + px((x as f32 - shape.hotx as f32) * scale),
+            frame.origin.y + px((y as f32 - shape.hoty as f32) * scale),
+        ),
+        gpui::size(
+            px(shape.width as f32 * scale),
+            px(shape.height as f32 * scale),
+        ),
+    );
+    Some((frame, image))
 }
 
 fn scroll_hits_frame(position: Point<Pixels>, bounds: Bounds<Pixels>, extent: (u32, u32)) -> bool {
@@ -580,6 +660,25 @@ impl Render for RemoteVideo {
                 self.publish(cx);
             }
         }
+        let cursor = if self.switching_monitor || self.video.image().is_none() {
+            CursorSnapshot::default()
+        } else {
+            self.session
+                .as_ref()
+                .map(SessionHandle::cursor_snapshot)
+                .unwrap_or_default()
+        };
+        let cursor_image = match self.prepare_cursor_image(&cursor, window) {
+            Ok(image) => image,
+            Err(error) => {
+                self.notice = format!("远程光标图像不可用: {error}");
+                self.publish(cx);
+                None
+            }
+        };
+        let extent = self.extent;
+        let origin = self.origin;
+        let hide_cursor = self.connected && self.keyboard_allowed;
         let bounds = self.bounds.clone();
         let drag_move = cx.listener(|view, event: &MouseMoveEvent, _, cx| {
             if !view.buttons.is_empty()
@@ -727,8 +826,39 @@ impl Render for RemoteVideo {
             )
             .child(
                 canvas(
-                    move |area, _, _| bounds.set(area),
-                    move |_, _, window, _| {
+                    move |area, window, _| {
+                        bounds.set(area);
+                        let placement = cursor.shape.as_ref().and_then(|shape| {
+                            cursor_placement(area, extent, origin, shape, cursor.position?)
+                        });
+                        let hitbox = placement
+                            .as_ref()
+                            .filter(|_| cursor_image.is_some())
+                            .map(|(frame, _)| window.insert_hitbox(*frame, HitboxBehavior::Normal));
+                        (placement, hitbox, cursor_image)
+                    },
+                    move |_, (placement, hitbox, cursor_image), window, _| {
+                        if let (Some((frame, image_bounds)), Some(hitbox), Some(image)) =
+                            (placement, hitbox, cursor_image)
+                        {
+                            match window.paint_image(
+                                frame,
+                                image_bounds,
+                                Default::default(),
+                                image,
+                                0,
+                                false,
+                            ) {
+                                Ok(()) => {
+                                    if hide_cursor {
+                                        window.set_cursor_style(CursorStyle::Hidden, &hitbox);
+                                    }
+                                }
+                                Err(error) => {
+                                    gpui_session::log_cursor_render_failure(&error);
+                                }
+                            }
+                        }
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble {
                                 drag_move(event, window, cx);
@@ -741,36 +871,6 @@ impl Render for RemoteVideo {
                 .left_0()
                 .size_full(),
             )
-            .when(window.is_fullscreen(), |video| {
-                video.child(
-                    div()
-                        .id("exit-remote-fullscreen")
-                        .absolute()
-                        .top_3()
-                        .right_3()
-                        .px_3()
-                        .h(px(theme::CONTROL_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .text_color(rgb(theme::DARK.text))
-                        .cursor_pointer()
-                        .occlude()
-                        .child(theme::surface(
-                            rgb(theme::DARK.panel),
-                            Some(rgb(theme::DARK.border)),
-                            theme::CONTROL_EXTENT,
-                        ))
-                        .child("退出全屏")
-                        .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            if view.release_input() {
-                                view.publish(cx);
-                            }
-                            window.toggle_fullscreen();
-                            cx.stop_propagation();
-                        })),
-                )
-            })
     }
 }
 
@@ -778,6 +878,42 @@ impl Render for RemoteVideo {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn remote_cursor_tracks_letterbox_display_origin_and_hotspot() {
+        let shape = CursorShape {
+            id: 1,
+            width: 32,
+            height: 32,
+            hotx: 4,
+            hoty: 8,
+            bgra: vec![0; 32 * 32 * 4].into(),
+        };
+        let viewport = Bounds::new(
+            gpui::point(px(50.0), px(20.0)),
+            gpui::size(px(1000.0), px(800.0)),
+        );
+        let (frame, image) =
+            cursor_placement(viewport, (2000, 1000), (-2000, -100), &shape, (-1800, 100)).unwrap();
+        assert_eq!(
+            frame,
+            Bounds::new(
+                gpui::point(px(50.0), px(170.0)),
+                gpui::size(px(1000.0), px(500.0))
+            )
+        );
+        assert_eq!(
+            image,
+            Bounds::new(
+                gpui::point(px(148.0), px(266.0)),
+                gpui::size(px(16.0), px(16.0))
+            )
+        );
+        assert!(
+            cursor_placement(viewport, (2000, 1000), (-2000, -100), &shape, (0, 100)).is_none()
+        );
+        assert!(cursor_placement(viewport, (0, 0), (0, 0), &shape, (0, 0)).is_none());
+    }
 
     #[test]
     fn scrolling_only_targets_the_visible_frame_after_resize() {

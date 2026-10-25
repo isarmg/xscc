@@ -3004,6 +3004,9 @@ pub enum CursorStyle {
     #[default]
     Arrow,
 
+    /// Hide the system cursor while an application paints its own pointer.
+    Hidden,
+
     /// A text input cursor
     /// corresponds to the CSS cursor value `text`
     IBeam,

@@ -842,6 +842,12 @@ impl WaylandClientState {
             return;
         };
         let serial = self.serial_tracker.get(SerialKind::MouseEnter);
+        if style == CursorStyle::Hidden {
+            if let Some(pointer) = &self.wl_pointer {
+                pointer.set_cursor(serial.as_raw(), None, 0, 0);
+            }
+            return;
+        }
         if let Some(cursor_shape_device) = &self.cursor_shape_device {
             cursor_shape_device.set_shape(serial.as_raw(), to_shape(style));
             return;
@@ -1367,6 +1373,12 @@ impl WaylandConnection {
         }
 
         let serial = state.serial_tracker.get(SerialKind::MouseEnter);
+        if style == CursorStyle::Hidden {
+            if let Some(pointer) = &state.wl_pointer {
+                pointer.set_cursor(serial.as_raw(), None, 0, 0);
+            }
+            return;
+        }
         if let Some(cursor_shape_device) = &state.cursor_shape_device {
             cursor_shape_device.set_shape(serial.as_raw(), to_shape(style));
         } else if let Some(focused_window) = &state.mouse_focused_window {
@@ -1390,7 +1402,8 @@ impl WaylandConnection {
     }
 
     pub(crate) fn is_cursor_visible(&self) -> bool {
-        self.0.borrow().cursor_hidden_window.is_none()
+        let state = self.0.borrow();
+        state.cursor_hidden_window.is_none() && state.cursor_style != Some(CursorStyle::Hidden)
     }
 
     pub(crate) fn open_uri(&self, uri: &str) {
@@ -2407,7 +2420,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
                     }
                     state.restore_cursor_after_hide();
                     if let Some(style) = state.cursor_style {
-                        if let Some(cursor_shape_device) = &state.cursor_shape_device {
+                        if style == CursorStyle::Hidden {
+                            wl_pointer.set_cursor(serial, None, 0, 0);
+                        } else if let Some(cursor_shape_device) = &state.cursor_shape_device {
                             cursor_shape_device.set_shape(serial, to_shape(style));
                         } else {
                             let scale = window.primary_output_scale();

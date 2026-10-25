@@ -2529,6 +2529,15 @@ extern "C" fn reset_cursor_rects(this: &Object, _: Sel) {
         let cursor_style = window_state.lock().cursor_style;
 
         let cursor: id = match cursor_style {
+            CursorStyle::Hidden => {
+                let image: id = msg_send![class!(NSImage), alloc];
+                let image: id = msg_send![image, initWithSize: NSSize::new(1.0, 1.0)];
+                let cursor: id = msg_send![class!(NSCursor), alloc];
+                let cursor: id =
+                    msg_send![cursor, initWithImage: image hotSpot: NSPoint::new(0.0, 0.0)];
+                let _: () = msg_send![image, release];
+                msg_send![cursor, autorelease]
+            }
             CursorStyle::Arrow => msg_send![class!(NSCursor), arrowCursor],
             CursorStyle::IBeam => msg_send![class!(NSCursor), IBeamCursor],
             CursorStyle::Crosshair => msg_send![class!(NSCursor), crosshairCursor],

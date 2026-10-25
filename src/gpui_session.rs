@@ -6,6 +6,8 @@ use crate::{
 use base::message_proto::*;
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
+mod cursor;
+pub use cursor::{log_cursor_render_failure, CursorShape, CursorSnapshot};
 mod metrics;
 mod pixels;
 
@@ -226,6 +228,8 @@ struct Mailbox {
     recycle: Arc<ArrayQueue<Vec<u8>>>,
     metrics: Arc<Mutex<metrics::Metrics>>,
     events: ArrayQueue<SessionEvent>,
+    quality: Mutex<Option<(usize, SessionQuality)>>,
+    cursor: Mutex<cursor::Cursors>,
     monitors: RwLock<Monitors>,
     connected: AtomicBool,
     keyboard: AtomicBool,
@@ -241,6 +245,8 @@ impl Default for Mailbox {
             recycle: Arc::new(ArrayQueue::new(3)),
             metrics: Arc::new(Mutex::new(metrics::Metrics::default())),
             events: ArrayQueue::new(64),
+            quality: Mutex::new(None),
+            cursor: Mutex::new(cursor::Cursors::default()),
             monitors: RwLock::new(Monitors::default()),
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
@@ -249,11 +255,31 @@ impl Default for Mailbox {
         }
     }
 }
+impl Mailbox {
+    fn drain_events(&self) -> Vec<SessionEvent> {
+        let mut events: Vec<_> = (0..64).map_while(|_| self.events.pop()).collect();
+        if let Some((index, update)) = self.quality.lock().unwrap().take() {
+            events.push(SessionEvent::Quality { index, update });
+        }
+        events
+    }
+}
 #[derive(Clone, Default)]
 struct Handler(Arc<Mailbox>);
 impl Handler {
     fn event(&self, event: SessionEvent) {
-        self.0.events.force_push(event);
+        if let SessionEvent::Quality { index, update } = event {
+            let mut latest = self.0.quality.lock().unwrap();
+            match latest.as_mut() {
+                Some((current, quality)) if *current == index => quality.merge(update),
+                _ => *latest = Some((index, update)),
+            }
+        } else {
+            if matches!(event, SessionEvent::Display { .. }) {
+                self.0.quality.lock().unwrap().take();
+            }
+            self.0.events.force_push(event);
+        }
         self.0.updates.notify_one();
     }
 }
@@ -292,9 +318,43 @@ impl SessionHandle {
             .pop()
             .filter(|frame| monitors.pending.is_none() && frame.display == monitors.current)
     }
+    pub fn cursor_snapshot(&self) -> CursorSnapshot {
+        let mailbox = &self.session.ui_handler.0;
+        if mailbox.closed.load(Ordering::Acquire)
+            || !mailbox.connected.load(Ordering::Acquire)
+            || mailbox.monitors.read().unwrap().pending.is_some()
+        {
+            return CursorSnapshot::default();
+        }
+        mailbox.cursor.lock().unwrap().snapshot()
+    }
+    pub fn update_local_cursor_position(&self, x: i32, y: i32) {
+        let mailbox = &self.session.ui_handler.0;
+        if mailbox.cursor.lock().unwrap().position((x, y)) {
+            mailbox.updates.notify_one();
+        }
+    }
+    pub fn subscribe_remote_cursor(&self) -> ResultType<()> {
+        let mailbox = &self.session.ui_handler.0;
+        if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
+            bail!("Session is not connected");
+        }
+        let sender = self.session.sender.read().unwrap();
+        let Some(sender) = sender.as_ref() else {
+            bail!("Session is disconnected");
+        };
+        let mut option = OptionMessage::new();
+        option.show_remote_cursor = option_message::BoolOption::Yes.into();
+        let mut misc = Misc::new();
+        misc.set_option(option);
+        let mut message = Message::new();
+        message.set_misc(misc);
+        sender
+            .send(Data::Message(message))
+            .map_err(|_| hbb_common::anyhow::anyhow!("Session is disconnected"))
+    }
     pub fn drain_events(&self) -> Vec<SessionEvent> {
-        let queue = &self.session.ui_handler.0.events;
-        (0..64).map_while(|_| queue.pop()).collect()
+        self.session.ui_handler.0.drain_events()
     }
     #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
     pub fn touch_input_allowed(&self) -> bool {
@@ -388,6 +448,7 @@ impl SessionHandle {
                 return Ok(());
             }
             monitors.pending = Some(index);
+            mailbox.quality.lock().unwrap().take();
             mailbox.frame.pop();
         }
         self.session.switch_display(index as i32);
@@ -766,9 +827,29 @@ impl InvokeUiSession for Handler {
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     fn clipboard(&self, _: String) {}
-    fn set_cursor_data(&self, _: CursorData) {}
-    fn set_cursor_id(&self, _: String) {}
-    fn set_cursor_position(&self, _: CursorPosition) {}
+    fn set_cursor_data(&self, data: CursorData) {
+        if self.0.closed.load(Ordering::Acquire) {
+            return;
+        }
+        self.0.cursor.lock().unwrap().insert(data);
+        self.0.updates.notify_one();
+    }
+    fn set_cursor_id(&self, id: String) {
+        if self.0.closed.load(Ordering::Acquire) {
+            return;
+        }
+        if self.0.cursor.lock().unwrap().select(id.parse().ok()) {
+            self.0.updates.notify_one();
+        }
+    }
+    fn set_cursor_position(&self, position: CursorPosition) {
+        if self.0.closed.load(Ordering::Acquire) {
+            return;
+        }
+        if self.0.cursor.lock().unwrap().position((position.x, position.y)) {
+            self.0.updates.notify_one();
+        }
+    }
     fn set_displays(&self, displays: &Vec<DisplayInfo>) {
         let list: Vec<_> = displays
             .iter()
@@ -1006,6 +1087,46 @@ mod tests {
     }
 
     #[test]
+    fn quality_flood_preserves_errors_permissions_and_latest_partial_metrics() {
+        let handler = Handler::default();
+        handler.event(SessionEvent::Error("connection failed".into()));
+        handler.event(SessionEvent::Permission { name: "keyboard".into(), enabled: false });
+        for fps in 0..1000 {
+            handler.event(SessionEvent::Quality {
+                index: 0, update: SessionQuality { received_fps: Some(fps), ..Default::default() },
+            });
+        }
+        handler.event(SessionEvent::Quality {
+            index: 0, update: SessionQuality { round_trip_ms: Some(25), ..Default::default() },
+        });
+        let events = handler.0.drain_events();
+        assert!(matches!(events.as_slice(), [SessionEvent::Error(_), SessionEvent::Permission { enabled: false, .. }, SessionEvent::Quality { .. }]));
+        let SessionEvent::Quality { index, update } = &events[2] else { unreachable!() };
+        assert_eq!((*index, update.received_fps, update.round_trip_ms), (0, Some(999), Some(25)));
+    }
+
+    #[test]
+    fn display_changes_discard_metrics_from_the_previous_display() {
+        let handle = SessionHandle { session: Session::default() };
+        let mailbox = &handle.session.ui_handler.0;
+        mailbox.connected.store(true, Ordering::Release);
+        mailbox.monitors.write().unwrap().list = vec![Monitor {
+            index: 1, name: "second".into(), width: 1920, height: 1080, available: true,
+        }];
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let quality = || SessionEvent::Quality {
+            index: 0, update: SessionQuality { received_fps: Some(60), ..Default::default() },
+        };
+        handle.session.ui_handler.event(quality());
+        handle.switch_monitor(1).unwrap();
+        assert!(handle.drain_events().is_empty());
+        handle.session.ui_handler.event(quality());
+        handle.session.ui_handler.set_display(1920, 0, 1920, 1080, false, 1.0);
+        assert!(matches!(handle.drain_events().as_slice(), [SessionEvent::Display { .. }]));
+    }
+
+    #[test]
     fn quality_reports_active_decoder_output_and_merges_partial_network_updates() {
         let handler = Handler::default();
         handler.0.monitors.write().unwrap().current = 1;
@@ -1028,21 +1149,17 @@ mod tests {
             delay: Some(23),
             ..Default::default()
         });
-        let mut quality = SessionQuality::default();
-        for _ in 0..2 {
-            let SessionEvent::Quality { index, update } = handler.0.events.pop().unwrap() else {
-                panic!("expected quality update")
-            };
-            assert_eq!(index, 1);
-            quality.merge(update);
-        }
+        let SessionEvent::Quality { index, update: quality } = handler.0.drain_events().pop().unwrap() else {
+            panic!("expected quality update")
+        };
+        assert_eq!(index, 1);
         assert_eq!(quality.decoded_fps, Some(57));
         assert_eq!(quality.receive_rate.as_deref(), Some("123.00kB/s"));
         assert_eq!(quality.codec, Some(scrap::CodecFormat::VP9.to_string()));
         assert_eq!(quality.round_trip_ms, Some(23));
         handler.0.monitors.write().unwrap().pending = Some(0);
         handler.update_quality_status(QualityStatus::default());
-        assert!(handler.0.events.pop().is_none());
+        assert!(handler.0.drain_events().is_empty());
     }
 
     #[test]

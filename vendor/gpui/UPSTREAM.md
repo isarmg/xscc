@@ -89,3 +89,12 @@ fallback. No decoder texture is imported or reused through this API.
 Core image/atlas tests cover retained ownership, replacement failure, changed
 size and device reset. WGPU tests cover upload storage reuse and pixel swizzling.
 Physical GPU throughput and actual screen presentation require device testing.
+
+## Application-painted pointers
+
+`CursorStyle::Hidden` clears the native pointer on Windows, registers a transparent
+NSCursor on macOS, and uses `wl_pointer.set_cursor(None)` on Wayland. Wayland skips
+cursor-shape-v1 for this style, including pointer entry and restore-after-typing.
+Regular controls restore their existing cursor styles. The optional, non-product
+X11 backend explicitly uses its arrow fallback. Mobile backends retain their
+existing system pointer behavior.
