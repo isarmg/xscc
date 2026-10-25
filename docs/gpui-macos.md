@@ -20,7 +20,7 @@ cargo build --locked --release \
   --target aarch64-apple-darwin --features live-session
 python3 .github/scripts/package-gpui-macos.py \
   --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-gpui-validation" \
-  --role controller --version 0.1.0-beta.4 \
+  --role controller --version 0.1.0-beta.5 \
   --output "$PWD/dist/XSCC Controller.app"
 ```
 
