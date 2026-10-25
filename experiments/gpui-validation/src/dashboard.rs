@@ -18,7 +18,7 @@ pub fn card(palette: Palette) -> Div {
 }
 
 pub fn button(
-    id: &'static str,
+    id: impl Into<gpui::ElementId>,
     label: &str,
     primary: bool,
     enabled: bool,
@@ -53,7 +53,19 @@ pub fn button(
         ))
         .child(label.to_owned())
         .when(enabled, |button| {
-            button.cursor_pointer().hover(|style| style.opacity(0.85))
+            button
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.85))
+                .active(|style| style.opacity(0.65))
+                .when(
+                    !cfg!(any(target_os = "android", target_os = "ios")),
+                    |button| {
+                        button
+                            .focusable()
+                            .tab_index(0)
+                            .focus(|style| style.opacity(0.75))
+                    },
+                )
         })
 }
 

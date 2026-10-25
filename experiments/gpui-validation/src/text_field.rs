@@ -511,6 +511,7 @@ impl Render for TextField {
             .min_w_0()
             .key_context("XsccTextField")
             .track_focus(&self.focus)
+            .tab_index(0)
             .cursor(CursorStyle::IBeam)
             .relative()
             .min_h(px(theme::CONTROL_HEIGHT))

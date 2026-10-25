@@ -60,7 +60,7 @@ struct Settings {
     server: String,
     addresses: Vec<HostAddress>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PeerView {
     pub binding: Binding,
     pub name: String,
@@ -68,7 +68,7 @@ pub struct PeerView {
     pub online: bool,
     pub addresses: Vec<HostAddress>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
     pub configured: bool,
     pub server: Option<String>,
@@ -228,6 +228,22 @@ impl NativeManager {
                 })
                 .unwrap_or_default(),
         }
+    }
+    pub fn target_available(&self, id: uuid::Uuid) -> bool {
+        let access = self.access.read().unwrap();
+        let Some(receiver) = access.as_ref() else {
+            return false;
+        };
+        let observation = receiver.borrow();
+        observation
+            .as_ref()
+            .and_then(AccessObservation::policy)
+            .is_some_and(|policy| {
+                policy.role == InstanceRole::Controller
+                    && policy.peers.iter().any(|peer| {
+                        peer.binding.device_id == id && peer.online && !peer.addresses.is_empty()
+                    })
+            })
     }
     pub fn target(&self, id: uuid::Uuid) -> Result<Target> {
         let policy = self.policy().ok_or(Error::Unavailable)?;
@@ -604,6 +620,8 @@ mod tests {
         );
         let status = serde_json::to_string(&manager.status()).unwrap();
         assert!(manager.status().configured && manager.status().peers.is_empty());
+        assert!(!manager.target_available(binding.device_id));
+        assert!(manager.target(binding.device_id).is_err());
         assert!(!status.contains(&"a".repeat(64)) && !status.contains("session_key"));
         assert_eq!(
             format!(

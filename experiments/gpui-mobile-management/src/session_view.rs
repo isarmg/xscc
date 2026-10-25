@@ -1,4 +1,5 @@
 use crate::{
+    dashboard,
     display_state::accepts_display_update,
     presentation::VideoPresentation,
     remote_keyboard::{Command, KeyboardControl, KeyboardEvent, RemoteKeyboard},
@@ -55,6 +56,7 @@ pub struct SessionView {
     receiver: mpsc::Receiver<Reply>,
     wake: Arc<tokio::sync::Notify>,
     presentation: VideoPresentation,
+    frame_scheduled: bool,
     notice: String,
     _refresh: gpui::Task<()>,
     _lifecycle: Subscription,
@@ -75,16 +77,24 @@ impl SessionView {
                     if let Some(control) = &view.keyboard_control {
                         control.cancel();
                     }
+                } else {
+                    view.wake.notify_one();
                 }
             }),
         ];
         let (sender, receiver) = mpsc::channel();
         let wake = Arc::new(tokio::sync::Notify::new());
         let refresh_wake = wake.clone();
-        let refresh = cx.spawn(async move |view, cx| {
+        let refresh = cx.spawn_in(window, async move |view, cx| {
             loop {
                 refresh_wake.notified().await;
-                if view.update(cx, |_, cx| cx.notify()).is_err() {
+                if view
+                    .update_in(cx, |view: &mut Self, window, cx| {
+                        view.consume(window, cx);
+                        cx.notify();
+                    })
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -150,6 +160,7 @@ impl SessionView {
             receiver,
             wake,
             presentation: VideoPresentation::default(),
+            frame_scheduled: false,
             notice: "选择已授权设备查看画面".into(),
             _refresh: refresh,
             _lifecycle: lifecycle,
@@ -187,6 +198,7 @@ impl SessionView {
         drop(self.session.take());
         self.selected = None;
         self.presentation.invalidate();
+        self.wake.notify_one();
         self.notice = "会话已断开".into();
         // Dropping a queued result also disconnects its session handle.
         for reply in self.receiver.try_iter() {
@@ -234,7 +246,9 @@ impl SessionView {
         let (Some(manager), Some(id)) = (&self.manager, &self.selected) else {
             return false;
         };
-        id.parse().ok().is_some_and(|id| manager.target(id).is_ok())
+        id.parse()
+            .ok()
+            .is_some_and(|id| manager.target_available(id))
     }
 
     pub fn check_authorization(&mut self, cx: &mut Context<Self>) {
@@ -344,6 +358,7 @@ impl SessionView {
             TouchPhase::Ended => Phase::Ended,
             TouchPhase::Cancelled => Phase::Cancelled,
         };
+        let had_pending = self.touch.pending();
         let was_armed = self.touch.right_click_armed();
         let output = self.touch.event(
             event.id.0,
@@ -352,8 +367,22 @@ impl SessionView {
             geometry,
         );
         self.send_outputs(output);
-        if self.touch.pending() || was_armed != self.touch.right_click_armed() {
+        if self.touch.pending() && !had_pending {
+            cx.on_next_frame(window, |view, window, cx| view.flush_touch(window, cx));
+        }
+        if was_armed != self.touch.right_click_armed() {
             cx.notify();
+        }
+    }
+
+    fn flush_touch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.input_allowed() {
+            self.release_input();
+        }
+        let pending = self.touch.flush();
+        self.send_outputs(pending);
+        if self.touch.pending() {
+            cx.on_next_frame(window, |view, window, cx| view.flush_touch(window, cx));
         }
     }
 
@@ -553,6 +582,10 @@ impl SessionView {
                 }
                 SessionEvent::Permission { name, enabled } if name == "keyboard" && !enabled => {
                     self.release_input();
+                    if let Some(control) = &self.keyboard_control {
+                        control.configure(false, false, false);
+                        control.cancel();
+                    }
                     self.notice = "服务端未允许输入 · 仅查看画面".into();
                 }
                 SessionEvent::Error(error) => {
@@ -567,6 +600,22 @@ impl SessionView {
                 _ => {}
             }
         }
+        if !self.frame_scheduled {
+            self.frame_scheduled = true;
+            cx.on_next_frame(window, |view, window, cx| {
+                view.consume(window, cx);
+                view.frame_scheduled = false;
+                if view.session.is_some() && window.visibility() != gpui::WindowVisibility::Visible
+                {
+                    return;
+                }
+                view.prepare_frame(window);
+                cx.notify();
+            });
+        }
+    }
+
+    fn prepare_frame(&mut self, window: &mut Window) {
         let frame = self
             .session
             .as_ref()
@@ -602,8 +651,6 @@ impl SessionView {
                     .is_some_and(SessionHandle::common_shortcuts_supported),
             );
         }
-        let pending = self.touch.flush();
-        self.send_outputs(pending);
         match self.presentation.update(frame, window) {
             Ok(Some(_)) => {
                 self.notice = if self.input_allowed() {
@@ -629,10 +676,6 @@ impl Drop for SessionView {
 
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.consume(window, cx);
-        if self.touch.pending() {
-            window.request_animation_frame();
-        }
         let palette = theme::palette(window.appearance());
         let audio = self.session.as_ref().map(SessionHandle::audio_status);
         let generation = self.generation;
@@ -724,36 +767,26 @@ impl Render for SessionView {
                                     ""
                                 }
                             );
-                            div()
-                                .id(("monitor", index))
-                                .min_h(px(44.))
-                                .p_2()
-                                .bg(rgb(palette.panel))
-                                .child(label)
+                            dashboard::button(
+                                ("monitor", index), &label,
+                                self.current_monitor == Some(index),
+                                monitor.available && self.pending_monitor.is_none(), palette,
+                            )
                                 .on_click(cx.listener(move |view, _, window, cx| {
                                     view.switch_monitor(index, window, cx)
                                 }))
                         })),
                 )
                 .child(
-                    div().flex().gap_2().children(
-                        [TargetFps::Fps30, TargetFps::Fps60]
+                    div().flex().flex_wrap().gap_2().children(
+                        [TargetFps::Fps30, TargetFps::Fps60, TargetFps::Fps90, TargetFps::Fps120]
                             .into_iter()
                             .map(|target| {
-                                div()
-                                    .id(("target-fps", target.value() as usize))
-                                    .min_h(px(44.))
-                                    .p_2()
-                                    .bg(rgb(palette.panel))
-                                    .child(format!(
-                                        "请求 {} FPS{}",
-                                        target.value(),
-                                        if self.target_fps == Some(target) {
-                                            "（已请求）"
-                                        } else {
-                                            ""
-                                        }
-                                    ))
+                                dashboard::button(
+                                    ("target-fps", target.value() as usize),
+                                    &format!("{} FPS", target.value()),
+                                    self.target_fps == Some(target), true, palette,
+                                )
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.request_fps(target, cx)
                                     }))
@@ -780,18 +813,13 @@ impl Render for SessionView {
             })
             .when_some(audio, |view, audio| {
                 view.child(
-                    div()
-                        .id("session-audio")
-                        .min_h(px(44.))
-                        .p_3()
-                        .text_color(rgb(palette.text))
-                        .bg(rgb(palette.panel))
-                        .child(if audio.enabled {
-                            "关闭声音"
-                        } else {
-                            "开启声音（使用系统音量）"
-                        })
+                    dashboard::button(
+                        "session-audio",
+                        if audio.enabled { "关闭声音" } else { "开启声音（使用系统音量）" },
+                        audio.enabled, self.connected, palette,
+                    )
                         .on_click(cx.listener(|view, _, _, cx| {
+                            if !view.connected { return; }
                             if let Some(session) = &view.session {
                                 if let Err(error) =
                                     session.set_audio_enabled(!session.audio_status().enabled)
@@ -806,16 +834,13 @@ impl Render for SessionView {
             })
             .when(input_allowed, |view| {
                 view.child(
-                    div()
-                        .id("one-shot-right-click")
-                        .min_h(px(44.))
-                        .p_3()
-                        .bg(rgb(palette.panel))
-                        .child(if self.touch.right_click_armed() {
+                    dashboard::button(
+                        "one-shot-right-click",
+                        if self.touch.right_click_armed() {
                             "右键已准备：轻点画面（点击此处取消）"
-                        } else {
-                            "下一次轻点使用右键"
-                        })
+                        } else { "下一次轻点使用右键" },
+                        self.touch.right_click_armed(), true, palette,
+                    )
                         .on_click(cx.listener(|view, _, window, cx| {
                             let cancel = view.touch.right_click_armed();
                             view.release_input();
@@ -833,15 +858,12 @@ impl Render for SessionView {
             })
             .children(self.keyboard.clone())
             .child(
-                div()
-                    .id("touch-mode")
-                    .min_h(px(44.))
-                    .p_3()
-                    .child(if self.direct_touch {
-                        "切换为仅查看（重连会话）"
-                    } else {
-                        "启用触控与软键盘（重连会话）"
-                    })
+                dashboard::button(
+                    "touch-mode",
+                    if self.direct_touch { "切换为仅查看（重连会话）" }
+                    else { "启用触控与软键盘（重连会话）" },
+                    false, true, palette,
+                )
                     .on_click(cx.listener(|view, _, _window, cx| {
                         let selected = view.selected.clone();
                         view.release_input();
@@ -854,13 +876,7 @@ impl Render for SessionView {
             )
             .when(self.selected.is_some(), |view| {
                 view.child(
-                    div()
-                        .id("disconnect-session")
-                        .min_h(px(44.))
-                        .p_3()
-                        .text_color(rgb(palette.text))
-                        .bg(rgb(palette.panel))
-                        .child("断开画面")
+                    dashboard::button("disconnect-session", "断开画面", false, true, palette)
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.stop();
                             cx.notify();

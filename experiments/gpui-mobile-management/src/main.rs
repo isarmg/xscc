@@ -1,3 +1,9 @@
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
+#[path = "../../gpui-validation/src/dashboard.rs"]
+mod dashboard;
 #[cfg(any(
     test,
     all(

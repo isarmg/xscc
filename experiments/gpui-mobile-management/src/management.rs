@@ -25,6 +25,7 @@ pub enum Event {
     SessionReady(Arc<NativeManager>),
     Status(Status),
     Action(Result<(), String>),
+    Enrolled(Result<(), String>),
     Lifecycle(Result<(), String>),
     Failed(String),
 }
@@ -110,13 +111,22 @@ pub async fn run(
         feature = "mobile-session"
     ))]
     publish(Event::SessionReady(manager.clone()));
-    publish(Event::Opened(manager.status()));
+    let mut last_status = manager.status();
+    publish(Event::Opened(last_status.clone()));
     let mut active = *lifecycle.borrow_and_update();
     if active {
         publish(Event::Lifecycle(
             manager.resume().await.map_err(|error| error.to_string()),
         ));
     }
+    let mut publish_status = || {
+        let status = manager.status();
+        if status == last_status {
+            return true;
+        }
+        last_status = status.clone();
+        publish(Event::Status(status))
+    };
     let mut timer = tokio::time::interval(Duration::from_secs(2));
     loop {
         tokio::select! {
@@ -127,11 +137,12 @@ pub async fn run(
                 if next == active { continue; }
                 active = next;
                 let result = if active { manager.resume().await } else { manager.shutdown().await };
-                publish(Event::Status(manager.status()));
+                publish_status();
                 if !publish(Event::Lifecycle(result.map_err(|error| error.to_string()))) { break; }
             }
             command = commands.recv() => {
                 let Some(command) = command else { break };
+                let enrolling = matches!(command, Command::Enroll { .. });
                 let result = match command {
                     Command::Enroll { server, code } if active => {
                         manager.enroll(&server, &code, Vec::new()).await
@@ -143,13 +154,14 @@ pub async fn run(
                         continue;
                     }
                 };
-                publish(Event::Status(manager.status()));
-                if !publish(Event::Action(result.map_err(|error| error.to_string()))) {
+                publish_status();
+                let result = result.map_err(|error| error.to_string());
+                if !publish(if enrolling { Event::Enrolled(result) } else { Event::Action(result) }) {
                     break;
                 }
             }
             _ = timer.tick(), if active => {
-                if !publish(Event::Status(manager.status())) { break; }
+                if !publish_status() { break; }
             }
         }
     }
@@ -242,6 +254,47 @@ mod tests {
         manager.unbind().await.unwrap();
         assert!(manager.status().binding.is_none());
         assert!(manager.status().peers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unchanged_idle_status_does_not_wake_the_management_view() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (commands, receiver) = mpsc::channel(1);
+        let (lifecycle, phases) = watch::channel(true);
+        let (events, replies) = std::sync::mpsc::channel();
+        let wake = Arc::new(Notify::new());
+        let worker = tokio::spawn(run(
+            Ok(temporary.path().to_owned()),
+            receiver,
+            phases,
+            events,
+            wake.clone(),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                wake.notified().await;
+                if replies
+                    .try_iter()
+                    .any(|event| matches!(event, Event::Lifecycle(_)))
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(2100)).await;
+        assert!(
+            !replies
+                .try_iter()
+                .any(|event| matches!(event, Event::Status(_)))
+        );
+        drop(commands);
+        drop(lifecycle);
+        tokio::time::timeout(Duration::from_secs(5), worker)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]

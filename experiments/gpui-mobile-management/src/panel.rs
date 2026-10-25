@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 use xscc::protocol::InstanceRole;
-use xscc_native_management::manager::Status;
+use xscc_native_management::{enrollment::ServerOrigin, manager::Status};
 
 pub struct Panel {
     commands: tokio::sync::mpsc::Sender<Command>,
@@ -63,12 +63,12 @@ impl Panel {
             events,
             wake.clone(),
         ));
-        let updates = cx.spawn(async move |view, cx| {
+        let updates = cx.spawn_in(_window, async move |view, cx| {
             loop {
                 wake.notified().await;
                 if view
-                    .update(cx, |view: &mut Self, cx| {
-                        view.consume(cx);
+                    .update_in(cx, |view: &mut Self, window, cx| {
+                        view.consume(window, cx);
                         cx.notify();
                     })
                     .is_err()
@@ -125,7 +125,7 @@ impl Panel {
         }
     }
 
-    fn consume(&mut self, _cx: &mut Context<Self>) {
+    fn consume(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         while let Ok(event) = self.events.try_recv() {
             match event {
                 #[cfg(all(
@@ -151,6 +151,13 @@ impl Panel {
                     ))]
                     self.session
                         .update(_cx, |view, cx| view.check_authorization(cx));
+                }
+                Event::Enrolled(result) => {
+                    self.busy = false;
+                    if result.is_ok() {
+                        self.code.update(_cx, |field, cx| field.clear(window, cx));
+                    }
+                    self.notice = result.err().unwrap_or_default();
                 }
                 Event::Action(result) => {
                     self.busy = false;
@@ -207,6 +214,8 @@ impl Panel {
         let server = self.server.read(cx).value().trim().to_owned();
         if server.is_empty() {
             self.notice = "请填写服务端地址。".into();
+        } else if ServerOrigin::parse(&server).is_err() {
+            self.notice = "服务端地址无效：HTTP 仅支持本机或私网地址；公网请使用 HTTPS，地址不能包含路径或账号。".into();
         } else {
             let code = match enrollment_input::instance_password(self.code.read(cx).value()) {
                 Ok(code) => code.to_owned(),
@@ -216,7 +225,6 @@ impl Panel {
                     return;
                 }
             };
-            self.code.update(cx, |field, cx| field.clear(window, cx));
             window.dismiss_virtual_keyboard();
             self.action(Command::Enroll { server, code }, cx);
         }

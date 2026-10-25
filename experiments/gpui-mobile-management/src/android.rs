@@ -4,6 +4,9 @@
 mod display_state;
 
 #[cfg(feature = "mobile-session")]
+#[path = "../../gpui-validation/src/dashboard.rs"]
+mod dashboard;
+#[cfg(feature = "mobile-session")]
 mod keyboard_action;
 #[cfg(feature = "mobile-session")]
 mod keyboard_input;

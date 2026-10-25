@@ -21,8 +21,8 @@ use std::{
 use xscc::protocol::InstanceRole;
 
 enum Reply {
-    Status(Result<Status, String>),
-    Action(Result<Status, String>),
+    Status(u64, Result<Status, String>),
+    Action(bool, Result<Status, String>),
 }
 
 struct ManagementPanel {
@@ -38,6 +38,10 @@ struct ManagementPanel {
     initialized: bool,
     status: Option<Status>,
     status_pending: bool,
+    manual_refresh_pending: bool,
+    action_revision: u64,
+    sidebar_visible: bool,
+    statistics: Statistics,
     status_error: Option<String>,
     action_pending: bool,
     confirm_unbind: bool,
@@ -50,24 +54,29 @@ struct ManagementPanel {
 }
 
 impl ManagementPanel {
-    fn refresh(&mut self) {
-        if !self.initialized || self.status_pending || self.action_pending {
+    fn refresh(&mut self, manual: bool) {
+        if !self.initialized || self.action_pending {
+            return;
+        }
+        self.manual_refresh_pending |= manual;
+        if self.status_pending {
             return;
         }
         self.status_pending = true;
+        let revision = self.action_revision;
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.runtime.spawn(async move {
             let result = gpui_management::status()
                 .await
                 .map_err(|error| error.to_string());
-            let _ = sender.send(Reply::Status(result));
+            let _ = sender.send(Reply::Status(revision, result));
             wake.notify_one();
         });
     }
 
     fn can_act(&self) -> bool {
-        management_actions_enabled(self.initialized, self.status_pending, self.action_pending)
+        management_actions_enabled(self.initialized, self.action_pending)
     }
 
     fn action(&mut self, request: Command) {
@@ -75,6 +84,8 @@ impl ManagementPanel {
             return;
         }
         self.action_pending = true;
+        self.action_revision = self.action_revision.wrapping_add(1);
+        let enrollment = matches!(&request, Command::Enroll { .. });
         self.confirm_unbind = false;
         self.notice = match &request {
             Command::Enroll { .. } => "正在绑定实例…",
@@ -89,12 +100,12 @@ impl ManagementPanel {
             let result = gpui_management::execute(request)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = sender.send(Reply::Action(result));
+            let _ = sender.send(Reply::Action(enrollment, result));
             wake.notify_one();
         });
     }
 
-    fn enroll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn enroll(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.can_act() || self.status.is_none() {
             return;
         }
@@ -120,8 +131,6 @@ impl ManagementPanel {
         } else {
             Vec::new()
         };
-        self.password
-            .update(cx, |field, cx| field.clear(window, cx));
         self.action(Command::Enroll {
             server,
             authorization_code,
@@ -187,15 +196,6 @@ impl ManagementPanel {
             return;
         }
         match key.key.as_str() {
-            "tab" => {
-                let next = if key.modifiers.shift {
-                    (index + fields.len() - 1) % fields.len()
-                } else {
-                    (index + 1) % fields.len()
-                };
-                fields[next].read(cx).focus_handle(cx).focus(window, cx);
-                cx.stop_propagation();
-            }
             "enter" if !key.modifiers.shift => {
                 if configured {
                     self.save_address(cx);
@@ -208,23 +208,43 @@ impl ManagementPanel {
         }
     }
 
-    fn consume_updates(&mut self) {
+    fn consume_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut changed = false;
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
-                Reply::Status(result) => {
+                Reply::Status(revision, result) => {
                     self.status_pending = false;
+                    let manual = self.manual_refresh_pending;
+                    changed |= manual;
+                    self.manual_refresh_pending = false;
+                    if revision != self.action_revision {
+                        if manual && !self.action_pending {
+                            self.refresh(true);
+                        }
+                        continue;
+                    }
                     match result {
                         Ok(status) => {
+                            changed |= self.status.as_ref() != Some(&status)
+                                || self.status_error.is_some();
                             self.status = Some(status);
                             self.status_error = None;
                         }
-                        Err(error) => self.status_error = Some(error),
+                        Err(error) => {
+                            changed |= self.status_error.as_ref() != Some(&error);
+                            self.status_error = Some(error);
+                        }
                     }
                 }
-                Reply::Action(result) => {
+                Reply::Action(enrollment, result) => {
+                    changed = true;
                     self.action_pending = false;
                     match result {
                         Ok(status) => {
+                            if enrollment {
+                                self.password
+                                    .update(cx, |field, cx| field.clear(window, cx));
+                            }
                             self.notice = if status.configured {
                                 "设置已更新。"
                             } else {
@@ -241,6 +261,7 @@ impl ManagementPanel {
                 }
             }
         }
+        changed
     }
 }
 
@@ -359,17 +380,17 @@ impl ManagementPanel {
                     .child(
                         ui::button(
                             "refresh",
-                            if self.status_pending {
+                            if self.manual_refresh_pending {
                                 "刷新中…"
                             } else {
                                 "刷新"
                             },
                             false,
-                            idle,
+                            idle && !self.manual_refresh_pending,
                             palette,
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.refresh();
+                            view.refresh(true);
                             cx.notify();
                         })),
                     )
@@ -682,221 +703,306 @@ impl Render for ManagementPanel {
                                 .text_color(rgb(if available { palette.accent } else { palette.muted }))
                                 .child(if available { "连接设备" } else if self.video_state.connecting { "正在连接…" } else if self.video_state.has_session { "会话进行中" } else if !current_peers { "等待状态同步" } else { "暂不可连接" })
                                 .child(if available { "→" } else { "" })))
-                        .when(available, |card| card.cursor_pointer().hover(|style| style.opacity(0.9))
+                        .when(available, |card| card.cursor_pointer().focusable().tab_index(0).hover(|style| style.opacity(0.9)).focus(|style| style.opacity(0.75))
                             .on_click(cx.listener(move |view, _, window, cx| { view.connect(id.clone(), window, cx); cx.notify(); })))
                 })));
-        panel
-            .when(!self.host && !self.video_state.notice.is_empty(), |root| {
-                root.child(div().child(self.video_state.notice.clone()))
-            })
-            .when(!self.host && self.video_state.has_session, |root| {
-                root.child(
-                    div()
-                        .id("fullscreen")
-                        .px_3()
-                        .py_1()
-                        .relative()
-                        .min_h(px(theme::CONTROL_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .child(theme::surface(
-                            rgb(palette.panel),
-                            None,
-                            theme::CONTROL_EXTENT,
-                        ))
-                        .cursor_pointer()
-                        .child("全屏 · Ctrl+Alt+Enter")
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.video.read(cx).focus_handle(cx).focus(window, cx);
-                            window.toggle_fullscreen();
-                            cx.notify();
-                        })),
-                )
-            })
-            .when(!self.host && self.video_state.monitors.len() > 1, |root| {
-                root.child(div().flex().flex_wrap().gap_2().child("屏幕：").children(
-                    self.video_state.monitors.iter().map(|monitor| {
-                        let index = monitor.index;
-                        let selected = self.video_state.current_monitor == index;
-                        let enabled = self.video_state.connected
-                            && !self.video_state.switching_monitor
-                            && monitor.available
-                            && !selected;
+        panel.when(
+            !self.host
+                && !self.video_state.connecting
+                && !self.video_state.has_session
+                && !self.video_state.notice.is_empty(),
+            |root| root.child(div().child(self.video_state.notice.clone())),
+        )
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Statistics {
+    Off,
+    Compact,
+    Detailed,
+}
+
+impl Statistics {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Off => "统计：关闭",
+            Self::Compact => "统计：简洁",
+            Self::Detailed => "统计：详细",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Compact,
+            Self::Compact => Self::Detailed,
+            Self::Detailed => Self::Off,
+        }
+    }
+}
+
+fn session_statistics(state: &VideoState, mode: Statistics) -> String {
+    if mode == Statistics::Off {
+        return String::new();
+    }
+    let quality = &state.quality;
+    let mut details = Vec::new();
+    if mode == Statistics::Detailed {
+        details.push(format!(
+            "屏幕 {} · 目标 {} FPS",
+            state.current_monitor + 1,
+            state.target_fps.value()
+        ));
+    }
+    if let Some(fps) = quality.received_fps {
+        details.push(format!("接收 {fps} FPS"));
+    }
+    if let Some(fps) = quality.submitted_fps {
+        details.push(format!("提交 {fps} FPS"));
+    }
+    if mode == Statistics::Detailed {
+        if let Some(fps) = quality.decoded_fps {
+            details.push(format!("解码 {fps} FPS"));
+        }
+        if let (Some(p50), Some(p95)) = (quality.decode_p50_ms, quality.decode_p95_ms) {
+            details.push(format!("解码 p50/p95 {p50:.1}/{p95:.1} ms"));
+        }
+        if let Some(p95) = quality.ui_queue_p95_ms {
+            details.push(format!("UI排队 p95 {p95:.1} ms"));
+        }
+        if let Some(dropped) = quality.mailbox_dropped {
+            details.push(format!("丢弃 {dropped} 帧"));
+        }
+        if let Some(codec) = &quality.codec {
+            details.push(format!("编码 {codec}"));
+        }
+    }
+    if let Some(rate) = &quality.receive_rate {
+        let mbps = rate
+            .trim()
+            .strip_suffix("kB/s")
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.);
+        details.push(
+            mbps.map(|value| format!("接收 {:.2} Mbps", value * 1024. * 8. / 1_000_000.))
+                .unwrap_or_else(|| format!("接收吞吐 {rate}")),
+        );
+    }
+    if let Some(delay) = quality.round_trip_ms {
+        details.push(format!("网络往返 {delay} ms"));
+    }
+    details.join(" · ")
+}
+
+struct ManagementMenu {
+    management: Entity<ManagementPanel>,
+    _subscription: Subscription,
+}
+
+impl Render for ManagementMenu {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = self.management.update(cx, |view, cx| {
+            if !view.host && (view.video_state.connecting || view.video_state.has_session) {
+                view.render_session_toolbar(window, cx)
+            } else {
+                view.render_menu(window, cx)
+            }
+        });
+        div()
+            .id("management-menu")
+            .size_full()
+            .overflow_y_scroll()
+            .child(content)
+    }
+}
+
+impl ManagementPanel {
+    fn render_session_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
+        let palette = theme::palette(window.appearance());
+        let state = &self.video_state;
+        let summary = session_statistics(state, self.statistics);
+        let status = if state.notice.is_empty() {
+            summary
+        } else if summary.is_empty() {
+            state.notice.clone()
+        } else {
+            format!("{} · {summary}", state.notice)
+        };
+        div()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .bg(rgb(palette.panel))
+            .border_b_1()
+            .border_color(rgb(palette.border))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
                         div()
-                            .id(("monitor", index))
-                            .px_3()
-                            .py_1()
-                            .relative()
-                            .min_h(px(theme::CONTROL_HEIGHT))
+                            .id("session-toolbar-actions")
+                            .flex_1()
+                            .min_w_0()
                             .flex()
                             .items_center()
-                            .child(theme::surface(
-                                rgb(if selected {
-                                    palette.accent
-                                } else {
-                                    palette.panel
-                                }),
-                                None,
-                                theme::CONTROL_EXTENT,
-                            ))
-                            .text_color(rgb(if selected {
-                                palette.page
-                            } else if enabled {
-                                palette.text
-                            } else {
-                                palette.muted
-                            }))
-                            .child(format!(
-                                "{} · {} · {}×{}{}",
-                                index + 1,
-                                monitor.name,
-                                monitor.width,
-                                monitor.height,
-                                if monitor.available {
-                                    ""
-                                } else {
-                                    " · 不可用"
-                                }
-                            ))
-                            .when(enabled, |button| {
-                                button.cursor_pointer().on_click(cx.listener(
-                                    move |view, _, _, cx| {
-                                        view.video.update(cx, |video, cx| {
-                                            video.switch_monitor(index, cx)
-                                        });
+                            .min_h(px(theme::CONTROL_HEIGHT))
+                            .overflow_x_scroll()
+                            .whitespace_nowrap()
+                            .gap_2()
+                            .child(
+                                ui::button(
+                                    "session-devices",
+                                    if self.sidebar_visible {
+                                        "收起设备"
+                                    } else {
+                                        "设备"
+                                    },
+                                    false,
+                                    true,
+                                    palette,
+                                )
+                                .flex_shrink_0()
+                                .on_click(cx.listener(
+                                    |view, _, _, cx| {
+                                        view.sidebar_visible = !view.sidebar_visible;
                                         cx.notify();
                                     },
-                                ))
-                            })
-                    }),
-                ))
-            })
-            .when(!self.host && self.video_state.has_session, |root| {
-                root.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .child("目标帧率：")
-                        .children(
-                            [
-                                TargetFps::Fps30,
-                                TargetFps::Fps60,
-                                TargetFps::Fps90,
-                                TargetFps::Fps120,
-                            ]
-                            .into_iter()
-                            .map(|target| {
-                                div()
-                                    .id(("target-fps", target.value() as usize))
-                                    .px_3()
-                                    .py_1()
-                                    .relative()
-                                    .min_h(px(theme::CONTROL_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .child(theme::surface(
-                                        rgb(if self.video_state.target_fps == target {
-                                            palette.accent
+                                )),
+                            )
+                            .children(state.monitors.iter().map(|monitor| {
+                                let index = monitor.index;
+                                let selected = state.current_monitor == index;
+                                let enabled = state.connected
+                                    && !state.switching_monitor
+                                    && monitor.available;
+                                ui::button(
+                                    ("session-monitor", index),
+                                    &format!(
+                                        "屏幕 {} · {} · {}×{}{}",
+                                        index + 1,
+                                        monitor.name,
+                                        monitor.width,
+                                        monitor.height,
+                                        if monitor.available {
+                                            ""
                                         } else {
-                                            palette.panel
-                                        }),
-                                        None,
-                                        theme::CONTROL_EXTENT,
-                                    ))
-                                    .text_color(rgb(if self.video_state.target_fps == target {
-                                        palette.page
-                                    } else {
-                                        palette.text
-                                    }))
-                                    .child(target.value().to_string())
-                                    .when(self.video_state.connected, |button| {
-                                        button.cursor_pointer().on_click(cx.listener(
-                                            move |view, _, _, cx| {
+                                            " · 不可用"
+                                        }
+                                    ),
+                                    selected,
+                                    enabled,
+                                    palette,
+                                )
+                                .flex_shrink_0()
+                                .on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        if enabled {
+                                            view.video.update(cx, |video, cx| {
+                                                video.switch_monitor(index, cx)
+                                            });
+                                        }
+                                    },
+                                ))
+                            }))
+                            .children(
+                                [
+                                    ("session-fps-30", TargetFps::Fps30),
+                                    ("session-fps-60", TargetFps::Fps60),
+                                    ("session-fps-90", TargetFps::Fps90),
+                                    ("session-fps-120", TargetFps::Fps120),
+                                ]
+                                .into_iter()
+                                .map(|(id, target)| {
+                                    ui::button(
+                                        id,
+                                        &format!("{} FPS", target.value()),
+                                        state.target_fps == target,
+                                        state.connected,
+                                        palette,
+                                    )
+                                    .flex_shrink_0()
+                                    .on_click(cx.listener(
+                                        move |view, _, _, cx| {
+                                            if view.video_state.connected {
                                                 view.video.update(cx, |video, cx| {
                                                     video.request_fps(target, cx)
                                                 });
-                                                cx.notify();
-                                            },
-                                        ))
-                                    })
-                            }),
-                        ),
-                )
-            })
-            .when(
-                !self.host && self.video_state.connected && !self.video_state.switching_monitor,
-                |root| {
-                    let quality = &self.video_state.quality;
-                    let mut details = vec![format!(
-                        "屏幕 {} · 目标 {} FPS",
-                        self.video_state.current_monitor + 1,
-                        self.video_state.target_fps.value()
-                    )];
-                    if let Some(fps) = quality.received_fps {
-                        details.push(format!("接收 {} FPS", fps));
-                    }
-                    if let Some(fps) = quality.submitted_fps {
-                        details.push(format!("UI提交 {} FPS", fps));
-                    }
-                    if let (Some(p50), Some(p95)) = (quality.decode_p50_ms, quality.decode_p95_ms) {
-                        details.push(format!("解码 p50/p95 {:.1}/{:.1} ms", p50, p95));
-                    }
-                    if let Some(p95) = quality.ui_queue_p95_ms {
-                        details.push(format!("UI排队 p95 {:.1} ms", p95));
-                    }
-                    if let Some(dropped) = quality.mailbox_dropped {
-                        details.push(format!("邮箱替换 {} 帧", dropped));
-                    }
-                    if let Some(fps) = quality.decoded_fps {
-                        details.push(format!("解码 {} FPS", fps));
-                    }
-                    if let Some(codec) = &quality.codec {
-                        details.push(format!("编码 {}", codec));
-                    }
-                    if let Some(rate) = &quality.receive_rate {
-                        details.push(format!("接收吞吐 {}", rate));
-                    }
-                    if let Some(delay) = quality.round_trip_ms {
-                        details.push(format!("网络往返 {} ms", delay));
-                    }
-                    root.child(
-                        div()
-                            .text_color(rgb(palette.muted))
-                            .child(details.join(" · ")),
+                                            }
+                                        },
+                                    ))
+                                }),
+                            )
+                            .child(
+                                ui::button(
+                                    "session-statistics",
+                                    self.statistics.label(),
+                                    false,
+                                    true,
+                                    palette,
+                                )
+                                .flex_shrink_0()
+                                .on_click(cx.listener(
+                                    |view, _, _, cx| {
+                                        view.statistics = view.statistics.next();
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                ui::button(
+                                    "session-fullscreen",
+                                    if window.is_fullscreen() {
+                                        "退出全屏"
+                                    } else {
+                                        "全屏"
+                                    },
+                                    false,
+                                    state.connected,
+                                    palette,
+                                )
+                                .flex_shrink_0()
+                                .on_click(cx.listener(
+                                    |view, _, window, cx| {
+                                        if view.video_state.connected {
+                                            view.video.read(cx).focus_handle(cx).focus(window, cx);
+                                            window.toggle_fullscreen();
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            ),
                     )
-                },
-            )
-            .when(
-                self.video_state.connecting || self.video_state.has_session,
-                |root| {
-                    root.child(
-                        div()
-                            .id("disconnect")
-                            .px_3()
-                            .py_1()
-                            .relative()
-                            .min_h(px(theme::CONTROL_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .child(theme::surface(
-                                rgb(palette.panel),
-                                None,
-                                theme::CONTROL_EXTENT,
-                            ))
-                            .text_color(rgb(palette.danger))
-                            .cursor_pointer()
-                            .child(if self.video_state.connecting {
+                    .child(
+                        ui::button(
+                            "session-disconnect",
+                            if state.connecting {
                                 "取消连接"
                             } else {
                                 "断开连接"
-                            })
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.video.update(cx, |video, cx| video.disconnect(cx));
-                                cx.notify();
-                            })),
-                    )
-                },
+                            },
+                            false,
+                            true,
+                            palette,
+                        )
+                        .text_color(rgb(palette.danger))
+                        .flex_shrink_0()
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.video.update(cx, |video, cx| video.disconnect(cx));
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("session-statistics-text")
+                    .h(px(theme::LINE_HEIGHT))
+                    .overflow_x_scroll()
+                    .whitespace_nowrap()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.muted))
+                    .child(status),
             )
     }
 }
@@ -905,8 +1011,41 @@ struct Client {
     font: gpui::SharedString,
     host: bool,
     management: Entity<ManagementPanel>,
+    menu: Entity<ManagementMenu>,
     video: Entity<RemoteVideo>,
     _subscription: Subscription,
+}
+
+impl Client {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.host && self.video.read(cx).focus_handle(cx).is_focused(window) {
+            return;
+        }
+        let key = &event.keystroke;
+        if key.key == "tab"
+            && !key.modifiers.control
+            && !key.modifiers.alt
+            && !key.modifiers.platform
+        {
+            if key.modifiers.shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            cx.stop_propagation();
+        } else if key.key.eq_ignore_ascii_case("r")
+            && key.modifiers.control
+            && !key.modifiers.shift
+            && !key.modifiers.alt
+            && !key.modifiers.platform
+        {
+            self.management.update(cx, |view, cx| {
+                view.refresh(true);
+                cx.notify();
+            });
+            cx.stop_propagation();
+        }
+    }
 }
 
 impl Render for Client {
@@ -914,31 +1053,42 @@ impl Render for Client {
         let palette = theme::palette(window.appearance());
         // Cached views require a definite viewport; panel content scrolls within it.
         let panel_width = (f32::from(window.viewport_size().width) * 0.38).min(420.0);
-        let remote_visible = !self.host && self.management.read(cx).video_state.connected;
-        let fullscreen_video = remote_visible && window.is_fullscreen();
+        let management = self.management.read(cx);
+        let remote_visible =
+            !self.host && (management.video_state.connecting || management.video_state.has_session);
+        let sidebar_visible = management.sidebar_visible;
         div()
             .size_full()
             .flex()
             .flex_col()
-            .when(!fullscreen_video, |root| root.gap_4().p_6())
+            .when(!remote_visible, |root| root.gap_4().p_6())
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .font_family(self.font.clone())
+            .on_key_down(cx.listener(Self::key_down))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
-            .when(!fullscreen_video, |root| {
-                root.child(
-                    self.management
-                        .update(cx, |view, cx| view.render_menu(window, cx)),
-                )
-            })
+            .child(
+                self.menu.clone().cached(
+                    StyleRefinement::default()
+                        .w_full()
+                        .h(px(if remote_visible {
+                            96.
+                        } else if f32::from(window.viewport_size().width) < 900. {
+                            128.
+                        } else {
+                            76.
+                        }))
+                        .flex_shrink_0(),
+                ),
+            )
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h(px(0.0))
                     .gap_3()
-                    .when(!fullscreen_video, |row| {
+                    .when(!remote_visible || sidebar_visible, |row| {
                         row.child(
                             div()
                                 .h_full()
@@ -1054,13 +1204,14 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     )];
                     let wake = Arc::new(tokio::sync::Notify::new());
                     let ui_wake = wake.clone();
-                    let update_task = cx.spawn(async move |view, cx| {
+                    let update_task = cx.spawn_in(window, async move |view, cx| {
                         loop {
                             ui_wake.notified().await;
                             if view
-                                .update(cx, |view: &mut ManagementPanel, cx| {
-                                    view.consume_updates();
-                                    cx.notify();
+                                .update_in(cx, |view: &mut ManagementPanel, window, cx| {
+                                    if view.consume_updates(window, cx) {
+                                        cx.notify();
+                                    }
                                 })
                                 .is_err()
                             {
@@ -1071,9 +1222,8 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     let management_task = cx.spawn(async move |view, cx| {
                         loop {
                             if view
-                                .update(cx, |view: &mut ManagementPanel, cx| {
-                                    view.refresh();
-                                    cx.notify();
+                                .update(cx, |view: &mut ManagementPanel, _| {
+                                    view.refresh(false);
                                 })
                                 .is_err()
                             {
@@ -1097,6 +1247,10 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         initialized,
                         status: None,
                         status_pending: false,
+                        manual_refresh_pending: false,
+                        action_revision: 0,
+                        sidebar_visible: false,
+                        statistics: Statistics::Compact,
                         status_error: None,
                         action_pending: false,
                         confirm_unbind: false,
@@ -1108,8 +1262,13 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         _tasks: vec![update_task, management_task],
                     }
                 });
+                let menu = cx.new(|cx| ManagementMenu {
+                    _subscription: cx.observe(&management, |_, _, cx| cx.notify()),
+                    management: management.clone(),
+                });
                 cx.new(|cx| Client {
                     font,
+                    menu,
                     host,
                     _subscription: cx.observe(&management, |_, _, cx| cx.notify()),
                     management,
@@ -1137,12 +1296,8 @@ fn format_peer_address(host: &str, port: u16) -> String {
     }
 }
 
-fn management_actions_enabled(
-    initialized: bool,
-    status_pending: bool,
-    action_pending: bool,
-) -> bool {
-    initialized && !status_pending && !action_pending
+fn management_actions_enabled(initialized: bool, action_pending: bool) -> bool {
+    initialized && !action_pending
 }
 
 fn management_status(configured: bool, phase: &str) -> &'static str {
@@ -1163,6 +1318,45 @@ mod tests {
     use super::{format_peer_address, management_actions_enabled, management_status};
 
     #[test]
+    fn compact_and_detailed_statistics_preserve_metric_meanings() {
+        let state = crate::remote_video::VideoState {
+            connecting: false,
+            has_session: true,
+            connected: true,
+            target_fps: librustdesk::gpui_session::TargetFps::Fps60,
+            monitors: vec![],
+            current_monitor: 0,
+            switching_monitor: false,
+            notice: String::new(),
+            quality: librustdesk::gpui_session::SessionQuality {
+                received_fps: Some(60),
+                submitted_fps: Some(58),
+                decoded_fps: Some(59),
+                decode_p50_ms: Some(1.0),
+                decode_p95_ms: Some(2.0),
+                ui_queue_p95_ms: Some(3.0),
+                mailbox_dropped: Some(4),
+                codec: Some("VP9".into()),
+                receive_rate: Some("1250.00kB/s".into()),
+                round_trip_ms: Some(12),
+            },
+        };
+        let compact = super::session_statistics(&state, super::Statistics::Compact);
+        assert!(compact.contains("接收 60 FPS") && compact.contains("提交 58 FPS"));
+        assert!(compact.contains("10.24 Mbps") && compact.contains("12 ms"));
+        let detailed = super::session_statistics(&state, super::Statistics::Detailed);
+        for label in [
+            "解码 59 FPS",
+            "p50/p95 1.0/2.0 ms",
+            "UI排队 p95 3.0 ms",
+            "丢弃 4 帧",
+            "VP9",
+        ] {
+            assert!(detailed.contains(label), "{label}");
+        }
+        assert!(super::session_statistics(&state, super::Statistics::Off).is_empty());
+    }
+    #[test]
     fn host_cards_display_addresses_with_ports() {
         assert_eq!(
             format_peer_address("192.168.1.8", 21118),
@@ -1176,11 +1370,10 @@ mod tests {
     }
 
     #[test]
-    fn management_actions_wait_for_refresh_before_changing_binding_or_addresses() {
-        assert!(management_actions_enabled(true, false, false));
-        assert!(!management_actions_enabled(true, true, false));
-        assert!(!management_actions_enabled(true, false, true));
-        assert!(!management_actions_enabled(false, false, false));
+    fn only_user_actions_block_management_buttons() {
+        assert!(management_actions_enabled(true, false));
+        assert!(!management_actions_enabled(true, true));
+        assert!(!management_actions_enabled(false, false));
     }
 
     #[test]
