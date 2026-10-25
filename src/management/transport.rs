@@ -6,11 +6,13 @@ use hbb_common::{
     anyhow::Context,
     bail,
     config::{self, CONNECT_TIMEOUT},
+    futures::{stream::FuturesUnordered, StreamExt},
     rendezvous_proto::ConnType,
     stream::Stream,
     tcp::FramedStream,
-    ResultType,
+    tokio, ResultType,
 };
+use std::{future::Future, time::Duration};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use xscc::protocol::InstanceRole;
 use xscc_native_management::{
@@ -121,24 +123,46 @@ pub(crate) async fn connect(
     let target: Target = serde_json::from_value(rpc(Request::Target { device_id: id }).await?)?;
     interface.update_direct(None);
     interface.update_received(false);
-    let mut last_error = None;
-    for address in &target.addresses {
+    let target_ref = &target;
+    let candidates = target.addresses.iter().map(|address| async move {
         let endpoint = if address.host.contains(':') {
             format!("[{}]:{}", address.host, address.port)
         } else {
             format!("{}:{}", address.host, address.port)
         };
-        let result = connect_target(&endpoint, &target).await;
-        match result {
-            Ok((stream, key)) => {
-                interface.update_direct(Some(true));
-                return Ok((stream, key, "TCP", Some(target.permit)));
+        connect_target(&endpoint, target_ref).await
+    });
+    let (stream, key) = first_authorized_candidate(candidates).await?;
+    interface.update_direct(Some(true));
+    Ok((stream, key, "TCP", Some(target.permit)))
+}
+
+async fn first_authorized_candidate<T, F>(candidates: impl IntoIterator<Item = F>) -> ResultType<T>
+where
+    F: Future<Output = ResultType<T>>,
+{
+    let mut pending: FuturesUnordered<_> = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(index, candidate)| async move {
+            tokio::time::sleep(Duration::from_millis(250 * index as u64)).await;
+            candidate.await
+        })
+        .collect();
+    hbb_common::timeout(CONNECT_TIMEOUT, async {
+        let mut last_error = None;
+        while let Some(result) = pending.next().await {
+            match result {
+                Ok(authorized) => return Ok(authorized),
+                Err(error) => last_error = Some(error),
             }
-            Err(error) => last_error = Some(error),
         }
-    }
-    Err(last_error
-        .unwrap_or_else(|| hbb_common::anyhow::anyhow!("No authorized host address is available")))
+        Err(last_error.unwrap_or_else(|| {
+            hbb_common::anyhow::anyhow!("No authorized host address is available")
+        }))
+    })
+    .await
+    .context("Managed connection timed out")?
 }
 
 async fn connect_target(endpoint: &str, target: &Target) -> ResultType<(Stream, Vec<u8>)> {
@@ -196,8 +220,41 @@ pub(crate) async fn check_controller(permit: Option<&SessionPermit>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hbb_common::{sodiumoxide::crypto::sign, tcp, tokio, uuid};
+    use hbb_common::{sodiumoxide::crypto::sign, tcp, uuid};
     use xscc::protocol::{Binding, SessionKey};
+
+    #[tokio::test]
+    async fn authorized_later_address_wins_over_stalled_and_rejected_candidates() {
+        let candidates = (0..3).map(|index| async move {
+            match index {
+                0 => std::future::pending().await,
+                1 => bail!("Managed host proof required"),
+                _ => Ok("authorized host"),
+            }
+        });
+        let authorized = tokio::time::timeout(
+            Duration::from_secs(2),
+            first_authorized_candidate(candidates),
+        )
+        .await
+        .expect("an unreachable first address must not delay a valid later host")
+        .unwrap();
+        assert_eq!(authorized, "authorized host");
+    }
+
+    #[tokio::test]
+    async fn rejected_candidates_cannot_become_a_managed_connection() {
+        let candidates = (0..2).map(|_| async {
+            ResultType::<()>::Err(hbb_common::anyhow::anyhow!("Managed host proof required"))
+        });
+        assert_eq!(
+            first_authorized_candidate(candidates)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Managed host proof required"
+        );
+    }
 
     async fn encrypted_pair() -> (Stream, Stream, Vec<u8>) {
         let listener = tcp::new_listener("127.0.0.1:0", false).await.unwrap();
