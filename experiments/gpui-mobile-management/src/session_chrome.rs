@@ -44,7 +44,7 @@ pub struct ChromeModel {
     pub quality: String,
     pub left_pressed: bool,
     pub right_pressed: bool,
-    pub scroll_pressed: bool,
+    pub middle_pressed: bool,
     pub right_click_armed: bool,
 }
 
@@ -513,16 +513,11 @@ impl SessionChrome {
             )
     }
 
-    fn mouse_dock(&self) -> Div {
+    fn floating_mouse_buttons(&self) -> Div {
         let Some(mouse) = self.model.layout.mouse else {
             return div();
         };
-        let mut dock = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(at(mouse.dock).bg(rgb(PAGE)));
+        let mut dock = div().absolute().top_0().left_0().size_full();
         for (rect, icon, label, pressed) in [
             (
                 mouse.left,
@@ -536,12 +531,17 @@ impl SessionChrome {
                 "右键",
                 self.model.right_pressed,
             ),
-            (mouse.wheel, Glyph::Wheel, "滚轮", self.model.scroll_pressed),
+            (
+                mouse.middle,
+                Glyph::MouseMiddle,
+                "中键",
+                self.model.middle_pressed,
+            ),
         ] {
             dock = dock.child(
                 at(rect)
                     .rounded_full()
-                    .bg(rgb(if pressed { BLUE } else { RAISED }))
+                    .bg(gpui::rgba(if pressed { 0x267cf5e8 } else { 0x272c35b8 }))
                     .border_1()
                     .border_color(rgb(if pressed { BLUE } else { BORDER }))
                     .flex()
@@ -590,7 +590,7 @@ impl Render for SessionChrome {
                     }),
             );
         }
-        chrome = chrome.child(self.mouse_dock());
+        chrome = chrome.child(self.floating_mouse_buttons());
         if let Some(panel) = self.model.layout.panel {
             chrome = chrome.child(self.panel(panel, cx));
         }
@@ -625,7 +625,7 @@ enum Glyph {
     Close,
     MouseLeft,
     MouseRight,
-    Wheel,
+    MouseMiddle,
 }
 
 fn glyph(shape: Glyph, color: u32) -> impl IntoElement {
@@ -715,10 +715,19 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             (12., 12.),
             (20., 12.),
         ]],
-        Glyph::Wheel => &[
-            &[(12., 3.), (12., 21.)],
-            &[(8., 7.), (12., 3.), (16., 7.)],
-            &[(8., 17.), (12., 21.), (16., 17.)],
+        Glyph::MouseMiddle => &[
+            &[
+                (7., 3.),
+                (17., 3.),
+                (20., 6.),
+                (20., 18.),
+                (17., 22.),
+                (7., 22.),
+                (4., 18.),
+                (4., 6.),
+                (7., 3.),
+            ],
+            &[(10., 6.), (14., 6.), (14., 12.), (10., 12.), (10., 6.)],
         ],
     }
 }

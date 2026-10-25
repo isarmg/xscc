@@ -52,6 +52,8 @@ pub enum Output {
     Scroll(i32, i32),
     RightDown(i32, i32),
     RightUp(i32, i32),
+    MiddleDown(i32, i32),
+    MiddleUp(i32, i32),
 }
 #[derive(Default)]
 pub struct TouchInput {

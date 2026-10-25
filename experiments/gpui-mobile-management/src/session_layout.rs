@@ -17,10 +17,9 @@ pub enum Panel {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MouseControls {
-    pub dock: Rect,
     pub left: Rect,
     pub right: Rect,
-    pub wheel: Rect,
+    pub middle: Rect,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -76,21 +75,13 @@ pub fn layout(
     };
     let stage_width = (available_width - side_width).max(0.);
     let stage_height = (height - bottom_height).max(0.);
-    let dock_height = if pointer_buttons && panel != Panel::Keyboard && stage_width >= 160. {
-        64_f32.min((stage_height - 44.).max(0.))
-    } else {
-        0.
-    };
     let stage = Rect {
         x: 0.,
         y: 0.,
         width: stage_width,
         height: stage_height,
     };
-    let video = Rect {
-        height: (stage_height - dock_height).max(0.),
-        ..stage
-    };
+    let video = stage;
     let rail = Rect {
         x: available_width,
         y: 0.,
@@ -122,36 +113,31 @@ pub fn layout(
         width: available_width,
         height: bottom_height,
     });
-    let mouse = (dock_height >= 44.).then(|| {
-        let key_size = 48_f32.min(dock_height - 8.);
-        let key_y = video.height + (dock_height - key_size) / 2.;
-        let first = (stage_width - key_size * 3. - 16.) / 2.;
-        let left = Rect {
-            x: first,
-            y: key_y,
-            width: key_size,
-            height: key_size,
-        };
-        let right = Rect {
-            x: first + key_size + 8.,
-            ..left
-        };
-        let wheel = Rect {
-            x: first + 2. * (key_size + 8.),
-            ..left
-        };
-        MouseControls {
-            dock: Rect {
-                x: 0.,
-                y: video.height,
-                width: stage_width,
-                height: dock_height,
-            },
-            left,
-            right,
-            wheel,
-        }
-    });
+    let mouse =
+        (pointer_buttons && panel != Panel::Keyboard && stage_width >= 160. && stage_height >= 64.)
+            .then(|| {
+                let key_size = 48.;
+                let first = (video.width - key_size * 3. - 16.) / 2.;
+                let left = Rect {
+                    x: first,
+                    y: video.height - key_size - 12.,
+                    width: key_size,
+                    height: key_size,
+                };
+                let middle = Rect {
+                    x: first + key_size + 8.,
+                    ..left
+                };
+                let right = Rect {
+                    x: first + 2. * (key_size + 8.),
+                    ..left
+                };
+                MouseControls {
+                    left,
+                    middle,
+                    right,
+                }
+            });
     SessionLayout {
         viewport: Rect {
             x: 0.,
@@ -184,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn controls_and_keyboard_never_cover_the_remote_image() {
+    fn panels_and_keyboard_stay_outside_the_remote_image() {
         for (width, height) in [(1280., 576.), (800., 360.), (320., 640.), (960., 154.)] {
             for panel in [
                 Panel::None,
@@ -194,14 +180,9 @@ mod tests {
             ] {
                 for expanded in [true, false] {
                     let layout = layout(width, height, expanded, panel, true, 176.);
-                    for control in [
-                        Some(layout.rail),
-                        layout.panel,
-                        layout.keyboard,
-                        layout.mouse.map(|m| m.dock),
-                    ]
-                    .into_iter()
-                    .flatten()
+                    for control in [Some(layout.rail), layout.panel, layout.keyboard]
+                        .into_iter()
+                        .flatten()
                     {
                         assert!(!overlaps(layout.video, control), "{layout:?}");
                     }
@@ -213,21 +194,39 @@ mod tests {
     }
 
     #[test]
-    fn collapse_restores_image_space_and_pointer_controls_stay_in_their_dock() {
-        let expanded = layout(1280., 576., true, Panel::None, false, 88.);
-        let collapsed = layout(1280., 576., false, Panel::None, false, 88.);
-        assert!(collapsed.video.width > expanded.video.width);
-        assert_eq!(collapsed.video.height, 576.);
-        let pointer = layout(1280., 576., false, Panel::None, true, 88.)
-            .mouse
-            .unwrap();
-        for key in [pointer.left, pointer.right, pointer.wheel] {
-            assert!(
-                key.y >= pointer.dock.y
-                    && key.y + key.height <= pointer.dock.y + pointer.dock.height
-            );
-            assert!(key.x >= 0. && key.x + key.width <= pointer.dock.width);
+    fn floating_buttons_preserve_full_image_geometry_and_stay_inside_it() {
+        for (width, height) in [(1280., 576.), (800., 360.), (320., 640.), (960., 154.)] {
+            for panel in [
+                Panel::None,
+                Panel::Operations,
+                Panel::Display,
+                Panel::Keyboard,
+            ] {
+                let hidden = layout(width, height, false, panel, false, 88.);
+                let shown = layout(width, height, false, panel, true, 88.);
+                assert_eq!(shown.video, hidden.video);
+                assert_eq!(shown.stage, hidden.stage);
+                if let Some(mouse) = shown.mouse {
+                    assert_ne!(panel, Panel::Keyboard);
+                    for button in [mouse.left, mouse.middle, mouse.right] {
+                        assert!(button.width >= 44. && button.height >= 44.);
+                        assert!(button.x >= shown.video.x && button.y >= shown.video.y);
+                        assert!(button.x + button.width <= shown.video.x + shown.video.width);
+                        assert!(button.y + button.height <= shown.video.y + shown.video.height);
+                    }
+                    assert!(!overlaps(mouse.left, mouse.middle));
+                    assert!(!overlaps(mouse.middle, mouse.right));
+                }
+            }
         }
+        let full = layout(1280., 576., false, Panel::None, true, 88.);
+        assert_eq!(full.video.height, 576.);
+        assert!(
+            full.video.width
+                > layout(1280., 576., true, Panel::None, true, 88.)
+                    .video
+                    .width
+        );
     }
 
     #[test]

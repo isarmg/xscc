@@ -373,6 +373,16 @@ impl SessionView {
                     x,
                     y,
                 ),
+                Output::MiddleDown(x, y) => (
+                    input::MOUSE_TYPE_DOWN | (input::MOUSE_BUTTON_WHEEL << 3),
+                    x,
+                    y,
+                ),
+                Output::MiddleUp(x, y) => (
+                    input::MOUSE_TYPE_UP | (input::MOUSE_BUTTON_WHEEL << 3),
+                    x,
+                    y,
+                ),
                 Output::Scroll(x, y) => (input::MOUSE_TYPE_TRACKPAD, x, y),
             };
             if let Err(error) = session.send_input(InputCommand::Mouse(MouseEvent {
@@ -428,17 +438,6 @@ impl SessionView {
             }
             window.dismiss_virtual_keyboard();
             self.focus.focus(window, cx);
-            if self.input.mode() == InputMode::Pointer && !self.input.active() {
-                let output = self.input.configure(geometry, controls);
-                self.send_outputs(output);
-                if let Some(position) = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.cursor_snapshot().position)
-                {
-                    self.input.set_position(position);
-                }
-            }
         }
         let had_pending = self.input.pending();
         let output = self.input.event(
@@ -665,7 +664,10 @@ impl SessionView {
                     if let Some(control) = &self.keyboard_control {
                         control.cancel();
                     }
-                    if self.current_monitor != Some(index) || self.pending_monitor.is_some() {
+                    if self.current_monitor != Some(index)
+                        || self.pending_monitor.is_some()
+                        || self.origin != (x, y)
+                    {
                         self.quality = SessionQuality::default();
                         self.presentation.invalidate();
                         self.extent = (0, 0);
@@ -684,6 +686,10 @@ impl SessionView {
                         control.cancel();
                     }
                     self.notice = "服务端未允许输入 · 仅查看画面".into();
+                }
+                SessionEvent::Permission { name, enabled } if name == "keyboard" && enabled => {
+                    self.initialize_pointer();
+                    self.notice.clear();
                 }
                 SessionEvent::Error(error) => {
                     self.stop();
@@ -724,7 +730,7 @@ impl SessionView {
 
     fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let had_frame = self.presentation.image().is_some();
-        let first_image = !had_frame || self.extent.0 == 0 || self.extent.1 == 0;
+        let mut first_image = !had_frame || self.extent.0 == 0 || self.extent.1 == 0;
         let mut changed = false;
         let frame = self
             .session
@@ -736,6 +742,7 @@ impl SessionView {
         if let Some(frame) = &frame {
             let extent = (frame.width, frame.height);
             if self.extent != extent {
+                first_image = true;
                 self.release_input();
                 if let Some(control) = &self.keyboard_control {
                     control.cancel();
@@ -778,8 +785,12 @@ impl SessionView {
         }
         if self.input_allowed() {
             if let Some((geometry, controls)) = self.input_geometry() {
+                let initialize = first_image || self.input.snapshot().position.is_none();
                 let output = self.input.configure(geometry, controls);
                 self.send_outputs(output);
+                if initialize {
+                    self.initialize_pointer();
+                }
             }
         }
         self.prepare_cursor(window);
@@ -813,6 +824,24 @@ impl SessionView {
         ))
     }
 
+    fn initialize_pointer(&mut self) {
+        if self.input.mode() != InputMode::Pointer || !self.input_allowed() {
+            return;
+        }
+        if let Some(position) = self
+            .session
+            .as_ref()
+            .and_then(|session| session.cursor_snapshot().position)
+        {
+            self.input.set_position(position);
+        }
+        // An unknown/out-of-screen host point uses the model's clamped center.
+        // Align the host once as well, so the initial visible arrow has the same click target.
+        if let Some((x, y)) = self.input.snapshot().position {
+            self.send_outputs(vec![Output::Move(x, y)]);
+        }
+    }
+
     fn prepare_cursor(&mut self, window: &mut Window) {
         let mut snapshot = self.session.as_ref().map(SessionHandle::cursor_snapshot);
         if !self.connected
@@ -824,16 +853,10 @@ impl SessionView {
         {
             snapshot = None;
         }
-        let pointer = self.input.snapshot();
+        // Pointer-mode painting and clicks share one continuous local position.
+        // The host cursor mailbox can still contain an older position after a finger lifts.
         let local = if self.input.mode() == InputMode::Pointer && self.input_allowed() {
-            if self.input.active() || pointer.left_down || pointer.right_down {
-                pointer.position
-            } else {
-                if let Some(snapshot) = snapshot.as_mut() {
-                    snapshot.position = snapshot.position.or(pointer.position);
-                }
-                None
-            }
+            self.input.snapshot().position
         } else {
             if snapshot
                 .as_ref()
@@ -926,7 +949,7 @@ impl SessionView {
             ),
             left_pressed: pointer.left_down,
             right_pressed: pointer.right_down,
-            scroll_pressed: self.input.wheel_active(),
+            middle_pressed: pointer.middle_down,
             right_click_armed: self.input.right_click_armed(),
         };
         self.chrome.update(cx, |chrome, cx| {
@@ -940,7 +963,7 @@ impl SessionView {
             let model = self.chrome.read(cx).model();
             model.left_pressed != pointer.left_down
                 || model.right_pressed != pointer.right_down
-                || model.scroll_pressed != self.input.wheel_active()
+                || model.middle_pressed != pointer.middle_down
                 || model.right_click_armed != self.input.right_click_armed()
         };
         if changed {
@@ -956,6 +979,7 @@ impl SessionView {
             || self.presentation.image().is_none()
             || self.input.active()
             || pointer.left_down
+            || pointer.middle_down
             || pointer.right_down
         {
             return;
@@ -968,6 +992,7 @@ impl SessionView {
                 if view.panel == Panel::None
                     && !view.input.active()
                     && !pointer.left_down
+                    && !pointer.middle_down
                     && !pointer.right_down
                 {
                     view.rail_expanded = false;
@@ -1032,24 +1057,21 @@ impl SessionView {
                 self.panel = Panel::None;
             }
             ChromeAction::SetPointer(pointer) => {
-                self.release_input();
-                self.hide_keyboard(window, cx);
-                let output = self.input.set_mode(if pointer {
+                let mode = if pointer {
                     InputMode::Pointer
                 } else {
                     InputMode::Direct
-                });
-                self.send_outputs(output);
-                if let Some((geometry, controls)) = self.input_geometry() {
-                    let output = self.input.configure(geometry, controls);
+                };
+                if self.input.mode() != mode {
+                    self.release_input();
+                    self.hide_keyboard(window, cx);
+                    let output = self.input.set_mode(mode);
                     self.send_outputs(output);
-                }
-                if let Some(position) = self
-                    .session
-                    .as_ref()
-                    .and_then(|session| session.cursor_snapshot().position)
-                {
-                    self.input.set_position(position);
+                    if let Some((geometry, controls)) = self.input_geometry() {
+                        let output = self.input.configure(geometry, controls);
+                        self.send_outputs(output);
+                    }
+                    self.initialize_pointer();
                 }
             }
             ChromeAction::ToggleMouseButtons => {
@@ -1067,6 +1089,8 @@ impl SessionView {
                     if let Some(id) = self.selected.clone() {
                         self.connect(id, window, cx);
                     }
+                } else if !self.view_only {
+                    self.initialize_pointer();
                 }
             }
             ChromeAction::ToggleAudio => {
@@ -1132,7 +1156,7 @@ fn stage_geometry(
             .map(|mouse| ControlRegions {
                 left: Some(global(mouse.left)),
                 right: Some(global(mouse.right)),
-                wheel: Some(global(mouse.wheel)),
+                middle: Some(global(mouse.middle)),
             })
             .unwrap_or_default(),
     )
@@ -1203,6 +1227,19 @@ impl Render for SessionView {
                                 .object_fit(ObjectFit::Contain)
                         }),
                 ),
+            )
+            .child(
+                canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, window, _| {
+                        cursor.paint(bounds, extent, origin, window);
+                    },
+                )
+                .absolute()
+                .left(px(layout.video.x))
+                .top(px(layout.video.y))
+                .w(px(layout.video.width))
+                .h(px(layout.video.height)),
             )
             .child(
                 self.chrome.clone().cached(
@@ -1297,15 +1334,6 @@ impl Render for SessionView {
                 },
                 move |_, (bounds, hitbox), window, _| {
                     let (geometry, controls) = stage_geometry(bounds, layout, extent, origin);
-                    cursor.paint(
-                        Bounds::new(
-                            gpui::point(px(geometry.bounds.0), px(geometry.bounds.1)),
-                            gpui::size(px(geometry.bounds.2), px(geometry.bounds.3)),
-                        ),
-                        extent,
-                        origin,
-                        window,
-                    );
                     if let Some(hitbox) = hitbox {
                         window.on_touch_event(owner, &hitbox, move |event, window, cx| {
                             touch(&(event.clone(), geometry, controls), window, cx);

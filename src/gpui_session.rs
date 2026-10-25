@@ -1345,9 +1345,16 @@ mod tests {
 
     #[test]
     fn mobile_pointer_requires_explicit_capability_and_rejects_keys() {
-        let pointer = InputCommand::Mouse(MouseEvent::default());
-        assert!(!mobile_pointer_permitted(false, &pointer));
-        assert!(mobile_pointer_permitted(true, &pointer));
+        use base::session_protocol::input::{MOUSE_BUTTON_WHEEL, MOUSE_TYPE_DOWN, MOUSE_TYPE_UP};
+        for mask in [
+            0,
+            MOUSE_TYPE_DOWN | (MOUSE_BUTTON_WHEEL << 3),
+            MOUSE_TYPE_UP | (MOUSE_BUTTON_WHEEL << 3),
+        ] {
+            let pointer = InputCommand::Mouse(MouseEvent { mask, ..Default::default() });
+            assert!(!mobile_pointer_permitted(false, &pointer));
+            assert!(mobile_pointer_permitted(true, &pointer));
+        }
         assert!(!mobile_pointer_permitted(true, &InputCommand::Key(KeyEvent::default())));
     }
 

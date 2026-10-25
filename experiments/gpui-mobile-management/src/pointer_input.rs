@@ -7,6 +7,7 @@ const TAP_SLOP: f64 = 8.;
 pub enum PointerButton {
     Left,
     Right,
+    Middle,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -14,6 +15,7 @@ pub struct PointerSnapshot {
     pub position: Option<(i32, i32)>,
     pub left_down: bool,
     pub right_down: bool,
+    pub middle_down: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -44,6 +46,7 @@ pub struct TrackpadInput {
     tap_scroll: (f64, f64),
     left: Option<(i32, i32)>,
     right: Option<(i32, i32)>,
+    middle: Option<(i32, i32)>,
 }
 
 impl TrackpadInput {
@@ -52,6 +55,7 @@ impl TrackpadInput {
             position: self.global_position(),
             left_down: self.left.is_some(),
             right_down: self.right.is_some(),
+            middle_down: self.middle.is_some(),
         }
     }
 
@@ -86,6 +90,7 @@ impl TrackpadInput {
         if !self.contacts.is_empty()
             || self.left.is_some()
             || self.right.is_some()
+            || self.middle.is_some()
             || self.pending()
             || i64::from(position.0) < i64::from(geometry.origin.0)
             || i64::from(position.1) < i64::from(geometry.origin.1)
@@ -99,27 +104,6 @@ impl TrackpadInput {
             f64::from(position.1) - f64::from(geometry.origin.1),
         ));
         true
-    }
-
-    pub fn scroll_by(&mut self, dx: f32, dy: f32) -> Vec<Output> {
-        if !dx.is_finite() || !dy.is_finite() {
-            return self.cancel();
-        }
-        if self.geometry.is_some() {
-            self.scroll.0 = (self.scroll.0 + f64::from(dx)).clamp(-240., 240.);
-            self.scroll.1 = (self.scroll.1 + f64::from(dy)).clamp(-240., 240.);
-            if self.scroll.0.abs() >= 1. || self.scroll.1.abs() >= 1. {
-                self.gesture = match self.gesture {
-                    Gesture::SingleTap => Gesture::PointerMove,
-                    Gesture::TwoTap => {
-                        self.tap_scroll = (0., 0.);
-                        Gesture::TwoScroll
-                    }
-                    gesture => gesture,
-                };
-            }
-        }
-        Vec::new()
     }
 
     pub fn pending(&self) -> bool {
@@ -148,6 +132,7 @@ impl TrackpadInput {
         let held = match button {
             PointerButton::Left => self.left.is_some(),
             PointerButton::Right => self.right.is_some(),
+            PointerButton::Middle => self.middle.is_some(),
         };
         if held == pressed || self.global_position().is_none() {
             return Vec::new();
@@ -173,12 +158,17 @@ impl TrackpadInput {
                         self.right = Some(position);
                         output.push(Output::RightDown(position.0, position.1));
                     }
+                    PointerButton::Middle => {
+                        self.middle = Some(position);
+                        output.push(Output::MiddleDown(position.0, position.1));
+                    }
                 }
             }
         } else {
             let release = match button {
                 PointerButton::Left => self.left.take().map(|p| Output::Up(p.0, p.1)),
                 PointerButton::Right => self.right.take().map(|p| Output::RightUp(p.0, p.1)),
+                PointerButton::Middle => self.middle.take().map(|p| Output::MiddleUp(p.0, p.1)),
             };
             output.extend(release);
         }
@@ -189,6 +179,7 @@ impl TrackpadInput {
         let mut output = Vec::new();
         output.extend(self.left.take().map(|p| Output::Up(p.0, p.1)));
         output.extend(self.right.take().map(|p| Output::RightUp(p.0, p.1)));
+        output.extend(self.middle.take().map(|p| Output::MiddleUp(p.0, p.1)));
         self.pending_move = None;
         self.scroll = (0., 0.);
         self.tap_scroll = (0., 0.);
@@ -218,7 +209,7 @@ impl TrackpadInput {
                 if self.contacts.is_empty() {
                     output.extend(self.flush());
                     self.gesture = if self.geometry.is_some() && inside_viewport(point, geometry) {
-                        if self.left.is_none() && self.right.is_none() {
+                        if self.left.is_none() && self.right.is_none() && self.middle.is_none() {
                             Gesture::SingleTap
                         } else {
                             Gesture::PointerMove
@@ -262,7 +253,7 @@ impl TrackpadInput {
                             }
                             _ => None,
                         };
-                        if self.left.is_none() && self.right.is_none() {
+                        if self.left.is_none() && self.right.is_none() && self.middle.is_none() {
                             if let Some(button) = tap {
                                 output.extend(self.click(button));
                             }
@@ -346,6 +337,10 @@ impl TrackpadInput {
                     Output::RightDown(position.0, position.1),
                     Output::RightUp(position.0, position.1),
                 ]),
+                PointerButton::Middle => output.extend([
+                    Output::MiddleDown(position.0, position.1),
+                    Output::MiddleUp(position.0, position.1),
+                ]),
             }
         }
         output
@@ -379,6 +374,9 @@ impl TrackpadInput {
         }
         if self.right.is_some() {
             self.right = Some(position);
+        }
+        if self.middle.is_some() {
+            self.middle = Some(position);
         }
     }
 }
@@ -460,6 +458,53 @@ mod tests {
     }
 
     #[test]
+    fn successive_gestures_continue_from_the_last_pointer_instead_of_finger_position() {
+        let g = geometry();
+        let mut pointer = TrackpadInput::default();
+        pointer.configure(g);
+        assert!(pointer.set_position((-300, 100)));
+        pointer.event(1, Phase::Started, Point(100., 100.), g);
+        pointer.event(1, Phase::Moved, Point(120., 110.), g);
+        assert_eq!(pointer.flush(), vec![Output::Move(-260, 120)]);
+        assert!(
+            pointer
+                .event(1, Phase::Ended, Point(120., 110.), g)
+                .is_empty()
+        );
+        assert!(pointer.configure(g).is_empty());
+        assert_eq!(pointer.snapshot().position, Some((-260, 120)));
+
+        // Repositioning the finger changes only the next relative-motion anchor.
+        assert!(
+            pointer
+                .event(2, Phase::Started, Point(170., 190.), g)
+                .is_empty()
+        );
+        assert_eq!(pointer.snapshot().position, Some((-260, 120)));
+        pointer.event(2, Phase::Moved, Point(160., 170.), g);
+        assert_eq!(pointer.flush(), vec![Output::Move(-280, 80)]);
+        assert!(
+            pointer
+                .event(2, Phase::Ended, Point(160., 170.), g)
+                .is_empty()
+        );
+        assert_eq!(pointer.snapshot().position, Some((-280, 80)));
+        assert!(
+            pointer
+                .event(3, Phase::Started, Point(50., 100.), g)
+                .is_empty()
+        );
+        assert_eq!(
+            pointer.event(3, Phase::Ended, Point(50., 100.), g),
+            vec![
+                Output::Move(-280, 80),
+                Output::Down(-280, 80),
+                Output::Up(-280, 80),
+            ]
+        );
+    }
+
+    #[test]
     fn two_finger_tap_and_scroll_do_not_become_left_clicks_or_drags() {
         let g = geometry();
         let mut pointer = TrackpadInput::default();
@@ -522,11 +567,20 @@ mod tests {
             pointer.set_button(PointerButton::Right, true),
             vec![Output::Move(-1, 50), Output::RightDown(-1, 50),]
         );
+        assert_eq!(
+            pointer.set_button(PointerButton::Middle, true),
+            vec![Output::Move(-1, 50), Output::MiddleDown(-1, 50)]
+        );
+        assert!(pointer.snapshot().middle_down);
         pointer.event(2, Phase::Started, Point(100., 100.), g);
         pointer.event(2, Phase::Moved, Point(80., 100.), g);
         assert_eq!(
             pointer.cancel(),
-            vec![Output::Up(-1, 50), Output::RightUp(-1, 50)]
+            vec![
+                Output::Up(-1, 50),
+                Output::RightUp(-1, 50),
+                Output::MiddleUp(-1, 50)
+            ]
         );
         assert!(!pointer.pending());
         assert!(
