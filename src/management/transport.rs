@@ -131,7 +131,7 @@ pub(crate) async fn connect(
             format!("{}:{}", address.host, address.port)
         };
         connect_target(&endpoint, target_ref).await
-    });
+    }).collect::<Vec<_>>();
     let (stream, key) = first_authorized_candidate(candidates).await?;
     interface.update_direct(Some(true));
     Ok((stream, key, "TCP", Some(target.permit)))
@@ -141,20 +141,36 @@ async fn first_authorized_candidate<T, F>(candidates: impl IntoIterator<Item = F
 where
     F: Future<Output = ResultType<T>>,
 {
-    let mut pending: FuturesUnordered<_> = candidates
-        .into_iter()
-        .enumerate()
-        .map(|(index, candidate)| async move {
-            tokio::time::sleep(Duration::from_millis(250 * index as u64)).await;
-            candidate.await
-        })
-        .collect();
     hbb_common::timeout(CONNECT_TIMEOUT, async {
+        let mut remaining = candidates.into_iter().peekable();
+        let mut pending = FuturesUnordered::new();
+        if let Some(candidate) = remaining.next() {
+            pending.push(candidate);
+        }
+        let launch_delay = Duration::from_millis(250);
+        let next_launch = tokio::time::sleep(launch_delay);
+        tokio::pin!(next_launch);
         let mut last_error = None;
-        while let Some(result) = pending.next().await {
-            match result {
-                Ok(authorized) => return Ok(authorized),
-                Err(error) => last_error = Some(error),
+        while !pending.is_empty() {
+            tokio::select! {
+                biased;
+                result = pending.next() => {
+                    let Some(result) = result else { break; };
+                    match result {
+                        Ok(authorized) => return Ok(authorized),
+                        Err(error) => last_error = Some(error),
+                    }
+                    if let Some(candidate) = remaining.next() {
+                        pending.push(candidate);
+                        next_launch.as_mut().reset(tokio::time::Instant::now() + launch_delay);
+                    }
+                }
+                _ = next_launch.as_mut(), if remaining.peek().is_some() => {
+                    if let Some(candidate) = remaining.next() {
+                        pending.push(candidate);
+                    }
+                    next_launch.as_mut().reset(tokio::time::Instant::now() + launch_delay);
+                }
             }
         }
         Err(last_error.unwrap_or_else(|| {
@@ -238,6 +254,24 @@ mod tests {
         )
         .await
         .expect("an unreachable first address must not delay a valid later host")
+        .unwrap();
+        assert_eq!(authorized, "authorized host");
+    }
+
+    #[tokio::test]
+    async fn immediately_rejected_address_does_not_delay_the_next_authorized_host() {
+        let candidates = (0..2).map(|index| async move {
+            if index == 0 {
+                bail!("Managed host proof required");
+            }
+            Ok("authorized host")
+        });
+        let authorized = tokio::time::timeout(
+            Duration::from_millis(100),
+            first_authorized_candidate(candidates),
+        )
+        .await
+        .expect("an immediate refusal must advance without the 250 ms launch delay")
         .unwrap();
         assert_eq!(authorized, "authorized host");
     }
