@@ -2,6 +2,7 @@ use crate::{
     display_state::accepts_display_update,
     presentation::VideoPresentation,
     remote_cursor::{CursorPresentation, PreparedCursor},
+    remote_image::remote_image,
     remote_keyboard::{Command, KeyboardControl, KeyboardEvent, KeyboardPage, RemoteKeyboard},
     session_chrome::{ChromeAction, ChromeModel, ChromeMonitor, SessionChrome},
     session_input::{ControlRegions, InputMode, SessionInput},
@@ -14,8 +15,8 @@ use base::{
 };
 use gpui::{
     AppContext, AppLifecyclePhase, Bounds, Context, Entity, EventEmitter, FocusHandle,
-    HitboxBehavior, ImageSource, IntoElement, ObjectFit, Pixels, Render, StyleRefinement,
-    Subscription, TouchEvent, TouchPhase, Window, canvas, div, img, prelude::*, px, rgb,
+    HitboxBehavior, IntoElement, Pixels, Render, StyleRefinement, Subscription, TouchEvent,
+    TouchPhase, Window, canvas, div, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
     self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
@@ -1221,11 +1222,7 @@ impl Render for SessionView {
                     self.presentation
                         .image()
                         .filter(|_| self.connected && self.extent.0 > 0 && self.extent.1 > 0)
-                        .map(|image| {
-                            img(ImageSource::Render(image.clone()))
-                                .size_full()
-                                .object_fit(ObjectFit::Contain)
-                        }),
+                        .map(|image| remote_image(image.clone())),
                 ),
             )
             .child(

@@ -46,6 +46,14 @@ mod presentation;
     )
 ))]
 mod remote_cursor;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod remote_image;
 #[cfg(all(
     any(target_os = "ios", target_os = "android"),
     feature = "mobile-session"

@@ -124,3 +124,12 @@ actual bounds, safe-area and keyboard notifications continue to drive layout.
 No private orientation KVC, forced iPad fullscreen, dependency, or decoder change
 is introduced. Native compilation and physical-device acceptance are separate;
 no device rotation/immersive-mode success is claimed from source inspection.
+
+## Test-only painted image observation
+
+`Window::painted_images()` is available only under `cfg(test)` or the
+`test-support` feature. It clones the last rendered frame's polychrome sprites
+so application scene regressions can inspect actual image bounds, clipping and
+texture UV mapping. This is a test observation interface; it does not change
+the production renderer, layout engine or `Img` behavior. It does not establish
+test completion, physical GPU output or mobile-device acceptance.

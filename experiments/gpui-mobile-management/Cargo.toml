@@ -46,6 +46,11 @@ log = "0.4"
 [dev-dependencies]
 tempfile = "3"
 
+# Host scene tests exercise the same core Image/Taffy implementation as mobile.
+# Keep test infrastructure outside Android/iOS checks and all production builds.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
+gpui_test_support = { package = "gpui", path = "../../vendor/gpui/crates/gpui", default-features = false, features = ["test-support"] }
+
 [patch.crates-io]
 tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
 

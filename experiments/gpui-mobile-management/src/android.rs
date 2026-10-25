@@ -17,6 +17,8 @@ mod presentation;
 #[cfg(feature = "mobile-session")]
 mod remote_cursor;
 #[cfg(feature = "mobile-session")]
+mod remote_image;
+#[cfg(feature = "mobile-session")]
 mod remote_keyboard;
 #[cfg(feature = "mobile-session")]
 mod session_chrome;

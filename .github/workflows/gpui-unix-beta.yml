@@ -23,7 +23,7 @@ on:
       package_version:
         description: 'Unsigned beta candidate version (no release publication)'
         required: true
-        default: '0.1.0-beta.7'
+        default: '0.1.0-beta.8'
         type: string
 permissions:
   contents: read
@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: false
 env:
   XSCC_PACKAGE_MODE: managed
-  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.7' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.8' }}
   VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
 jobs:
   linux:
