@@ -1,11 +1,13 @@
+#[path = "../../shared/remote_image.rs"]
+mod remote_image;
+
 use crate::{input, presentation::VideoPresentation};
 use base::message_proto::Message;
 use gpui::{
     App, Bounds, Context, CursorStyle, DispatchPhase, EventEmitter, FocusHandle, Focusable,
-    HitboxBehavior, ImageSource, IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, Render,
-    RenderImage, ScrollDelta, ScrollWheelEvent, Subscription, Window, canvas, div, img, prelude::*,
-    px, rgb,
+    HitboxBehavior, IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
+    ScrollWheelEvent, Subscription, Window, canvas, div, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
     self, CursorShape, CursorSnapshot, InputCommand, Monitor, SessionEvent, SessionHandle,
@@ -813,11 +815,11 @@ impl Render for RemoteVideo {
                     view.publish(cx);
                 }
             }))
-            .children(self.video.image().map(|frame| {
-                img(ImageSource::Render(frame.clone()))
-                    .size_full()
-                    .object_fit(ObjectFit::Contain)
-            }))
+            .children(
+                self.video
+                    .image()
+                    .map(|frame| remote_image::remote_image(frame.clone())),
+            )
             .children(
                 self.video
                     .image()
