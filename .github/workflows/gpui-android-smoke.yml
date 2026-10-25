@@ -5,6 +5,9 @@ on:
     paths:
       - 'experiments/gpui-android-smoke/**'
       - 'experiments/gpui-mobile-management/**'
+      - 'experiments/gpui-validation/src/dashboard.rs'
+      - 'experiments/gpui-validation/src/text_field.rs'
+      - 'experiments/gpui-validation/src/theme.rs'
       - 'crates/management/**'
       - 'crates/native-management/**'
       - 'src/**'

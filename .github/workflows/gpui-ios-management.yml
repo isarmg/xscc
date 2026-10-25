@@ -6,6 +6,7 @@ on:
     paths:
       - 'experiments/gpui-mobile-management/**'
       - 'experiments/shared/**'
+      - 'experiments/gpui-validation/src/dashboard.rs'
       - 'experiments/gpui-validation/src/text_field.rs'
       - 'experiments/gpui-validation/src/theme.rs'
       - 'vendor/gpui/**'

@@ -608,11 +608,12 @@ impl Render for ManagementPanel {
                 .status
                 .as_ref()
                 .is_some_and(|status| status.phase == "online");
-        let panel_width = if !self.host && self.video_state.connected {
-            (f32::from(window.viewport_size().width) * 0.38).min(420.)
-        } else {
-            f32::from(window.viewport_size().width) - 48.
-        };
+        let panel_width =
+            if !self.host && (self.video_state.connecting || self.video_state.has_session) {
+                (f32::from(window.viewport_size().width) * 0.38).min(420.)
+            } else {
+                f32::from(window.viewport_size().width) - 48.
+            };
         let content_width = (panel_width - 32.).max(1.);
         let can_connect = current_peers
             && correct_role
