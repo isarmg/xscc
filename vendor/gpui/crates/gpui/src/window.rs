@@ -6892,6 +6892,13 @@ impl Window {
         self.platform_window.toggle_fullscreen();
     }
 
+    /// Requests landscape and immersive system UI during a mobile session.
+    /// The OS may decline orientation changes in a multiwindow scene. IME and safe-area geometry remain available.
+    pub fn set_remote_session_presentation(&self, enabled: bool) {
+        self.platform_window
+            .set_remote_session_presentation(enabled);
+    }
+
     /// Toggle simple (borderless) fullscreen, where the window covers the entire
     /// screen including the menu bar and, on notched displays, the area around the
     /// notch. Unlike [`Window::toggle_fullscreen`], this does not move the window

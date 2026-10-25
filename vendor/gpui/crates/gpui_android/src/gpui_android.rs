@@ -11,6 +11,7 @@ mod ime_bridge;
 mod input;
 mod insets;
 mod platform;
+mod session_presentation;
 mod text_state;
 mod window;
 

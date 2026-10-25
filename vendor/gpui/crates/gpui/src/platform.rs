@@ -1254,6 +1254,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);
+    /// Requests a reversible mobile session layout. Other platforms keep their current presentation.
+    fn set_remote_session_presentation(&self, _enabled: bool) {}
     fn is_fullscreen(&self) -> bool;
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         None

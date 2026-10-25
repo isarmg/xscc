@@ -1,28 +1,36 @@
 use crate::{
-    dashboard,
     display_state::accepts_display_update,
     presentation::VideoPresentation,
-    remote_keyboard::{Command, KeyboardControl, KeyboardEvent, RemoteKeyboard},
-    theme,
-    touch_input::{Geometry, Output, Phase, Point, TouchInput},
+    remote_cursor::{CursorPresentation, PreparedCursor},
+    remote_keyboard::{Command, KeyboardControl, KeyboardEvent, KeyboardPage, RemoteKeyboard},
+    session_chrome::{ChromeAction, ChromeModel, ChromeMonitor, SessionChrome},
+    session_input::{ControlRegions, InputMode, SessionInput},
+    session_layout::{self, Panel, Rect, SessionLayout},
+    touch_input::{Geometry, Output, Phase, Point},
 };
 use base::{
     message_proto::{ControlKey, KeyEvent, MouseEvent},
     session_protocol::input,
 };
 use gpui::{
-    AppContext, AppLifecyclePhase, Context, Entity, FocusHandle, HitboxBehavior, ImageSource,
-    IntoElement, ObjectFit, Render, Subscription, TouchEvent, TouchPhase, Window, canvas, div, img,
-    prelude::*, px, rgb,
+    AppContext, AppLifecyclePhase, Bounds, Context, Entity, EventEmitter, FocusHandle,
+    HitboxBehavior, ImageSource, IntoElement, ObjectFit, Pixels, Render, StyleRefinement,
+    Subscription, TouchEvent, TouchPhase, Window, canvas, div, img, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
     self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
 };
 use std::{
+    cell::Cell,
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Duration,
 };
 use xscc_native_management::manager::NativeManager;
+
+pub enum SessionUiEvent {
+    BackToDevices,
+}
 
 enum Reply {
     Connected(u64, Result<SessionHandle, String>),
@@ -32,15 +40,27 @@ pub struct SessionView {
     keyboard: Option<Entity<RemoteKeyboard>>,
     keyboard_control: Option<Rc<KeyboardControl>>,
     keyboard_subscription: Option<Subscription>,
-    touch: TouchInput,
+    input: SessionInput,
+    chrome: Entity<SessionChrome>,
+    _chrome_events: Subscription,
+    cursor_presentation: CursorPresentation,
+    prepared_cursor: PreparedCursor,
+    viewport_bounds: Rc<Cell<Bounds<Pixels>>>,
+    layout: SessionLayout,
     monitors: Vec<Monitor>,
     current_monitor: Option<usize>,
     pending_monitor: Option<usize>,
     connected: bool,
-    controls_expanded: bool,
+    rail_expanded: bool,
+    panel: Panel,
+    mouse_buttons: bool,
+    keyboard_page: KeyboardPage,
+    controls_idle: Option<gpui::Task<()>>,
+    presentation_active: bool,
+    interactive_session: bool,
     target_fps: Option<TargetFps>,
     quality: SessionQuality,
-    direct_touch: bool,
+    view_only: bool,
     extent: (u32, u32),
     origin: (i32, i32),
     focus: FocusHandle,
@@ -62,26 +82,45 @@ pub struct SessionView {
     _lifecycle: Subscription,
 }
 
+impl EventEmitter<SessionUiEvent> for SessionView {}
+
 impl SessionView {
     pub fn new(
         runtime: tokio::runtime::Handle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let chrome = cx.new(|_| SessionChrome::default());
+        let chrome_events = cx.subscribe_in(&chrome, window, |view, _, action, window, cx| {
+            view.chrome_action(*action, window, cx);
+        });
         let focus = cx.focus_handle();
         let focus_subscriptions = vec![
-            cx.on_blur(&focus, window, |view: &mut Self, _, _| view.release_input()),
-            cx.observe_window_activation(window, |view: &mut Self, window, _| {
+            cx.on_blur(&focus, window, |view: &mut Self, _, cx| {
+                view.release_input();
+                view.publish_pointer_chrome(cx);
+            }),
+            cx.observe_window_activation(window, |view: &mut Self, window, cx| {
                 if !window.is_window_active() {
                     view.release_input();
                     if let Some(control) = &view.keyboard_control {
                         control.cancel();
                     }
+                    view.publish_pointer_chrome(cx);
                 } else {
                     view.wake.notify_one();
                 }
             }),
         ];
+        let mut focus_subscriptions = focus_subscriptions;
+        focus_subscriptions.push(cx.observe_window_bounds(window, |view, _, cx| {
+            view.release_input();
+            if let Some(control) = &view.keyboard_control {
+                control.cancel();
+            }
+            view.publish_pointer_chrome(cx);
+            view.wake.notify_one();
+        }));
         let (sender, receiver) = mpsc::channel();
         let wake = Arc::new(tokio::sync::Notify::new());
         let refresh_wake = wake.clone();
@@ -128,6 +167,12 @@ impl SessionView {
                         if let Err(error) = view.presentation.update(None, window) {
                             view.notice = error;
                         }
+                        view.prepared_cursor = PreparedCursor::default();
+                        if let Err(error) = view.cursor_presentation.clear(window) {
+                            view.notice = error;
+                        }
+                        window.set_remote_session_presentation(false);
+                        view.presentation_active = false;
                     });
                 });
             }
@@ -136,15 +181,27 @@ impl SessionView {
             keyboard: None,
             keyboard_control: None,
             keyboard_subscription: None,
-            touch: TouchInput::default(),
+            input: SessionInput::default(),
+            chrome,
+            _chrome_events: chrome_events,
+            cursor_presentation: CursorPresentation::default(),
+            prepared_cursor: PreparedCursor::default(),
+            viewport_bounds: Rc::new(Cell::new(Bounds::default())),
+            layout: SessionLayout::default(),
             monitors: Vec::new(),
             current_monitor: None,
             pending_monitor: None,
             connected: false,
-            controls_expanded: false,
+            rail_expanded: true,
+            panel: Panel::None,
+            mouse_buttons: true,
+            keyboard_page: KeyboardPage::Input,
+            controls_idle: None,
+            presentation_active: false,
+            interactive_session: false,
             target_fps: None,
             quality: SessionQuality::default(),
-            direct_touch: true,
+            view_only: false,
             extent: (0, 0),
             origin: (0, 0),
             focus,
@@ -179,11 +236,16 @@ impl SessionView {
         self.keyboard.take();
         self.keyboard_subscription.take();
         self.release_input();
-        self.touch.reset();
+        drop(self.input.reset());
         self.monitors.clear();
         self.current_monitor = None;
         self.pending_monitor = None;
         self.connected = false;
+        self.interactive_session = false;
+        self.controls_idle.take();
+        self.panel = Panel::None;
+        self.rail_expanded = true;
+        self.prepared_cursor = PreparedCursor::default();
         self.target_fps = None;
         self.quality = SessionQuality::default();
         self.extent = (0, 0);
@@ -208,14 +270,20 @@ impl SessionView {
 
     pub fn leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop();
-        self.controls_expanded = false;
+        self.panel = Panel::None;
+        self.sync_presentation(window);
+        self.prepared_cursor = PreparedCursor::default();
+        if let Err(error) = self.cursor_presentation.clear(window) {
+            self.notice = error;
+        }
+        self.publish_chrome(cx);
         if let Err(error) = self.presentation.update(None, window) {
             self.notice = error;
         }
         cx.notify();
     }
 
-    pub fn connect(&mut self, device_id: String, cx: &mut Context<Self>) {
+    pub fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.stop();
         self.selected = Some(device_id.clone());
         if !self.authorized() {
@@ -228,9 +296,11 @@ impl SessionView {
         let sender = self.sender.clone();
         let wake = self.wake.clone();
         self.notice = "正在建立授权会话…".into();
-        let direct_touch = self.direct_touch;
+        let interactive = !self.view_only;
+        self.interactive_session = interactive;
+        self.sync_presentation(window);
         self.connecting = Some(self.runtime.spawn(async move {
-            let result = if direct_touch {
+            let result = if interactive {
                 gpui_session::connect_interactive(&device_id).await
             } else {
                 gpui_session::connect(&device_id).await
@@ -239,6 +309,7 @@ impl SessionView {
             let _ = sender.send(Reply::Connected(generation, result));
             wake.notify_one();
         }));
+        self.publish_chrome(cx);
         cx.notify();
     }
 
@@ -255,12 +326,13 @@ impl SessionView {
         if self.selected.is_some() && !self.authorized() {
             self.stop();
             self.notice = "设备授权已失效，会话已关闭。".into();
+            self.publish_chrome(cx);
             cx.notify();
         }
     }
 
     fn input_allowed(&self) -> bool {
-        self.direct_touch
+        !self.view_only
             && self.pending_monitor.is_none()
             && self.authorized()
             && self.extent.0 > 0
@@ -272,7 +344,7 @@ impl SessionView {
     }
 
     fn release_input(&mut self) {
-        let releases = self.touch.cancel();
+        let releases = self.input.cancel();
         self.send_outputs(releases);
     }
 
@@ -282,6 +354,7 @@ impl SessionView {
         };
         let mut failure = None;
         for output in outputs {
+            let update_position = !matches!(output, Output::Scroll(_, _));
             let (mask, x, y) = match output {
                 Output::Move(x, y) => (input::MOUSE_TYPE_MOVE, x, y),
                 Output::Down(x, y) => (
@@ -311,10 +384,13 @@ impl SessionView {
                 failure = Some(error.to_string());
                 break;
             }
+            if update_position {
+                session.update_local_cursor_position(x, y);
+            }
         }
         if let Some(error) = failure {
             // Stop sending after a failure; remote release delivery is best-effort.
-            self.touch.reset();
+            drop(self.input.reset());
             self.stop();
             self.notice = error;
         }
@@ -324,6 +400,7 @@ impl SessionView {
         &mut self,
         event: &TouchEvent,
         geometry: Geometry,
+        controls: ControlRegions,
         generation: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -331,59 +408,70 @@ impl SessionView {
         if generation != self.generation {
             return;
         }
-        if !self.input_allowed() {
-            self.release_input();
-            if matches!(event.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
-                // Retire captured contacts even after permission/listener removal.
-                let output = self.touch.event(
-                    event.id.0,
-                    Phase::Cancelled,
-                    Point(event.position.x.into(), event.position.y.into()),
-                    geometry,
-                );
-                self.send_outputs(output);
-            }
-            return;
-        }
-        if event.phase == TouchPhase::Started {
-            if let Some(control) = &self.keyboard_control {
-                control.cancel();
-            }
-            window.dismiss_virtual_keyboard();
-            self.focus.focus(window, cx);
-        }
         let phase = match event.phase {
             TouchPhase::Started => Phase::Started,
             TouchPhase::Moved => Phase::Moved,
             TouchPhase::Ended => Phase::Ended,
             TouchPhase::Cancelled => Phase::Cancelled,
         };
-        let had_pending = self.touch.pending();
-        let was_armed = self.touch.right_click_armed();
-        let output = self.touch.event(
+        if !self.input_allowed() {
+            // The raw owner still receives new fingers until the captured sequence ends.
+            let output = self.input.cancel_event(event.id.0, phase);
+            self.send_outputs(output);
+            self.publish_pointer_chrome(cx);
+            return;
+        }
+        if phase == Phase::Started {
+            self.controls_idle.take();
+            if let Some(control) = &self.keyboard_control {
+                control.cancel();
+            }
+            window.dismiss_virtual_keyboard();
+            self.focus.focus(window, cx);
+            if self.input.mode() == InputMode::Pointer && !self.input.active() {
+                let output = self.input.configure(geometry, controls);
+                self.send_outputs(output);
+                if let Some(position) = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.cursor_snapshot().position)
+                {
+                    self.input.set_position(position);
+                }
+            }
+        }
+        let had_pending = self.input.pending();
+        let output = self.input.event(
             event.id.0,
             phase,
             Point(event.position.x.into(), event.position.y.into()),
             geometry,
+            controls,
         );
         self.send_outputs(output);
-        if self.touch.pending() && !had_pending {
+        if self.input.pending() && !had_pending {
             cx.on_next_frame(window, |view, window, cx| view.flush_touch(window, cx));
         }
-        if was_armed != self.touch.right_click_armed() {
-            cx.notify();
+        self.prepare_cursor(window);
+        self.publish_pointer_chrome(cx);
+        if !self.input.active() {
+            self.arm_controls_hide(window, cx);
         }
+        cx.notify();
     }
 
     fn flush_touch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.input_allowed() {
             self.release_input();
         }
-        let pending = self.touch.flush();
+        let pending = self.input.flush();
         self.send_outputs(pending);
-        if self.touch.pending() {
+        self.prepare_cursor(window);
+        self.publish_pointer_chrome(cx);
+        if self.input.pending() {
             cx.on_next_frame(window, |view, window, cx| view.flush_touch(window, cx));
         }
+        cx.notify();
     }
 
     fn keyboard_event(&mut self, event: &KeyboardEvent, generation: u64, cx: &mut Context<Self>) {
@@ -485,10 +573,12 @@ impl SessionView {
     }
 
     fn consume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut changed = false;
         while let Ok(Reply::Connected(generation, result)) = self.receiver.try_recv() {
             if generation != self.generation {
                 continue;
             }
+            changed = true;
             drop(self.connecting.take());
             match result {
                 Ok(session) if self.authorized() => {
@@ -528,17 +618,24 @@ impl SessionView {
         if self.selected.is_some() && !self.authorized() {
             self.stop();
             self.notice = "设备授权已失效，会话已关闭。".into();
+            changed = true;
         }
         let events = self
             .session
             .as_ref()
             .map(|session| session.drain_events())
             .unwrap_or_default();
+        changed |= !events.is_empty();
         for event in events {
             match event {
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接，等待首帧…".into();
+                    if let Some(session) = &self.session {
+                        if let Err(error) = session.subscribe_remote_cursor() {
+                            self.notice = error.to_string();
+                        }
+                    }
                 }
                 SessionEvent::Monitors(monitors) => {
                     if self.current_monitor.is_some_and(|index| {
@@ -600,6 +697,16 @@ impl SessionView {
                 _ => {}
             }
         }
+        self.sync_presentation(window);
+        let audio_changed = self.session.as_ref().is_some_and(|session| {
+            let audio = session.audio_status();
+            let model = self.chrome.read(cx).model();
+            model.audio_on != audio.enabled
+                || model.audio_error.as_deref() != audio.error.as_deref()
+        });
+        if changed || audio_changed {
+            self.publish_chrome(cx);
+        }
         if !self.frame_scheduled {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
@@ -609,13 +716,16 @@ impl SessionView {
                 {
                     return;
                 }
-                view.prepare_frame(window);
+                view.prepare_frame(window, cx);
                 cx.notify();
             });
         }
     }
 
-    fn prepare_frame(&mut self, window: &mut Window) {
+    fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let had_frame = self.presentation.image().is_some();
+        let first_image = !had_frame || self.extent.0 == 0 || self.extent.1 == 0;
+        let mut changed = false;
         let frame = self
             .session
             .as_ref()
@@ -653,19 +763,388 @@ impl SessionView {
         }
         match self.presentation.update(frame, window) {
             Ok(Some(_)) => {
-                self.notice = if self.input_allowed() {
-                    "直接触控 · 单指点击/拖动，双指滚动 · 剪贴板关闭".into()
-                } else {
-                    "仅查看画面 · 输入未启用，剪贴板关闭".into()
+                if first_image {
+                    self.notice.clear();
+                    changed = true;
+                    self.arm_controls_hide(window, cx);
                 }
             }
             Ok(None) => {}
             Err(error) => {
                 self.stop();
                 self.notice = error;
+                changed = true;
             }
         }
+        if self.input_allowed() {
+            if let Some((geometry, controls)) = self.input_geometry() {
+                let output = self.input.configure(geometry, controls);
+                self.send_outputs(output);
+            }
+        }
+        self.prepare_cursor(window);
+        self.publish_pointer_chrome(cx);
+        changed |= had_frame != self.presentation.image().is_some();
+        if changed {
+            self.publish_chrome(cx);
+        }
     }
+}
+
+impl SessionView {
+    fn sync_presentation(&mut self, window: &mut Window) {
+        let active = self.selected.is_some();
+        if active != self.presentation_active {
+            window.set_remote_session_presentation(active);
+            self.presentation_active = active;
+        }
+    }
+
+    fn input_geometry(&self) -> Option<(Geometry, ControlRegions)> {
+        let bounds = self.viewport_bounds.get();
+        if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+            return None;
+        }
+        Some(stage_geometry(
+            bounds,
+            self.layout,
+            self.extent,
+            self.origin,
+        ))
+    }
+
+    fn prepare_cursor(&mut self, window: &mut Window) {
+        let mut snapshot = self.session.as_ref().map(SessionHandle::cursor_snapshot);
+        if !self.connected
+            || !self.authorized()
+            || self.pending_monitor.is_some()
+            || self.presentation.image().is_none()
+            || self.extent.0 == 0
+            || self.extent.1 == 0
+        {
+            snapshot = None;
+        }
+        let pointer = self.input.snapshot();
+        let local = if self.input.mode() == InputMode::Pointer && self.input_allowed() {
+            if self.input.active() || pointer.left_down || pointer.right_down {
+                pointer.position
+            } else {
+                if let Some(snapshot) = snapshot.as_mut() {
+                    snapshot.position = snapshot.position.or(pointer.position);
+                }
+                None
+            }
+        } else {
+            if snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.position.is_none())
+            {
+                snapshot = None;
+            }
+            None
+        };
+        self.prepared_cursor =
+            match self
+                .cursor_presentation
+                .prepare(snapshot.as_ref(), local, window)
+            {
+                Ok(cursor) => cursor,
+                Err(error) => {
+                    gpui_session::log_cursor_render_failure(&error);
+                    PreparedCursor::default()
+                }
+            };
+    }
+
+    fn publish_chrome(&self, cx: &mut Context<Self>) {
+        let audio = self.session.as_ref().map(SessionHandle::audio_status);
+        let pointer = self.input.snapshot();
+        let model = ChromeModel {
+            layout: self.layout,
+            connecting: self.connecting.is_some(),
+            connected: self.connected,
+            has_frame: self.connected
+                && self.extent.0 > 0
+                && self.extent.1 > 0
+                && self.presentation.image().is_some(),
+            notice: self.notice.clone(),
+            pointer_mode: self.input.mode() == InputMode::Pointer,
+            view_only: self.view_only,
+            can_control: self
+                .session
+                .as_ref()
+                .is_some_and(SessionHandle::touch_input_allowed)
+                && self.authorized(),
+            can_request_control: self.connected && self.authorized() && !self.interactive_session,
+            mouse_buttons: self.mouse_buttons,
+            rail_expanded: self.rail_expanded,
+            panel: self.panel,
+            audio_on: audio.as_ref().is_some_and(|audio| audio.enabled),
+            audio_error: audio.and_then(|audio| audio.error),
+            target_fps: self.target_fps.map(TargetFps::value),
+            current_monitor: self.current_monitor,
+            pending_monitor: self.pending_monitor,
+            monitors: self
+                .monitors
+                .iter()
+                .map(|monitor| ChromeMonitor {
+                    index: monitor.index,
+                    name: monitor.name.clone(),
+                    width: monitor.width,
+                    height: monitor.height,
+                    available: monitor.available,
+                })
+                .collect(),
+            quality: format!(
+                "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · {}",
+                self.quality
+                    .received_fps
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.quality
+                    .decoded_fps
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.quality
+                    .submitted_fps
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.quality
+                    .decode_p95_ms
+                    .map(|v| format!("{v:.1}"))
+                    .unwrap_or_else(|| "—".into()),
+                self.quality
+                    .ui_queue_p95_ms
+                    .map(|v| format!("{v:.1}"))
+                    .unwrap_or_else(|| "—".into()),
+                self.quality.receive_rate.as_deref().unwrap_or("—"),
+                self.quality
+                    .round_trip_ms
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.quality.codec.as_deref().unwrap_or("—"),
+            ),
+            left_pressed: pointer.left_down,
+            right_pressed: pointer.right_down,
+            scroll_pressed: self.input.wheel_active(),
+            right_click_armed: self.input.right_click_armed(),
+        };
+        self.chrome.update(cx, |chrome, cx| {
+            chrome.set_model(model, cx);
+        });
+    }
+
+    fn publish_pointer_chrome(&self, cx: &mut Context<Self>) {
+        let pointer = self.input.snapshot();
+        let changed = {
+            let model = self.chrome.read(cx).model();
+            model.left_pressed != pointer.left_down
+                || model.right_pressed != pointer.right_down
+                || model.scroll_pressed != self.input.wheel_active()
+                || model.right_click_armed != self.input.right_click_armed()
+        };
+        if changed {
+            self.publish_chrome(cx);
+        }
+    }
+
+    fn arm_controls_hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.controls_idle.take();
+        let pointer = self.input.snapshot();
+        if !self.rail_expanded
+            || self.panel != Panel::None
+            || self.presentation.image().is_none()
+            || self.input.active()
+            || pointer.left_down
+            || pointer.right_down
+        {
+            return;
+        }
+        let delay = cx.background_executor().timer(Duration::from_secs(4));
+        self.controls_idle = Some(cx.spawn_in(window, async move |view, cx| {
+            delay.await;
+            let _ = view.update_in(cx, |view, _, cx| {
+                let pointer = view.input.snapshot();
+                if view.panel == Panel::None
+                    && !view.input.active()
+                    && !pointer.left_down
+                    && !pointer.right_down
+                {
+                    view.rail_expanded = false;
+                    view.publish_chrome(cx);
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn hide_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(keyboard) = &self.keyboard {
+            keyboard.update(cx, |keyboard, cx| keyboard.hide(window, cx));
+        }
+        window.dismiss_virtual_keyboard();
+    }
+
+    fn keyboard_page(&mut self, page: KeyboardPage, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.input_allowed() || self.panel != Panel::Keyboard {
+            return;
+        }
+        self.release_input();
+        self.keyboard_page = page;
+        if let Some(keyboard) = &self.keyboard {
+            keyboard.update(cx, |keyboard, cx| keyboard.show(page, window, cx));
+        }
+        cx.notify();
+    }
+
+    fn chrome_action(&mut self, action: ChromeAction, window: &mut Window, cx: &mut Context<Self>) {
+        self.controls_idle.take();
+        match action {
+            ChromeAction::Exit => {
+                self.hide_keyboard(window, cx);
+                self.leave(window, cx);
+                cx.emit(SessionUiEvent::BackToDevices);
+                return;
+            }
+            ChromeAction::ToggleRail => {
+                self.release_input();
+                self.rail_expanded = !self.rail_expanded;
+                if !self.rail_expanded {
+                    self.hide_keyboard(window, cx);
+                    self.panel = Panel::None;
+                }
+            }
+            ChromeAction::OpenPanel(panel) => {
+                if panel == Panel::Keyboard && !self.input_allowed() {
+                    return;
+                }
+                self.release_input();
+                self.rail_expanded = true;
+                self.hide_keyboard(window, cx);
+                self.panel = panel;
+                if panel == Panel::Keyboard {
+                    self.keyboard_page(self.keyboard_page, window, cx);
+                }
+            }
+            ChromeAction::ClosePanel => {
+                self.release_input();
+                self.hide_keyboard(window, cx);
+                self.panel = Panel::None;
+            }
+            ChromeAction::SetPointer(pointer) => {
+                self.release_input();
+                self.hide_keyboard(window, cx);
+                let output = self.input.set_mode(if pointer {
+                    InputMode::Pointer
+                } else {
+                    InputMode::Direct
+                });
+                self.send_outputs(output);
+                if let Some((geometry, controls)) = self.input_geometry() {
+                    let output = self.input.configure(geometry, controls);
+                    self.send_outputs(output);
+                }
+                if let Some(position) = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.cursor_snapshot().position)
+                {
+                    self.input.set_position(position);
+                }
+            }
+            ChromeAction::ToggleMouseButtons => {
+                self.release_input();
+                self.mouse_buttons = !self.mouse_buttons;
+            }
+            ChromeAction::ToggleViewOnly => {
+                self.release_input();
+                self.hide_keyboard(window, cx);
+                self.view_only = !self.view_only;
+                if self.view_only && self.panel == Panel::Keyboard {
+                    self.panel = Panel::None;
+                }
+                if !self.view_only && !self.interactive_session {
+                    if let Some(id) = self.selected.clone() {
+                        self.connect(id, window, cx);
+                    }
+                }
+            }
+            ChromeAction::ToggleAudio => {
+                if self.connected && self.authorized() {
+                    if let Some(session) = &self.session {
+                        if let Err(error) =
+                            session.set_audio_enabled(!session.audio_status().enabled)
+                        {
+                            self.notice = error.to_string();
+                        }
+                    }
+                }
+            }
+            ChromeAction::Fps(fps) => {
+                let target = match fps {
+                    30 => TargetFps::Fps30,
+                    60 => TargetFps::Fps60,
+                    90 => TargetFps::Fps90,
+                    120 => TargetFps::Fps120,
+                    _ => return,
+                };
+                self.request_fps(target, cx);
+            }
+            ChromeAction::Monitor(index) => self.switch_monitor(index, window, cx),
+            ChromeAction::ArmRightClick => {
+                let armed = self.input.right_click_armed();
+                self.release_input();
+                self.hide_keyboard(window, cx);
+                if !armed && self.input_allowed() && !self.input.arm_right_click() {
+                    self.notice = "请先松开画面上的触点。".into();
+                }
+            }
+        }
+        self.prepare_cursor(window);
+        self.publish_chrome(cx);
+        self.arm_controls_hide(window, cx);
+        cx.notify();
+    }
+}
+
+fn stage_geometry(
+    bounds: Bounds<Pixels>,
+    layout: SessionLayout,
+    extent: (u32, u32),
+    origin: (i32, i32),
+) -> (Geometry, ControlRegions) {
+    let global = |rect: Rect| {
+        (
+            f32::from(bounds.origin.x) + rect.x - layout.stage.x,
+            f32::from(bounds.origin.y) + rect.y - layout.stage.y,
+            rect.width,
+            rect.height,
+        )
+    };
+    (
+        Geometry {
+            bounds: global(layout.video),
+            extent,
+            origin,
+        },
+        layout
+            .mouse
+            .map(|mouse| ControlRegions {
+                left: Some(global(mouse.left)),
+                right: Some(global(mouse.right)),
+                wheel: Some(global(mouse.wheel)),
+            })
+            .unwrap_or_default(),
+    )
+}
+
+fn at(rect: Rect) -> gpui::Div {
+    div()
+        .absolute()
+        .left(px(rect.x))
+        .top(px(rect.y))
+        .w(px(rect.width))
+        .h(px(rect.height))
 }
 
 impl Drop for SessionView {
@@ -676,265 +1155,169 @@ impl Drop for SessionView {
 
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::palette(window.appearance());
-        let audio = self.session.as_ref().map(SessionHandle::audio_status);
+        let visible = window.fully_visible_bounds().size;
+        let keyboard_height = match self.keyboard_page {
+            KeyboardPage::Input => 88.,
+            KeyboardPage::Keys => 176.,
+            KeyboardPage::Shortcuts => 132.,
+        };
+        let layout = session_layout::layout(
+            visible.width.into(),
+            visible.height.into(),
+            self.rail_expanded,
+            self.panel,
+            self.input.mode() == InputMode::Pointer && self.mouse_buttons && self.input_allowed(),
+            keyboard_height,
+        );
+        if self.layout != layout {
+            self.layout = layout;
+            self.publish_chrome(cx);
+        }
+        let owner = cx.entity_id();
         let generation = self.generation;
         let extent = self.extent;
         let origin = self.origin;
-        let input_allowed = self.input_allowed();
-        let owner = cx.entity_id();
-        let touch = cx.listener(move |view, event: &(TouchEvent, Geometry), window, cx| {
-            view.touch_event(&event.0, event.1, generation, window, cx);
-        });
-        let viewport = div()
-            .absolute()
-            .top(px(44.))
-            .bottom_0()
-            .left_0()
-            .w_full()
-            .bg(rgb(0x101010))
-            .overflow_hidden()
-            .children(self.presentation.image().map(|image| {
-                img(ImageSource::Render(image.clone()))
-                    .size_full()
-                    .object_fit(ObjectFit::Contain)
-            }))
-            .when(input_allowed, |view| {
-                view.child(
-                    canvas(
-                        |bounds, window, _| {
-                            (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal))
-                        },
-                        move |_, (bounds, hitbox), window, _| {
-                            let geometry = Geometry {
-                                bounds: (
-                                    bounds.origin.x.into(),
-                                    bounds.origin.y.into(),
-                                    bounds.size.width.into(),
-                                    bounds.size.height.into(),
-                                ),
-                                extent,
-                                origin,
-                            };
-                            window.on_touch_event(owner, &hitbox, move |event, window, cx| {
-                                touch(&(event.clone(), geometry), window, cx)
-                            });
-                        },
-                    )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full(),
-                )
-            });
-        let controls = div()
-            .id("session-controls-scroll")
-            .occlude()
-            .absolute()
-            .top(px(44.))
-            .left_0()
-            .w_full()
-            .max_h(px((f32::from(window.fully_visible_bounds().size.height)
-                - 100.)
-                .max(44.)))
-            .overflow_y_scroll()
-            .p_3()
-            .bg(rgb(palette.panel))
-            .flex()
-            .flex_col()
-            .gap_3()
-            .w_full()
-            .when(self.connected, |view| {
-                view.child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .children(self.monitors.iter().map(|monitor| {
-                            let index = monitor.index;
-                            let label = format!(
-                                "屏幕 {} · {}×{}{}",
-                                index + 1,
-                                monitor.width,
-                                monitor.height,
-                                if !monitor.available {
-                                    "（离线）"
-                                } else if self.pending_monitor == Some(index) {
-                                    "（切换中）"
-                                } else if self.current_monitor == Some(index) {
-                                    "（当前）"
-                                } else {
-                                    ""
-                                }
-                            );
-                            dashboard::button(
-                                ("monitor", index), &label,
-                                self.current_monitor == Some(index),
-                                monitor.available && self.pending_monitor.is_none(), palette,
-                            )
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.switch_monitor(index, window, cx)
-                                }))
-                        })),
-                )
-                .child(
-                    div().flex().flex_wrap().gap_2().children(
-                        [TargetFps::Fps30, TargetFps::Fps60, TargetFps::Fps90, TargetFps::Fps120]
-                            .into_iter()
-                            .map(|target| {
-                                dashboard::button(
-                                    ("target-fps", target.value() as usize),
-                                    &format!("{} FPS", target.value()),
-                                    self.target_fps == Some(target), true, palette,
-                                )
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.request_fps(target, cx)
-                                    }))
-                            }),
-                    ),
-                )
-                .child(div().child(format!(
-                        "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · {}",
-                        self.quality.received_fps.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
-                        self.quality
-                            .decoded_fps
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "—".into()),
-                        self.quality.submitted_fps.map(|v| v.to_string()).unwrap_or_else(|| "—".into()),
-                        self.quality.decode_p95_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()),
-                        self.quality.ui_queue_p95_ms.map(|v| format!("{v:.1}")).unwrap_or_else(|| "—".into()),
-                        self.quality.receive_rate.as_deref().unwrap_or("—"),
-                        self.quality
-                            .round_trip_ms
-                            .map(|value| value.to_string())
-                            .unwrap_or_else(|| "—".into()),
-                        self.quality.codec.as_deref().unwrap_or("—"),
-                    )))
-            })
-            .when_some(audio, |view, audio| {
-                view.child(
-                    dashboard::button(
-                        "session-audio",
-                        if audio.enabled { "关闭声音" } else { "开启声音（使用系统音量）" },
-                        audio.enabled, self.connected, palette,
-                    )
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            if !view.connected { return; }
-                            if let Some(session) = &view.session {
-                                if let Err(error) =
-                                    session.set_audio_enabled(!session.audio_status().enabled)
-                                {
-                                    view.notice = error.to_string();
-                                }
-                            }
-                            cx.notify();
-                        })),
-                )
-                .when_some(audio.error, |view, error| view.child(div().child(error)))
-            })
-            .when(input_allowed, |view| {
-                view.child(
-                    dashboard::button(
-                        "one-shot-right-click",
-                        if self.touch.right_click_armed() {
-                            "右键已准备：轻点画面（点击此处取消）"
-                        } else { "下一次轻点使用右键" },
-                        self.touch.right_click_armed(), true, palette,
-                    )
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            let cancel = view.touch.right_click_armed();
-                            view.release_input();
-                            if let Some(control) = &view.keyboard_control {
-                                control.cancel();
-                            }
-                            window.dismiss_virtual_keyboard();
-                            view.focus.focus(window, cx);
-                            if !cancel && view.input_allowed() && !view.touch.arm_right_click() {
-                                view.notice = "请先松开画面上的触点。".into();
-                            }
-                            cx.notify();
-                        })),
-                )
-            })
-            .children(self.keyboard.clone())
-            .child(
-                dashboard::button(
-                    "touch-mode",
-                    if self.direct_touch { "切换为仅查看（重连会话）" }
-                    else { "启用触控与软键盘（重连会话）" },
-                    false, true, palette,
-                )
-                    .on_click(cx.listener(|view, _, _window, cx| {
-                        let selected = view.selected.clone();
-                        view.release_input();
-                        view.direct_touch = !view.direct_touch;
-                        if let Some(id) = selected {
-                            view.connect(id, cx);
-                        }
-                        cx.notify();
-                    })),
-            )
-            .when(self.selected.is_some(), |view| {
-                view.child(
-                    dashboard::button("disconnect-session", "断开画面", false, true, palette)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.stop();
-                            cx.notify();
-                        })),
-                )
-            });
-        div()
+        let enabled = self.input_allowed();
+        let viewport_bounds = self.viewport_bounds.clone();
+        let cursor = self.prepared_cursor.clone();
+        let touch = cx.listener(
+            move |view, event: &(TouchEvent, Geometry, ControlRegions), window, cx| {
+                view.touch_event(&event.0, event.1, event.2, generation, window, cx);
+            },
+        );
+        let mut root = div()
             .relative()
-            .size_full()
+            .w(visible.width)
+            .h(visible.height)
             .overflow_hidden()
             .track_focus(&self.focus)
-            .bg(rgb(palette.page))
-            .when(self.presentation.image().is_some(), |view| {
-                view.child(viewport)
-            })
+            .bg(rgb(0x080a0e))
             .child(
+                at(layout.video).overflow_hidden().children(
+                    self.presentation
+                        .image()
+                        .filter(|_| self.connected && self.extent.0 > 0 && self.extent.1 > 0)
+                        .map(|image| {
+                            img(ImageSource::Render(image.clone()))
+                                .size_full()
+                                .object_fit(ObjectFit::Contain)
+                        }),
+                ),
+            )
+            .child(
+                self.chrome.clone().cached(
+                    StyleRefinement::default()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w(visible.width)
+                        .h(visible.height),
+                ),
+            );
+        if let Some(keyboard_bounds) = layout.keyboard {
+            let mut header = div()
+                .h(px(44.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_1();
+            for (id, label, page) in [
+                ("session-keyboard-input", "输入法", KeyboardPage::Input),
+                (
+                    "session-keyboard-shortcuts",
+                    "快捷键",
+                    KeyboardPage::Shortcuts,
+                ),
+                ("session-keyboard-keys", "控制键", KeyboardPage::Keys),
+            ] {
+                header = header.child(
+                    div()
+                        .id(id)
+                        .h(px(44.))
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(10.))
+                        .bg(rgb(if self.keyboard_page == page {
+                            0x267cf5
+                        } else {
+                            0x272c35
+                        }))
+                        .text_color(rgb(0xf3f6fa))
+                        .text_size(px(13.))
+                        .child(label)
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.keyboard_page(page, window, cx)
+                        })),
+                );
+            }
+            header = header.child(
                 div()
-                    .relative()
-                    .occlude()
-                    .w_full()
+                    .id("session-keyboard-close")
+                    .size(px(44.))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .bg(rgb(palette.panel))
-                    .px_3()
+                    .justify_center()
+                    .rounded(px(10.))
+                    .text_color(rgb(0xf3f6fa))
+                    .child("×")
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.chrome_action(ChromeAction::ClosePanel, window, cx);
+                    })),
+            );
+            root = root.child(
+                at(keyboard_bounds)
+                    .occlude()
+                    .bg(rgb(0x1b1e25))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .child(header)
                     .child(
                         div()
                             .flex_1()
-                            .min_w_0()
-                            .when(self.presentation.image().is_some(), |view| view.truncate())
-                            .child(self.notice.clone()),
+                            .min_h_0()
+                            .w_full()
+                            .children(self.keyboard.clone()),
+                    ),
+            );
+        }
+        root.child(
+            canvas(
+                move |bounds, window, _| {
+                    viewport_bounds.set(bounds);
+                    (
+                        bounds,
+                        enabled.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
                     )
-                    .when(self.selected.is_some(), |view| {
-                        view.child(
-                            div()
-                                .id("toggle-session-controls")
-                                .occlude()
-                                .min_h(px(44.))
-                                .p_2()
-                                .child(if self.controls_expanded {
-                                    "收起控制"
-                                } else {
-                                    "会话控制"
-                                })
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.release_input();
-                                    if let Some(control) = &view.keyboard_control {
-                                        control.cancel();
-                                    }
-                                    window.dismiss_virtual_keyboard();
-                                    view.controls_expanded = !view.controls_expanded;
-                                    cx.notify();
-                                })),
-                        )
-                    }),
+                },
+                move |_, (bounds, hitbox), window, _| {
+                    let (geometry, controls) = stage_geometry(bounds, layout, extent, origin);
+                    cursor.paint(
+                        Bounds::new(
+                            gpui::point(px(geometry.bounds.0), px(geometry.bounds.1)),
+                            gpui::size(px(geometry.bounds.2), px(geometry.bounds.3)),
+                        ),
+                        extent,
+                        origin,
+                        window,
+                    );
+                    if let Some(hitbox) = hitbox {
+                        window.on_touch_event(owner, &hitbox, move |event, window, cx| {
+                            touch(&(event.clone(), geometry, controls), window, cx);
+                        });
+                    }
+                },
             )
-            .when(self.controls_expanded && self.selected.is_some(), |view| {
-                view.child(controls)
-            })
+            .absolute()
+            .left(px(layout.stage.x))
+            .top(px(layout.stage.y))
+            .w(px(layout.stage.width))
+            .h(px(layout.stage.height)),
+        )
     }
 }

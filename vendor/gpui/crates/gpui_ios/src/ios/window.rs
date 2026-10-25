@@ -10,6 +10,7 @@
 //! whose view hosts a CAMetalLayer.
 
 use super::events::*;
+mod session_presentation;
 use super::text_input::TextInputView;
 use super::{CallbackSlot, IosDisplay, platform::IosPlatformState};
 use gpui::{
@@ -32,8 +33,8 @@ use objc2_ui_kit::{
     UIKeyboardWillChangeFrameNotification, UIKeyboardWillHideNotification, UIStatusBarStyle,
 };
 use objc2_ui_kit::{
-    UIEvent, UIScreen, UITouch, UITraitCollection, UITraitEnvironment, UIUserInterfaceStyle,
-    UIView, UIViewAutoresizing, UIViewController, UIWindow, UIWindowScene,
+    UIEvent, UIInterfaceOrientationMask, UIScreen, UITouch, UITraitCollection, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIViewAutoresizing, UIViewController, UIWindow, UIWindowScene,
 };
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, UiKitDisplayHandle, UiKitWindowHandle};
@@ -85,6 +86,33 @@ define_class!(
                 UIStatusBarStyle::LightContent
             } else {
                 UIStatusBarStyle::DarkContent
+            }
+        }
+
+        #[unsafe(method(prefersStatusBarHidden))]
+        fn prefers_status_bar_hidden(&self) -> bool {
+            if self.ivars().with_window(|window| window.session_presentation.get().is_some()).unwrap_or(false) {
+                true
+            } else {
+                unsafe { msg_send![super(self), prefersStatusBarHidden] }
+            }
+        }
+
+        #[unsafe(method(prefersHomeIndicatorAutoHidden))]
+        fn prefers_home_indicator_auto_hidden(&self) -> bool {
+            if self.ivars().with_window(|window| window.session_presentation.get().is_some()).unwrap_or(false) {
+                true
+            } else {
+                unsafe { msg_send![super(self), prefersHomeIndicatorAutoHidden] }
+            }
+        }
+
+        #[unsafe(method(supportedInterfaceOrientations))]
+        fn supported_interface_orientations(&self) -> UIInterfaceOrientationMask {
+            if self.ivars().with_window(|window| window.session_presentation.get().is_some()).unwrap_or(false) {
+                UIInterfaceOrientationMask::Landscape
+            } else {
+                unsafe { msg_send![super(self), supportedInterfaceOrientations] }
             }
         }
 
@@ -232,6 +260,7 @@ pub(crate) struct IosWindowState {
     /// Callback for active status changes
     active_status_callback: CallbackSlot<Box<dyn FnMut(bool)>>,
     visibility: Cell<WindowVisibility>,
+    session_presentation: Cell<Option<UIInterfaceOrientationMask>>,
     visibility_callback: CallbackSlot<Box<dyn FnMut(WindowVisibility)>>,
     /// Callback for hover status changes (not really applicable on iOS)
     hover_status_callback: CallbackSlot<Box<dyn FnMut(bool)>>,
@@ -348,6 +377,7 @@ impl IosWindow {
             input_callback: CallbackSlot::default(),
             active_status_callback: CallbackSlot::default(),
             visibility: Cell::new(WindowVisibility::Visible),
+            session_presentation: Cell::new(None),
             visibility_callback: CallbackSlot::default(),
             hover_status_callback: CallbackSlot::default(),
             resize_callback: CallbackSlot::default(),
@@ -588,6 +618,9 @@ impl IosWindowState {
     }
 
     pub(crate) fn notify_visibility_change(&self, visibility: WindowVisibility) {
+        if visibility == WindowVisibility::Hidden {
+            session_presentation::set_enabled(self, false);
+        }
         if self.visibility.replace(visibility) != visibility {
             self.visibility_callback
                 .with(|callback| callback(visibility));
@@ -648,6 +681,7 @@ impl IosWindowState {
 
 impl Drop for IosWindow {
     fn drop(&mut self) {
+        session_presentation::set_enabled(&self.state, false);
         if let Some(platform) = self.platform.upgrade() {
             platform.application.unregister_window(&self.state);
         }
@@ -796,6 +830,10 @@ impl PlatformWindow for IosWindow {
 
     fn toggle_fullscreen(&self) {
         // iOS apps are always fullscreen
+    }
+
+    fn set_remote_session_presentation(&self, enabled: bool) {
+        session_presentation::set_enabled(&self.state, enabled);
     }
 
     fn is_fullscreen(&self) -> bool {

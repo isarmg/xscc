@@ -47,3 +47,8 @@
     public void close();
     private static native void nativeStopped(long, int);
 }
+
+# The opt-in session presentation request is looked up through JNI.
+-keepclassmembers class org.xscc.gpui.smoke.SmokeActivity {
+    public void setRemoteSessionPresentation(boolean);
+}

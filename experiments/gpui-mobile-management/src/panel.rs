@@ -36,6 +36,11 @@ pub struct Panel {
         feature = "mobile-session"
     ))]
     session: Entity<crate::session_view::SessionView>,
+    #[cfg(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    ))]
+    _session_events: Subscription,
     _updates: gpui::Task<()>,
     _lifecycle: Subscription,
 }
@@ -100,6 +105,22 @@ impl Panel {
                 cx.notify();
             });
         });
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "mobile-session"
+        ))]
+        let session =
+            cx.new(|cx| crate::session_view::SessionView::new(runtime.clone(), _window, cx));
+        #[cfg(all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "mobile-session"
+        ))]
+        let session_events = cx.subscribe_in(&session, _window, |view, _, event, _, cx| {
+            match event {
+                crate::session_view::SessionUiEvent::BackToDevices => view.session_visible = false,
+            }
+            cx.notify();
+        });
         Self {
             commands,
             events: incoming,
@@ -118,8 +139,12 @@ impl Panel {
                 any(target_os = "ios", target_os = "android"),
                 feature = "mobile-session"
             ))]
-            session: cx
-                .new(|cx| crate::session_view::SessionView::new(runtime.clone(), _window, cx)),
+            session,
+            #[cfg(all(
+                any(target_os = "ios", target_os = "android"),
+                feature = "mobile-session"
+            ))]
+            _session_events: session_events,
             _updates: updates,
             _lifecycle: lifecycle,
         }
@@ -252,30 +277,7 @@ impl Render for Panel {
                         .top(visible.origin.y)
                         .w(visible.size.width)
                         .h(visible.size.height)
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .id("back-to-hosts")
-                                .min_h(px(44.))
-                                .px_4()
-                                .py_2()
-                                .child("‹ 返回主机列表")
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    window.dismiss_virtual_keyboard();
-                                    view.session
-                                        .update(cx, |session, cx| session.leave(window, cx));
-                                    view.session_visible = false;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .w_full()
-                                .child(self.session.clone()),
-                        ),
+                        .child(self.session.clone()),
                 );
         }
         let enabled = self.enabled();
@@ -526,7 +528,7 @@ impl Render for Panel {
                 }
                 window.dismiss_virtual_keyboard();
                 view.session
-                    .update(cx, |session, cx| session.connect(id.clone(), cx));
+                    .update(cx, |session, cx| session.connect(id.clone(), window, cx));
                 view.session_visible = true;
                 cx.notify();
             }));

@@ -24,6 +24,14 @@ pub struct KeyboardEvent {
     pub epoch: u64,
     pub commands: Vec<Command>,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyboardPage {
+    #[default]
+    Input,
+    Shortcuts,
+    Keys,
+}
+
 pub struct KeyboardControl {
     state: RefCell<KeyboardState>,
     enabled: Cell<bool>,
@@ -61,6 +69,7 @@ pub struct RemoteKeyboard {
     pub control: Rc<KeyboardControl>,
     focus: FocusHandle,
     notice: String,
+    page: KeyboardPage,
     _blur: Subscription,
 }
 impl EventEmitter<KeyboardEvent> for RemoteKeyboard {}
@@ -76,9 +85,62 @@ impl RemoteKeyboard {
             control,
             focus,
             notice: String::new(),
+            page: KeyboardPage::Input,
             _blur: blur,
         }
     }
+    pub fn show(&mut self, page: KeyboardPage, window: &mut Window, cx: &mut Context<Self>) {
+        let changed_page = self.page != page;
+        if changed_page {
+            self.control.cancel();
+            window.dismiss_virtual_keyboard();
+            self.page = page;
+        }
+        if page != KeyboardPage::Input || !self.control.enabled.get() {
+            self.changed(window, cx);
+            return;
+        }
+        let continuing = self.control.editing.get() && self.focus.is_focused(window);
+        if continuing && self.control.state.borrow().marked().is_some() {
+            return;
+        }
+        self.control.editing.set(true);
+        self.focus.focus(window, cx);
+        if continuing && !changed_page {
+            cx.notify();
+        } else {
+            self.changed(window, cx);
+        }
+        let epoch = self.control.epoch();
+        // The first frame mounts the input handler; the following frame can safely show IME.
+        cx.on_next_frame(window, move |view, window, cx| {
+            if !view.ime_requested(epoch, window) {
+                return;
+            }
+            cx.on_next_frame(window, move |view, window, _| {
+                if view.ime_requested(epoch, window) {
+                    window.request_virtual_keyboard();
+                }
+            });
+        });
+    }
+
+    pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.control.cancel();
+        window.dismiss_virtual_keyboard();
+        self.changed(window, cx);
+    }
+
+    fn ime_requested(&self, epoch: u64, window: &Window) -> bool {
+        self.page == KeyboardPage::Input
+            && self.control.enabled.get()
+            && self.control.editing.get()
+            && self.control.epoch() == epoch
+            && self.focus.is_focused(window)
+            && window.is_window_active()
+            && self.control.state.borrow().marked().is_none()
+    }
+
     fn changed(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.notify_text_input_changed(&self.focus);
         cx.notify();
@@ -282,13 +344,129 @@ impl EntityInputHandler for RemoteKeyboard {
     }
 }
 impl Render for RemoteKeyboard {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::palette(window.appearance());
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = theme::DARK;
         let entity = cx.entity();
         let focus = self.focus.clone();
         let enabled = self.control.enabled.get();
+        let content = match self.page {
+            KeyboardPage::Input => {
+                let status = if !enabled {
+                    "远端未允许键盘输入"
+                } else if !self.notice.is_empty() {
+                    &self.notice
+                } else if self.control.unicode.get() {
+                    "使用本机输入法，文字直接提交到远端"
+                } else {
+                    "目标仅支持可打印 ASCII，暂不支持中文"
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        key_button("open-remote-keyboard", "打开输入法", enabled)
+                            .w_full()
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.show(KeyboardPage::Input, window, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(gpui::px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child(status.to_owned()),
+                    )
+            }
+            KeyboardPage::Keys => div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div().grid().grid_cols(3).gap_2().children(
+                        [
+                            ("退格", ControlKey::Backspace),
+                            ("Delete", ControlKey::Delete),
+                            ("Enter", ControlKey::Return),
+                            ("Tab", ControlKey::Tab),
+                            ("Esc", ControlKey::Escape),
+                            ("←", ControlKey::LeftArrow),
+                            ("→", ControlKey::RightArrow),
+                            ("↑", ControlKey::UpArrow),
+                            ("↓", ControlKey::DownArrow),
+                        ]
+                        .into_iter()
+                        .map(|(label, key)| {
+                            key_button(label, label, enabled).on_click(cx.listener(
+                                move |view, _, window, cx| {
+                                    view.control_key(key, window, cx);
+                                },
+                            ))
+                        }),
+                    ),
+                )
+                .when(!enabled, |view| {
+                    view.child(
+                        div()
+                            .text_size(gpui::px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child("远端未允许键盘输入"),
+                    )
+                })
+                .when(!self.notice.is_empty(), |view| {
+                    view.child(
+                        div()
+                            .text_size(gpui::px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child(self.notice.clone()),
+                    )
+                }),
+            KeyboardPage::Shortcuts => {
+                let supported = enabled && self.control.shortcuts.get();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div().grid().grid_cols(3).gap_2().children(
+                            [
+                                ("全选 Ctrl+A", Shortcut::SelectAll),
+                                ("撤销 Ctrl+Z", Shortcut::Undo),
+                                ("保存 Ctrl+S", Shortcut::Save),
+                            ]
+                            .into_iter()
+                            .map(|(label, shortcut)| {
+                                key_button(label, label, supported).on_click(cx.listener(
+                                    move |view, _, window, cx| {
+                                        view.shortcut(shortcut, window, cx);
+                                    },
+                                ))
+                            }),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_size(gpui::px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child(if supported {
+                                "将快捷键发送到远端应用"
+                            } else {
+                                "目标尚未允许这些快捷键"
+                            }),
+                    )
+                    .when(!self.notice.is_empty(), |view| {
+                        view.child(
+                            div()
+                                .text_size(gpui::px(12.))
+                                .text_color(rgb(palette.muted))
+                                .child(self.notice.clone()),
+                        )
+                    })
+            }
+        };
         div()
             .id("remote-keyboard")
+            .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event, window, cx| {
                 if !view.accepts_text_input(window, cx) {
@@ -305,106 +483,64 @@ impl Render for RemoteKeyboard {
                 );
                 view.publish(result, window, cx);
             }))
-            .flex()
-            .flex_col()
-            .gap_2()
+            .size_full()
+            .min_h(gpui::px(0.))
+            .bg(rgb(palette.panel))
+            .text_color(rgb(palette.text))
             .child(
                 div()
-                    .id("open-remote-keyboard")
-                    .min_h(gpui::px(44.))
-                    .p_3()
-                    .bg(rgb(palette.panel))
-                    .child(if enabled {
-                        "打开远程软键盘"
-                    } else {
-                        "远程键盘不可用"
-                    })
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if !view.control.enabled.get() {
-                            return;
-                        }
-                        view.control.state.borrow_mut().reset();
-                        view.control.editing.set(true);
-                        view.focus.focus(window, cx);
-                        window.request_virtual_keyboard();
-                        view.changed(window, cx);
-                    })),
+                    .id("remote-keyboard-page-scroll")
+                    .size_full()
+                    .min_h(gpui::px(0.))
+                    .overflow_y_scroll()
+                    .p_2()
+                    .child(content),
             )
-            .child(
-                div().child(
-                    if self.notice.is_empty() {
-                        if self.control.unicode.get() {
-                            "文字直接提交 · 完整硬件键盘待接入"
-                        } else {
-                            "目标仅支持可打印 ASCII · 中文输入暂不可用"
-                        }
-                    } else {
-                        &self.notice
-                    }
-                    .to_owned(),
-                ),
-            )
-            .when(enabled, |view| {
+            .when(self.page == KeyboardPage::Input, |view| {
                 view.child(
-                    div().flex().flex_wrap().gap_2().children(
-                        [
-                            ("退格", ControlKey::Backspace),
-                            ("Delete", ControlKey::Delete),
-                            ("Enter", ControlKey::Return),
-                            ("Tab", ControlKey::Tab),
-                            ("Esc", ControlKey::Escape),
-                            ("←", ControlKey::LeftArrow),
-                            ("→", ControlKey::RightArrow),
-                            ("↑", ControlKey::UpArrow),
-                            ("↓", ControlKey::DownArrow),
-                        ]
-                        .into_iter()
-                        .map(|(label, key)| {
-                            div()
-                                .id(label)
-                                .min_h(gpui::px(44.))
-                                .p_2()
-                                .bg(rgb(palette.panel))
-                                .child(label)
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.control_key(key, window, cx)
-                                }))
-                        }),
-                    ),
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            window.handle_input(
+                                &focus,
+                                ElementInputHandler::new(bounds, entity),
+                                cx,
+                            );
+                        },
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .h(gpui::px(1.)),
                 )
             })
-            .when(enabled && self.control.shortcuts.get(), |view| {
-                view.child(
-                    div().flex().flex_wrap().gap_2().children(
-                        [
-                            ("全选 Ctrl+A", Shortcut::SelectAll),
-                            ("撤销 Ctrl+Z", Shortcut::Undo),
-                            ("保存 Ctrl+S", Shortcut::Save),
-                        ]
-                        .into_iter()
-                        .map(|(label, shortcut)| {
-                            div()
-                                .id(label)
-                                .min_h(gpui::px(44.))
-                                .p_2()
-                                .bg(rgb(palette.panel))
-                                .child(label)
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    view.shortcut(shortcut, window, cx)
-                                }))
-                        }),
-                    ),
-                )
-            })
-            .child(
-                canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, cx| {
-                        window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
-                    },
-                )
-                .w_full()
-                .h(gpui::px(1.)),
-            )
     }
+}
+
+fn key_button(id: &'static str, label: &str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+    let palette = theme::DARK;
+    div()
+        .id(id)
+        .min_h(gpui::px(48.))
+        .min_w(gpui::px(48.))
+        .px_2()
+        .py_2()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_lg()
+        .border_1()
+        .border_color(rgb(palette.border))
+        .bg(rgb(palette.page))
+        .text_color(rgb(palette.text))
+        .text_size(gpui::px(14.))
+        .opacity(if enabled { 1. } else { 0.45 })
+        .child(label.to_owned())
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(palette.accent_soft)))
+                .active(|style| style.bg(rgb(palette.border)))
+        })
 }

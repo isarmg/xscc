@@ -98,3 +98,29 @@ cursor-shape-v1 for this style, including pointer entry and restore-after-typing
 Regular controls restore their existing cursor styles. The optional, non-product
 X11 backend explicitly uses its arrow fallback. Mobile backends retain their
 existing system pointer behavior.
+
+## Reversible mobile session presentation
+
+`Window::set_remote_session_presentation(bool)` is an opt-in request with a
+default platform no-op. Existing desktop fullscreen and inactive mobile paths
+are unchanged. Android posts to the existing Java main-thread bridge; the
+application's isolated `RemoteSessionPresentation` helper snapshots requested
+orientation and AndroidX compat system-bar visibility/behavior. It requests
+sensor landscape and transient swipe-reveal system bars without hiding the IME
+or changing text-input configuration. Exit, Activity stop/destroy and window
+drop restore the original request and bars.
+
+The application JNI entry is
+`org.xscc.gpui.smoke.SmokeActivity.setRemoteSessionPresentation(boolean)`;
+`packaging/gpui-android/app/privacy-rules.pro` keeps that exact member name.
+The companion Java helper lives beside the existing application bridge, while
+`AndroidImeBridge`'s text-input implementation is unchanged.
+
+UIKit applies per-controller landscape/status-bar/home-indicator preferences,
+requests public window-scene geometry, and restores the inherited controller
+policy and previous scene orientation on exit/background/window close. iPad
+multiwindow geometry requests may be declined; errors are logged and existing
+actual bounds, safe-area and keyboard notifications continue to drive layout.
+No private orientation KVC, forced iPad fullscreen, dependency, or decoder change
+is introduced. Native compilation and physical-device acceptance are separate;
+no device rotation/immersive-mode success is claimed from source inspection.

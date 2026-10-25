@@ -25,6 +25,7 @@
     "crates/ztracing_macro"
   ],
   "source_changes_from_upstream": [
+    "Cargo.toml",
     "crates/gpui/Cargo.toml",
     "crates/gpui/examples/README.md",
     "crates/gpui/examples/windows_shared_surface.rs",
@@ -37,6 +38,11 @@
     "crates/gpui/src/shared_string.rs",
     "crates/gpui/src/style.rs",
     "crates/gpui/src/window.rs",
+    "crates/gpui_android/src/gpui_android.rs",
+    "crates/gpui_android/src/session_presentation.rs",
+    "crates/gpui_android/src/window.rs",
+    "crates/gpui_ios/src/ios/window.rs",
+    "crates/gpui_ios/src/ios/window/session_presentation.rs",
     "crates/gpui_linux/Cargo.toml",
     "crates/gpui_linux/src/linux/platform.rs",
     "crates/gpui_linux/src/linux/wayland.rs",
@@ -66,7 +72,8 @@
     "Merge SharedString into gpui without changing its public re-export or serialization.",
     "Remove Web backend, two network-image demos, unused GitHub downloader and performance harness; preserve the three style correctness tests.",
     "Own packed BGRA pixel storage through RenderImage and reuse same-size image atlas allocations only on ordered-upload DirectX/WGPU backends; retain fresh-image fallback on Metal, resizing, device loss and upload failure.",
-    "Expose Hidden cursor style for application-painted pointers; Windows clears HCURSOR, macOS registers a transparent NSCursor and Wayland clears the pointer surface without using cursor-shape-v1. Optional X11 retains an arrow fallback."
+    "Expose Hidden cursor style for application-painted pointers; Windows clears HCURSOR, macOS registers a transparent NSCursor and Wayland clears the pointer surface without using cursor-shape-v1. Optional X11 retains an arrow fallback.",
+    "Expose an opt-in reversible mobile session presentation request. Android uses its existing Java UI-thread bridge and AndroidX compat system-bar APIs without hiding IME; UIKit uses per-controller visibility/orientation policy and public scene geometry requests, preserving existing safe-area/keyboard geometry and restoring on exit/background. The application entry is SmokeActivity.setRemoteSessionPresentation(boolean), retained by an exact R8 member rule; AndroidImeBridge text-input code is unchanged."
   ],
   "initial_workspace_member_count": 28,
   "removed_crates": [

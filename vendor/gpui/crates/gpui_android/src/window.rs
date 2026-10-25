@@ -62,6 +62,7 @@ pub(crate) struct WindowState {
     pub(crate) input_handler: Callback<PlatformInputHandler>,
     pub(crate) ime: RefCell<crate::ime::ImeState>,
     pub(crate) ime_bridge: crate::ime_bridge::Bridge,
+    presentation: crate::session_presentation::Presentation,
     pub(crate) ime_configuration: RefCell<TextInputConfiguration>,
     pub(crate) ime_show: Cell<bool>,
     request_frame: Callback<Box<dyn FnMut(RequestFrameOptions)>>,
@@ -120,6 +121,7 @@ impl AndroidWindow {
             input_handler: Callback::default(),
             ime: RefCell::default(),
             ime_bridge: crate::ime_bridge::Bridge::new(&platform.app),
+            presentation: crate::session_presentation::Presentation::new(&platform.app),
             ime_configuration: RefCell::default(),
             ime_show: Cell::new(false),
             request_frame: Callback::default(),
@@ -425,6 +427,9 @@ impl PlatformWindow for AndroidWindow {
     fn minimize(&self) {}
     fn zoom(&self) {}
     fn toggle_fullscreen(&self) {}
+    fn set_remote_session_presentation(&self, enabled: bool) {
+        self.0.presentation.set_enabled(enabled);
+    }
     fn is_fullscreen(&self) -> bool {
         true
     }

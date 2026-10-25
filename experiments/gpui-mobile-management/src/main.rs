@@ -1,9 +1,3 @@
-#[cfg(all(
-    any(target_os = "ios", target_os = "android"),
-    feature = "mobile-session"
-))]
-#[path = "../../gpui-validation/src/dashboard.rs"]
-mod dashboard;
 #[cfg(any(
     test,
     all(
@@ -30,17 +24,57 @@ mod keyboard_action;
 mod keyboard_input;
 mod management;
 mod panel;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod pointer_input;
 #[cfg(all(
     any(target_os = "ios", target_os = "android"),
     feature = "mobile-session"
 ))]
 #[path = "../../gpui-validation/src/presentation.rs"]
 mod presentation;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod remote_cursor;
 #[cfg(all(
     any(target_os = "ios", target_os = "android"),
     feature = "mobile-session"
 ))]
 mod remote_keyboard;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_chrome;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_input;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_layout;
 #[cfg(all(
     any(target_os = "ios", target_os = "android"),
     feature = "mobile-session"
