@@ -2,6 +2,8 @@
 
 根目录为统一的原生应用工作区；内嵌管理库位于 `crates/management`，Cargo 包名仍为 `xscc`。两者共用根目录 Cargo.lock，Rust 工具链为 1.99。
 
+输入边界、类型保证、错误传播与热路径简化遵循[避免过度防御性编程](defensive-programming.md)。
+
 管理库检查从仓库根目录运行：
 
 ```sh

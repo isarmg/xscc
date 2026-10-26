@@ -40,8 +40,23 @@ type Result<T> = std::result::Result<T, EnrollmentError>;
 
 /// A single origin is also the protected-store namespace. HTTP is supported for
 /// explicit loopback or private-IP testing origins; public servers require HTTPS.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ServerOrigin(Url);
+
+impl TryFrom<String> for ServerOrigin {
+    type Error = EnrollmentError;
+
+    fn try_from(value: String) -> Result<Self> {
+        Self::parse(&value)
+    }
+}
+
+impl From<ServerOrigin> for String {
+    fn from(value: ServerOrigin) -> Self {
+        value.0.into()
+    }
+}
 
 impl ServerOrigin {
     pub fn parse(value: &str) -> Result<Self> {
@@ -514,6 +529,7 @@ mod tests {
                 ServerOrigin::parse(value),
                 Err(EnrollmentError::Configuration)
             );
+            assert!(serde_json::from_value::<ServerOrigin>(serde_json::json!(value)).is_err());
         }
         for host in [
             "localhost",
@@ -535,6 +551,12 @@ mod tests {
         }
         let server = ServerOrigin::parse("https://EXAMPLE.com:443").unwrap();
         assert_eq!(server.as_str(), "https://example.com/");
+        let encoded = serde_json::to_value(&server).unwrap();
+        assert_eq!(encoded, serde_json::json!("https://example.com/"));
+        assert_eq!(
+            serde_json::from_value::<ServerOrigin>(encoded).unwrap(),
+            server
+        );
         assert_eq!(
             server.connection_url().unwrap().as_str(),
             "wss://example.com/xscc/v2/connect"

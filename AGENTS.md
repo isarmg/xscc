@@ -37,17 +37,24 @@ host or client application code.
 
 ## Rust Rules
 
-* Avoid `unwrap()` / `expect()` in production code.
-* Exceptions:
-
-  * tests;
-  * lock acquisition where failure means poisoning, not normal control flow.
-* Otherwise prefer `Result` + `?` or explicit handling.
-* Do not ignore errors silently.
-* Avoid unnecessary `.clone()`.
-* Prefer borrowing when practical.
+* Parse external inputs at their trust boundary and retain the validated type
+  inside the process. Network, persisted files, configuration, FFI and public
+  library APIs are boundaries. Internal calls should use those type guarantees.
+* Authorization expiry, revocation and connection state can change after parsing;
+  check the current observation when granting or continuing a session.
+* External failures use `Result` + `?` or explicit handling. Preserve their cause;
+  do not hide errors with defaults or classify every failure as missing data.
+* Avoid `unwrap()` in production. Prefer types and control flow that express an
+  invariant; a proven internal invariant may use `expect("invariant: ...")`.
+  Tests and poisoned-lock acquisition retain their existing conventions.
+* Borrow shared state and clone only the returned data. A single-peer lookup or
+  session check must not copy the entire access policy or unrelated session keys.
+* Keep locks short and release guards before `.await` or blocking I/O.
 * Do not add dependencies unless needed.
 * Keep code simple and idiomatic.
+
+See [the project-specific simplification rules](docs/defensive-programming.md)
+for trust boundaries, review questions and validation commands.
 
 ### Logging
 
@@ -137,6 +144,9 @@ host or client application code.
 
 ### Be minimally invasive
 
+* For an explicitly requested simplification, remove the redundant check, copy
+  or branch directly. Keep the change local and preserve protocol/storage
+  formats; do not retain a parallel implementation solely to make it additive.
 * Prefer purely additive changes: layer new (`#[cfg]`-gated) blocks or new functions around existing code instead of restructuring it. The ideal diff for a fix adds lines and modifies/deletes none.
 * Do not extract or reshape existing code just to enable your new code; look for a mechanism that leaves existing lines untouched (e.g. hide/show an existing object instead of refactoring its construction into a helper for rebuilding).
 * Accept a little duplication over a restructure. A new function that repeats a few lines of an existing one is a better diff than reshaping the original so both can share it.

@@ -57,7 +57,7 @@ impl RustDeskHost for Host {
 #[serde(deny_unknown_fields)]
 struct Settings {
     version: u8,
-    server: String,
+    server: ServerOrigin,
     addresses: Vec<HostAddress>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,7 +171,6 @@ impl NativeManager {
             if s.version != 1 {
                 return Err(Error::Storage);
             }
-            ServerOrigin::parse(&s.server)?;
             protocol::validate_addresses(&s.addresses).map_err(storage)?;
         }
         let store = FileBindingStore::open(root.path(), installation_id)?;
@@ -201,28 +200,32 @@ impl NativeManager {
     }
     pub fn status(&self) -> Status {
         let settings = self.settings.read().unwrap().clone();
-        let policy = self.policy();
+        let access = self.access.read().unwrap();
+        let observation = access.as_ref().map(|receiver| receiver.borrow());
+        let policy = observation
+            .as_ref()
+            .and_then(|observation| observation.as_ref().and_then(AccessObservation::policy));
         Status {
             configured: settings.is_some(),
-            server: settings.as_ref().map(|s| s.server.clone()),
+            server: settings.as_ref().map(|s| s.server.as_str().to_owned()),
             phase: if policy.is_some() {
                 "online".into()
             } else {
                 self.phase.read().unwrap().clone()
             },
             binding: self.binding.read().unwrap().clone(),
-            role: policy.as_ref().map(|p| p.role),
+            role: policy.map(|p| p.role),
             addresses: settings.map(|s| s.addresses).unwrap_or_default(),
             peers: policy
                 .map(|p| {
                     p.peers
-                        .into_iter()
+                        .iter()
                         .map(|p| PeerView {
-                            binding: p.binding,
-                            name: p.name,
+                            binding: p.binding.clone(),
+                            name: p.name.clone(),
                             role: p.role,
                             online: p.online,
-                            addresses: p.addresses,
+                            addresses: p.addresses.clone(),
                         })
                         .collect()
                 })
@@ -246,7 +249,12 @@ impl NativeManager {
             })
     }
     pub fn target(&self, id: uuid::Uuid) -> Result<Target> {
-        let policy = self.policy().ok_or(Error::Unavailable)?;
+        let access = self.access.read().unwrap();
+        let observation = access.as_ref().ok_or(Error::Unavailable)?.borrow();
+        let policy = observation
+            .as_ref()
+            .and_then(AccessObservation::policy)
+            .ok_or(Error::Unavailable)?;
         if policy.role != InstanceRole::Controller {
             return Err(Error::Denied);
         }
@@ -257,7 +265,7 @@ impl NativeManager {
             .ok_or(Error::Denied)?;
         Ok(Target {
             permit: SessionPermit {
-                controller: policy.binding,
+                controller: policy.binding.clone(),
                 controlled: peer.binding.clone(),
                 epoch: session::epoch(&peer.session_key),
             },
@@ -268,7 +276,12 @@ impl NativeManager {
         if cfg!(any(target_os = "android", target_os = "ios")) && role != InstanceRole::Controller {
             return Err(Error::Denied);
         }
-        let policy = self.policy().ok_or(Error::Unavailable)?;
+        let access = self.access.read().unwrap();
+        let observation = access.as_ref().ok_or(Error::Unavailable)?.borrow();
+        let policy = observation
+            .as_ref()
+            .and_then(AccessObservation::policy)
+            .ok_or(Error::Unavailable)?;
         let (own, other) = if role == InstanceRole::Controller {
             (&permit.controller, &permit.controlled)
         } else {
@@ -390,14 +403,14 @@ impl NativeManager {
             .read()
             .unwrap()
             .as_ref()
-            .is_some_and(|s| s.server != origin.as_str())
+            .is_some_and(|s| s.server != origin)
         {
             return Err(Error::Denied);
         }
         self.stop_owner().await?;
         self.save_settings(Some(Settings {
             version: 1,
-            server: origin.as_str().into(),
+            server: origin.clone(),
             addresses,
         }))
         .await?;
@@ -431,10 +444,15 @@ impl NativeManager {
     pub async fn unbind(&self) -> Result<()> {
         let _guard = self.gate.lock().await;
         self.stop_owner().await?;
-        let Some(settings) = self.settings.read().unwrap().clone() else {
+        let Some(origin) = self
+            .settings
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.server.clone())
+        else {
             return Ok(());
         };
-        let origin = ServerOrigin::parse(&settings.server)?;
         if let Some(saved) = self.store.load(&origin).await? {
             EnrollmentClient::new(origin.clone())?
                 .unbind(&saved)
@@ -465,8 +483,13 @@ impl NativeManager {
         .into();
     }
     async fn run(self: &Arc<Self>, shutdown: &mut watch::Receiver<bool>) -> Result<()> {
-        let settings = self.settings.read().unwrap().clone().ok_or(Error::Denied)?;
-        let origin = ServerOrigin::parse(&settings.server)?;
+        let origin = self
+            .settings
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.server.clone())
+            .ok_or(Error::Denied)?;
         let client = EnrollmentClient::new(origin.clone())?;
         loop {
             let recovered = tokio::select! {_=shutdown.changed()=>return Ok(()),value=client.recover(&self.store)=>value};
@@ -569,6 +592,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn stored_server_strings_are_parsed_before_use() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::create(temporary.path(), "native").unwrap();
+        for (server, valid) in [
+            ("https://EXAMPLE.com:443", true),
+            ("http://example.com", false),
+            ("https://example.com/path", false),
+        ] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "version": 1, "server": server, "addresses": []
+            }))
+            .unwrap();
+            root.write("active.json", &bytes, false).unwrap();
+            let result = NativeManager::open(root.clone(), Arc::new(UnavailableHost));
+            if valid {
+                assert_eq!(
+                    result.unwrap().status().server.as_deref(),
+                    Some("https://example.com/")
+                );
+            } else {
+                assert!(result.is_err());
+            }
+        }
+    }
+
     #[tokio::test]
     async fn owner_is_exclusive_and_recovers_pending_identity_without_exposing_secrets() {
         let temporary = tempfile::tempdir().unwrap();
@@ -596,7 +645,7 @@ mod tests {
         manager
             .save_settings(Some(Settings {
                 version: 1,
-                server: origin.as_str().into(),
+                server: origin.clone(),
                 addresses: Vec::new(),
             }))
             .await
