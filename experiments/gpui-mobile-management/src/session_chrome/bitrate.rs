@@ -518,7 +518,7 @@ fn slider_ticks() -> Div {
         )
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod tests {
     use super::*;
     use crate::session_chrome::ChromeModel;
