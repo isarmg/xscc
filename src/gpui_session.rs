@@ -1167,7 +1167,14 @@ mod tests {
         assert!(handle.drain_events().is_empty());
         handle.session.ui_handler.event(quality());
         handle.session.ui_handler.set_display(1920, 0, 1920, 1080, false, 1.0);
-        assert!(matches!(handle.drain_events().as_slice(), [SessionEvent::Display { .. }]));
+        let events = handle.drain_events();
+        assert!(!events.iter().any(|event| matches!(event, SessionEvent::Quality { .. })));
+        assert!(matches!(events.as_slice(), [
+            SessionEvent::MediaControls(MediaControls {
+                current_resolution: Some(ResolutionMode { width: 1920, height: 1080 }), ..
+            }),
+            SessionEvent::Display { x: 1920, y: 0, width: 1920, height: 1080, .. }
+        ]));
     }
 
     #[test]
