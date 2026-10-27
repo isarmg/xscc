@@ -95,6 +95,10 @@ impl RemoteVideo {
             };
             match result {
                 Ok(()) => {
+                    if matches!(request, MediaRequest::Resolution(_)) {
+                        self.extent = (0, 0);
+                        self.video.invalidate();
+                    }
                     self.pending_media = Some(PendingMedia::new(request, &self.media_controls));
                     self.notice = format!("正在请求{}，等待主机确认…", request.label());
                 }

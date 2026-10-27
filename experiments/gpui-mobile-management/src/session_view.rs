@@ -601,7 +601,11 @@ impl SessionView {
         self.hide_keyboard(window, cx);
         let Some(session) = &self.session else { return };
         self.notice = match session.set_resolution(mode) {
-            Ok(()) => format!("已发送 {}×{} 分辨率请求。", mode.width, mode.height),
+            Ok(()) => {
+                self.extent = (0, 0);
+                self.presentation.invalidate();
+                format!("已发送 {}×{} 分辨率请求。", mode.width, mode.height)
+            }
             Err(error) => error.to_string(),
         };
     }

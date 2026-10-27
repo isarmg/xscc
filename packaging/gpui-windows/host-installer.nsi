@@ -22,7 +22,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\XSCC-Host"
-!define MUI_WELCOMEPAGE_TEXT "This unsigned beta installs XSCC Host and registers a LocalSystem Windows service. The host UI requires administrator approval. Signed virtual display driver files are included; the driver is installed only when an authorized controller requests a virtual display. No firewall/security changes are made. Close the host UI before upgrade or removal. Host identity and configuration are preserved on uninstall."
+!define MUI_WELCOMEPAGE_TEXT "This unsigned beta installs XSCC Host and registers a LocalSystem Windows service. The host UI requires administrator approval. Signed virtual display driver files are included; the driver is installed on demand for an authorized virtual display request or headless session. No firewall/security changes are made. Close the host UI before upgrade or removal. Host identity and configuration are preserved on uninstall."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD_DIR}\LICENCE"
 !insertmacro MUI_PAGE_INSTFILES

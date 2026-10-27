@@ -153,7 +153,7 @@ variants, in addition to static vcpkg libraries. Packaging records MSVC
 `dumpbin /DEPENDENTS` output in `dependencies.txt` and fails if the executable
 imports a VC++ redistributable runtime such as VCRUNTIME or MSVCP. No redistributable,
 driver or arbitrary DLL is downloaded on the user's device. The optional virtual
-display driver is bundled with the host and registered only after an explicit virtual-display request.
+display driver is bundled with the host and registered on demand for an authorized virtual-display request or headless session.
 This direct-import inspection is not proof that every dynamically loaded graphics
 library is available; actual clean Windows 11 startup remains a release gate.
 
@@ -164,7 +164,7 @@ is Windows 11; the installer smoke runner is not a supported end-user target.
 Both application installers are unsigned and preserve identity/configuration on removal.
 They make no firewall, security-policy or update-feed modifications. The host bundles the
 signed virtual display driver files described below; driver registration is deferred until
-an authorized interactive session explicitly requests a virtual display.
+an authorized session explicitly requests a virtual display or needs headless provisioning.
 
 Controller:
 - Normal-user installation under `%LOCALAPPDATA%\Programs\XSCC-Controller`.
@@ -238,7 +238,9 @@ in the installed `usbmmidd_v2/driver-source.json`; controller packages contain n
 
 Installing the host only copies these files into its protected Program Files directory.
 The existing host backend registers the driver through Windows SetupAPI when an authorized
-controller with keyboard control explicitly adds a virtual display. An already installed
+controller with keyboard control explicitly adds a virtual display, or when the existing
+authorized headless-login path needs a display. Headless provisioning is part of opening
+a permitted remote desktop session and does not require keyboard control. An already installed
 compatible driver is reused. The operating system retains driver-signature enforcement.
 Adding/removing virtual screens reports remote failures and monitor updates through the
 normal session channel; unsupported hosts do not offer active controls. Removal preserves

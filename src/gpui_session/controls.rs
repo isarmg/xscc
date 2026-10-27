@@ -246,6 +246,8 @@ impl SessionHandle {
             bail!("Display controls are unavailable or input is disabled");
         }
         if state.current_resolution == Some(mode) {
+            let index = mailbox.monitors.read().unwrap().current;
+            self.session.refresh_video(index as i32);
             self.session.ui_handler.publish_media_controls();
             return Ok(());
         }
@@ -275,6 +277,8 @@ impl SessionHandle {
         self.send_media_request(misc)?;
         monitors.pending = Some(index);
         mailbox.frame.pop();
+        drop(monitors);
+        self.session.refresh_video(index as i32);
         Ok(())
     }
 
@@ -406,6 +410,11 @@ mod tests {
             .set_resolution(handle.media_controls().current_resolution.unwrap())
             .unwrap();
         assert!(handle.media_controls().can_change_resolution);
+        let Data::Message(refresh) = receiver.try_recv().unwrap() else {
+            panic!("expected no-op refresh")
+        };
+        assert!(refresh.misc().refresh_video());
+        assert!(receiver.try_recv().is_err());
         assert!(handle
             .set_resolution(ResolutionMode {
                 width: 1,
@@ -413,6 +422,16 @@ mod tests {
             })
             .is_err());
         handle.set_resolution(mode).unwrap();
+        let Data::Message(resolution) = receiver.try_recv().unwrap() else {
+            panic!("expected resolution request")
+        };
+        assert_eq!(resolution.misc().change_resolution().width, mode.width);
+        assert_eq!(resolution.misc().change_resolution().height, mode.height);
+        let Data::Message(refresh) = receiver.try_recv().unwrap() else {
+            panic!("expected refresh after resolution request")
+        };
+        assert!(refresh.misc().refresh_video());
+        assert!(receiver.try_recv().is_err());
         assert!(!handle.media_controls().can_change_resolution);
         handler.set_permission("keyboard", false);
         assert!(handle
