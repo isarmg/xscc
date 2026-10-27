@@ -37,3 +37,14 @@ upstream distribution recorded in usbmmidd_v2/driver-source.json. The original
 license and instructions are included beside them. The license includes consent
 to advertisement pages and is not the application's AGPL or GPUI Apache license.
 The controller package does not include or install this driver.
+
+Windows host configurable virtual display support
+Virtual Display Driver 25.7.23 (original AMD64 driver-only distribution)
+Copyright (c) 2024 Virtual Display. License: MIT.
+The unchanged signed driver, INF, catalog, original configuration and complete
+MIT license are included in mtt_vdd. Pinned archive/file digests and upstream
+license provenance are recorded in mtt_vdd/driver-source.json. This is the
+default backend when its verified payload is present; Amyuni files are retained
+for compatibility. No certificate import or test signing is required or enabled.
+Upstream: https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/tag/25.7.23
+The controller package does not include or install either display driver.

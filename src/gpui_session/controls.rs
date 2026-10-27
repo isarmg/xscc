@@ -11,15 +11,16 @@ pub enum BitrateMode {
 pub struct ResolutionMode {
     pub width: i32,
     pub height: i32,
+    pub refresh_rate: u32,
 }
 
 impl ResolutionMode {
     fn from_wire(value: &Resolution) -> Option<Self> {
-        (value.width > 0 && value.height > 0 && value.width <= 16384 && value.height <= 16384)
-            .then_some(Self {
-                width: value.width,
-                height: value.height,
-            })
+        (value.width > 0 && value.height > 0).then_some(Self {
+            width: value.width,
+            height: value.height,
+            refresh_rate: value.refresh_rate,
+        })
     }
 }
 
@@ -32,11 +33,13 @@ pub enum VirtualDisplayRequest {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MediaControls {
     pub bitrate_supported: bool,
+    pub max_bitrate_kbps: u32,
     pub bitrate_mode: BitrateMode,
     pub can_change_resolution: bool,
     pub current_resolution: Option<ResolutionMode>,
     pub resolutions: Vec<ResolutionMode>,
     pub virtual_display_supported: bool,
+    pub virtual_display_driver: String,
     pub can_add_virtual_display: bool,
     pub virtual_display_remove_latest_only: bool,
     /// Amyuni exposes only the latest count token, never a physical monitor index.
@@ -52,11 +55,21 @@ pub(super) struct Controls {
     windows: bool,
     retina: bool,
     display_scales: Vec<f64>,
+    current_refresh_rate: u32,
 }
 
 impl Controls {
     pub(super) fn peer(&mut self, peer: &PeerInfo) {
         self.state.bitrate_supported = peer.features.as_ref().is_some_and(|v| v.bitrate_limit);
+        self.state.max_bitrate_kbps = peer.features.as_ref().map_or(0, |features| {
+            if !features.bitrate_limit {
+                0
+            } else if features.max_bitrate_kbps == 0 {
+                100_000
+            } else {
+                features.max_bitrate_kbps.min(1_000_000)
+            }
+        });
         self.display_controls_supported =
             peer.features.as_ref().is_some_and(|v| v.display_controls);
         self.windows = peer.platform == "Windows";
@@ -71,8 +84,14 @@ impl Controls {
             .iter()
             .filter_map(ResolutionMode::from_wire)
             .collect();
-        self.state.resolutions.sort_by_key(|v| (v.width, v.height));
+        self.state
+            .resolutions
+            .sort_by_key(|v| (v.width, v.height, v.refresh_rate));
         self.state.resolutions.dedup();
+        self.current_refresh_rate = resolutions
+            .current_resolution
+            .as_ref()
+            .map_or(0, |mode| mode.refresh_rate);
     }
 
     pub(super) fn displays(&mut self, displays: &[DisplayInfo], current: usize) {
@@ -96,6 +115,7 @@ impl Controls {
         self.state.current_resolution = ResolutionMode::from_wire(&Resolution {
             width: (width as f64 / scale).round() as i32,
             height: (height as f64 / scale).round() as i32,
+            refresh_rate: self.current_refresh_rate,
             ..Default::default()
         });
     }
@@ -122,10 +142,39 @@ impl Controls {
                 })?
                 .into();
         }
+        self.state.virtual_display_driver.clone_from(&self.idd_impl);
         self.state.virtual_display_ids.clear();
         let supported = self.windows && self.installed && self.display_controls_supported;
-        self.state.virtual_display_remove_latest_only = self.idd_impl == "amyuni_idd";
+        self.state.virtual_display_remove_latest_only =
+            matches!(self.idd_impl.as_str(), "amyuni_idd" | "mtt_vdd");
         match self.idd_impl.as_str() {
+            "mtt_vdd" if supported => {
+                let count = object
+                    .get("virtual_display_count")
+                    .and_then(|value| value.as_u64())
+                    .filter(|value| *value <= i32::MAX as u64)
+                    .ok_or_else(|| {
+                        hbb_common::anyhow::anyhow!("Invalid remote virtual display count")
+                    })? as u32;
+                let maximum = match object.get("virtual_display_max_count") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(value) => Some(
+                        value
+                            .as_u64()
+                            .filter(|value| *value > 0 && *value <= i32::MAX as u64)
+                            .ok_or_else(|| {
+                                hbb_common::anyhow::anyhow!(
+                                    "Invalid remote virtual display maximum"
+                                )
+                            })? as u32,
+                    ),
+                };
+                if count > 0 {
+                    self.state.virtual_display_ids.push(count);
+                }
+                self.state.virtual_display_supported = true;
+                self.state.can_add_virtual_display = count < maximum.unwrap_or(i32::MAX as u32);
+            }
             "amyuni_idd" if supported => {
                 let count = object
                     .get("amyuni_virtual_displays")
@@ -172,7 +221,7 @@ impl Controls {
 
     fn next_virtual_id(&self) -> Option<u32> {
         match self.idd_impl.as_str() {
-            "amyuni_idd" => self.state.can_add_virtual_display.then_some(0),
+            "amyuni_idd" | "mtt_vdd" => self.state.can_add_virtual_display.then_some(0),
             "rustdesk_idd" => (1..5).find(|id| !self.state.virtual_display_ids.contains(id)),
             _ => None,
         }
@@ -229,8 +278,15 @@ impl SessionHandle {
                 value
             }
         };
-        if !self.media_controls().bitrate_supported {
+        let controls = self.media_controls();
+        if !controls.bitrate_supported {
             bail!("The remote host does not support bitrate limits");
+        }
+        if value > controls.max_bitrate_kbps {
+            bail!(
+                "The host supports at most {} kbps; upgrade it for higher limits",
+                controls.max_bitrate_kbps
+            );
         }
         let mut option = OptionMessage::new();
         option.bitrate_limit_kbps = Some(value);
@@ -263,6 +319,7 @@ impl SessionHandle {
         let resolution = Resolution {
             width: mode.width,
             height: mode.height,
+            refresh_rate: mode.refresh_rate,
             ..Default::default()
         };
         if crate::common::is_support_multi_ui_session_num(self.session.lc.read().unwrap().version) {
@@ -352,16 +409,18 @@ mod tests {
         *handle.session.sender.write().unwrap() = Some(sender);
         let handler = &handle.session.ui_handler;
         assert!(handle
-            .set_bitrate_mode(BitrateMode::LimitKbps(4000))
+            .set_bitrate_mode(BitrateMode::LimitKbps(1_000_000))
             .is_err());
         let mode = ResolutionMode {
             width: 1280,
             height: 720,
+            refresh_rate: 120,
         };
         let mut peer = PeerInfo {
             platform: "Windows".into(),
             features: Some(Features {
                 bitrate_limit: true,
+                max_bitrate_kbps: 1_000_000,
                 display_controls: true,
                 ..Default::default()
             })
@@ -370,11 +429,27 @@ mod tests {
                 r#"{"is_installed":true,"idd_impl":"amyuni_idd","amyuni_virtual_displays":2}"#
                     .into(),
             resolutions: Some(SupportedResolutions {
-                resolutions: vec![Resolution {
-                    width: mode.width,
-                    height: mode.height,
+                resolutions: vec![
+                    Resolution {
+                        width: mode.width,
+                        height: mode.height,
+                        refresh_rate: 60,
+                        ..Default::default()
+                    },
+                    Resolution {
+                        width: mode.width,
+                        height: mode.height,
+                        refresh_rate: mode.refresh_rate,
+                        ..Default::default()
+                    },
+                ],
+                current_resolution: Some(Resolution {
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate: 60,
                     ..Default::default()
-                }],
+                })
+                .into(),
                 ..Default::default()
             })
             .into(),
@@ -387,24 +462,36 @@ mod tests {
             ..Default::default()
         });
         handler.set_peer_info(&peer);
+        assert_eq!(handle.media_controls().resolutions.len(), 2);
+        assert_eq!(
+            handle
+                .media_controls()
+                .current_resolution
+                .unwrap()
+                .refresh_rate,
+            60
+        );
         assert_eq!(handle.media_controls().virtual_display_ids, vec![2]);
         assert!(handle.media_controls().virtual_display_remove_latest_only);
         assert!(handle.set_bitrate_mode(BitrateMode::LimitKbps(0)).is_err());
+        assert!(handle
+            .set_bitrate_mode(BitrateMode::LimitKbps(1_000_001))
+            .is_err());
         handle
-            .set_bitrate_mode(BitrateMode::LimitKbps(4000))
+            .set_bitrate_mode(BitrateMode::LimitKbps(1_000_000))
             .unwrap();
         let Data::Message(message) = receiver.try_recv().unwrap() else {
             panic!("expected command")
         };
-        assert_eq!(message.misc().option().bitrate_limit_kbps, Some(4000));
+        assert_eq!(message.misc().option().bitrate_limit_kbps, Some(1_000_000));
         assert_eq!(handle.media_controls().bitrate_mode, BitrateMode::Auto);
         handler.media_options(&OptionMessage {
-            bitrate_limit_kbps: Some(4000),
+            bitrate_limit_kbps: Some(1_000_000),
             ..Default::default()
         });
         assert_eq!(
             handle.media_controls().bitrate_mode,
-            BitrateMode::LimitKbps(4000)
+            BitrateMode::LimitKbps(1_000_000)
         );
         handle
             .set_resolution(handle.media_controls().current_resolution.unwrap())
@@ -418,7 +505,8 @@ mod tests {
         assert!(handle
             .set_resolution(ResolutionMode {
                 width: 1,
-                height: 1
+                height: 1,
+                refresh_rate: 0
             })
             .is_err());
         handle.set_resolution(mode).unwrap();
@@ -427,6 +515,7 @@ mod tests {
         };
         assert_eq!(resolution.misc().change_resolution().width, mode.width);
         assert_eq!(resolution.misc().change_resolution().height, mode.height);
+        assert_eq!(resolution.misc().change_resolution().refresh_rate, 120);
         let Data::Message(refresh) = receiver.try_recv().unwrap() else {
             panic!("expected refresh after resolution request")
         };
@@ -455,7 +544,14 @@ mod tests {
         handle
             .request_virtual_display(VirtualDisplayRequest::Remove(2))
             .unwrap();
+        peer.platform_additions = r#"{"is_installed":true,"idd_impl":"mtt_vdd","virtual_display_count":8,"virtual_display_max_count":null}"#.into();
+        handler.set_peer_info(&peer);
+        assert_eq!(handle.media_controls().virtual_display_ids, vec![8]);
+        assert_eq!(handle.media_controls().virtual_display_driver, "mtt_vdd");
+        assert!(handle.media_controls().virtual_display_remove_latest_only);
+        assert!(handle.media_controls().can_add_virtual_display);
         peer.platform = "Mac OS".into();
+        peer.resolutions.as_mut().unwrap().current_resolution = None.into();
         peer.displays[0].width = 3840;
         peer.displays[0].height = 2160;
         peer.displays[0].scale = 2.0;
@@ -464,7 +560,8 @@ mod tests {
             handle.media_controls().current_resolution,
             Some(ResolutionMode {
                 width: 1920,
-                height: 1080
+                height: 1080,
+                refresh_rate: 0
             })
         );
     }

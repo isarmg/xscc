@@ -1276,6 +1276,7 @@ impl Connection {
         pi.features = Some(Features {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
             bitrate_limit: true,
+            max_bitrate_kbps: 1_000_000,
             display_controls: true,
             ..Default::default()
         })
@@ -1314,15 +1315,12 @@ impl Connection {
                     pi.current_display = self.display_idx as _;
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     {
-                        pi.resolutions = Some(SupportedResolutions {
-                            resolutions: pi
-                                .displays
-                                .get(self.display_idx)
-                                .map(|d| crate::platform::resolutions(&d.name))
-                                .unwrap_or(vec![]),
-                            ..Default::default()
-                        })
-                        .into();
+                        pi.resolutions = Some(pi
+                            .displays
+                            .get(self.display_idx)
+                            .map(|d| crate::platform::session_resolutions(&d.name))
+                            .unwrap_or_default())
+                            .into();
                     }
                     res.set_peer_info(pi);
                     sub_service = true;

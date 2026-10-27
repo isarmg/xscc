@@ -71,7 +71,7 @@ impl Connection {
         let permit = self.managed_permit.clone();
         #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
         let test_lan = self.test_lan;
-        let result = tokio::task::spawn_blocking(move || -> ResultType<()> {
+        let result = tokio::task::spawn_blocking(move || -> ResultType<bool> {
             #[cfg(feature = "managed")]
             {
                 #[cfg(feature = "test-lan-direct")]
@@ -87,24 +87,31 @@ impl Connection {
                 .get(index)
                 .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
             let name = display.name();
-            if !crate::platform::resolutions(&name)
-                .iter()
-                .any(|value| value.width == mode.width && value.height == mode.height)
+            #[cfg(not(windows))]
+            if mode.refresh_rate != 0 {
+                bail!("The host does not support refresh rate changes");
+            }
+            if mode.refresh_rate == 0
+                && !crate::platform::resolutions(&name)
+                    .iter()
+                    .any(|value| value.width == mode.width && value.height == mode.height)
             {
                 bail!("The requested resolution is not supported by this display");
             }
             #[cfg(windows)]
-            if let Some(applied) =
-                virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
-                    &name,
-                    mode.width as _,
-                    mode.height as _,
-                )
-            {
-                if !applied {
-                    bail!("Virtual display rejected the requested resolution");
+            if mode.refresh_rate == 0 {
+                if let Some(applied) =
+                    virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
+                        &name,
+                        mode.width as _,
+                        mode.height as _,
+                    )
+                {
+                    if !applied {
+                        bail!("Virtual display rejected the requested resolution");
+                    }
+                    return Ok(false);
                 }
-                return Ok(());
             }
             #[cfg(target_os = "macos")]
             let scale = display.scale();
@@ -114,7 +121,13 @@ impl Connection {
                 ((display.width() as f64) / scale).round() as i32,
                 ((display.height() as f64) / scale).round() as i32,
             );
-            crate::platform::change_resolution(&name, mode.width as _, mode.height as _)?;
+            if mode.refresh_rate == 0 {
+                crate::platform::change_resolution(&name, mode.width as _, mode.height as _)?;
+            }
+            #[cfg(windows)]
+            if mode.refresh_rate != 0 {
+                crate::platform::windows::display_modes::change(&name, &mode)?;
+            }
             #[cfg(windows)]
             let record = !virtual_display_manager::amyuni_idd::is_my_display(&name);
             #[cfg(not(windows))]
@@ -126,11 +139,18 @@ impl Connection {
                     (mode.width, mode.height),
                 );
             }
-            Ok(())
+            Ok(mode.refresh_rate != 0 && original == (mode.width, mode.height))
         })
         .await;
         match result {
-            Ok(Ok(())) => {}
+            Ok(Ok(true)) => {
+                if let Some(message) =
+                    video_service::make_display_changed_msg(index, None, VideoSource::Monitor)
+                {
+                    self.send(message).await;
+                }
+            }
+            Ok(Ok(false)) => {}
             Ok(Err(error)) => {
                 self.media_control_error("Display resolution", error.to_string())
                     .await
@@ -176,7 +196,7 @@ impl Connection {
                 bail!("Virtual displays require an installed supported Windows host");
             }
             if request.on {
-                if virtual_display_manager::is_amyuni_idd() {
+                if virtual_display_manager::is_count_based_idd() {
                     if request.display != 0 {
                         bail!("Invalid virtual display request");
                     }
@@ -185,8 +205,8 @@ impl Connection {
                 }
                 virtual_display_manager::plug_in_monitor(request.display as _, Vec::new())?;
             } else {
-                if virtual_display_manager::is_amyuni_idd() {
-                    let count = virtual_display_manager::amyuni_idd::get_monitor_count();
+                if virtual_display_manager::is_count_based_idd() {
+                    let count = virtual_display_manager::get_monitor_count();
                     if count == 0 || request.display as usize != count {
                         bail!("Only the most recently added virtual display can be removed");
                     }

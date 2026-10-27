@@ -1,0 +1,2 @@
+# Preserve the fixed upstream snapshot, including its original whitespace.
+* -text -whitespace

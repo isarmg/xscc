@@ -17,7 +17,16 @@ impl MediaRequest {
         match self {
             Self::Bitrate(BitrateMode::Auto) => "自动码率".into(),
             Self::Bitrate(BitrateMode::LimitKbps(kbps)) => format!("码率上限 {kbps} kbps"),
-            Self::Resolution(mode) => format!("分辨率 {}×{}", mode.width, mode.height),
+            Self::Resolution(mode) => {
+                if mode.refresh_rate == 0 {
+                    format!("分辨率 {}×{}", mode.width, mode.height)
+                } else {
+                    format!(
+                        "分辨率 {}×{} @{} Hz",
+                        mode.width, mode.height, mode.refresh_rate
+                    )
+                }
+            }
             Self::AddVirtual => "添加虚拟显示器".into(),
             Self::RemoveVirtual(_) => "移除虚拟显示器".into(),
         }
@@ -148,10 +157,24 @@ mod tests {
         let mode = ResolutionMode {
             width: 1920,
             height: 1080,
+            refresh_rate: 0,
         };
         let resolution = PendingMedia::new(MediaRequest::Resolution(mode), &controls);
         assert!(!resolution.confirmed(&controls));
         controls.current_resolution = Some(mode);
+        assert!(resolution.confirmed(&controls));
+        let high_refresh = ResolutionMode {
+            refresh_rate: 120,
+            ..mode
+        };
+        let resolution = PendingMedia::new(MediaRequest::Resolution(high_refresh), &controls);
+        assert!(!resolution.confirmed(&controls));
+        controls.current_resolution = Some(ResolutionMode {
+            refresh_rate: 60,
+            ..mode
+        });
+        assert!(!resolution.confirmed(&controls));
+        controls.current_resolution = Some(high_refresh);
         assert!(resolution.confirmed(&controls));
         let remove = PendingMedia::new(MediaRequest::RemoveVirtual(2), &controls);
         assert!(!remove.confirmed(&controls));

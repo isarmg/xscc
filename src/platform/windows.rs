@@ -87,6 +87,7 @@ use windows_service::{
 };
 use winreg::{enums::*, RegKey};
 
+pub(crate) mod display_modes;
 mod acl;
 mod installer_handoff;
 mod installer_shell;

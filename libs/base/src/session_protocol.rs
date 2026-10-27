@@ -12,8 +12,8 @@ pub const SCRAP_XDP_PORTAL_UNAVAILABLE: &str = "xdp-portal-unavailable";
 
 /// Limits the encoder target, not packet bursts or transport overhead.
 pub fn validate_bitrate_limit(kbps: u32) -> hbb_common::ResultType<()> {
-    if !(64..=100_000).contains(&kbps) {
-        hbb_common::bail!("Bitrate limit must be between 64 and 100000 kbps");
+    if !(64..=1_000_000).contains(&kbps) {
+        hbb_common::bail!("Bitrate limit must be between 64 and 1000000 kbps");
     }
     Ok(())
 }

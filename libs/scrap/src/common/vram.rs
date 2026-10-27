@@ -155,16 +155,24 @@ impl EncoderApi for VRamEncoder {
             let bitrate = self
                 .bitrate_limit
                 .map_or(bitrate, |limit| bitrate.min(limit));
-            self.encoder
-                .set_bitrate(bitrate as _)
-                .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
+            let bitrate = if self.bitrate_limit.is_some() {
+                self.encoder
+                    .set_bitrate_control(bitrate as _, true)
+                    .map_err(|err| anyhow!("Bitrate limit update failed: {err:?}"))?
+            } else {
+                self.encoder
+                    .set_bitrate(bitrate as _)
+                    .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
+                bitrate
+            };
             self.bitrate = bitrate;
             self.ctx.d.kbitrate = bitrate as _;
             self.quality = ratio;
         } else if let Some(limit) = self.bitrate_limit {
             let bitrate = bitrate.min(limit);
-            self.encoder
-                .set_bitrate(bitrate as _)
+            let bitrate = self
+                .encoder
+                .set_bitrate_control(bitrate as _, true)
                 .map_err(|error| anyhow!("Bitrate limit update failed: {error:?}"))?;
             self.bitrate = bitrate;
             self.ctx.d.kbitrate = bitrate as _;
@@ -215,19 +223,24 @@ impl EncoderApi for VRamEncoder {
     fn set_bitrate_limit(&mut self, limit: Option<u32>) -> ResultType<()> {
         let previous = self.bitrate_limit;
         self.bitrate_limit = limit;
-        let result = if limit.is_none() && self.streaming_fps.is_none() {
+        let result = if limit.is_none() {
             let bitrate = Self::bitrate(
                 self.ctx.f.data_format,
                 self.ctx.d.width as _,
                 self.ctx.d.height as _,
                 self.quality,
             );
+            let bitrate = if self.streaming_fps.is_some() {
+                bitrate_for_fps(bitrate, self.streaming_fps)
+            } else {
+                bitrate
+            };
             self.encoder
-                .set_bitrate(bitrate as _)
+                .set_bitrate_control(bitrate as _, false)
                 .map_err(|error| anyhow!("Automatic bitrate restore failed: {error:?}"))
-                .map(|_| {
-                    self.bitrate = bitrate;
-                    self.ctx.d.kbitrate = bitrate as _;
+                .map(|applied| {
+                    self.bitrate = applied;
+                    self.ctx.d.kbitrate = applied as _;
                 })
         } else {
             self.set_quality(self.quality)

@@ -1,50 +1,60 @@
-# 会话码率、分辨率与虚拟显示器
+# 会话码率与完整显示模式
 
-本轮从 `896e5f9e4` 开始实现，下一批原生候选标为 `0.1.0-beta.9`，Android versionCode 为 9。旧的 beta.8 Release 与已安装程序不会被源码修改自动替换。
+本轮基于 `53c4d39e4`，原生候选版本为 `0.1.0-beta.10`，Android versionCode 为 10。
 
-## 操作
+## 操作与兼容
 
-- 桌面控制端在会话侧栏“画质与显示”调节，移动端在会话显示面板调节。面板不覆盖远程画面，悬浮鼠标三键和原有触控坐标路径保持不变。
-- 编码码率上限支持自动、500 kbps、1/2/4/8/16/32 Mbps。上限参与真实编码器目标计算，帧率与画质重算后仍保留；自动模式释放本连接的限制，继续使用原有自适应。接收流量与编码目标分别显示，不能把编码目标上限解释成包含音频、协议开销及瞬时突发的逐包限速。
-- 分辨率选项来自当前远端显示器声明的模式列表，修改远端显示模式。它与本地等比显示缩放是两个不同操作。设置前释放已有按键、拖拽及触点；请求成功后清旧画面并刷新，以首个新帧恢复画面和坐标输入。Mac Retina 模式用系统逻辑分辨率展示，视频与鼠标仍使用原有物理帧坐标。
-- Windows 被控端支持添加虚拟屏并从显示器列表选取。当前 Amyuni 后端最多四个虚拟屏，移除操作明确针对最近添加的虚拟屏，不把计数当作物理屏幕编号。原有“保留最后一块显示器”规则继续生效。
-- 控制端成功绑定、或首次读取到已有绑定时，自动收起绑定区域；仍可手动展开查看。失败保留原输入，后续轮询不覆盖手动展开状态。桌面被控端工作台保持原有展示路径。
+- 桌面会话侧栏和移动端显示面板提供自动、500 kbps、1/2/4/8/16/32/64/100/200/500/1000 Mbps。十进制 1 Gbps 为 1000000 kbps；公开入口接受 64 至 1000000 kbps 的非零上限。
+- 码率仍是编码目标上限。网络自适应、画质、帧率和共享流的其它观看者都可能让实际目标更低；它不是包含音频、协议开销和瞬时突发的逐包硬限速。恢复自动或断开会释放本连接上限。
+- 主机明确上报 `max_bitrate_kbps`。旧主机只有原有支持标志时按其 100000 kbps 范围处理，超出主机范围的档位不可选；完全不支持调节的旧主机仍可观看和切屏。
+- 分辨率和刷新率使用远端声明的完整模式。同分辨率下的不同 Hz 分别显示和确认。Windows 使用驱动原始模式及各旋转方向，不按固定常用分辨率或 60 Hz 截断。刷新率按 Windows DEVMODE 的整数 Hz 模式标识；自定义配置中的小数值按固定驱动支持的 1/10000 Hz 精度保留。
+- Windows 先测试请求的模式，再应用并查询实际模式。只改刷新率、画面尺寸不变时，也发送模式确认。改变模式前释放原有输入，清除旧画面并请求新帧，首个新帧恢复画面与坐标输入。
+- 旧主机没有刷新率字段时保留原有分辨率操作；非 Windows 主机继续使用已有分辨率实现。本轮不改视频几何、悬浮鼠标三键、触控坐标、横屏或登录框折叠逻辑。
 
-## 能力与失败反馈
+## 虚拟显示器
 
-新码率与显示控制使用明确的主机能力协商。旧主机保留原有观看和显示器切换功能，新调节项提示升级被控端，不根据应用版本字符串猜测能力。码率字段为向后兼容的可选字段：缺失保持原值，零恢复自动；公开入口接受 64 至 100000 kbps 的非零限制。
+Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 驱动 DLL 与 catalog 均由 SignPath Foundation 正式签名，固定归档大小为 132118 字节、SHA256 为 `e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a`。逐文件摘要、原始 MIT 许可来源和依赖记录见 `packaging/gpui-windows/virtual-display-vdd-driver.json`。旧 Amyuni 后端和其分发文件保留用于兼容，其自身四屏、十种模式等限制仍如实保留。
 
-设置请求入队不等于已生效。界面按主机确认和实际显示信息更新选中值，系统或驱动拒绝请求时显示非致命错误。编码器拒绝码率设置时恢复自动并报告原因，不持续以同一个失败限制重启。
+新配置合并实际显卡驱动报告的全部 RAW 模式与已有自定义模式，不将列表截断为十项、不固定为四个虚拟屏。模式不是根据显卡名称或制造日期推测。当前驱动没有可查询的可靠最大屏数，因此上报 `virtual_display_max_count: null`；每次添加均以 Windows 实际枚举结果确认，不能把未知最大值理解为任意数量必然可用。移除操作针对最近添加的虚拟屏，显示的计数 token 不是物理屏幕编号；保留最后一块显示器的原有规则。
 
-同一编码流被多个控制端共享时，使用仍在线连接所设上限的最小值。恢复自动或断开连接即释放该连接的上限。当前实际编码目标由主机遥测展示，可能因网络自适应或其它观看者的限制而低于本连接所选上限。
+安装 Host 只复制随包文件。显式添加虚拟屏，或已有的授权无头连接补屏路径，才按需执行 Windows 正常驱动安装。没有导入证书、开启测试签名或修改安全策略。初始化配置位于受安装目录保护的 `mtt_vdd/config`，保留既有设置；不接管其它应用管理的 VDD 设备或配置。配置原子写入，设备创建或模式重配置失败时恢复本次操作前的配置和设备状态，同时报告原始及恢复失败原因。升级/卸载保留配置和已注册共享驱动，只移除已知随包文件。
 
-分辨率和虚拟显示器操作要求当前管理授权与键鼠控制权限；驱动与系统模式操作在阻塞任务中执行，不持有全局 QoS 锁。错误反馈不会关闭整个会话。未改变身份存储、管理证明、服务器地址策略或视频/触控协议坐标。
+配置提交顺序为：首次创建所有权标记并同步文件、写临时 XML 并执行一次 `sync_all`、`MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 原子替换、更新 VDDPATH、安装或重启设备、确认实际屏数。每次正常 XML 发布一次文件同步，首次标记另一次；恢复旧 XML 时再同步一次。注册表更新没有新增 `RegFlushKey`，普通禁用至零屏不重写 XML。
 
-Windows Host 包只复制固定来源、摘要校验通过的 Amyuni x64 驱动文件。明确添加虚拟屏时按需走 Windows 正常驱动安装路径；现有的授权无头连接自动补屏流程也可能启用驱动，此流程不要求键鼠控制权限。已安装的兼容驱动继续复用。驱动原始许可包含广告页面条款，界面、文档和包内许可均告知。打包校验检查归档、五个分发文件与有效 catalog 签名；不安装证书、不修改驱动签名策略。来源记录随包放在 `usbmmidd_v2/driver-source.json`。详见 [Windows 打包说明](gpui-windows-beta.md)。
+显示操作仍逐次检查当前管理授权和键鼠权限，驱动与系统调用在阻塞任务执行。系统、驱动和编码器拒绝请求时返回非致命错误，不把请求入队当作已生效。
 
-## 既有运行路径的必要改动
+## Intel 高码率
 
-| 现有文件 | 改变的路径与原因 |
+原固定 hwcodec 的 Direct-MFX 路径直接把 kbps 写入 16 位字段。现将同一固定源码及 SDK 头本地化到 `vendor/hwcodec`，仅为显式限制增加专用接口。使用 `BRCParamMultiplier` 表示高码率，保持有效目标不超过请求，避免 65535 以上回绕，并按比例换算缓冲，避免随倍率放大延迟。SDK Query、Reset 与实际参数查询必须成功，且不得悄悄改变 profile、level 或画面几何。恢复自动会恢复原有倍率和缓冲参数；未启用显式上限的原 setter 保持原实现。固定编码级别与具体 GPU/SDK 的真实限制继续有效，不将支持 1 Gbps 参数解释成每台硬件均能输出 1 Gbps。
+
+## 必要回归面
+
+| 既有文件 | 本轮改变的运行路径与必要性 |
 | --- | --- |
-| `src/gpui_session.rs` | 原生会话事件、能力投影、显示确认与码率遥测接入，供两种原生界面使用；新逻辑在 `gpui_session/controls.rs`。 |
-| `src/ui_session_interface.rs`、`src/client/io_loop.rs` | 将主机媒体设置确认转交 GPUI；其它前端保持默认空回调。 |
-| `libs/base/protos/message.proto`、`libs/base/src/session_protocol.rs` | 可选码率字段、明确能力与外部数值验证；已有字段和编号不变。 |
-| `src/server/connection.rs` | 控制消息调用 feature 模块，验证当前权限、后台执行并回报错误；旧自动画质逻辑保持。 |
-| `src/virtual_display_manager.rs` | 新虚拟屏启用失败时保留系统驱动错误原因，便于通过现有非致命反馈诊断；驱动算法保持原实现。 |
-| `src/server/video_qos.rs` | 每个现有观看者保存可选上限，复用连接退出清理与共享编码流。 |
-| `src/server/video_service.rs` | 初始化和既有 QoS 检查时应用上限，后端拒绝时清理失败限制并回报。 |
-| `libs/scrap/src/common/codec.rs` | 编码器增加可选限制接口及真实 VP9/AV1 回归，不支持的后端明确失败。 |
-| `libs/scrap/src/common/vpxcodec.rs`、`aom.rs`、`hwcodec.rs`、`vram.rs` | 仅在显式上限启用时约束真实整数目标；恢复自动及后续 FPS/画质重算同步更新。 |
-| `experiments/gpui-validation/src/client.rs` | 薄调用会话设置、成功绑定/初始已有绑定收起、保留手动展开；设置视图隔离在子模块。 |
-| `experiments/gpui-validation/src/remote_video.rs` | 接收设置事件、显示确认、分辨率变更前释放输入；新请求处理在子模块。 |
-| `experiments/gpui-mobile-management/src/session_view.rs` | 将显示面板动作映射到真实会话 API，保留原输入和图像布局；权限逐次检查。 |
-| `experiments/gpui-mobile-management/src/session_chrome.rs` | 现有显示面板增加设置控件及能力提示；不改变视频区域几何。 |
-| `experiments/gpui-mobile-management/src/panel.rs` | 成功绑定及初始已配置状态折叠，失败不清空输入。 |
-| `.github/scripts/package-gpui-windows.ps1`、`packaging/gpui-windows/host-installer.nsi` | 仅 Host 准备并复制已校验驱动；卸载只移除已知随包文件，不移除其它应用可能共用的已注册驱动。 |
-| `packaging/gpui-windows/README-host.txt`、`THIRD_PARTY_NOTICES.txt`、`docs/gpui-windows-beta.md` | 更新功能边界、驱动来源、原始许可及安装行为说明。 |
-| `.github/workflows/gpui-windows-beta.yml`、`.github/scripts/validate-gpui-unix.sh` | 原生流程增加真实编码器码率测试并拒绝空过滤；主机现有测试已经覆盖新增 QoS 与会话测试。 |
-| `.github/workflows/gpui-unix-beta.yml`、`packaging/gpui-android/app/build.gradle` | 与 Windows 候选一起标记为 beta.9，避免复用已发布 beta.8 标签。 |
+| `libs/base/protos/message.proto` | 追加刷新率、当前模式及码率范围字段，保留所有旧字段编号和零值兼容语义。 |
+| `libs/base/src/session_protocol.rs` | 外部码率上限放宽到 1000000 kbps，仍保留最小值及非法输入拒绝。 |
+| `src/gpui_session/controls.rs` | 投影完整模式、主机码率范围和新驱动实际计数；请求保留 Hz，拒绝超出对端范围的码率。 |
+| `src/gpui_session.rs` | 仅为既有显示回归测试补充刷新率零值，生产输入与媒体路径不变。 |
+| `src/platform/windows.rs`、`src/platform/mod.rs` | 声明新的 Windows 模式模块，并为原生会话元数据提供薄入口；其它系统调用原实现。 |
+| `src/server/connection.rs` | 登录时公告实际码率范围和完整显示模式。 |
+| `src/server/connection/media_controls.rs` | Windows 模式应用及仅 Hz 变化的确认；虚拟屏按真实后端计数校验，保留原授权检查。 |
+| `src/server/video_service.rs` | 显示变化时发送完整模式与当前 Hz，不改编码服务、帧队列或捕获几何。 |
+| `src/server/video_qos.rs` | 只扩展既有测试至高码率数值，共享流和断连清理算法不变。 |
+| `libs/scrap/src/common/vram.rs` | 显式限制走 MFX 专用安全倍率接口，反映 SDK 实际目标；普通自动路径不变。 |
+| `libs/scrap/src/common/codec.rs` | 扩展现有真实 VP9/AV1 上限回归，覆盖 1 Gbps 参数。 |
+| `libs/scrap/Cargo.toml`、根 `Cargo.toml` 与各受影响 `Cargo.lock` | 固定 hwcodec 改为仓库内相同 revision；Windows 配置解析使用已锁定 XML 库，启用实际 WinTrust API；没有无关依赖升级。 |
+| `src/virtual_display_manager.rs` | 为 Windows Host 增加新后端薄路由，公告实际数量，旧后端实现保留。 |
+| `src/server/display_service.rs` | 新驱动沿用既有按需无头补屏语义，普通无会话轮询不提前安装。 |
+| `experiments/gpui-validation/src/client/media_controls.rs`、`remote_video/media_controls.rs` | 新码率档位、按对端范围启用、Hz 标签与确认、正确区分新旧驱动说明。 |
+| `experiments/gpui-mobile-management/src/session_chrome.rs`、`session_view.rs` | 同样的实际档位与模式投影/请求转发，不改变视频区域或输入门禁。 |
+| `.github/scripts/package-gpui-windows.ps1`、`packaging/gpui-windows/host-installer.nsi` | 仅 Host 校验并分发新驱动，卸载不递归删除配置，不安装显示驱动。 |
+| `packaging/gpui-windows/README-host.txt`、`THIRD_PARTY_NOTICES.txt`、`docs/gpui-windows-beta.md` | 说明新默认后端、原始许可、能力范围及按需安装行为。 |
+| `.gitattributes` | 新许可固定 LF，确保 Windows checkout 后仍符合原始许可证摘要。 |
+| `.github/workflows/gpui-windows-beta.yml`、`gpui-unix-beta.yml` | beta.10 版本与新依赖的触发范围，Windows 增加非空的实际模式配置回归。 |
+| `packaging/gpui-android/app/build.gradle` | Android 版本升为 beta.10/code10，区分此前预览包。 |
+
+新逻辑集中在 `src/platform/windows/display_modes.rs`、`src/virtual_display_manager/mtt_vdd/` 及其后端模块、驱动来源清单和独立准备脚本。hwcodec 原始来源、SDK 子 revision、保留文件清单与局部补丁记录随 vendored 源码提供。
 
 ## 验证边界
 
-本地管理包检查、GPUI 主机测试、软件编码器回归、Windows 驱动打包及签名验证分别记录实际结果。完整硬件编码、VRAM、Windows 模式变更以及 Android/iOS 条件编译通过对应原生 CI 验证；构建成功不代表物理设备实测通过。未经真实验收不宣称码率精度、画质、帧率、驱动兼容或端到端延迟收益。
+真实软件编码器回归、MFX 生产倍率 helper 的 SDK 编译断言、模式配置纯测试与 Windows 签名打包验证分别记录实际结果。完整 Windows、VRAM、macOS/Linux、Android/iOS 条件编译和应用回归由同一提交的原生 CI 验证。构建和单元测试不等同于物理 GPU、手机远控或全部显示模式的实测，不声称未经测量的吞吐量、帧率和延迟收益。最终可用模式还需满足捕获、编码和接收端渲染能力；本轮没有放松原有像素长度、溢出和渲染尺寸安全检查。

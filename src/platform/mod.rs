@@ -91,6 +91,17 @@ pub fn breakdown_callback() {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn session_resolutions(name: &str) -> base::message_proto::SupportedResolutions {
+    #[cfg(windows)]
+    return windows::display_modes::supported(name);
+    #[cfg(not(windows))]
+    base::message_proto::SupportedResolutions {
+        resolutions: resolutions(name),
+        ..Default::default()
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn change_resolution(name: &str, width: usize, height: usize) -> ResultType<()> {
     let cur_resolution = current_resolution(name)?;
     // For MacOS

@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/rustdesk-org/hwcodec",
+  "revision": "778df1f99597722473b29443bac22ae6c23946fe",
+  "submodules": {
+    "externals": {
+      "repository": "https://github.com/rustdesk-org/externals",
+      "revision": "8903740a1f47884906a6e347ad3d8d56304d9771"
+    }
+  },
+  "local_changes": [
+    "build.rs",
+    "src/vram/encode.rs",
+    "cpp/mfx/mfx_encode.cpp",
+    "cpp/mfx/mfx_ffi.h",
+    "cpp/mfx/bitrate_limit.h"
+  ],
+  "source_inventory": "SOURCE_FILES.sha256",
+  "source_file_count": 459
+}

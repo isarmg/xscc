@@ -106,6 +106,7 @@ system_shutdown = "4.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 scrap = { path = "libs/scrap", features = ["capture"] }
+roxmltree = "=0.20.0"
 tiny-skia = "0.11"
 softbuffer = "0.4"
 fontdb = "0.23"
@@ -114,6 +115,9 @@ ttf-parser = "0.25"
 winapi = { version = "0.3", features = [
     "winuser",
     "wincrypt",
+    "wintrust",
+    "libloaderapi",
+    "winbase",
     "shellscalingapi",
     "pdh",
     "synchapi",
@@ -210,7 +214,7 @@ block = "0.1"
 
 [workspace]
 members = ["crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vdi/host", "vendor/gpui", "vendor/rust-pulsectl"]
+exclude = ["vdi/host", "vendor/gpui", "vendor/rust-pulsectl", "vendor/hwcodec"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone

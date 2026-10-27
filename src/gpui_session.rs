@@ -1171,7 +1171,7 @@ mod tests {
         assert!(!events.iter().any(|event| matches!(event, SessionEvent::Quality { .. })));
         assert!(matches!(events.as_slice(), [
             SessionEvent::MediaControls(MediaControls {
-                current_resolution: Some(ResolutionMode { width: 1920, height: 1080 }), ..
+                current_resolution: Some(ResolutionMode { width: 1920, height: 1080, refresh_rate: 0 }), ..
             }),
             SessionEvent::Display { x: 1920, y: 0, width: 1920, height: 1080, .. }
         ]));

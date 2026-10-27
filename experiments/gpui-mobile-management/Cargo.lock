@@ -7862,6 +7862,7 @@ dependencies = [
  "repng",
  "reqwest",
  "ringbuf",
+ "roxmltree 0.20.0",
  "rust-pulsectl",
  "scrap",
  "serde 1.0.229",

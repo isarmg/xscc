@@ -1044,14 +1044,14 @@ mod bitrate_limit_tests {
         let mut qos = VideoQoS::default();
         qos.on_connection_open(1);
         qos.on_connection_open(2);
-        qos.user_bitrate_limit(1, Some(8000));
-        qos.user_bitrate_limit(2, Some(2000));
-        assert_eq!(qos.bitrate_limit(), Some(2000));
+        qos.user_bitrate_limit(1, Some(1_000_000));
+        qos.user_bitrate_limit(2, Some(500_000));
+        assert_eq!(qos.bitrate_limit(), Some(500_000));
         qos.user_bitrate_limit(2, None);
-        assert_eq!(qos.bitrate_limit(), Some(8000));
-        qos.user_bitrate_limit(2, Some(4000));
+        assert_eq!(qos.bitrate_limit(), Some(1_000_000));
+        qos.user_bitrate_limit(2, Some(900_000));
         qos.on_connection_close(2);
-        assert_eq!(qos.bitrate_limit(), Some(8000));
+        assert_eq!(qos.bitrate_limit(), Some(1_000_000));
         qos.on_connection_close(1);
         assert_eq!(qos.bitrate_limit(), None);
     }

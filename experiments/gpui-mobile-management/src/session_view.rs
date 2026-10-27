@@ -604,7 +604,14 @@ impl SessionView {
             Ok(()) => {
                 self.extent = (0, 0);
                 self.presentation.invalidate();
-                format!("已发送 {}×{} 分辨率请求。", mode.width, mode.height)
+                if mode.refresh_rate == 0 {
+                    format!("已发送 {}×{} 分辨率请求。", mode.width, mode.height)
+                } else {
+                    format!(
+                        "已发送 {}×{} @{} Hz 显示模式请求。",
+                        mode.width, mode.height, mode.refresh_rate
+                    )
+                }
             }
             Err(error) => error.to_string(),
         };
@@ -971,6 +978,7 @@ impl SessionView {
             audio_error: audio.and_then(|audio| audio.error),
             target_fps: self.target_fps.map(TargetFps::value),
             bitrate_supported: media.bitrate_supported,
+            max_bitrate_kbps: media.max_bitrate_kbps,
             bitrate_limit_kbps: match media.bitrate_mode {
                 BitrateMode::Auto => None,
                 BitrateMode::LimitKbps(value) => Some(value),
@@ -978,13 +986,14 @@ impl SessionView {
             can_change_resolution: media.can_change_resolution && !self.view_only,
             current_resolution: media
                 .current_resolution
-                .map(|mode| (mode.width, mode.height)),
+                .map(|mode| (mode.width, mode.height, mode.refresh_rate)),
             resolutions: media
                 .resolutions
                 .iter()
-                .map(|mode| (mode.width, mode.height))
+                .map(|mode| (mode.width, mode.height, mode.refresh_rate))
                 .collect(),
             virtual_display_supported: media.virtual_display_supported,
+            virtual_display_driver: media.virtual_display_driver,
             virtual_display_remove_latest_only: media.virtual_display_remove_latest_only,
             can_add_virtual_display: media.can_add_virtual_display && !self.view_only,
             virtual_display_ids: media.virtual_display_ids,
@@ -1202,8 +1211,16 @@ impl SessionView {
                 self.request_fps(target, cx);
             }
             ChromeAction::Bitrate(limit) => self.request_bitrate(limit),
-            ChromeAction::Resolution(width, height) => {
-                self.request_resolution(ResolutionMode { width, height }, window, cx);
+            ChromeAction::Resolution(width, height, refresh_rate) => {
+                self.request_resolution(
+                    ResolutionMode {
+                        width,
+                        height,
+                        refresh_rate,
+                    },
+                    window,
+                    cx,
+                );
             }
             ChromeAction::AddVirtualDisplay => {
                 self.request_virtual_display(VirtualDisplayRequest::Add, window, cx);

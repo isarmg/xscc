@@ -13,6 +13,13 @@ impl ManagementPanel {
         let controls = &state.media_controls;
         let busy = state.switching_monitor || state.pending_media.is_some();
         let idle = state.connected && !busy;
+        let max_bitrate = if controls.max_bitrate_kbps >= 1000
+            && controls.max_bitrate_kbps.is_multiple_of(1000)
+        {
+            format!("{} Mbps", controls.max_bitrate_kbps / 1000)
+        } else {
+            format!("{} kbps", controls.max_bitrate_kbps)
+        };
         let bitrate = match controls.bitrate_mode {
             BitrateMode::Auto => "自动".into(),
             BitrateMode::LimitKbps(kbps) => format!("{kbps} kbps"),
@@ -47,9 +54,9 @@ impl ManagementPanel {
                             .text_size(px(12.))
                             .text_color(rgb(palette.muted))
                             .child(if controls.bitrate_supported {
-                                "保留自适应：网络拥堵时会继续降低码率。"
+                                format!("主机允许最高 {max_bitrate}；保留自适应：网络拥堵时会继续降低码率。")
                             } else {
-                                "主机不支持码率上限调节，请升级被控端。"
+                                "主机不支持码率上限调节，请升级被控端。".into()
                             }),
                     )
                     .child(
@@ -63,6 +70,11 @@ impl ManagementPanel {
                                 Some(8000),
                                 Some(16000),
                                 Some(32000),
+                                Some(64000),
+                                Some(100000),
+                                Some(200000),
+                                Some(500000),
+                                Some(1000000),
                             ]
                             .into_iter()
                             .enumerate()
@@ -71,7 +83,10 @@ impl ManagementPanel {
                                     .map(BitrateMode::LimitKbps)
                                     .unwrap_or(BitrateMode::Auto);
                                 let selected = controls.bitrate_mode == mode;
-                                let enabled = idle && controls.bitrate_supported && !selected;
+                                let enabled = idle
+                                    && controls.bitrate_supported
+                                    && !selected
+                                    && kbps.is_none_or(|value| value <= controls.max_bitrate_kbps);
                                 let label = kbps
                                     .map(|value| {
                                         if value < 1000 {
@@ -110,7 +125,7 @@ impl ManagementPanel {
                     .child(
                         div()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("主机分辨率"),
+                            .child("分辨率与刷新率"),
                     )
                     .child(
                         div()
@@ -119,7 +134,16 @@ impl ManagementPanel {
                             .child(
                                 controls
                                     .current_resolution
-                                    .map(|mode| format!("当前 {}×{}", mode.width, mode.height))
+                                    .map(|mode| {
+                                        if mode.refresh_rate == 0 {
+                                            format!("当前 {}×{}", mode.width, mode.height)
+                                        } else {
+                                            format!(
+                                                "当前 {}×{} @{} Hz",
+                                                mode.width, mode.height, mode.refresh_rate
+                                            )
+                                        }
+                                    })
                                     .unwrap_or("等待主机上报当前分辨率…".into()),
                             ),
                     )
@@ -146,7 +170,14 @@ impl ManagementPanel {
                                         idle && controls.can_change_resolution && !selected;
                                     ui::button(
                                         ("session-resolution", index),
-                                        &format!("{}×{}", mode.width, mode.height),
+                                        &if mode.refresh_rate == 0 {
+                                            format!("{}×{}", mode.width, mode.height)
+                                        } else {
+                                            format!(
+                                                "{}×{} @{} Hz",
+                                                mode.width, mode.height, mode.refresh_rate
+                                            )
+                                        },
                                         selected,
                                         enabled,
                                         palette,
@@ -196,8 +227,10 @@ impl ManagementPanel {
                         div()
                             .text_size(px(12.))
                             .text_color(rgb(palette.muted))
-                            .child(if controls.virtual_display_remove_latest_only {
+                            .child(if controls.virtual_display_driver == "amyuni_idd" {
                                 "首次添加会在被控端启用随包驱动；Amyuni 许可含广告页面条款。"
+                            } else if controls.virtual_display_driver == "mtt_vdd" {
+                                "使用正式签名驱动；分辨率、刷新率和数量由主机驱动与 Windows 确认。"
                             } else {
                                 "首次添加会在被控端启用虚拟显示器驱动。"
                             }),

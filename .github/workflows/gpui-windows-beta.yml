@@ -5,6 +5,7 @@ on:
     paths:
       - 'experiments/gpui-validation/**'
       - 'vendor/gpui/**'
+      - 'vendor/hwcodec/**'
       - 'experiments/shared/**'
       - 'src/gpui*'
       - 'src/gpui_session/**'
@@ -16,6 +17,8 @@ on:
       - 'src/server.rs'
       - 'src/server/**'
       - 'src/platform/**'
+      - 'src/virtual_display_manager.rs'
+      - 'src/virtual_display_manager/**'
       - 'src/ipc/**'
       - 'src/management/**'
       - 'src/ui_session_interface.rs'
@@ -32,9 +35,9 @@ on:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.9 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.10 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.9'
+        default: '0.1.0-beta.10'
         type: string
 permissions:
   contents: read
@@ -63,7 +66,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.9' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.10' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -71,7 +74,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.9'
+            throw 'Expected a numeric version such as 0.1.0-beta.10'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -143,6 +146,9 @@ jobs:
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test native session and host regression coverage
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
+      - name: Test configurable virtual display mode preservation
+        if: matrix.role == 'host'
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
       - name: Test encrypted management handshake and connection-close errors
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::transport::tests"
       - name: Test framed transport wire compatibility and blocked-write isolation
@@ -222,7 +228,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.9' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.10' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

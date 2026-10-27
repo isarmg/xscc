@@ -6,7 +6,13 @@ use hbb_common::{bail, ResultType};
 pub const RUSTDESK_IDD_DEVICE_STRING: &'static str = "RustDeskIddDriver Device\0";
 pub const AMYUNI_IDD_DEVICE_STRING: &'static str = "USB Mobile Monitor Virtual Display\0";
 
+mod mtt_vdd;
+
+#[cfg(feature = "gpui-host")]
+const IDD_IMPL: &str = IDD_IMPL_MTT_VDD;
+#[cfg(not(feature = "gpui-host"))]
 const IDD_IMPL: &str = IDD_IMPL_AMYUNI;
+const IDD_IMPL_MTT_VDD: &str = "mtt_vdd";
 const IDD_IMPL_RUSTDESK: &str = "rustdesk_idd";
 const IDD_IMPL_AMYUNI: &str = "amyuni_idd";
 const IDD_PLUG_OUT_ALL_INDEX: i32 = -1;
@@ -15,8 +21,25 @@ pub fn is_amyuni_idd() -> bool {
     IDD_IMPL == IDD_IMPL_AMYUNI
 }
 
+pub fn is_count_based_idd() -> bool {
+    matches!(IDD_IMPL, IDD_IMPL_AMYUNI | IDD_IMPL_MTT_VDD)
+}
+
+pub fn is_headless_on_demand() -> bool {
+    is_count_based_idd()
+}
+
+pub fn get_monitor_count() -> usize {
+    match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::get_monitor_count(),
+        IDD_IMPL_AMYUNI => amyuni_idd::get_monitor_count(),
+        _ => rustdesk_idd::get_virtual_displays().len(),
+    }
+}
+
 pub fn get_cur_device_string() -> &'static str {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::DEVICE_STRING,
         IDD_IMPL_RUSTDESK => RUSTDESK_IDD_DEVICE_STRING,
         IDD_IMPL_AMYUNI => AMYUNI_IDD_DEVICE_STRING,
         _ => "",
@@ -36,6 +59,7 @@ pub fn is_virtual_display_supported() -> bool {
 
 pub fn plug_in_headless() -> ResultType<()> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::plug_in_headless(),
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_headless(),
         IDD_IMPL_AMYUNI => amyuni_idd::plug_in_headless(),
         _ => bail!("Unsupported virtual display implementation."),
@@ -48,6 +72,17 @@ pub fn get_platform_additions() -> serde_json::Map<String, serde_json::Value> {
         return map;
     }
     map.insert("idd_impl".into(), serde_json::json!(IDD_IMPL));
+    if is_count_based_idd() {
+        map.insert(
+            "virtual_display_count".into(),
+            serde_json::json!(get_monitor_count()),
+        );
+        let maximum = if is_amyuni_idd() { Some(4u32) } else { None };
+        map.insert(
+            "virtual_display_max_count".into(),
+            serde_json::json!(maximum),
+        );
+    }
     match IDD_IMPL {
         IDD_IMPL_RUSTDESK => {
             let virtual_displays = rustdesk_idd::get_virtual_displays();
@@ -72,6 +107,7 @@ pub fn get_platform_additions() -> serde_json::Map<String, serde_json::Value> {
 #[inline]
 pub fn plug_in_monitor(idx: u32, modes: Vec<virtual_display::MonitorMode>) -> ResultType<()> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::plug_in_monitor(&modes),
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_index_modes(idx, modes),
         IDD_IMPL_AMYUNI => amyuni_idd::plug_in_monitor(),
         _ => bail!("Unsupported virtual display implementation."),
@@ -80,6 +116,7 @@ pub fn plug_in_monitor(idx: u32, modes: Vec<virtual_display::MonitorMode>) -> Re
 
 pub fn plug_out_monitor(index: i32, force_all: bool, force_one: bool) -> ResultType<()> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::plug_out_monitor(index, force_all),
         IDD_IMPL_RUSTDESK => {
             let indices = if index == IDD_PLUG_OUT_ALL_INDEX {
                 rustdesk_idd::get_virtual_displays()
@@ -95,6 +132,14 @@ pub fn plug_out_monitor(index: i32, force_all: bool, force_one: bool) -> ResultT
 
 pub fn plug_in_peer_request(modes: Vec<Vec<virtual_display::MonitorMode>>) -> ResultType<Vec<u32>> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => {
+            let mut indices = Vec::new();
+            for modes in modes {
+                mtt_vdd::plug_in_monitor(&modes)?;
+                indices.push(u32::try_from(mtt_vdd::get_monitor_count())?);
+            }
+            Ok(indices)
+        }
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_in_peer_request(modes),
         IDD_IMPL_AMYUNI => {
             amyuni_idd::plug_in_monitor()?;
@@ -110,6 +155,12 @@ pub fn plug_out_monitor_indices(
     force_one: bool,
 ) -> ResultType<()> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => {
+            for _ in indices {
+                mtt_vdd::plug_out_monitor(i32::try_from(mtt_vdd::get_monitor_count())?, force_all)?;
+            }
+            Ok(())
+        }
         IDD_IMPL_RUSTDESK => rustdesk_idd::plug_out_peer_request(indices),
         IDD_IMPL_AMYUNI => {
             for _idx in indices.iter() {
@@ -123,6 +174,7 @@ pub fn plug_out_monitor_indices(
 
 pub fn reset_all() -> ResultType<()> {
     match IDD_IMPL {
+        IDD_IMPL_MTT_VDD => mtt_vdd::reset_all(),
         IDD_IMPL_RUSTDESK => rustdesk_idd::reset_all(),
         IDD_IMPL_AMYUNI => amyuni_idd::reset_all(),
         _ => bail!("Unsupported virtual display implementation."),

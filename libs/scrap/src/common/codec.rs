@@ -1333,19 +1333,20 @@ mod bitrate_limit_tests {
     fn bitrate_limit_caps_real_software_encoders_across_quality_and_frame_rate() {
         for config in [
             EncoderCfg::VPX(VpxEncoderConfig {
-                width: 1280,
-                height: 720,
+                width: 1920,
+                height: 1080,
                 quality: BR_BALANCED,
                 codec: crate::VpxVideoCodecId::VP9,
                 keyframe_interval: None,
             }),
             EncoderCfg::AOM(AomEncoderConfig {
-                width: 1280,
-                height: 720,
+                width: 1920,
+                height: 1080,
                 quality: BR_BALANCED,
                 keyframe_interval: None,
             }),
         ] {
+            let codec = format!("{config:?}");
             let mut encoder = Encoder::new_streaming(config, false, 60).unwrap();
             encoder.set_bitrate_limit(Some(256)).unwrap();
             assert!(encoder.bitrate() <= 256);
@@ -1355,6 +1356,10 @@ mod bitrate_limit_tests {
             assert!(encoder.bitrate() <= 256);
             encoder.set_bitrate_limit(None).unwrap();
             assert!(encoder.bitrate() > 256);
+            encoder.set_bitrate_limit(Some(1_000_000)).unwrap();
+            encoder.set_quality(1_000.0).unwrap();
+            assert_eq!(encoder.bitrate(), 1_000_000, "{codec}");
+            assert_eq!(encoder.bitrate_limit(), Some(1_000_000));
         }
     }
 }

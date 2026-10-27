@@ -39,11 +39,13 @@ pub struct ChromeModel {
     pub audio_error: Option<String>,
     pub target_fps: Option<i32>,
     pub bitrate_supported: bool,
+    pub max_bitrate_kbps: u32,
     pub bitrate_limit_kbps: Option<u32>,
     pub can_change_resolution: bool,
-    pub current_resolution: Option<(i32, i32)>,
-    pub resolutions: Vec<(i32, i32)>,
+    pub current_resolution: Option<(i32, i32, u32)>,
+    pub resolutions: Vec<(i32, i32, u32)>,
     pub virtual_display_supported: bool,
+    pub virtual_display_driver: String,
     pub virtual_display_remove_latest_only: bool,
     pub can_add_virtual_display: bool,
     pub virtual_display_ids: Vec<u32>,
@@ -69,7 +71,7 @@ pub enum ChromeAction {
     ToggleAudio,
     Fps(i32),
     Bitrate(Option<u32>),
-    Resolution(i32, i32),
+    Resolution(i32, i32, u32),
     AddVirtualDisplay,
     RemoveVirtualDisplay(u32),
     Monitor(usize),
@@ -447,6 +449,12 @@ impl SessionChrome {
         let ready = model.connected && model.pending_monitor.is_none();
         let mut body = div().flex().flex_col().gap_3().child(section("码率上限"));
         if model.bitrate_supported {
+            let max_bitrate =
+                if model.max_bitrate_kbps >= 1000 && model.max_bitrate_kbps.is_multiple_of(1000) {
+                    format!("{} Mbps", model.max_bitrate_kbps / 1000)
+                } else {
+                    format!("{} kbps", model.max_bitrate_kbps)
+                };
             let mut limits = div().flex().flex_wrap().gap_2();
             for (kbps, label) in [
                 (None, "自动"),
@@ -457,6 +465,11 @@ impl SessionChrome {
                 (Some(8000), "8 Mbps"),
                 (Some(16000), "16 Mbps"),
                 (Some(32000), "32 Mbps"),
+                (Some(64000), "64 Mbps"),
+                (Some(100000), "100 Mbps"),
+                (Some(200000), "200 Mbps"),
+                (Some(500000), "500 Mbps"),
+                (Some(1000000), "1000 Mbps"),
             ] {
                 limits = limits.child(
                     self.button(
@@ -464,7 +477,7 @@ impl SessionChrome {
                         format!("session-bitrate-{}", kbps.unwrap_or(0)),
                         label,
                         model.bitrate_limit_kbps == kbps,
-                        ready,
+                        ready && kbps.is_none_or(|value| value <= model.max_bitrate_kbps),
                         ChromeAction::Bitrate(kbps),
                     )
                     .flex_1(),
@@ -475,7 +488,7 @@ impl SessionChrome {
                     .text_size(px(12.))
                     .line_height(px(19.))
                     .text_color(rgb(MUTED))
-                    .child("实际码率会随网络和画面变化，在所选上限内自适应。"),
+                    .child(format!("主机允许最高 {max_bitrate}；实际码率会随网络和画面变化，在所选上限内自适应。")),
             );
         } else {
             body = body.child(
@@ -485,14 +498,15 @@ impl SessionChrome {
                     .child("远端未提供码率上限控制。"),
             );
         }
-        body = body.child(section("分辨率"));
-        if let Some((width, height)) = model.current_resolution {
-            body = body.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child(format!("当前 {width}×{height}")),
-            );
+        body = body.child(section("分辨率与刷新率"));
+        if let Some((width, height, refresh_rate)) = model.current_resolution {
+            body = body.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(
+                if refresh_rate == 0 {
+                    format!("当前 {width}×{height}")
+                } else {
+                    format!("当前 {width}×{height} @{refresh_rate} Hz")
+                },
+            ));
         }
         if model.resolutions.is_empty() {
             body = body.child(
@@ -503,15 +517,19 @@ impl SessionChrome {
             );
         } else {
             let mut modes = div().flex().flex_wrap().gap_2();
-            for &(width, height) in &model.resolutions {
+            for &(width, height, refresh_rate) in &model.resolutions {
                 modes = modes.child(
                     self.button(
                         cx,
-                        format!("session-resolution-{width}-{height}"),
-                        &format!("{width}×{height}"),
-                        model.current_resolution == Some((width, height)),
+                        format!("session-resolution-{width}-{height}-{refresh_rate}"),
+                        &if refresh_rate == 0 {
+                            format!("{width}×{height}")
+                        } else {
+                            format!("{width}×{height} @{refresh_rate} Hz")
+                        },
+                        model.current_resolution == Some((width, height, refresh_rate)),
                         ready && model.can_change_resolution,
-                        ChromeAction::Resolution(width, height),
+                        ChromeAction::Resolution(width, height, refresh_rate),
                     )
                     .flex_1(),
                 );
@@ -537,8 +555,10 @@ impl SessionChrome {
                         .text_size(px(12.))
                         .line_height(px(19.))
                         .text_color(rgb(MUTED))
-                        .child(if model.virtual_display_remove_latest_only {
+                        .child(if model.virtual_display_driver == "amyuni_idd" {
                             "首次添加会在被控端启用随包驱动；Amyuni许可含广告页面条款。添加后可在屏幕列表中选择。"
+                        } else if model.virtual_display_driver == "mtt_vdd" {
+                            "使用正式签名驱动；分辨率、刷新率和数量由主机驱动与 Windows 确认。"
                         } else {
                             "首次添加会在被控端启用随包驱动。添加后可在屏幕列表中选择。"
                         }),

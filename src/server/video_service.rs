@@ -1323,17 +1323,14 @@ pub fn make_display_changed_msg(
             VideoSource::Monitor => display_service::capture_cursor_embedded(),
         },
         #[cfg(not(target_os = "android"))]
-        resolutions: Some(SupportedResolutions {
-            resolutions: match source {
-                VideoSource::Monitor => {
-                    if display.name.is_empty() {
-                        vec![]
-                    } else {
-                        crate::platform::resolutions(&display.name)
-                    }
+        resolutions: Some(match source {
+            VideoSource::Monitor => {
+                if display.name.is_empty() {
+                    SupportedResolutions::default()
+                } else {
+                    crate::platform::session_resolutions(&display.name)
                 }
-            },
-            ..SupportedResolutions::default()
+            }
         })
         .into(),
         original_resolution: display.original_resolution,

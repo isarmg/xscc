@@ -229,24 +229,35 @@ and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html).
 
 ## Virtual display driver / 虚拟显示器驱动
 
-Windows Host uses the existing Amyuni backend. The package preparation script downloads
-the fixed upstream archive recorded in `packaging/gpui-windows/virtual-display-driver.json`,
-checks its full SHA256 and size, extracts only the unchanged x64 INF/catalog/DLL and original
-license/instructions, checks every file hash, and requires a valid Windows catalog signature.
-No driver or certificate is installed on the CI runner. The fixed source record is included
-in the installed `usbmmidd_v2/driver-source.json`; controller packages contain no driver.
+Native Windows Host defaults to the configurable Virtual Display Driver 25.7.23 backend.
+The original AMD64 driver-only archive is pinned in
+`packaging/gpui-windows/virtual-display-vdd-driver.json`. Package preparation checks its
+size and SHA256, every extracted file hash, the AMD64 PE architecture, valid signatures
+of both the DLL and catalog, and the pinned SignPath Foundation publisher. The original
+MIT license is included as `mtt_vdd/VDD-LICENSE-MIT.txt`, with source provenance in
+`mtt_vdd/driver-source.json`. Existing Amyuni files and their original license/instructions
+remain in `usbmmidd_v2` for compatibility; that license includes advertisement-page consent.
+Controller packages contain neither driver. No driver or certificate is installed on CI.
 
-Installing the host only copies these files into its protected Program Files directory.
-The existing host backend registers the driver through Windows SetupAPI when an authorized
-controller with keyboard control explicitly adds a virtual display, or when the existing
-authorized headless-login path needs a display. Headless provisioning is part of opening
-a permitted remote desktop session and does not require keyboard control. An already installed
-compatible driver is reused. The operating system retains driver-signature enforcement.
-Adding/removing virtual screens reports remote failures and monitor updates through the
-normal session channel; unsupported hosts do not offer active controls. Removal preserves
-the existing backend's protection against removing the only display.
+Installing Host copies the files into Program Files. A permitted explicit add request
+with keyboard control, or the existing authorized headless-login path, uses normal
+Windows SetupAPI to install the driver on demand. A background display poll does not
+install it. Headless provisioning opens an already permitted remote desktop and does
+not require keyboard control. Windows driver-signature enforcement remains enabled;
+no test certificate or test-signing policy is introduced.
 
-The Amyuni license is preserved verbatim and includes advertisement-page consent.
-Host uninstall removes the known bundled files, not the registered shared driver, because
-other applications may use it. Driver/capture compatibility still requires Windows hardware
-acceptance; build and signature checks are not a physical virtual-monitor test.
+The owned configuration merges all raw adapter modes and existing custom resolutions
+and refresh rates. It has no application-defined four-screen, ten-mode or 60 Hz ceiling.
+The driver exposes no reliable maximum monitor count; `null` represents an unknown
+maximum, with each requested count confirmed against actual Windows enumeration. Mode
+changes are tested, applied and read back, including changes to Hz without resizing.
+Actual capture, encoder and receiver rendering capabilities still apply. The newest
+virtual monitor can be removed, retaining the rule that protects the only display.
+
+Configuration is written atomically to protected `mtt_vdd/config`; a failed change
+restores the prior configuration and device state and reports failures. Existing VDD
+devices/configuration owned outside XSCC are not taken over. Normal device restart
+is used rather than the upstream pipe reload operation. Uninstall removes only the
+known bundled files and preserves owned configuration and the registered shared driver.
+Build, signature and configuration tests do not establish physical GPU compatibility,
+maximum display count, streaming throughput, or end-to-end latency.

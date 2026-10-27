@@ -4219,7 +4219,6 @@ checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
 [[package]]
 name = "hwcodec"
 version = "0.7.1"
-source = "git+https://github.com/rustdesk-org/hwcodec#778df1f99597722473b29443bac22ae6c23946fe"
 dependencies = [
  "bindgen 0.59.2",
  "cc",
@@ -7948,6 +7947,7 @@ dependencies = [
  "repng",
  "reqwest",
  "ringbuf",
+ "roxmltree 0.20.0",
  "rust-pulsectl",
  "scrap",
  "serde 1.0.229",
