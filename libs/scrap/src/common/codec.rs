@@ -107,6 +107,14 @@ pub trait EncoderApi {
 
     fn set_quality(&mut self, ratio: f32) -> ResultType<()>;
 
+    fn bitrate_limit(&self) -> Option<u32> {
+        None
+    }
+
+    fn set_bitrate_limit(&mut self, _limit: Option<u32>) -> ResultType<()> {
+        bail!("Encoder does not support bitrate limits")
+    }
+
     fn bitrate(&self) -> u32;
 
     fn support_changing_quality(&self) -> bool;
@@ -1313,6 +1321,40 @@ mod streaming_tests {
                 (base_bitrate(640, 480) as f32 * BR_SPEED) as u32 * 2
             );
             assert!(Encoder::new_streaming(config, false, 0).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+mod bitrate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn bitrate_limit_caps_real_software_encoders_across_quality_and_frame_rate() {
+        for config in [
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: 1280,
+                height: 720,
+                quality: BR_BALANCED,
+                codec: crate::VpxVideoCodecId::VP9,
+                keyframe_interval: None,
+            }),
+            EncoderCfg::AOM(AomEncoderConfig {
+                width: 1280,
+                height: 720,
+                quality: BR_BALANCED,
+                keyframe_interval: None,
+            }),
+        ] {
+            let mut encoder = Encoder::new_streaming(config, false, 60).unwrap();
+            encoder.set_bitrate_limit(Some(256)).unwrap();
+            assert!(encoder.bitrate() <= 256);
+            encoder.set_quality(BR_BEST).unwrap();
+            assert!(encoder.bitrate() <= 256);
+            assert!(encoder.set_frame_rate(120).unwrap());
+            assert!(encoder.bitrate() <= 256);
+            encoder.set_bitrate_limit(None).unwrap();
+            assert!(encoder.bitrate() > 256);
         }
     }
 }

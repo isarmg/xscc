@@ -1,0 +1,14 @@
+{
+  "backend": "amyuni_idd",
+  "version": "2.0.0.1",
+  "source": "https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip",
+  "bytes": 199309,
+  "sha256": "629b51e9944762bae73948171c65d09a79595cf4c771a82ebc003fbba5b24f51",
+  "files": {
+    "License.txt": "44c73fc4110979899dbb5054662de581f7d4350939f19bb2d50574f613314ba2",
+    "idd_instructions.txt": "4928ad8aca39eec287d5ceaaf13f0e44a29f519821b495898692a62ece97c4c3",
+    "usbmmidd.cat": "470149c4cf9970ba59070aa7c9409c9f63a15727de99bab53e7e51f55310779f",
+    "usbmmIdd.inf": "a8750ca15a86742f3012886c9932bb974158cd2d9779cf891c730d976a47726a",
+    "x64/usbmmIdd.dll": "dc135d675127113915a7e5aa9fe57c84edad6be41d0890b265ef124ab26ea9e3"
+  }
+}

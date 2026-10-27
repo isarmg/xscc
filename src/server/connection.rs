@@ -1,3 +1,5 @@
+mod media_controls;
+
 use super::{
     input_service::*,
     video_pipeline::{ConnectionTransport, VideoWriter},
@@ -1273,6 +1275,8 @@ impl Connection {
         pi.sas_enabled = sas_enabled;
         pi.features = Some(Features {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
+            bitrate_limit: true,
+            display_controls: true,
             ..Default::default()
         })
         .into();
@@ -2417,11 +2421,11 @@ impl Connection {
                     },
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeResolution(r)) => {
-                        self.change_resolution(None, &r);
+                        self.request_resolution(None, r).await;
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeDisplayResolution(dr)) => {
-                        self.change_resolution(Some(dr.display as _), &dr.resolution);
+                        self.request_resolution(Some(dr.display as _), dr.resolution.unwrap_or_default()).await;
                     }
                     Some(misc::Union::AutoAdjustFps(fps)) => video_service::VIDEO_QOS
                         .lock()
@@ -2817,44 +2821,7 @@ impl Connection {
 
     #[cfg(windows)]
     async fn toggle_virtual_display(&mut self, t: ToggleVirtualDisplay) {
-        let make_msg = |text: String| {
-            let mut msg_out = Message::new();
-            let res = MessageBox {
-                msgtype: "nook-nocancel-hasclose".to_owned(),
-                title: "Virtual display".to_owned(),
-                text,
-                link: "".to_owned(),
-                ..Default::default()
-            };
-            msg_out.set_message_box(res);
-            msg_out
-        };
-
-        if t.on {
-            if !virtual_display_manager::is_virtual_display_supported() {
-                self.send(make_msg("idd_not_support_under_win10_2004_tip".to_string()))
-                    .await;
-            } else {
-                if let Err(e) = virtual_display_manager::plug_in_monitor(t.display as _, Vec::new())
-                {
-                    log::error!("Failed to plug in virtual display: {}", e);
-                    self.send(make_msg(format!(
-                        "Failed to plug in virtual display: {}",
-                        e
-                    )))
-                    .await;
-                }
-            }
-        } else {
-            if let Err(e) = virtual_display_manager::plug_out_monitor(t.display, false, true) {
-                log::error!("Failed to plug out virtual display {}: {}", t.display, e);
-                self.send(make_msg(format!(
-                    "Failed to plug out virtual displays: {}",
-                    e
-                )))
-                .await;
-            }
-        }
+        self.control_virtual_display(t).await;
     }
 
     async fn toggle_privacy_mode(&mut self, t: TogglePrivacyMode) {
@@ -2920,6 +2887,9 @@ impl Connection {
     }
 
     async fn update_options(&mut self, o: &OptionMessage) {
+        if let Some(limit) = o.bitrate_limit_kbps {
+            self.update_bitrate_limit(limit).await;
+        }
         log::info!("Option update: {:?}", o);
         if let Ok(q) = o.image_quality.enum_value() {
             let image_quality;

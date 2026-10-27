@@ -1,3 +1,6 @@
+mod media_controls;
+pub use media_controls::MediaRequest;
+
 #[path = "../../shared/remote_image.rs"]
 mod remote_image;
 
@@ -10,8 +13,8 @@ use gpui::{
     ScrollWheelEvent, Subscription, Window, canvas, div, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
-    self, CursorShape, CursorSnapshot, InputCommand, Monitor, SessionEvent, SessionHandle,
-    SessionQuality, TargetFps,
+    self, CursorShape, CursorSnapshot, InputCommand, MediaControls, Monitor, SessionEvent,
+    SessionHandle, SessionQuality, TargetFps,
 };
 use std::{
     cell::Cell,
@@ -29,6 +32,8 @@ pub struct VideoState {
     pub monitors: Vec<Monitor>,
     pub current_monitor: usize,
     pub switching_monitor: bool,
+    pub media_controls: MediaControls,
+    pub pending_media: Option<MediaRequest>,
     pub quality: SessionQuality,
     pub notice: String,
 }
@@ -53,6 +58,8 @@ pub struct RemoteVideo {
     monitors: Vec<Monitor>,
     current_monitor: usize,
     switching_monitor: bool,
+    media_controls: MediaControls,
+    pending_media: Option<media_controls::PendingMedia>,
     quality: SessionQuality,
     notice: String,
     focus: FocusHandle,
@@ -123,6 +130,8 @@ impl RemoteVideo {
             monitors: Vec::new(),
             current_monitor: 0,
             switching_monitor: false,
+            media_controls: MediaControls::default(),
+            pending_media: None,
             quality: SessionQuality::default(),
             notice: String::new(),
             focus,
@@ -148,6 +157,8 @@ impl RemoteVideo {
             monitors: self.monitors.clone(),
             current_monitor: self.current_monitor,
             switching_monitor: self.switching_monitor,
+            media_controls: self.media_controls.clone(),
+            pending_media: self.pending_media.as_ref().map(|pending| pending.request),
             quality: self.quality.clone(),
             notice: self.notice.clone(),
         }
@@ -177,7 +188,11 @@ impl RemoteVideo {
     }
 
     pub fn switch_monitor(&mut self, index: usize, cx: &mut Context<Self>) {
-        if !self.connected || self.switching_monitor || self.current_monitor == index {
+        if !self.connected
+            || self.switching_monitor
+            || self.pending_media.is_some()
+            || self.current_monitor == index
+        {
             return;
         }
         self.release_input();
@@ -267,6 +282,8 @@ impl RemoteVideo {
         self.monitors.clear();
         self.current_monitor = 0;
         self.switching_monitor = false;
+        self.media_controls = MediaControls::default();
+        self.pending_media = None;
         self.quality = SessionQuality::default();
         self.keyboard_allowed = false;
         self.scroll_remainder = (0.0, 0.0);
@@ -347,11 +364,22 @@ impl RemoteVideo {
                     if name == "keyboard" {
                         if !enabled {
                             self.release_input();
+                            if self.pending_media.as_ref().is_some_and(|pending| {
+                                !matches!(pending.request, MediaRequest::Bitrate(_))
+                            }) {
+                                self.pending_media = None;
+                                self.notice = "调节未完成：主机已撤销显示控制权限。".into();
+                            }
                         }
                         self.keyboard_allowed = enabled;
                     }
                 }
                 SessionEvent::Monitors(monitors) => self.monitors = monitors,
+                SessionEvent::MediaControls(controls) => self.update_media_controls(controls),
+                SessionEvent::ControlError(error) => {
+                    self.pending_media = None;
+                    self.notice = format!("调节未完成：{error}");
+                }
                 SessionEvent::Quality { index, update } => {
                     if !self.switching_monitor && index == self.current_monitor {
                         self.quality.merge(update);
@@ -431,7 +459,14 @@ impl RemoteVideo {
     }
 
     fn key(&mut self, key: &gpui::Keystroke, down: bool, cx: &Context<Self>) -> bool {
-        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+        {
             return false;
         }
         let identity = input::key_identity(key, cx.keyboard_mapper().as_ref());
@@ -481,7 +516,14 @@ impl RemoteVideo {
     }
 
     fn wheel(&mut self, event: &ScrollWheelEvent) -> bool {
-        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+        {
             return false;
         }
         if !scroll_hits_frame(event.position, self.bounds.get(), self.extent) {
@@ -519,7 +561,14 @@ impl RemoteVideo {
         button: i32,
         modifiers: gpui::Modifiers,
     ) -> bool {
-        if !self.connected || !self.keyboard_allowed || self.switching_monitor {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+        {
             return false;
         }
         let bounds = self.bounds.get();

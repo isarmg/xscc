@@ -42,6 +42,9 @@ Copy-Item "$root/LICENCE" $payload
 Copy-Item "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/$readme" (Join-Path $payload 'README.txt')
+if ($role -eq 'host') {
+    & "$PSScriptRoot/prepare-gpui-virtual-display.ps1" -PayloadDirectory $payload
+}
 if ($env:XSCC_PACKAGE_MODE -eq 'test-lan-direct') {
     Get-Content (Join-Path $payload 'TEST-ONLY.txt') | Add-Content (Join-Path $payload 'README.txt')
 }

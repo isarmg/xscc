@@ -51,6 +51,7 @@ pub struct VRamEncoder {
     last_frame_len: usize,
     same_bad_len_counter: usize,
     streaming_fps: Option<u32>,
+    bitrate_limit: Option<u32>,
     quality: f32,
 }
 
@@ -151,9 +152,20 @@ impl EncoderApi for VRamEncoder {
         );
         if self.streaming_fps.is_some() {
             let bitrate = bitrate_for_fps(bitrate, self.streaming_fps);
+            let bitrate = self
+                .bitrate_limit
+                .map_or(bitrate, |limit| bitrate.min(limit));
             self.encoder
                 .set_bitrate(bitrate as _)
                 .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
+            self.bitrate = bitrate;
+            self.ctx.d.kbitrate = bitrate as _;
+            self.quality = ratio;
+        } else if let Some(limit) = self.bitrate_limit {
+            let bitrate = bitrate.min(limit);
+            self.encoder
+                .set_bitrate(bitrate as _)
+                .map_err(|error| anyhow!("Bitrate limit update failed: {error:?}"))?;
             self.bitrate = bitrate;
             self.ctx.d.kbitrate = bitrate as _;
             self.quality = ratio;
@@ -180,6 +192,9 @@ impl EncoderApi for VRamEncoder {
             ),
             Some(fps),
         );
+        let bitrate = self
+            .bitrate_limit
+            .map_or(bitrate, |limit| bitrate.min(limit));
         if self.encoder.set_framerate(fps as _).is_err()
             || self.encoder.set_bitrate(bitrate as _).is_err()
         {
@@ -191,6 +206,36 @@ impl EncoderApi for VRamEncoder {
         self.streaming_fps = Some(fps);
         self.bitrate = bitrate;
         Ok(true)
+    }
+
+    fn bitrate_limit(&self) -> Option<u32> {
+        self.bitrate_limit
+    }
+
+    fn set_bitrate_limit(&mut self, limit: Option<u32>) -> ResultType<()> {
+        let previous = self.bitrate_limit;
+        self.bitrate_limit = limit;
+        let result = if limit.is_none() && self.streaming_fps.is_none() {
+            let bitrate = Self::bitrate(
+                self.ctx.f.data_format,
+                self.ctx.d.width as _,
+                self.ctx.d.height as _,
+                self.quality,
+            );
+            self.encoder
+                .set_bitrate(bitrate as _)
+                .map_err(|error| anyhow!("Automatic bitrate restore failed: {error:?}"))
+                .map(|_| {
+                    self.bitrate = bitrate;
+                    self.ctx.d.kbitrate = bitrate as _;
+                })
+        } else {
+            self.set_quality(self.quality)
+        };
+        if result.is_err() {
+            self.bitrate_limit = previous;
+        }
+        result
     }
 
     fn bitrate(&self) -> u32 {
@@ -246,6 +291,7 @@ impl VRamEncoder {
                         last_frame_len: 0,
                         same_bad_len_counter: 0,
                         streaming_fps,
+                        bitrate_limit: None,
                         quality: config.quality,
                     }),
                     Err(_) => Err(anyhow!(format!("Failed to create encoder"))),

@@ -1,3 +1,5 @@
+mod media_controls;
+
 use crate::{
     dashboard as ui,
     remote_video::{RemoteVideo, VideoState},
@@ -227,6 +229,13 @@ impl ManagementPanel {
                         Ok(status) => {
                             changed |= self.status.as_ref() != Some(&status)
                                 || self.status_error.is_some();
+                            if !self.host {
+                                self.show_login = binding_panel_open(
+                                    self.show_login,
+                                    self.status.as_ref().map(|status| status.configured),
+                                    status.configured,
+                                );
+                            }
                             self.status = Some(status);
                             self.status_error = None;
                         }
@@ -251,6 +260,13 @@ impl ManagementPanel {
                                 "已解绑。"
                             }
                             .into();
+                            if !self.host {
+                                self.show_login = binding_panel_open(
+                                    self.show_login,
+                                    self.status.as_ref().map(|status| status.configured),
+                                    status.configured,
+                                );
+                            }
                             self.status = Some(status);
                             self.status_error = None;
                         }
@@ -356,11 +372,17 @@ impl ManagementPanel {
                         },
                         palette.panel,
                     ))
-                    .when(!configured, |row| {
+                    .when(!configured || !self.host, |row| {
                         row.child(
                             ui::button(
                                 "login-menu",
-                                if self.show_login {
+                                if configured {
+                                    if self.show_login {
+                                        "收起实例信息"
+                                    } else {
+                                        "实例信息"
+                                    }
+                                } else if self.show_login {
                                     "收起绑定"
                                 } else {
                                     "绑定实例"
@@ -634,6 +656,7 @@ impl Render for ManagementPanel {
             .child(ui::heading(
                 if self.host { "访问工作台" } else { "设备工作台" },
                 if self.host { "查看本机连接信息，管理获准访问的设备。" } else { "在一个地方查看并连接你的授权设备。" }, palette))
+            .when(!self.host && self.video_state.connected, |root| root.child(self.render_media_controls(palette, cx)))
             .when(!self.notice.is_empty(), |root| root.child(
                 div().p_3().rounded_lg().bg(rgb(palette.accent_soft)).child(self.notice.clone())))
             .when_some(self.status_error.clone(), |root, error| root.child(
@@ -649,7 +672,7 @@ impl Render for ManagementPanel {
                     .child(ui::metric("当前在线", online_count, if current_peers { "已同步最新设备状态" } else { "连接管理端后同步" }, palette))
                     .child(ui::metric("管理连接", if current_peers { "已连接" } else if configured { "待连接" } else { "未绑定" }.into(), "使用实例授权建立连接", palette))))
             .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
-            .when(configured, |root| {
+            .when(configured && (self.host || self.show_login), |root| {
                 let status = self.status.as_ref();
                 root.child(ui::card(palette).gap_2()
                     .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("当前管理实例"))
@@ -788,6 +811,9 @@ fn session_statistics(state: &VideoState, mode: Statistics) -> String {
                 .unwrap_or_else(|| format!("接收吞吐 {rate}")),
         );
     }
+    if let Some(kbps) = quality.target_bitrate_kbps {
+        details.push(format!("当前编码码率 {kbps} kbps"));
+    }
     if let Some(delay) = quality.round_trip_ms {
         details.push(format!("网络往返 {delay} ms"));
     }
@@ -857,9 +883,9 @@ impl ManagementPanel {
                                 ui::button(
                                     "session-devices",
                                     if self.sidebar_visible {
-                                        "收起设备"
+                                        "收起设备与画质"
                                     } else {
-                                        "设备"
+                                        "设备与画质"
                                     },
                                     false,
                                     true,
@@ -878,6 +904,7 @@ impl ManagementPanel {
                                 let selected = state.current_monitor == index;
                                 let enabled = state.connected
                                     && !state.switching_monitor
+                                    && state.pending_media.is_none()
                                     && monitor.available;
                                 ui::button(
                                     ("session-monitor", index),
@@ -1297,6 +1324,14 @@ fn format_peer_address(host: &str, port: u16) -> String {
     }
 }
 
+fn binding_panel_open(current: bool, previous: Option<bool>, configured: bool) -> bool {
+    if previous == Some(configured) {
+        current
+    } else {
+        !configured
+    }
+}
+
 fn management_actions_enabled(initialized: bool, action_pending: bool) -> bool {
     initialized && !action_pending
 }
@@ -1328,6 +1363,8 @@ mod tests {
             monitors: vec![],
             current_monitor: 0,
             switching_monitor: false,
+            media_controls: Default::default(),
+            pending_media: None,
             notice: String::new(),
             quality: librustdesk::gpui_session::SessionQuality {
                 received_fps: Some(60),
@@ -1340,6 +1377,7 @@ mod tests {
                 codec: Some("VP9".into()),
                 receive_rate: Some("1250.00kB/s".into()),
                 round_trip_ms: Some(12),
+                target_bitrate_kbps: Some(8000),
             },
         };
         let compact = super::session_statistics(&state, super::Statistics::Compact);
@@ -1368,6 +1406,16 @@ mod tests {
             format_peer_address("2001:db8::1", 21118),
             "[2001:db8::1]:21118"
         );
+    }
+
+    #[test]
+    fn binding_panel_collapses_after_binding_and_preserves_manual_expansion() {
+        assert!(!super::binding_panel_open(true, None, true));
+        assert!(!super::binding_panel_open(true, Some(false), true));
+        assert!(super::binding_panel_open(true, Some(true), true));
+        assert!(!super::binding_panel_open(false, Some(true), true));
+        assert!(super::binding_panel_open(false, Some(true), false));
+        assert!(super::binding_panel_open(true, Some(false), false));
     }
 
     #[test]

@@ -952,6 +952,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
+                    Some(misc::Union::Option(options)) => self.handler.ui_handler.media_options(&options),
                     Some(misc::Union::AudioFormat(f)) => {
                         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
                         if let Some(audio) = &self.handler.lc.read().unwrap().mobile_audio {

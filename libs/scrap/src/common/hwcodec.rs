@@ -62,6 +62,7 @@ pub struct HwRamEncoder {
     bitrate: u32, //kbs
     config: HwRamEncoderConfig,
     streaming_fps: Option<u32>,
+    bitrate_limit: Option<u32>,
 }
 
 impl EncoderApi for HwRamEncoder {
@@ -146,6 +147,11 @@ impl EncoderApi for HwRamEncoder {
             bitrate = Self::check_bitrate_range(&self.config, bitrate);
             if self.streaming_fps.is_some() {
                 bitrate = bitrate_for_fps(bitrate, self.streaming_fps);
+            }
+            if let Some(limit) = self.bitrate_limit {
+                bitrate = bitrate.min(limit);
+            }
+            if self.streaming_fps.is_some() || self.bitrate_limit.is_some() {
                 self.encoder
                     .set_bitrate(bitrate as _)
                     .map_err(|err| anyhow!("streaming bitrate update failed: {err:?}"))?;
@@ -156,6 +162,39 @@ impl EncoderApi for HwRamEncoder {
         }
         self.config.quality = ratio;
         Ok(())
+    }
+
+    fn bitrate_limit(&self) -> Option<u32> {
+        self.bitrate_limit
+    }
+
+    fn set_bitrate_limit(&mut self, limit: Option<u32>) -> ResultType<()> {
+        let previous = self.bitrate_limit;
+        self.bitrate_limit = limit;
+        // Even restoring Auto must surface a native encoder update failure.
+        let result = if limit.is_none() && self.streaming_fps.is_none() {
+            let bitrate = Self::check_bitrate_range(
+                &self.config,
+                Self::bitrate(
+                    &self.config.name,
+                    self.config.width,
+                    self.config.height,
+                    self.config.quality,
+                ),
+            );
+            self.encoder
+                .set_bitrate(bitrate as _)
+                .map_err(|error| anyhow!("Automatic bitrate restore failed: {error:?}"))
+                .map(|_| {
+                    self.bitrate = bitrate;
+                })
+        } else {
+            self.set_quality(self.config.quality)
+        };
+        if result.is_err() {
+            self.bitrate_limit = previous;
+        }
+        result
     }
 
     fn bitrate(&self) -> u32 {
@@ -223,6 +262,7 @@ impl HwRamEncoder {
                         bitrate,
                         config,
                         streaming_fps,
+                        bitrate_limit: None,
                     }),
                     Err(err) => Err(anyhow!(
                         "Failed to create hardware encoder {}: {err:?}",

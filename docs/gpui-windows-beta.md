@@ -72,7 +72,7 @@ decoder, transport or CPU-to-GPU upload path.
 会释放已按下的键鼠。此版本仍使用文本/快捷键输入，不等同于游戏所需的原始扫描码捕获。
 
 多屏主机可在“屏幕”栏切换。切换期间暂停输入，收到主机确认后显示新画面；
-若主机未响应，可断开后重新连接。画面按窗口比例缩放，不会修改主机分辨率。
+若主机未响应，可断开后重新连接。窗口缩放保持画面比例；会话中的分辨率设置则修改当前远端显示器的模式，仅提供主机声明支持的分辨率。
 
 状态栏区分目标 FPS 和解码输出 FPS。接收吞吐包括协议流量，网络往返来自
 现有探测；这些数值不代表实际显示帧率或端到端操作延迟。音频沿用原生播放
@@ -152,7 +152,8 @@ The Windows target explicitly sets `-C target-feature=+crt-static` for both
 variants, in addition to static vcpkg libraries. Packaging records MSVC
 `dumpbin /DEPENDENTS` output in `dependencies.txt` and fails if the executable
 imports a VC++ redistributable runtime such as VCRUNTIME or MSVCP. No redistributable,
-driver or arbitrary DLL is silently downloaded or installed on the user's device.
+driver or arbitrary DLL is downloaded on the user's device. The optional virtual
+display driver is bundled with the host and registered only after an explicit virtual-display request.
 This direct-import inspection is not proof that every dynamically loaded graphics
 library is available; actual clean Windows 11 startup remains a release gate.
 
@@ -160,8 +161,10 @@ library is available; actual clean Windows 11 startup remains a release gate.
 
 Both packages check x86_64 architecture and OS build >= 22000. Supported runtime
 is Windows 11; the installer smoke runner is not a supported end-user target.
-Both are unsigned, preserve identity/configuration on removal, and have no driver,
-firewall, security-policy or update-feed modifications.
+Both application installers are unsigned and preserve identity/configuration on removal.
+They make no firewall, security-policy or update-feed modifications. The host bundles the
+signed virtual display driver files described below; driver registration is deferred until
+an authorized interactive session explicitly requests a virtual display.
 
 Controller:
 - Normal-user installation under `%LOCALAPPDATA%\Programs\XSCC-Controller`.
@@ -222,3 +225,26 @@ product entries are the separately built Controller and Host described above.
 
 NSIS references: [normal-user execution level](https://nsis.sourceforge.io/Reference/RequestExecutionLevel)
 and [scripting reference](https://nsis.sourceforge.io/Docs/Chapter4.html).
+
+
+## Virtual display driver / 虚拟显示器驱动
+
+Windows Host uses the existing Amyuni backend. The package preparation script downloads
+the fixed upstream archive recorded in `packaging/gpui-windows/virtual-display-driver.json`,
+checks its full SHA256 and size, extracts only the unchanged x64 INF/catalog/DLL and original
+license/instructions, checks every file hash, and requires a valid Windows catalog signature.
+No driver or certificate is installed on the CI runner. The fixed source record is included
+in the installed `usbmmidd_v2/driver-source.json`; controller packages contain no driver.
+
+Installing the host only copies these files into its protected Program Files directory.
+The existing host backend registers the driver through Windows SetupAPI when an authorized
+controller with keyboard control explicitly adds a virtual display. An already installed
+compatible driver is reused. The operating system retains driver-signature enforcement.
+Adding/removing virtual screens reports remote failures and monitor updates through the
+normal session channel; unsupported hosts do not offer active controls. Removal preserves
+the existing backend's protection against removing the only display.
+
+The Amyuni license is preserved verbatim and includes advertisement-page consent.
+Host uninstall removes the known bundled files, not the registered shared driver, because
+other applications may use it. Driver/capture compatibility still requires Windows hardware
+acceptance; build and signature checks are not a physical virtual-monitor test.

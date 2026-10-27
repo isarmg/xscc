@@ -19,7 +19,8 @@ use gpui::{
     TouchPhase, Window, canvas, div, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
-    self, InputCommand, Monitor, SessionEvent, SessionHandle, SessionQuality, TargetFps,
+    self, BitrateMode, InputCommand, Monitor, ResolutionMode, SessionEvent, SessionHandle,
+    SessionQuality, TargetFps, VirtualDisplayRequest,
 };
 use std::{
     cell::Cell,
@@ -572,6 +573,57 @@ impl SessionView {
         cx.notify();
     }
 
+    fn request_bitrate(&mut self, limit_kbps: Option<u32>) {
+        if !self.connected || !self.authorized() {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let mode = limit_kbps.map_or(BitrateMode::Auto, BitrateMode::LimitKbps);
+        self.notice = match session.set_bitrate_mode(mode) {
+            Ok(()) => match limit_kbps {
+                Some(value) => format!("已发送码率上限 {value} kbps 请求。"),
+                None => "已发送自动码率请求。".into(),
+            },
+            Err(error) => error.to_string(),
+        };
+    }
+
+    fn request_resolution(
+        &mut self,
+        mode: ResolutionMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connected || !self.authorized() || self.view_only {
+            return;
+        }
+        self.release_input();
+        self.hide_keyboard(window, cx);
+        let Some(session) = &self.session else { return };
+        self.notice = match session.set_resolution(mode) {
+            Ok(()) => format!("已发送 {}×{} 分辨率请求。", mode.width, mode.height),
+            Err(error) => error.to_string(),
+        };
+    }
+
+    fn request_virtual_display(
+        &mut self,
+        request: VirtualDisplayRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connected || !self.authorized() || self.view_only {
+            return;
+        }
+        self.release_input();
+        self.hide_keyboard(window, cx);
+        let Some(session) = &self.session else { return };
+        self.notice = match session.request_virtual_display(request) {
+            Ok(()) => "已发送虚拟屏幕请求，可在屏幕列表查看结果。".into(),
+            Err(error) => error.to_string(),
+        };
+    }
+
     fn consume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut changed = false;
         while let Ok(Reply::Connected(generation, result)) = self.receiver.try_recv() {
@@ -691,6 +743,9 @@ impl SessionView {
                 SessionEvent::Permission { name, enabled } if name == "keyboard" && enabled => {
                     self.initialize_pointer();
                     self.notice.clear();
+                }
+                SessionEvent::ControlError(error) => {
+                    self.notice = error;
                 }
                 SessionEvent::Error(error) => {
                     self.stop();
@@ -883,6 +938,11 @@ impl SessionView {
     fn publish_chrome(&self, cx: &mut Context<Self>) {
         let audio = self.session.as_ref().map(SessionHandle::audio_status);
         let pointer = self.input.snapshot();
+        let media = self
+            .session
+            .as_ref()
+            .map(SessionHandle::media_controls)
+            .unwrap_or_default();
         let model = ChromeModel {
             layout: self.layout,
             connecting: self.connecting.is_some(),
@@ -906,6 +966,24 @@ impl SessionView {
             audio_on: audio.as_ref().is_some_and(|audio| audio.enabled),
             audio_error: audio.and_then(|audio| audio.error),
             target_fps: self.target_fps.map(TargetFps::value),
+            bitrate_supported: media.bitrate_supported,
+            bitrate_limit_kbps: match media.bitrate_mode {
+                BitrateMode::Auto => None,
+                BitrateMode::LimitKbps(value) => Some(value),
+            },
+            can_change_resolution: media.can_change_resolution && !self.view_only,
+            current_resolution: media
+                .current_resolution
+                .map(|mode| (mode.width, mode.height)),
+            resolutions: media
+                .resolutions
+                .iter()
+                .map(|mode| (mode.width, mode.height))
+                .collect(),
+            virtual_display_supported: media.virtual_display_supported,
+            virtual_display_remove_latest_only: media.virtual_display_remove_latest_only,
+            can_add_virtual_display: media.can_add_virtual_display && !self.view_only,
+            virtual_display_ids: media.virtual_display_ids,
             current_monitor: self.current_monitor,
             pending_monitor: self.pending_monitor,
             monitors: self
@@ -920,7 +998,7 @@ impl SessionView {
                 })
                 .collect(),
             quality: format!(
-                "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · {}",
+                "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
                 self.quality
                     .received_fps
                     .map(|v| v.to_string())
@@ -944,6 +1022,10 @@ impl SessionView {
                 self.quality.receive_rate.as_deref().unwrap_or("—"),
                 self.quality
                     .round_trip_ms
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                self.quality
+                    .target_bitrate_kbps
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
                 self.quality.codec.as_deref().unwrap_or("—"),
@@ -1114,6 +1196,16 @@ impl SessionView {
                     _ => return,
                 };
                 self.request_fps(target, cx);
+            }
+            ChromeAction::Bitrate(limit) => self.request_bitrate(limit),
+            ChromeAction::Resolution(width, height) => {
+                self.request_resolution(ResolutionMode { width, height }, window, cx);
+            }
+            ChromeAction::AddVirtualDisplay => {
+                self.request_virtual_display(VirtualDisplayRequest::Add, window, cx);
+            }
+            ChromeAction::RemoveVirtualDisplay(id) => {
+                self.request_virtual_display(VirtualDisplayRequest::Remove(id), window, cx);
             }
             ChromeAction::Monitor(index) => self.switch_monitor(index, window, cx),
             ChromeAction::ArmRightClick => {

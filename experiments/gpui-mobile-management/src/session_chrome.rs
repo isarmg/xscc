@@ -38,6 +38,15 @@ pub struct ChromeModel {
     pub audio_on: bool,
     pub audio_error: Option<String>,
     pub target_fps: Option<i32>,
+    pub bitrate_supported: bool,
+    pub bitrate_limit_kbps: Option<u32>,
+    pub can_change_resolution: bool,
+    pub current_resolution: Option<(i32, i32)>,
+    pub resolutions: Vec<(i32, i32)>,
+    pub virtual_display_supported: bool,
+    pub virtual_display_remove_latest_only: bool,
+    pub can_add_virtual_display: bool,
+    pub virtual_display_ids: Vec<u32>,
     pub current_monitor: Option<usize>,
     pub pending_monitor: Option<usize>,
     pub monitors: Vec<ChromeMonitor>,
@@ -59,6 +68,10 @@ pub enum ChromeAction {
     ToggleViewOnly,
     ToggleAudio,
     Fps(i32),
+    Bitrate(Option<u32>),
+    Resolution(i32, i32),
+    AddVirtualDisplay,
+    RemoveVirtualDisplay(u32),
     Monitor(usize),
     ArmRightClick,
 }
@@ -429,6 +442,135 @@ impl SessionChrome {
             .child(self.screen_list(cx))
     }
 
+    fn media_settings(&self, cx: &mut Context<Self>) -> Div {
+        let model = &self.model;
+        let ready = model.connected && model.pending_monitor.is_none();
+        let mut body = div().flex().flex_col().gap_3().child(section("码率上限"));
+        if model.bitrate_supported {
+            let mut limits = div().flex().flex_wrap().gap_2();
+            for (kbps, label) in [
+                (None, "自动"),
+                (Some(500), "0.5 Mbps"),
+                (Some(1000), "1 Mbps"),
+                (Some(2000), "2 Mbps"),
+                (Some(4000), "4 Mbps"),
+                (Some(8000), "8 Mbps"),
+                (Some(16000), "16 Mbps"),
+                (Some(32000), "32 Mbps"),
+            ] {
+                limits = limits.child(
+                    self.button(
+                        cx,
+                        format!("session-bitrate-{}", kbps.unwrap_or(0)),
+                        label,
+                        model.bitrate_limit_kbps == kbps,
+                        ready,
+                        ChromeAction::Bitrate(kbps),
+                    )
+                    .flex_1(),
+                );
+            }
+            body = body.child(limits).child(
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(19.))
+                    .text_color(rgb(MUTED))
+                    .child("实际码率会随网络和画面变化，在所选上限内自适应。"),
+            );
+        } else {
+            body = body.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("远端未提供码率上限控制。"),
+            );
+        }
+        body = body.child(section("分辨率"));
+        if let Some((width, height)) = model.current_resolution {
+            body = body.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child(format!("当前 {width}×{height}")),
+            );
+        }
+        if model.resolutions.is_empty() {
+            body = body.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("远端未提供可选分辨率。"),
+            );
+        } else {
+            let mut modes = div().flex().flex_wrap().gap_2();
+            for &(width, height) in &model.resolutions {
+                modes = modes.child(
+                    self.button(
+                        cx,
+                        format!("session-resolution-{width}-{height}"),
+                        &format!("{width}×{height}"),
+                        model.current_resolution == Some((width, height)),
+                        ready && model.can_change_resolution,
+                        ChromeAction::Resolution(width, height),
+                    )
+                    .flex_1(),
+                );
+            }
+            body = body.child(modes);
+        }
+        body = body.child(section("虚拟显示器"));
+        if model.virtual_display_supported {
+            body = body
+                .child(
+                    self.button(
+                        cx,
+                        "session-virtual-add",
+                        "添加虚拟屏幕",
+                        false,
+                        ready && model.can_add_virtual_display,
+                        ChromeAction::AddVirtualDisplay,
+                    )
+                    .w_full(),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .line_height(px(19.))
+                        .text_color(rgb(MUTED))
+                        .child(if model.virtual_display_remove_latest_only {
+                            "首次添加会在被控端启用随包驱动；Amyuni许可含广告页面条款。添加后可在屏幕列表中选择。"
+                        } else {
+                            "首次添加会在被控端启用随包驱动。添加后可在屏幕列表中选择。"
+                        }),
+                );
+            for &id in &model.virtual_display_ids {
+                body = body.child(
+                    self.button(
+                        cx,
+                        format!("session-virtual-remove-{id}"),
+                        &if model.virtual_display_remove_latest_only {
+                            "移除最近添加的虚拟屏幕".to_owned()
+                        } else {
+                            format!("移除虚拟屏幕 {id}")
+                        },
+                        false,
+                        ready && model.can_control && !model.view_only,
+                        ChromeAction::RemoveVirtualDisplay(id),
+                    )
+                    .w_full(),
+                );
+            }
+        } else {
+            body = body.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(MUTED))
+                    .child("远端未提供虚拟显示器控制。"),
+            );
+        }
+        body
+    }
+
     fn panel(&self, area: Rect, cx: &mut Context<Self>) -> Stateful<Div> {
         let title = match self.model.panel {
             Panel::Operations => "操作",
@@ -444,7 +586,8 @@ impl SessionChrome {
                 .flex_col()
                 .gap_3()
                 .child(section("远程屏幕"))
-                .child(self.screen_list(cx));
+                .child(self.screen_list(cx))
+                .child(self.media_settings(cx));
             if !self.model.quality.is_empty() {
                 body = body.child(section("连接状态")).child(
                     div()

@@ -649,7 +649,7 @@ pub mod amyuni_idd {
         let mut is_async = false;
         if let Err(e) = check_install_driver(&mut is_async) {
             log::error!("Failed to install driver: {}", e);
-            bail!("Failed to install driver.");
+            bail!("Failed to install driver: {e}");
         }
 
         if get_monitor_count() == VIRTUAL_DISPLAY_MAX_COUNT {

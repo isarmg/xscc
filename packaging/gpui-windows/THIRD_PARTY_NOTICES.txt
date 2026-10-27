@@ -28,3 +28,12 @@ This file records GPUI/example attribution. Other Rust and native dependencies
 retain their respective licenses and notices; it is not an assertion that all
 third-party components share the application license or Apache-2.0. Review the
 pinned Cargo.lock and vcpkg dependencies when preparing a redistribution.
+
+Windows host virtual display support
+Amyuni USB Mobile Monitor Indirect Display Driver 2.0.0.1
+Copyright 2014-2021 Amyuni Technologies Inc. https://www.amyuni.com
+The host includes the unchanged x64 driver, catalog and INF from the pinned
+upstream distribution recorded in usbmmidd_v2/driver-source.json. The original
+license and instructions are included beside them. The license includes consent
+to advertisement pages and is not the application's AGPL or GPUI Apache license.
+The controller package does not include or install this driver.

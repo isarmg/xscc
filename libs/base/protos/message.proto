@@ -89,6 +89,8 @@ message Auth2FA {
 
 message Features {
   bool privacy_mode = 1;
+  bool bitrate_limit = 2;
+  bool display_controls = 3;
 
 }
 
@@ -459,6 +461,8 @@ message OptionMessage {
 
   BoolOption show_my_cursor = 19;
   BoolOption streaming_mode = 20;
+  // Absent preserves the old mode; zero restores automatic bitrate.
+  optional uint32 bitrate_limit_kbps = 21;
 }
 
 message TestDelay {

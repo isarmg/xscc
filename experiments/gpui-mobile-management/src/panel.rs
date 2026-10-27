@@ -162,6 +162,7 @@ impl Panel {
                 }
                 Event::Opened(status) => {
                     self.initialized = true;
+                    self.binding_expanded = !status.configured;
                     self.status = Some(status);
                     self.notice.clear();
                 }
@@ -181,6 +182,8 @@ impl Panel {
                     self.busy = false;
                     if result.is_ok() {
                         self.code.update(_cx, |field, cx| field.clear(window, cx));
+                        self.binding_expanded = false;
+                        window.dismiss_virtual_keyboard();
                     }
                     self.notice = result.err().unwrap_or_default();
                 }

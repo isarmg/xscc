@@ -664,6 +664,8 @@ fn run_encoder(
             bail!(e);
         }
     }
+    let bitrate_limit = VIDEO_QOS.lock().unwrap().bitrate_limit();
+    apply_bitrate_limit(&mut encoder, sp, bitrate_limit)?;
     VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
     VIDEO_QOS
         .lock()
@@ -725,6 +727,7 @@ fn run_encoder(
             &mut send_counter,
             &mut second_instant,
             &sp.name(),
+            sp,
         )?;
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
         // not yet produced its first packet, restarting the warm-up forever. Defer until it has;
@@ -1341,6 +1344,39 @@ pub fn make_display_changed_msg(
     Some(msg_out)
 }
 
+fn apply_bitrate_limit(
+    encoder: &mut Encoder,
+    service: &GenericService,
+    limit: Option<u32>,
+) -> ResultType<()> {
+    if encoder.bitrate_limit() == limit {
+        return Ok(());
+    }
+    if let Err(error) = encoder.set_bitrate_limit(limit) {
+        // A driver may reject a valid target. Restore Auto rather than restarting forever.
+        VIDEO_QOS.lock().unwrap().clear_bitrate_limits();
+        let mut misc = Misc::new();
+        misc.set_option(OptionMessage {
+            bitrate_limit_kbps: Some(0),
+            ..Default::default()
+        });
+        let mut response = Message::new();
+        response.set_misc(misc);
+        service.send(response);
+        let mut failure = Message::new();
+        failure.set_message_box(MessageBox {
+            msgtype: "media-control-error".into(),
+            title: "Video bitrate".into(),
+            text: format!("Encoder rejected the bitrate limit; restored Auto: {error}"),
+            ..Default::default()
+        });
+        service.send(failure);
+        encoder.set_bitrate_limit(None)?;
+    }
+    VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
+    Ok(())
+}
+
 fn check_qos(
     encoder: &mut Encoder,
     ratio: &mut f32,
@@ -1348,8 +1384,9 @@ fn check_qos(
     send_counter: &mut usize,
     second_instant: &mut Instant,
     name: &str,
+    service: &GenericService,
 ) -> ResultType<()> {
-    let (requested_fps, requested_ratio, in_vbr, custom_quality) = {
+    let (requested_fps, requested_ratio, in_vbr, custom_quality, bitrate_limit) = {
         let mut qos = VIDEO_QOS.lock().unwrap();
         *spf = qos.spf();
         if second_instant.elapsed() > Duration::from_secs(1) {
@@ -1362,8 +1399,10 @@ fn check_qos(
             qos.ratio(),
             qos.in_vbr_state(),
             qos.latest_quality().is_custom(),
+            qos.bitrate_limit(),
         )
     };
+    apply_bitrate_limit(encoder, service, bitrate_limit)?;
     // Driver reconfiguration can block; it must never hold the global QoS mutex.
     if encoder.frame_rate() != requested_fps {
         match requested_fps {

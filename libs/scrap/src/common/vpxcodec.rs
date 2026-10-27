@@ -40,6 +40,7 @@ pub struct VpxEncoder {
     i444: bool,
     yuvfmt: EncodeYuvFormat,
     streaming_fps: Option<u32>,
+    bitrate_limit: Option<u32>,
     quality: f32,
 }
 
@@ -168,6 +169,7 @@ impl EncoderApi for VpxEncoder {
                     i444,
                     yuvfmt: Self::get_yuvfmt(config.width, config.height, i444),
                     streaming_fps: None,
+                    bitrate_limit: None,
                     quality: config.quality,
                 })
             }
@@ -213,6 +215,7 @@ impl EncoderApi for VpxEncoder {
             Self::bitrate(self.width as _, self.height as _, ratio),
             self.streaming_fps,
         );
+        if let Some(limit) = self.bitrate_limit { c.rc_target_bitrate = c.rc_target_bitrate.min(limit); }
         call_vpx!(vpx_codec_enc_config_set(&mut self.ctx, &c));
         self.quality = ratio;
         Ok(())
@@ -224,9 +227,22 @@ impl EncoderApi for VpxEncoder {
             Self::bitrate(self.width as _, self.height as _, self.quality),
             Some(fps),
         );
+        if let Some(limit) = self.bitrate_limit { c.rc_target_bitrate = c.rc_target_bitrate.min(limit); }
         call_vpx!(vpx_codec_enc_config_set(&mut self.ctx, &c));
         self.streaming_fps = Some(fps);
         Ok(true)
+    }
+
+    fn bitrate_limit(&self) -> Option<u32> { self.bitrate_limit }
+
+    fn set_bitrate_limit(&mut self, limit: Option<u32>) -> ResultType<()> {
+        let previous = self.bitrate_limit;
+        self.bitrate_limit = limit;
+        if let Err(error) = self.set_quality(self.quality) {
+            self.bitrate_limit = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn bitrate(&self) -> u32 {

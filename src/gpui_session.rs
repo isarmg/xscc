@@ -6,6 +6,8 @@ use crate::{
 use base::message_proto::*;
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
+mod controls;
+pub use controls::{BitrateMode, MediaControls, ResolutionMode, VirtualDisplayRequest};
 mod cursor;
 pub use cursor::{log_cursor_render_failure, CursorShape, CursorSnapshot};
 mod metrics;
@@ -154,6 +156,7 @@ pub struct SessionQuality {
     pub decode_p95_ms: Option<f32>,
     pub ui_queue_p95_ms: Option<f32>,
     pub mailbox_dropped: Option<u64>,
+    pub target_bitrate_kbps: Option<u32>,
     pub receive_rate: Option<String>,
     pub codec: Option<String>,
     pub round_trip_ms: Option<i32>,
@@ -177,6 +180,9 @@ impl SessionQuality {
         }
         if update.submitted_fps.is_some() {
             self.ui_queue_p95_ms = update.ui_queue_p95_ms;
+        }
+        if update.target_bitrate_kbps.is_some() {
+            self.target_bitrate_kbps = update.target_bitrate_kbps;
         }
         if update.receive_rate.is_some() {
             self.receive_rate = update.receive_rate;
@@ -208,6 +214,8 @@ pub enum SessionEvent {
         enabled: bool,
     },
     Monitors(Vec<Monitor>),
+    MediaControls(MediaControls),
+    ControlError(String),
     Quality {
         index: usize,
         update: SessionQuality,
@@ -230,6 +238,7 @@ struct Mailbox {
     events: ArrayQueue<SessionEvent>,
     quality: Mutex<Option<(usize, SessionQuality)>>,
     cursor: Mutex<cursor::Cursors>,
+    controls: RwLock<controls::Controls>,
     monitors: RwLock<Monitors>,
     connected: AtomicBool,
     keyboard: AtomicBool,
@@ -247,6 +256,7 @@ impl Default for Mailbox {
             events: ArrayQueue::new(64),
             quality: Mutex::new(None),
             cursor: Mutex::new(cursor::Cursors::default()),
+            controls: RwLock::new(controls::Controls::default()),
             monitors: RwLock::new(Monitors::default()),
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
@@ -749,6 +759,9 @@ impl InvokeUiSession for Handler {
         }
     }
     fn set_display(&self, x: i32, y: i32, width: i32, height: i32, _: bool, _: f64) {
+        let index = self.0.monitors.read().unwrap().current;
+        self.0.controls.write().unwrap().display(width, height, index);
+        self.publish_media_controls();
         self.event(SessionEvent::Display {
             index: self.0.monitors.read().unwrap().current,
             x,
@@ -761,6 +774,7 @@ impl InvokeUiSession for Handler {
         if display.display < 0 || display.width <= 0 || display.height <= 0 {
             return;
         }
+        self.0.controls.write().unwrap().resolutions(&display.resolutions);
         {
             let mut monitors = self.0.monitors.write().unwrap();
             monitors.current = display.display as usize;
@@ -778,6 +792,8 @@ impl InvokeUiSession for Handler {
         );
     }
     fn set_peer_info(&self, peer: &PeerInfo) {
+        self.0.controls.write().unwrap().peer(peer);
+        self.set_platform_additions(&peer.platform_additions);
         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
         { *self.0.platform.write().unwrap() = peer.platform.clone(); }
         self.set_displays(&peer.displays);
@@ -795,6 +811,7 @@ impl InvokeUiSession for Handler {
         self.0.metrics.lock().unwrap().reset();
         self.0.connected.store(true, Ordering::Release);
         self.event(SessionEvent::Connected);
+        self.publish_media_controls();
         self.event(SessionEvent::Permission {
             name: "keyboard".to_owned(),
             enabled: self.0.keyboard.load(Ordering::Acquire),
@@ -802,7 +819,11 @@ impl InvokeUiSession for Handler {
     }
     fn set_permission(&self, name: &str, enabled: bool) {
         if name == "keyboard" {
-            self.0.keyboard.store(enabled, Ordering::Release);
+            let previous = self.0.keyboard.swap(enabled, Ordering::AcqRel);
+            if previous && !enabled && self.cancel_resolution_request() {
+                self.event(SessionEvent::ControlError("Display change cancelled because input permission was revoked".into()));
+            }
+            self.publish_media_controls();
         }
         self.event(SessionEvent::Permission {
             name: name.to_owned(),
@@ -810,7 +831,11 @@ impl InvokeUiSession for Handler {
         });
     }
     fn msgbox(&self, kind: &str, title: &str, text: &str, _: &str, _: bool) {
-        if kind.contains("error") || kind.contains("password") {
+        if kind == "media-control-error" || title == "Virtual display" {
+            if title == "Display resolution" { self.cancel_resolution_request(); }
+            self.event(SessionEvent::ControlError(format!("{title}: {text}")));
+            self.publish_media_controls();
+        } else if kind.contains("error") || kind.contains("password") {
             self.event(SessionEvent::Error(format!("{title}: {text}")));
         }
     }
@@ -851,6 +876,8 @@ impl InvokeUiSession for Handler {
         }
     }
     fn set_displays(&self, displays: &Vec<DisplayInfo>) {
+        let current = self.0.monitors.read().unwrap().current;
+        self.0.controls.write().unwrap().displays(displays, current);
         let list: Vec<_> = displays
             .iter()
             .enumerate()
@@ -873,13 +900,29 @@ impl InvokeUiSession for Handler {
             pending_unavailable
         };
         self.event(SessionEvent::Monitors(list));
+        self.publish_media_controls();
         if pending_unavailable {
             self.event(SessionEvent::Error(
                 "Requested display disconnected. Reconnect and select an available display.".into(),
             ));
         }
     }
-    fn set_platform_additions(&self, _: &str) {}
+    fn set_platform_additions(&self, text: &str) {
+        let result = self.0.controls.write().unwrap().additions(text);
+        if let Err(error) = result {
+            self.event(SessionEvent::ControlError(format!("Invalid display capabilities: {error}")));
+        }
+        self.publish_media_controls();
+    }
+    fn media_options(&self, options: &OptionMessage) {
+        if let Some(limit) = options.bitrate_limit_kbps {
+            if limit != 0 && base::session_protocol::validate_bitrate_limit(limit).is_err() { return; }
+            self.0.controls.write().unwrap().state.bitrate_mode = if limit == 0 {
+                BitrateMode::Auto
+            } else { BitrateMode::LimitKbps(limit) };
+            self.publish_media_controls();
+        }
+    }
     fn on_connected(&self, _: ConnType) {}
     fn update_privacy_mode(&self) {}
     fn update_quality_status(&self, status: QualityStatus) {
@@ -898,6 +941,7 @@ impl InvokeUiSession for Handler {
                 decode_p95_ms: sample.as_ref().and_then(|s| s.decode_p95_ms),
                 ui_queue_p95_ms: sample.as_ref().and_then(|s| s.ui_queue_p95_ms),
                 mailbox_dropped: sample.as_ref().map(|s| s.mailbox_dropped),
+                target_bitrate_kbps: status.target_bitrate.and_then(|value| u32::try_from(value).ok()).filter(|value| *value > 0),
                 receive_rate: status.speed,
                 codec: status.codec_format.map(|codec| codec.to_string()),
                 round_trip_ms: status.delay.filter(|delay| *delay > 0),

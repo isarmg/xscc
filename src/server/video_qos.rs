@@ -262,6 +262,7 @@ impl UserDelay {
 struct UserData {
     auto_adjust_fps: Option<u32>, // reserve for compatibility
     custom_fps: Option<u32>,
+    bitrate_limit: Option<u32>,
     streaming_target_fps: Option<u32>,
     quality: Option<(i64, Quality)>, // (time, quality)
     delay: UserDelay,
@@ -382,6 +383,25 @@ impl VideoQoS {
     // Get stored bitrate
     pub fn bitrate(&self) -> u32 {
         self.bitrate_store
+    }
+
+    pub fn user_bitrate_limit(&mut self, id: i32, limit: Option<u32>) {
+        if let Some(user) = self.users.get_mut(&id) {
+            user.bitrate_limit = limit;
+        }
+    }
+
+    pub fn clear_bitrate_limits(&mut self) {
+        for user in self.users.values_mut() {
+            user.bitrate_limit = None;
+        }
+    }
+
+    pub fn bitrate_limit(&self) -> Option<u32> {
+        self.users
+            .values()
+            .filter_map(|user| user.bitrate_limit)
+            .min()
     }
 
     // Get current bitrate ratio with bounds checking
@@ -1013,4 +1033,26 @@ mod tests {
     mod sim;
     mod smoke;
     mod startup;
+}
+
+#[cfg(test)]
+mod bitrate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn bitrate_limit_is_the_lowest_live_viewer_limit_and_auto_releases_it() {
+        let mut qos = VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.on_connection_open(2);
+        qos.user_bitrate_limit(1, Some(8000));
+        qos.user_bitrate_limit(2, Some(2000));
+        assert_eq!(qos.bitrate_limit(), Some(2000));
+        qos.user_bitrate_limit(2, None);
+        assert_eq!(qos.bitrate_limit(), Some(8000));
+        qos.user_bitrate_limit(2, Some(4000));
+        qos.on_connection_close(2);
+        assert_eq!(qos.bitrate_limit(), Some(8000));
+        qos.on_connection_close(1);
+        assert_eq!(qos.bitrate_limit(), None);
+    }
 }
