@@ -92,7 +92,7 @@ impl SessionView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let chrome = cx.new(|_| SessionChrome::default());
+        let chrome = cx.new(SessionChrome::new);
         let chrome_events = cx.subscribe_in(&chrome, window, |view, _, action, window, cx| {
             view.chrome_action(*action, window, cx);
         });
@@ -104,6 +104,8 @@ impl SessionView {
             }),
             cx.observe_window_activation(window, |view: &mut Self, window, cx| {
                 if !window.is_window_active() {
+                    view.chrome
+                        .update(cx, |chrome, cx| chrome.cancel_bitrate(cx));
                     view.release_input();
                     if let Some(control) = &view.keyboard_control {
                         control.cancel();
@@ -116,6 +118,8 @@ impl SessionView {
         ];
         let mut focus_subscriptions = focus_subscriptions;
         focus_subscriptions.push(cx.observe_window_bounds(window, |view, _, cx| {
+            view.chrome
+                .update(cx, |chrome, cx| chrome.cancel_bitrate(cx));
             view.release_input();
             if let Some(control) = &view.keyboard_control {
                 control.cancel();

@@ -59,62 +59,7 @@ impl ManagementPanel {
                                 "主机不支持码率上限调节，请升级被控端。".into()
                             }),
                     )
-                    .child(
-                        div().flex().flex_wrap().gap_2().children(
-                            [
-                                None,
-                                Some(500),
-                                Some(1000),
-                                Some(2000),
-                                Some(4000),
-                                Some(8000),
-                                Some(16000),
-                                Some(32000),
-                                Some(64000),
-                                Some(100000),
-                                Some(200000),
-                                Some(500000),
-                                Some(1000000),
-                            ]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, kbps)| {
-                                let mode = kbps
-                                    .map(BitrateMode::LimitKbps)
-                                    .unwrap_or(BitrateMode::Auto);
-                                let selected = controls.bitrate_mode == mode;
-                                let enabled = idle
-                                    && controls.bitrate_supported
-                                    && !selected
-                                    && kbps.is_none_or(|value| value <= controls.max_bitrate_kbps);
-                                let label = kbps
-                                    .map(|value| {
-                                        if value < 1000 {
-                                            format!("{value} kbps")
-                                        } else {
-                                            format!("{} Mbps", value / 1000)
-                                        }
-                                    })
-                                    .unwrap_or("自动".into());
-                                ui::button(
-                                    ("session-bitrate", index),
-                                    &label,
-                                    selected,
-                                    enabled,
-                                    palette,
-                                )
-                                .on_click(cx.listener(
-                                    move |view, _, _, cx| {
-                                        if enabled {
-                                            view.video.update(cx, |video, cx| {
-                                                video.request_media(MediaRequest::Bitrate(mode), cx)
-                                            });
-                                        }
-                                    },
-                                ))
-                            }),
-                        ),
-                    ),
+                    .child(self.render_bitrate_editor(palette, cx)),
             )
             .child(div().h(px(1.)).bg(rgb(palette.border)))
             .child(

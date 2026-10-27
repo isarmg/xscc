@@ -38,8 +38,8 @@ android {
         management {
             dimension 'client'
             applicationId 'org.sarmg.xscc.gpui.preview'
-            versionCode 10
-            versionName '0.1.0-beta.10'
+            versionCode 11
+            versionName '0.1.0-beta.11'
             buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
             manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC 控制端预览']
         }

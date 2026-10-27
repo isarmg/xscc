@@ -4,6 +4,8 @@ use gpui::{
     point, prelude::*, px, rgb,
 };
 
+mod bitrate;
+
 const PAGE: u32 = 0x111318;
 const SURFACE: u32 = 0x1b1e25;
 const RAISED: u32 = 0x272c35;
@@ -78,14 +80,21 @@ pub enum ChromeAction {
     ArmRightClick,
 }
 
-#[derive(Default)]
 pub struct SessionChrome {
     model: ChromeModel,
+    bitrate: bitrate::BitrateEditor,
 }
 
 impl EventEmitter<ChromeAction> for SessionChrome {}
 
 impl SessionChrome {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            model: ChromeModel::default(),
+            bitrate: bitrate::BitrateEditor::new(cx),
+        }
+    }
+
     pub fn model(&self) -> &ChromeModel {
         &self.model
     }
@@ -93,6 +102,15 @@ impl SessionChrome {
     pub fn set_model(&mut self, model: ChromeModel, cx: &mut Context<Self>) -> bool {
         if self.model == model {
             return false;
+        }
+        if model.panel != Panel::Display
+            || !model.connected
+            || !model.bitrate_supported
+            || model.pending_monitor.is_some()
+            || self.model.max_bitrate_kbps != model.max_bitrate_kbps
+            || self.model.layout != model.layout
+        {
+            self.bitrate.cancel();
         }
         self.model = model;
         cx.notify();
@@ -448,56 +466,7 @@ impl SessionChrome {
         let model = &self.model;
         let ready = model.connected && model.pending_monitor.is_none();
         let mut body = div().flex().flex_col().gap_3().child(section("码率上限"));
-        if model.bitrate_supported {
-            let max_bitrate =
-                if model.max_bitrate_kbps >= 1000 && model.max_bitrate_kbps.is_multiple_of(1000) {
-                    format!("{} Mbps", model.max_bitrate_kbps / 1000)
-                } else {
-                    format!("{} kbps", model.max_bitrate_kbps)
-                };
-            let mut limits = div().flex().flex_wrap().gap_2();
-            for (kbps, label) in [
-                (None, "自动"),
-                (Some(500), "0.5 Mbps"),
-                (Some(1000), "1 Mbps"),
-                (Some(2000), "2 Mbps"),
-                (Some(4000), "4 Mbps"),
-                (Some(8000), "8 Mbps"),
-                (Some(16000), "16 Mbps"),
-                (Some(32000), "32 Mbps"),
-                (Some(64000), "64 Mbps"),
-                (Some(100000), "100 Mbps"),
-                (Some(200000), "200 Mbps"),
-                (Some(500000), "500 Mbps"),
-                (Some(1000000), "1000 Mbps"),
-            ] {
-                limits = limits.child(
-                    self.button(
-                        cx,
-                        format!("session-bitrate-{}", kbps.unwrap_or(0)),
-                        label,
-                        model.bitrate_limit_kbps == kbps,
-                        ready && kbps.is_none_or(|value| value <= model.max_bitrate_kbps),
-                        ChromeAction::Bitrate(kbps),
-                    )
-                    .flex_1(),
-                );
-            }
-            body = body.child(limits).child(
-                div()
-                    .text_size(px(12.))
-                    .line_height(px(19.))
-                    .text_color(rgb(MUTED))
-                    .child(format!("主机允许最高 {max_bitrate}；实际码率会随网络和画面变化，在所选上限内自适应。")),
-            );
-        } else {
-            body = body.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child("远端未提供码率上限控制。"),
-            );
-        }
+        body = body.child(self.bitrate_controls(cx));
         body = body.child(section("分辨率与刷新率"));
         if let Some((width, height, refresh_rate)) = model.current_resolution {
             body = body.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(
@@ -721,7 +690,12 @@ impl SessionChrome {
 
 impl Render for SessionChrome {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut chrome = div().relative().size_full().text_color(rgb(TEXT));
+        let mut chrome = div()
+            .relative()
+            .size_full()
+            .text_color(rgb(TEXT))
+            .on_key_down(cx.listener(Self::bitrate_key_down))
+            .on_key_up(cx.listener(Self::bitrate_key_up));
         if !self.model.has_frame {
             let status = if self.model.connecting {
                 "正在连接…"

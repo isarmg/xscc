@@ -1,12 +1,14 @@
 # 会话码率与完整显示模式
 
-本轮基于 `53c4d39e4`，原生候选版本为 `0.1.0-beta.10`，Android versionCode 为 10。
+码率与显示后端基于 `53c4d39e4`，分段滑杆基于 `ecc1b68f2`；原生候选版本为 `0.1.0-beta.11`，Android versionCode 为 11。
 
 ## 操作与兼容
 
-- 桌面会话侧栏和移动端显示面板提供自动、500 kbps、1/2/4/8/16/32/64/100/200/500/1000 Mbps。十进制 1 Gbps 为 1000000 kbps；公开入口接受 64 至 1000000 kbps 的非零上限。
+- 桌面会话侧栏和移动端显示面板提供 1–1000 Mbps 的码率上限滑杆及数值输入。四段 1–10、10–100、100–300、300–1000 Mbps 各占滑杆四分之一，拖动步长分别为 1、10、30、100 Mbps。300 Mbps 等分段端点始终可达，100–300 段为 100/130/160/190/220/250/280/300 Mbps。
+- 拖动只更新本地预览，松手后提交一次；取消不提交。数值输入或键盘确认可设置到 0.001 Mbps 精度，输入未确认前不改变主机上限。实际生效值始终来自主机确认，解除上限保留原有自动适应。
+- 十进制 1 Gbps 为 1000 Mbps、1000000 kbps。界面范围从 1 Mbps 起；公开协议入口保留旧客户端的 64 kbps 最小值兼容。
 - 码率仍是编码目标上限。网络自适应、画质、帧率和共享流的其它观看者都可能让实际目标更低；它不是包含音频、协议开销和瞬时突发的逐包硬限速。恢复自动或断开会释放本连接上限。
-- 主机明确上报 `max_bitrate_kbps`。旧主机只有原有支持标志时按其 100000 kbps 范围处理，超出主机范围的档位不可选；完全不支持调节的旧主机仍可观看和切屏。
+- 主机明确上报 `max_bitrate_kbps`。旧主机只有原有支持标志时按其 100000 kbps 范围处理，超出主机范围的滑杆区域禁用且数值输入拒绝越界，固定分段比例不随主机上限重新均分；完全不支持调节的旧主机仍可观看和切屏。
 - 分辨率和刷新率使用远端声明的完整模式。同分辨率下的不同 Hz 分别显示和确认。Windows 使用驱动原始模式及各旋转方向，不按固定常用分辨率或 60 Hz 截断。刷新率按 Windows DEVMODE 的整数 Hz 模式标识；自定义配置中的小数值按固定驱动支持的 1/10000 Hz 精度保留。
 - Windows 先测试请求的模式，再应用并查询实际模式。只改刷新率、画面尺寸不变时，也发送模式确认。改变模式前释放原有输入，清除旧画面并请求新帧，首个新帧恢复画面与坐标输入。
 - 旧主机没有刷新率字段时保留原有分辨率操作；非 Windows 主机继续使用已有分辨率实现。本轮不改视频几何、悬浮鼠标三键、触控坐标、横屏或登录框折叠逻辑。
@@ -45,15 +47,16 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 | `libs/scrap/Cargo.toml`、根 `Cargo.toml` 与各受影响 `Cargo.lock` | 固定 hwcodec 改为仓库内相同 revision；Windows 配置解析使用已锁定 XML 库，启用实际 WinTrust API；没有无关依赖升级。 |
 | `src/virtual_display_manager.rs` | 为 Windows Host 增加新后端薄路由，公告实际数量，旧后端实现保留。 |
 | `src/server/display_service.rs` | 新驱动沿用既有按需无头补屏语义，普通无会话轮询不提前安装。 |
-| `experiments/gpui-validation/src/client/media_controls.rs`、`remote_video/media_controls.rs` | 新码率档位、按对端范围启用、Hz 标签与确认、正确区分新旧驱动说明。 |
-| `experiments/gpui-mobile-management/src/session_chrome.rs`、`session_view.rs` | 同样的实际档位与模式投影/请求转发，不改变视频区域或输入门禁。 |
+| `experiments/gpui-validation/src/client.rs` | 持有本地编辑控件，并在主机确认或能力变化时同步；不更改登录折叠或管理逻辑。 |
+| `experiments/gpui-validation/src/client/media_controls.rs`、`remote_video/media_controls.rs` | 分段上限滑杆、精确输入、按对端范围启用、Hz 标签与确认、正确区分新旧驱动说明。 |
+| `experiments/gpui-mobile-management/src/session_chrome.rs`、`session_view.rs` | 同样的分段上限滑杆、精确输入与模式投影/请求转发，不改变视频区域或输入门禁。 |
 | `.github/scripts/package-gpui-windows.ps1`、`packaging/gpui-windows/host-installer.nsi` | 仅 Host 校验并分发新驱动，卸载不递归删除配置，不安装显示驱动。 |
 | `packaging/gpui-windows/README-host.txt`、`THIRD_PARTY_NOTICES.txt`、`docs/gpui-windows-beta.md` | 说明新默认后端、原始许可、能力范围及按需安装行为。 |
 | `.gitattributes` | 新许可固定 LF，确保 Windows checkout 后仍符合原始许可证摘要。 |
-| `.github/workflows/gpui-windows-beta.yml`、`gpui-unix-beta.yml` | beta.10 版本与新依赖的触发范围，Windows 增加非空的实际模式配置回归。 |
-| `packaging/gpui-android/app/build.gradle` | Android 版本升为 beta.10/code10，区分此前预览包。 |
+| `.github/workflows/gpui-windows-beta.yml`、`gpui-unix-beta.yml` | beta.11 版本与新依赖的触发范围，Windows 增加非空的实际模式配置回归。 |
+| `packaging/gpui-android/app/build.gradle` | Android 版本升为 beta.11/code11，区分此前预览包。 |
 
-新逻辑集中在 `src/platform/windows/display_modes.rs`、`src/virtual_display_manager/mtt_vdd/` 及其后端模块、驱动来源清单和独立准备脚本。hwcodec 原始来源、SDK 子 revision、保留文件清单与局部补丁记录随 vendored 源码提供。
+新逻辑集中在 `src/platform/windows/display_modes.rs`、`src/virtual_display_manager/mtt_vdd/` 及其后端模块、驱动来源清单和独立准备脚本。码率滑杆、精确输入分别位于各前端功能子模块，分段比例、步进与十进制解析共用 `experiments/shared/bitrate_controls.rs`；没有新增持久化写入。hwcodec 原始来源、SDK 子 revision、保留文件清单与局部补丁记录随 vendored 源码提供。
 
 ## 验证边界
 

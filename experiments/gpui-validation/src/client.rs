@@ -1,3 +1,4 @@
+mod bitrate_controls;
 mod media_controls;
 
 use crate::{
@@ -51,6 +52,7 @@ struct ManagementPanel {
     notice: String,
     video: Entity<RemoteVideo>,
     video_state: VideoState,
+    bitrate: bitrate_controls::BitrateEditor,
     _subscriptions: Vec<Subscription>,
     _tasks: Vec<gpui::Task<()>>,
 }
@@ -1226,6 +1228,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             {
                                 window.toggle_fullscreen();
                             }
+                            view.sync_bitrate_editor(state, window, cx);
                             view.video_state = state.clone();
                             cx.notify();
                         },
@@ -1286,6 +1289,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         notice: initial_notice,
                         video: video.clone(),
                         video_state,
+                        bitrate: bitrate_controls::BitrateEditor::new(cx),
                         _subscriptions: subscriptions,
                         _tasks: vec![update_task, management_task],
                     }
