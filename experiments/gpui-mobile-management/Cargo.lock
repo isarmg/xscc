@@ -8147,6 +8147,7 @@ dependencies = [
  "jni 0.21.1",
  "lazy_static",
  "log",
+ "ndk 0.7.0",
  "ndk-context",
  "num_cpus",
  "serde 1.0.229",

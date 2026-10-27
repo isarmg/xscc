@@ -31,6 +31,11 @@ pub struct MediaCodecInfo {
     pub color_formats: Vec<i32>,
 }
 
+#[cfg(feature = "mediacodec")]
+pub(super) fn set_decoder_infos(infos: Vec<MediaCodecInfo>) {
+    *MEDIA_CODEC_INFOS.write().unwrap() = infos;
+}
+
 pub fn get_decoder_infos(mime: &str) -> Vec<MediaCodecInfo> {
     MEDIA_CODEC_INFOS
         .read()

@@ -35,9 +35,9 @@ on:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.11 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.12 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.11'
+        default: '0.1.0-beta.12'
         type: string
 permissions:
   contents: read
@@ -66,7 +66,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.11' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.12' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -74,7 +74,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.11'
+            throw 'Expected a numeric version such as 0.1.0-beta.12'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -228,7 +228,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.11' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.12' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

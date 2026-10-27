@@ -54,6 +54,18 @@ fn prepare(_headless: bool) -> Result<(), String> {
 
 pub fn initialize() -> Result<(), String> {
     prepare(false)?;
+    static LOGGER: std::sync::OnceLock<Option<hbb_common::flexi_logger::LoggerHandle>> =
+        std::sync::OnceLock::new();
+    LOGGER.get_or_init(|| {
+        hbb_common::init_log(
+            false,
+            if is_host() {
+                "gpui-host"
+            } else {
+                "gpui-controller"
+            },
+        )
+    });
     #[cfg(all(target_os = "linux", feature = "gpui-host"))]
     crate::platform::linux::start_gpui_host_audio()?;
     #[cfg(all(windows, feature = "gpui-host"))]

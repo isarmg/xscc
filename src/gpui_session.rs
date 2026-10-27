@@ -6,6 +6,8 @@ use crate::{
 use base::message_proto::*;
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
+#[cfg(all(target_os = "android", feature = "mediacodec"))]
+pub use scrap::android::initialize_android_decoders;
 mod controls;
 pub use controls::{BitrateMode, MediaControls, ResolutionMode, VirtualDisplayRequest};
 mod cursor;
@@ -930,9 +932,32 @@ impl InvokeUiSession for Handler {
         if self.0.closed.load(Ordering::Acquire) || monitors.pending.is_some() {
             return;
         }
+        let index = monitors.current;
         let sample = self.0.metrics.lock().unwrap().snapshot(Instant::now());
+        drop(monitors);
+        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        if let Some(sample) = sample.as_ref() {
+            hbb_common::log::info!(
+                target: "xscc::session_metrics",
+                "session_pipeline {}",
+                serde_json::json!({
+                    "schema": 1,
+                    "received_fps": sample.received_fps,
+                    "decoded_fps": sample.decoded_fps,
+                    "submitted_fps": sample.submitted_fps,
+                    "decode_p50_ms": sample.decode_p50_ms,
+                    "decode_p95_ms": sample.decode_p95_ms,
+                    "ui_queue_p95_ms": sample.ui_queue_p95_ms,
+                    "mailbox_dropped": sample.mailbox_dropped,
+                    "codec": status.codec_format.as_ref().map(ToString::to_string),
+                    "target_bitrate_kbps": status.target_bitrate
+                        .and_then(|value| u32::try_from(value).ok())
+                        .filter(|value| *value > 0),
+                })
+            );
+        }
         self.event(SessionEvent::Quality {
-            index: monitors.current,
+            index,
             update: SessionQuality {
                 received_fps: sample.as_ref().map(|s| s.received_fps),
                 decoded_fps: sample.as_ref().map(|s| s.decoded_fps),

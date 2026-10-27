@@ -55,6 +55,14 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
         .internal_data_path()
         .filter(|path| path.is_absolute())
         .ok_or_else(|| "Android private application directory unavailable".to_owned());
+    #[cfg(feature = "mobile-session")]
+    if let Err(error) =
+        unsafe { librustdesk::gpui_session::initialize_android_decoders(app.vm_as_ptr()) }
+    {
+        log::warn!(
+            "Android hardware decoder discovery failed; continuing with software codecs: {error:#}"
+        );
+    }
     let application = gpui::android(app)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)

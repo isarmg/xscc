@@ -172,12 +172,13 @@ jobs:
           for line in open(sys.argv[1]):
               package, features = line.rstrip().split('|', 1)
               graph.setdefault(package.split()[0], set()).update(filter(None, features.removesuffix(' (*)').split(',')))
-          assert {'rustdesk', 'scrap'} <= graph.keys(), "Missing real software-video client"
-          assert not ({'flutter_rust_bridge', 'flutter_rust_bridge_macros', 'dart-sys', 'enigo', 'clipboard', 'hwcodec'} & graph.keys()), "Unexpected Flutter/host/hardware dependency"
-          assert {'gpui-mobile-session', 'managed'} <= graph['rustdesk'], "Missing managed mobile boundary"
-          assert not ({'default', 'flutter', 'gpui-host', 'hwcodec', 'mediacodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
+          assert {'rustdesk', 'scrap'} <= graph.keys(), "Missing real native-video client"
+          assert not ({'flutter_rust_bridge', 'flutter_rust_bridge_macros', 'dart-sys', 'enigo', 'clipboard', 'hwcodec'} & graph.keys()), "Unexpected Flutter/host/FFmpeg dependency"
+          assert {'gpui-mobile-session', 'managed', 'mediacodec'} <= graph['rustdesk'], "Missing managed mobile MediaCodec boundary"
+          assert not ({'default', 'flutter', 'gpui-host', 'hwcodec', 'vram', 'drm', 'screencapturekit'} & graph['rustdesk']), "Unexpected root capabilities"
           assert ('test-lan-direct' in graph['rustdesk']) == (os.environ['FLAVOR'] == 'landirect'), "Test-only capability mismatch"
-          assert not ({'capture', 'wayland', 'drm', 'hwcodec', 'mediacodec', 'vram', 'quartz', 'x11'} & graph['scrap']), "Unexpected scrap capture/hardware capability"
+          assert 'mediacodec' in graph['scrap'], "Missing native Android hardware decoder"
+          assert not ({'capture', 'wayland', 'drm', 'hwcodec', 'vram', 'quartz', 'x11'} & graph['scrap']), "Unexpected scrap capture/FFmpeg capability"
           PY
           fi
           if [ "$FLAVOR" != smoke ]; then

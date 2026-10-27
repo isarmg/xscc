@@ -5,6 +5,7 @@ mod application;
 mod clipboard;
 mod dispatcher;
 mod fonts;
+mod frame_clock;
 mod geometry;
 mod ime;
 mod ime_bridge;

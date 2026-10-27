@@ -698,6 +698,7 @@ impl SessionView {
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接，等待首帧…".into();
+                    self.request_fps(TargetFps::Fps60, cx);
                     if let Some(session) = &self.session {
                         if let Err(error) = session.subscribe_remote_cursor() {
                             self.notice = error.to_string();

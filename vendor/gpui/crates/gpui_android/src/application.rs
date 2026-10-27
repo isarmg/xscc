@@ -1,35 +1,25 @@
-use crate::{input::InputState, platform::State};
+use crate::{frame_clock::FrameClock, input::InputState, platform::State};
 use android_activity::{
     InputStatus, MainEvent, PollEvent,
     input::{InputEvent, KeyAction, Keycode},
 };
 use gpui::AppLifecyclePhase;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::rc::Rc;
 
 pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
     let mut launched = Some(launched);
     let mut input = InputState::default();
-    let mut next_frame = Instant::now();
-    // A bounded fallback cadence. Android's FIFO swapchain handles presentation;
-    // idle/background windows block indefinitely in the event loop, not a spin loop.
-    const FRAME_INTERVAL: Duration = Duration::from_micros(16_667);
+    let frame_clock = FrameClock::new(&state.app);
     while !state.destroyed.get() {
-        let timeout = state
+        if state
             .window()
-            .filter(|w| w.can_draw() && w.dirty.get())
-            .map(|_| {
-                let remaining = next_frame.saturating_duration_since(Instant::now());
-                // android-activity converts this duration to whole milliseconds.
-                if remaining.is_zero() {
-                    remaining
-                } else {
-                    remaining.max(Duration::from_millis(1))
-                }
-            });
-        state.app.poll_events(timeout, |event| {
+            .is_some_and(|w| w.can_draw() && w.dirty.get())
+        {
+            frame_clock.request();
+        } else {
+            frame_clock.cancel();
+        }
+        state.app.poll_events(None, |event| {
             let PollEvent::Main(event) = event else {
                 return;
             };
@@ -48,6 +38,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                     }
                 }
                 MainEvent::TerminateWindow { .. } => {
+                    frame_clock.cancel();
                     cancel_touches(state, &mut input);
                     if let Some(window) = state.window() {
                         window.detach_surface();
@@ -98,6 +89,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                     state.lifecycle.with(|f| f(AppLifecyclePhase::Inactive));
                 }
                 MainEvent::Pause => {
+                    frame_clock.cancel();
                     cancel_touches(state, &mut input);
                     state.resumed.set(false);
                     if let Some(window) = state.window() {
@@ -116,6 +108,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                     read_input(state, &mut input);
                 }
                 MainEvent::Destroy => {
+                    frame_clock.cancel();
                     cancel_touches(state, &mut input);
                     if let Some(window) = state.window() {
                         window.set_visible(false);
@@ -141,11 +134,22 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             window.sync_ime();
             window.read_ime_events();
         }
-        if !state.destroyed.get() && Instant::now() >= next_frame {
-            if let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get()) {
-                window.request_frame(false);
+        if !state.destroyed.get()
+            && let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get())
+        {
+            match frame_clock.take_ready() {
+                Ok(true) => {
+                    frame_clock.request();
+                    window.request_frame(false);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    log::error!("Android frame clock failed: {error:#}");
+                    state.finish();
+                }
             }
-            next_frame = Instant::now() + FRAME_INTERVAL;
+        } else {
+            frame_clock.cancel();
         }
         if let Some(window) = state.window() {
             window.sync_ime();
