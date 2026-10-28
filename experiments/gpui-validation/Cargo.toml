@@ -10,6 +10,7 @@ publish = false
 mobile-management = []
 live-session = ["dep:librustdesk", "librustdesk/hwcodec"]
 native-host = ["live-session", "librustdesk/gpui-host"]
+native-host-vram = ["native-host", "librustdesk/vram"]
 xscc-codec = ["dep:scrap"]
 test-lan-direct = ["live-session", "librustdesk/test-lan-direct"]
 

@@ -1066,9 +1066,56 @@ fn setup_encoder(
         get_encoder_config(&c, name.to_string(), quality, last_portable_service_running)?;
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     let requested_fps = VIDEO_QOS.lock().unwrap().streaming_encoder_fps();
+    #[cfg(all(windows, feature = "vram", feature = "hwcodec"))]
+    if matches!(&encoder_cfg, EncoderCfg::VRAM(_)) {
+        return setup_vram_encoder_with_ram_fallback(encoder_cfg, use_i444, requested_fps);
+    }
     let encoder = match requested_fps {
         Some(fps) => Encoder::new_streaming(encoder_cfg.clone(), use_i444, fps)?,
         None => Encoder::new(encoder_cfg.clone(), use_i444)?,
+    };
+    Encoder::set_fallback(&encoder_cfg);
+    let codec_format = Encoder::negotiated_codec();
+    Ok((encoder, encoder_cfg, codec_format, use_i444))
+}
+
+#[cfg(all(windows, feature = "vram", feature = "hwcodec"))]
+fn setup_vram_encoder_with_ram_fallback(
+    encoder_cfg: EncoderCfg,
+    use_i444: bool,
+    requested_fps: Option<u32>,
+) -> ResultType<(Encoder, EncoderCfg, CodecFormat, bool)> {
+    let result = match requested_fps {
+        Some(fps) => Encoder::new_streaming(encoder_cfg.clone(), use_i444, fps),
+        None => Encoder::new(encoder_cfg.clone(), use_i444),
+    };
+    let (encoder, encoder_cfg, use_i444) = match result {
+        Ok(encoder) => (encoder, encoder_cfg, use_i444),
+        Err(vram_error) => {
+            let EncoderCfg::VRAM(config) = encoder_cfg else {
+                return Err(vram_error);
+            };
+            let ram_result = (|| {
+                let config = config.ram_fallback()?;
+                let i444 = Encoder::use_i444(&config);
+                let encoder = match requested_fps {
+                    Some(fps) => Encoder::new_streaming(config.clone(), i444, fps)?,
+                    None => Encoder::new(config.clone(), i444)?,
+                };
+                Ok::<_, hbb_common::anyhow::Error>((encoder, config, i444))
+            })();
+            let fallback = ram_result.map_err(|ram_error| {
+                anyhow!(
+                    "VRAM initialization failed: {vram_error:#}; RAM fallback failed: {ram_error:#}"
+                )
+            })?;
+            hbb_common::throttled_log!(
+                Duration::from_secs(5),
+                warn,
+                "VRAM initialization failed; using the same codec in RAM: {vram_error:#}"
+            );
+            fallback
+        }
     };
     Encoder::set_fallback(&encoder_cfg);
     let codec_format = Encoder::negotiated_codec();

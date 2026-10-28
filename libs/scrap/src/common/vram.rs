@@ -43,6 +43,37 @@ pub struct VRamEncoderConfig {
     pub keyframe_interval: Option<usize>,
 }
 
+#[cfg(all(windows, feature = "hwcodec"))]
+impl VRamEncoderConfig {
+    pub fn ram_fallback(&self) -> ResultType<EncoderCfg> {
+        let format = match self.feature.data_format {
+            DataFormat::H264 => CodecFormat::H264,
+            DataFormat::H265 => CodecFormat::H265,
+            format => bail!("No RAM fallback for VRAM codec {format:?}"),
+        };
+        self.ram_fallback_for(
+            crate::hwcodec::HwRamEncoder::try_get(format).map(|codec| (codec.name, codec.mc_name)),
+        )
+    }
+
+    fn ram_fallback_for(&self, codec: Option<(String, Option<String>)>) -> ResultType<EncoderCfg> {
+        let (name, mc_name) = codec.ok_or_else(|| {
+            anyhow!(
+                "No available RAM hardware encoder for negotiated codec {:?}",
+                self.feature.data_format
+            )
+        })?;
+        Ok(EncoderCfg::HWRAM(crate::hwcodec::HwRamEncoderConfig {
+            name,
+            mc_name,
+            width: self.width,
+            height: self.height,
+            quality: self.quality,
+            keyframe_interval: self.keyframe_interval,
+        }))
+    }
+}
+
 pub struct VRamEncoder {
     encoder: Encoder,
     pub format: DataFormat,
@@ -506,4 +537,55 @@ pub(crate) fn check_available_vram() -> (Vec<FeatureContext>, Vec<DecodeContext>
         decoders,
         available.serialize().unwrap_or_default(),
     )
+}
+
+#[cfg(all(test, windows, feature = "hwcodec"))]
+mod ram_fallback_tests {
+    use super::*;
+
+    fn config(format: DataFormat) -> VRamEncoderConfig {
+        VRamEncoderConfig {
+            device: AdapterDevice::default(),
+            width: 1920,
+            height: 1080,
+            quality: 0.67,
+            feature: FeatureContext {
+                driver: Driver::FFMPEG,
+                vendor: Driver::AMF,
+                data_format: format,
+                luid: 7,
+            },
+            keyframe_interval: Some(120),
+        }
+    }
+
+    #[test]
+    fn ram_fallback_preserves_negotiated_codec_and_capture_parameters() {
+        for (format, name) in [
+            (DataFormat::H264, "h264_amf"),
+            (DataFormat::H265, "hevc_amf"),
+        ] {
+            let source = config(format);
+            let actual = source
+                .ram_fallback_for(Some((name.to_owned(), Some("native".to_owned()))))
+                .unwrap();
+            let EncoderCfg::HWRAM(actual) = actual else {
+                panic!("VRAM fallback must return the actual RAM configuration");
+            };
+            assert_eq!(actual.name, name);
+            assert_eq!(actual.mc_name.as_deref(), Some("native"));
+            assert_eq!((actual.width, actual.height), (source.width, source.height));
+            assert_eq!(actual.quality, source.quality);
+            assert_eq!(actual.keyframe_interval, source.keyframe_interval);
+        }
+    }
+
+    #[test]
+    fn ram_fallback_without_the_negotiated_codec_fails_explicitly() {
+        for format in [DataFormat::H264, DataFormat::H265] {
+            let error = config(format).ram_fallback_for(None).unwrap_err();
+            assert!(error.to_string().contains(&format!("{format:?}")));
+            assert!(!error.to_string().contains("VP9"));
+        }
+    }
 }

@@ -637,11 +637,13 @@ pub fn check_available_hwcodec() -> String {
     };
     #[cfg(feature = "vram")]
     let vram = crate::vram::check_available_vram();
-    #[cfg(feature = "vram")]
-    let vram_string = vram.2;
     #[cfg(not(feature = "vram"))]
     let vram_string = "".to_owned();
     let c = HwCodecConfig {
+        // Texture interop failures must not hide usable RAM hardware encoders.
+        #[cfg(feature = "vram")]
+        ram_encode: Encoder::available_encoders(ctx, None),
+        #[cfg(not(feature = "vram"))]
         ram_encode: Encoder::available_encoders(ctx, Some(vram_string)),
         ram_decode: Decoder::available_decoders(),
         #[cfg(feature = "vram")]

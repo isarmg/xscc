@@ -36,9 +36,9 @@ on:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.13 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.14 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.13'
+        default: '0.1.0-beta.14'
         type: string
 permissions:
   contents: read
@@ -55,8 +55,8 @@ jobs:
             features: live-session
             core_features: use_dasp,gpui-session,hwcodec
           - role: host
-            features: native-host
-            core_features: use_dasp,gpui-host,hwcodec
+            features: native-host-vram
+            core_features: use_dasp,gpui-host,hwcodec,vram
     runs-on: windows-2025
     timeout-minutes: 180
     defaults:
@@ -67,7 +67,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.13' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.14' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -75,7 +75,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.13'
+            throw 'Expected a numeric version such as 0.1.0-beta.14'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -154,6 +154,15 @@ jobs:
           $decodeTests | Write-Output
           if ($decodeExit -ne 0 -or ($decodeTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
             throw 'Native decoded-plane reuse regression tests failed or did not run all three tests'
+          }
+      - name: Test same-codec VRAM initialization fallback parameters
+        if: matrix.role == 'host'
+        run: |
+          $fallbackTests = & cargo test --locked -p scrap --lib --features hwcodec,vram --target x86_64-pc-windows-msvc vram::ram_fallback_tests:: 2>&1
+          $fallbackExit = $LASTEXITCODE
+          $fallbackTests | Write-Output
+          if ($fallbackExit -ne 0 -or ($fallbackTests | Out-String) -notmatch '(?m)^test result: ok\. 2 passed; 0 failed;') {
+            throw 'VRAM fallback regression tests failed or did not run both tests'
           }
       - name: Test native session and host regression coverage
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
@@ -239,7 +248,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.13' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.14' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

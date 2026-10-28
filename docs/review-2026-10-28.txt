@@ -51,3 +51,19 @@ docs/development.md：说明真实统一锁边界和PR/DRM验证入口。
 
 验证结果与产物
 本地管理两库在统一锁下26项测试和 Clippy -D warnings 通过；实际软件捕获 GPUI host 集成编译及移动产品43项主机回归通过；产品格式、现有打包/发布/移动测试门禁、来源三项合同通过。解码私有同步输出的三项局部回归、Host计时模块两项回归通过。实际 Windows/Unix FFmpeg C ABI、完整各平台构建、安装后帧率和手机实机由同一最终提交 CI/运行记录继续单独验收；未完成部分不标成通过。
+
+后续实测与 GPU 纹理编码（beta.14）
+beta.13 最终提交 90dbb23 的七组 CI 全部通过，Windows Host/Controller 已按校验后的实际工件升级，SYSTEM 与当前用户的身份和绑定内容保留。Android 同提交 APK 通过证书、生产能力与 16KB 对齐核验；未安装实体手机，不宣称手机帧率改善。
+45 秒独立持续变化场景中，beta.13 自动 HEVC 稳定17项一秒样本的接收/解码/提交中位数为42/43/41 FPS，诊断 GPUI 自身提交58.02 FPS。H.264 对照18项为30/30/30 FPS，自身58.87 FPS；已只恢复临时改动的 codec-preference=auto，保留其余配置更新。
+同场景 Host 数字阶段样本显示直接 DXGI（capture_gdi=0），采集平均耗时的一秒样本中位11.93ms，CPU转换3.31ms，编码分发8.02ms；编码分发包含编码与队列提交，不能全部归为GPU编码。当前串行路径未达到60 FPS，据此启用已有纹理编码而非增加全局计时器或强制H.264。
+
+本次必要的既有文件/运行路径变更面：
+experiments/gpui-validation/Cargo.toml：新增 native-host-vram 特性包含原 native-host，仅 Windows Host 候选选择；原特性关闭时走原路径。
+.github/workflows/gpui-windows-beta.yml：Host 产品与核心回归启用 vram，同格式回退配置的两项实际原生测试拒绝空选择；Controller 特性不变，并升级候选编号14。
+libs/scrap/src/common/hwcodec.rs：仅 vram 开启时独立探测 RAM 编码，防止 VRAM 纹理互操作结果隐藏原来可用的 RAM 编码器；关闭时保留旧调用。
+libs/scrap/src/common/vram.rs：为 Windows 硬编路径从原 VRAM 配置派生同格式 RAM 配置，沿用既有能力表，不增加缓存、禁用标志或后台任务。
+src/server/video_service.rs：只对 Windows+vram+hwcodec 的 VRAM 候选增加初始化失败后同格式 RAM 回退入口，返回实际使用配置，以便既有捕获逻辑选择纹理或 RAM；原路径、授权、QoS与帧队列顺序保留。
+.github/workflows/gpui-unix-beta.yml、packaging/gpui-android/app/build.gradle：候选编号14及Android versionCode14，保证与已分发13区分并可正常升级。
+本轮尚待同一最终提交的全平台 CI、实际 GPU 探测和升级后性能验收。配置转换单元测试不能证明具体显卡的纹理互操作成功。
+
+本轮提交前验证：独立源码评审未发现阻断问题；真实 Linux 软件 Host 原 native-host 路径 cargo check 通过，产品格式、来源及3项vendor来源合同通过。新增VRAM回退两项回归将由Windows实际原生依赖构建运行，严格检查2 passed；本地没有完整Windows FFmpeg/vcpkg，不将配置测试或Linux编译标作Windows纹理硬编实测。根Cargo.lock指纹仍为d62e34562a22a160b8eb6b3a3b43bc0f3595b46fba52aeaeb00c3d81d8d9a919。
