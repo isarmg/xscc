@@ -39,6 +39,7 @@ jobs:
             features: mobile-session
             package_flags: --playback-preview
     env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/experiments/gpui-mobile-management/target
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
       VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
@@ -151,7 +152,7 @@ jobs:
           test "$(rustc --print deployment-target --target aarch64-apple-ios)" = 'IPHONEOS_DEPLOYMENT_TARGET=26.0'
           cargo check --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
           cargo check --tests --locked --target aarch64-apple-ios --features "${{ matrix.features }}"
-          cargo clippy --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
+          cargo clippy --locked --no-deps --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
           cargo build --locked --release --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
       - name: Validate and package unsigned preview
         run: |
@@ -169,6 +170,8 @@ jobs:
   simulator-smoke:
     runs-on: macos-26
     timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/experiments/gpui-mobile-management/target
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:

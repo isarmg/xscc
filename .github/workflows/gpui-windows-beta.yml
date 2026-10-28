@@ -142,7 +142,7 @@ jobs:
           cargo check --locked --manifest-path Cargo.toml --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Lint Windows preview
-        run: cargo clippy --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+        run: cargo clippy --locked --no-deps --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Test Windows preview
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test FFmpeg decoded-plane reuse with native bindings

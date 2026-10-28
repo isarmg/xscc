@@ -1,6 +1,6 @@
 # 开发验证
 
-根工作区包含 Rust 核心、`crates/management`、桌面与移动 GPUI 产品；内嵌管理库的 Cargo 包名仍为 `xscc`。这些产品和核心测试共用根目录 `Cargo.lock`，Rust 工具链为 1.99。仓库内维护的 GPUI 框架仍保留自己的开发工作区；不能将该框架工作区的独立测试等同于产品依赖验收。
+根工作区包含 Rust 核心、`crates/management`、桌面与移动 GPUI 产品；内嵌管理库的 Cargo 包名仍为 `xscc`。这些产品和核心测试共用根目录 `Cargo.lock`，Rust 工具链为 1.99。 产品 CI 用 `cargo clippy --no-deps` 保持原产品包的严格 lint 范围，管理库由独立 CI 严格检查；工作区共享依赖解析，输出目录仍由各打包流程显式指定。仓库内维护的 GPUI 框架仍保留自己的开发工作区；不能将该框架工作区的独立测试等同于产品依赖验收。
 
 输入边界、类型保证、错误传播与热路径简化遵循[避免过度防御性编程](defensive-programming.md)。
 

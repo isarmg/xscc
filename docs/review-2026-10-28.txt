@@ -9,7 +9,7 @@
 3. FFmpeg RAM 同步 callback 复用上一包已归还的 NV12/YUV420 plane Vec，公开借用和 C ABI 不变，不跨帧复用 GPU 裸句柄。同尺寸、格式和步长稳态原四次堆分配降为零；布局变化会释放旧帧缓冲，CPU plane 数据仍复制。参考帧完整解码，只对同次 decode 返回的最后一张可转换图像做 RGB 转换。
 4. use_i444 读取能力表时借用，删除整表 clone。删除零调用的 NativeManager::policy，避免复制包含会话密钥的全部策略。当前状态、授权租约和撤权检查不变。
 5. gpui-host 增加一秒窗口数字观测：采集耗时及 Ready/Empty/WouldBlock/Failed 数量、转换耗时、Fresh/Replay/Repeat 编码分发平均/最大耗时和目标周期。encode_calls 是尝试次数，不能当作成功码流 FPS；不新增线程、锁、依赖或身份/凭据字段。capture_gdi 在 Windows 记录捕获器现有 is_gdi 观察，其余平台为2（未知）；portable 捕获代理的该观察不能证明后台真实捕获方式。
-6. Windows/Unix 桌面候选流程也由 PR 触发。原生 hwcodec 单元测试的既有 Windows 开发助手链接 SDL，运行时路径仅在该 CI 测试进程内补齐，不进入产品。Linux host 增加 DRM/drm-wake 编译；真实原生库构建后运行三项解码缓冲回归，拒绝空过滤。来源检查验证 hwcodec 459 个原始导入文件，排除 upstream.json 已明确登记的本地补丁；不篡改原始 hash 清单。新增三项来源检查合同回归。
+6. Windows/Unix 桌面候选流程也由 PR 触发。原生 hwcodec 单元测试的既有 Windows 开发助手链接 SDL，运行时路径仅在该 CI 测试进程内补齐，不进入产品。Linux host 增加 DRM/drm-wake 编译；真实原生库构建后运行三项解码缓冲回归，拒绝空过滤。来源检查验证 hwcodec 459 个原始导入文件，排除 upstream.json 已明确登记的本地补丁；不篡改原始 hash 清单。新增三项来源检查合同回归。 首轮统一工作区 CI 中，Clippy 将新纳入工作区的既有依赖一并按产品 -D warnings 检查，暴露 hbb_common 旧 lint；产品命令显式 --no-deps 恢复原独立产品的 lint 边界，保留产品自身 -D warnings 与管理库独立严格检查。依赖照常编译与测试。Framework 与 iOS CI 显式保留原输出目录，根锁变化也触发 framework 验证。
 
 未照搬的结论
 - Rust 1.99 的 Windows 非零 thread::sleep 已用高精度 waitable timer；官方实现 library/std/src/sys/thread/windows.rs108-135。没有新增全局 timeBeginPeriod 或第二套计时器。
@@ -40,6 +40,9 @@ src/server/video_service.rs：gpui-host 阶段计时薄钩；原编码、QoS、�
 .github/workflows/ci.yml：运行来源合同回归。
 .github/workflows/gpui-windows-beta.yml：PR覆盖、真实缓冲测试和beta.13候选编号。
 .github/workflows/gpui-unix-beta.yml：PR覆盖、可选DRM编译和beta.13候选编号。
+.github/workflows/ui-validation.yml：统一后恢复原产品 lint 边界、保留上传目录，并让根锁变更触发验证。
+.github/workflows/gpui-ios-management.yml：统一后保持产品 lint 范围和既有设备/Simulator打包目录，避免找错可执行文件。
+docs/ui-framework-validation.md：本地 GPUI 构建命令使用统一工作区的真实默认输出位置。
 .github/workflows/gpui-android-smoke.yml：产物附带根锁，仍执行现有生产能力白名单。
 packaging/gpui-android/app/build.gradle：版本码13，确保安装升级消费这次新源码。
 docs/development.md：说明真实统一锁边界和PR/DRM验证入口。

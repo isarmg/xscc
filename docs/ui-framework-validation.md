@@ -69,7 +69,7 @@ cargo build --locked --manifest-path experiments/gpui-validation/Cargo.toml
 
 python3 experiments/compare-ui.py \
   --slint experiments/slint-validation/target/debug/xscc-slint-validation \
-  --gpui experiments/gpui-validation/target/debug/xscc-gpui-validation \
+  --gpui target/debug/xscc-gpui-validation \
   --width 1920 --height 1080 --fps 60 --seconds 30 \
   --output /tmp/xscc-ui-comparison-new
 ```

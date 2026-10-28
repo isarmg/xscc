@@ -9,7 +9,7 @@ cargo fmt --manifest-path "$manifest" -- --check
 # Preserve the codec-only feature boundary previously checked by the retired UI build.
 cargo check --locked -p scrap --lib --no-default-features --target "$target"
 cargo tree --locked -p scrap --no-default-features --target "$target" -e normal,build --prefix none
-cargo clippy --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target" --all-targets -- -D warnings
+cargo clippy --locked --no-deps --manifest-path "$manifest" --no-default-features --features "$features" --target "$target" --all-targets -- -D warnings
 cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target"
 # Test the same native role feature set that ships.
 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
