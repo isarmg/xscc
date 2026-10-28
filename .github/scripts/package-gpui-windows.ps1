@@ -61,7 +61,7 @@ $metadata = [ordered]@{
     crt = 'static requested via target rustflags; direct imports recorded in dependencies.txt'
     role = $role
     scope = 'Experimental native GPUI remote desktop beta candidate; runtime validation pending'
-    cargo_lock_sha256 = (Get-FileHash "$root/experiments/gpui-validation/Cargo.lock" -Algorithm SHA256).Hash.ToLowerInvariant()
+    cargo_lock_sha256 = (Get-FileHash "$root/Cargo.lock" -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $metadata | ConvertTo-Json | Set-Content (Join-Path $payload 'build-info.json') -Encoding utf8
 $installer = Join-Path $out "$stem-setup.exe"

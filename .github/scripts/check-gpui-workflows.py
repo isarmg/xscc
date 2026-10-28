@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Keep active product automation native and local workflow references valid."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import hashlib
+import json
 import re
 import tomllib
 import subprocess
@@ -23,8 +25,37 @@ SDK = re.compile(
 )
 
 
+def check_hwcodec_source(snapshot):
+    metadata = json.loads((snapshot / 'upstream.json').read_text())
+    changes = set(metadata['local_changes'])
+    imported = set()
+    for line in (snapshot / metadata['source_inventory']).read_text().splitlines():
+        digest, relative = line.split('  ', 1)
+        path = PurePosixPath(relative)
+        if (not re.fullmatch(r'[0-9a-f]{64}', digest) or path.is_absolute()
+                or '..' in path.parts or relative in imported):
+            raise ValueError('Invalid hwcodec source inventory entry')
+        imported.add(relative)
+        if relative not in changes:
+            actual = hashlib.sha256((snapshot / relative).read_bytes()).hexdigest()
+            if actual != digest:
+                raise ValueError(f'Unrecorded hwcodec source modification: {relative}')
+    if len(imported) != metadata['source_file_count']:
+        raise ValueError('hwcodec imported source count differs from provenance')
+    for relative in changes:
+        if not (snapshot / relative).is_file():
+            raise ValueError(f'Missing recorded hwcodec local change: {relative}')
+
+
 def check():
-    features = tomllib.loads((ROOT / 'Cargo.toml').read_text())['features']
+    check_hwcodec_source(ROOT / 'vendor/hwcodec')
+    manifest = tomllib.loads((ROOT / 'Cargo.toml').read_text())
+    for product in ('experiments/gpui-validation', 'experiments/gpui-mobile-management'):
+        if (product not in manifest['workspace']['members']
+                or 'workspace' in tomllib.loads((ROOT / product / 'Cargo.toml').read_text())
+                or (ROOT / product / 'Cargo.lock').exists()):
+            raise ValueError(f'Product must share the core workspace and Cargo.lock: {product}')
+    features = manifest['features']
     pending, enabled = list(features.get('default', ())), set()
     while pending:
         feature = pending.pop()

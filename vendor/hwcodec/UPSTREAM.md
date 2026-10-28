@@ -30,3 +30,8 @@ include these unused example binaries.
 
 Upstream whitespace is retained without formatting the SDK snapshot. Local
 patches are checked separately against the exact imported source revision.
+
+The FFmpeg RAM decoder reuses its previous packet's owned pixel-plane buffers.
+The synchronous callback still copies FFmpeg-owned planes before returning; no
+GPU resources or borrowed codec frame pointers escape to the application. Each
+packet clears the visible output before decode, including no-output/error paths.

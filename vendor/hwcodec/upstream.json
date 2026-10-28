@@ -12,7 +12,8 @@
     "src/vram/encode.rs",
     "cpp/mfx/mfx_encode.cpp",
     "cpp/mfx/mfx_ffi.h",
-    "cpp/mfx/bitrate_limit.h"
+    "cpp/mfx/bitrate_limit.h",
+    "src/ffmpeg_ram/decode.rs"
   ],
   "source_inventory": "SOURCE_FILES.sha256",
   "source_file_count": 459

@@ -21,8 +21,8 @@ use xscc::{
     engine::Executor,
     host::{HostError, RustDeskHost},
     protocol::{
-        self, AccessPolicy, Backend, Binding, Capabilities, ClientOs, DiagnosticSnapshot,
-        ExecutionMode, HostAddress, InstanceRole, SessionKey,
+        self, Backend, Binding, Capabilities, ClientOs, DiagnosticSnapshot, ExecutionMode,
+        HostAddress, InstanceRole, SessionKey,
     },
     transport::{AccessObservation, HealthObservation, TransportError},
 };
@@ -190,13 +190,6 @@ impl NativeManager {
     }
     pub fn configured(&self) -> bool {
         self.settings.read().unwrap().is_some()
-    }
-    pub fn policy(&self) -> Option<AccessPolicy> {
-        self.access
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|receiver| receiver.borrow().as_ref().and_then(|o| o.policy().cloned()))
     }
     pub fn status(&self) -> Status {
         let settings = self.settings.read().unwrap().clone();

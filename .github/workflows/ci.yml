@@ -17,6 +17,7 @@ jobs:
         run: python3 .github/scripts/check-gpui-workflows.py
       - name: Test GPUI package and release contracts
         run: |
+          python3 .github/scripts/test-gpui-vendored-source.py
           python3 .github/scripts/test-gpui-package-mode.py
           python3 .github/scripts/test-gpui-ios-package.py
           python3 .github/scripts/test-gpui-macos-package.py

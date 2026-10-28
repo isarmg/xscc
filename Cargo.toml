@@ -213,8 +213,9 @@ objc = "0.2"
 block = "0.1"
 
 [workspace]
-members = ["crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vdi/host", "vendor/gpui", "vendor/rust-pulsectl", "vendor/hwcodec"]
+resolver = "3"
+members = ["vendor/hwcodec", "experiments/gpui-validation", "experiments/gpui-mobile-management", "crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
+exclude = ["vendor/gpui", "vendor/rust-pulsectl"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone
@@ -248,14 +249,6 @@ identifier = "com.carriez.rustdesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
 osx_minimum_system_version = "10.14"
 
-#https://github.com/johnthagen/min-sized-rust
-[profile.release]
-lto = true
-codegen-units = 1
-panic = 'abort'
-strip = true
-#opt-level = 'z' # only have smaller size after strip
-rpath = true
-
+# Preserve the profiles previously used by the standalone product workspaces.
 [profile.dev]
-debug = 1
+debug = 0

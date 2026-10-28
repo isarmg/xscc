@@ -480,7 +480,7 @@ impl Encoder {
     }
 
     pub fn use_i444(config: &EncoderCfg) -> bool {
-        let decodings = PEER_DECODINGS.lock().unwrap().clone();
+        let decodings = PEER_DECODINGS.lock().unwrap();
         let prefer_i444 = decodings
             .iter()
             .all(|d| d.1.prefer_chroma == Chroma::I444.into());
@@ -866,10 +866,10 @@ impl Decoder {
     ) -> ResultType<bool> {
         let mut ret = false;
         for h264 in frames.frames.iter() {
-            for image in decoder.decode(&h264.data)? {
-                // TODO: just process the last frame
+            for image in decoder.decode(&h264.data)?.into_iter().rev() {
                 if image.to_fmt(rgb, i420).is_ok() {
                     ret = true;
+                    break;
                 }
             }
         }

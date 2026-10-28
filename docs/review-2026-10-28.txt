@@ -1,0 +1,48 @@
+2026-10-28 审查建议核实与实现
+
+范围
+用户提供 XSCC 与 XSCS 两份第三方审查会话。按当前源码核实建议，不把其中的示例、平台收缩和时间估算视为用户指令。XSCS 的独立改动已在其仓库 main bad4d1d 提交；本文件记录 XSCC。
+
+已实现
+1. 根 Rust 核心、桌面、移动产品及已内嵌 hwcodec 统一工作区/锁文件。以 beta.12 桌面锁为解析基线，逐项核对保留桌面 1146 个、移动 1138 个旧包的名称、版本、来源和 checksum；合并后 1199 个包。新增的是原根工作区及移动测试的既有依赖，不将锁文件中可选历史包误当成 Android 生产依赖。
+2. 保留现有 iOS libc=0.2.189。根 resolver=3 与之前 edition2024 产品一致。移除原来只作用于旧根构建、未被独立产品使用的 release profile；继续使用此前正式产品的 Cargo release 默认值，开发 debug=0。Windows build-info 和 Android 产物都保存根锁文件来源。
+3. FFmpeg RAM 同步 callback 复用上一包已归还的 NV12/YUV420 plane Vec，公开借用和 C ABI 不变，不跨帧复用 GPU 裸句柄。同尺寸、格式和步长稳态原四次堆分配降为零；布局变化会释放旧帧缓冲，CPU plane 数据仍复制。参考帧完整解码，只对同次 decode 返回的最后一张可转换图像做 RGB 转换。
+4. use_i444 读取能力表时借用，删除整表 clone。删除零调用的 NativeManager::policy，避免复制包含会话密钥的全部策略。当前状态、授权租约和撤权检查不变。
+5. gpui-host 增加一秒窗口数字观测：采集耗时及 Ready/Empty/WouldBlock/Failed 数量、转换耗时、Fresh/Replay/Repeat 编码分发平均/最大耗时和目标周期。encode_calls 是尝试次数，不能当作成功码流 FPS；不新增线程、锁、依赖或身份/凭据字段。capture_gdi 在 Windows 记录捕获器现有 is_gdi 观察，其余平台为2（未知）；portable 捕获代理的该观察不能证明后台真实捕获方式。
+6. Windows/Unix 桌面候选流程也由 PR 触发。原生 hwcodec 单元测试的既有 Windows 开发助手链接 SDL，运行时路径仅在该 CI 测试进程内补齐，不进入产品。Linux host 增加 DRM/drm-wake 编译；真实原生库构建后运行三项解码缓冲回归，拒绝空过滤。来源检查验证 hwcodec 459 个原始导入文件，排除 upstream.json 已明确登记的本地补丁；不篡改原始 hash 清单。新增三项来源检查合同回归。
+
+未照搬的结论
+- Rust 1.99 的 Windows 非零 thread::sleep 已用高精度 waitable timer；官方实现 library/std/src/sys/thread/windows.rs108-135。没有新增全局 timeBeginPeriod 或第二套计时器。
+- 当前 streaming 路径没有等待旧三秒 ACK 屏障；Windows GPUI 也没有绘制后再固定睡一个刷新周期的证据。
+- drm_capturer.rs 报告的3358行 Xcursor 乘法位于 cfg(test) 的 ignored 本地主题调查，不是生产捕获入口。没有将它冒报为生产越界漏洞。
+- 当前正常 VideoHandler 输出 ARGB，ABGR 标量交换不在这条实际路径；没有改无关分支。
+- Linux 的直接 NV12 转换微基准优于两段转换，但不足以覆盖旧 Windows 注释中的实测依据，本版保留 Windows 路径。
+- 不删除跨时间授权复核、密码/持久化边界、安全源校验、慢会话资源边界；不按未验证的理论估算重写采集线程/GPU 纹理生命周期。
+- GPUI vendor 独立开发工作区、历史可选源码、全仓品牌/安装目录迁移和进一步拆 crate 不包含在本批改动。
+
+测量边界
+安装中的 beta.12 已确认实际采用 HEVC/D3D11VA；旧 beta.11 的软件-only 探测不能代表本轮。精确对齐 45 秒诊断：CPU 生成119.88 FPS、诊断 GPUI 提交57.30 FPS，稳定窗口21项一秒样本中真实会话接收中位28/解码29/提交28 FPS，decode p95 的一秒样本中位23.25ms。该数字是优化前基准，不能标成 beta.13 提升，也不是物理显示 scanout。第一次30秒诊断的尾部49-50样本位于诊断结束后，已纠正。
+50帧缓冲局部微基准减少200次分配到0，但1080p和4K中位仅分别节省约0.05ms，不能宣称解决约15ms整段解码处理。Android 用户尚未安装 beta.12，实体手机帧率无新结论。
+
+既有文件与运行路径变更面
+Cargo.toml：产品工作区、解析器和编译配置统一；为核心测试消费产品实际依赖所必需。
+Cargo.lock：唯一产品解析结果；桌面和移动旧包的版本/来源/checksum保留。
+experiments/gpui-validation/Cargo.toml、experiments/gpui-mobile-management/Cargo.toml：移除独立工作区及重复 patch/profile，保留功能与 iOS 版本限制。
+experiments/gpui-validation/Cargo.lock、experiments/gpui-mobile-management/Cargo.lock：删除独立锁，防止再次测试A发布B。
+crates/native-management/src/manager.rs：仅删零调用整表密钥复制接口及无用导入。
+libs/scrap/src/common/codec.rs：只读能力表借用、同包最后可用图像转换；不改变参考帧解码顺序。
+vendor/hwcodec/src/ffmpeg_ram/decode.rs：仅同步 CPU 输出缓冲所有权和 FFI plane 复制边界；返回借用和 C ABI 保留。
+vendor/hwcodec/UPSTREAM.md、vendor/hwcodec/upstream.json：登记本地解码修改；原始导入清单保留。
+src/server/video_service.rs：gpui-host 阶段计时薄钩；原编码、QoS、队列和睡眠顺序保留。新增私有 metrics.rs 承载观测和两项回归。
+.github/scripts/check-gpui-workflows.py：统一依赖和 vendor 导入来源门禁；新增来源合同测试脚本。
+.github/scripts/validate-gpui-unix.sh：真实原生依赖下运行三项缓冲回归并拒绝空测试。
+.github/scripts/package-gpui-windows.ps1：build-info 锁文件指纹改为唯一根锁。
+.github/workflows/ci.yml：运行来源合同回归。
+.github/workflows/gpui-windows-beta.yml：PR覆盖、真实缓冲测试和beta.13候选编号。
+.github/workflows/gpui-unix-beta.yml：PR覆盖、可选DRM编译和beta.13候选编号。
+.github/workflows/gpui-android-smoke.yml：产物附带根锁，仍执行现有生产能力白名单。
+packaging/gpui-android/app/build.gradle：版本码13，确保安装升级消费这次新源码。
+docs/development.md：说明真实统一锁边界和PR/DRM验证入口。
+
+验证结果与产物
+本地管理两库在统一锁下26项测试和 Clippy -D warnings 通过；实际软件捕获 GPUI host 集成编译及移动产品43项主机回归通过；产品格式、现有打包/发布/移动测试门禁、来源三项合同通过。解码私有同步输出的三项局部回归、Host计时模块两项回归通过。实际 Windows/Unix FFmpeg C ABI、完整各平台构建、安装后帧率和手机实机由同一最终提交 CI/运行记录继续单独验收；未完成部分不标成通过。

@@ -55,9 +55,22 @@ impl std::fmt::Display for DecodeFrame {
     }
 }
 
+#[derive(Default)]
+struct DecodeOutput {
+    frames: Vec<DecodeFrame>,
+    reusable: Vec<DecodeFrame>,
+}
+
+impl DecodeOutput {
+    fn begin_packet(&mut self) {
+        self.reusable.clear();
+        self.reusable.append(&mut self.frames);
+    }
+}
+
 pub struct Decoder {
     codec: *mut c_void,
-    frames: *mut Vec<DecodeFrame>,
+    frames: *mut DecodeOutput,
     pub ctx: DecodeContext,
 }
 
@@ -81,7 +94,7 @@ impl Decoder {
 
             Ok(Decoder {
                 codec,
-                frames: Box::into_raw(Box::new(Vec::<DecodeFrame>::new())),
+                frames: Box::into_raw(Box::new(DecodeOutput::default())),
                 ctx,
             })
         }
@@ -89,7 +102,7 @@ impl Decoder {
 
     pub fn decode(&mut self, packet: &[u8]) -> Result<&mut Vec<DecodeFrame>, i32> {
         unsafe {
-            (&mut *self.frames).clear();
+            (&mut *self.frames).begin_packet();
             let ret = ffmpeg_ram_decode(
                 self.codec,
                 packet.as_ptr(),
@@ -100,7 +113,7 @@ impl Decoder {
             if ret < 0 {
                 Err(ret)
             } else {
-                Ok(&mut *self.frames)
+                Ok(&mut (*self.frames).frames)
             }
         }
     }
@@ -114,47 +127,70 @@ impl Decoder {
         datas: *mut *mut u8,
         key: c_int,
     ) {
-        let frames = &mut *(obj as *mut Vec<DecodeFrame>);
+        let output = &mut *(obj as *mut DecodeOutput);
         let datas = from_raw_parts(datas, AV_NUM_DATA_POINTERS as _);
         let linesizes = from_raw_parts(linesizes, AV_NUM_DATA_POINTERS as _);
-
-        let mut frame = DecodeFrame {
-            pixfmt: std::mem::transmute(pixfmt),
-            width,
-            height,
-            data: vec![],
-            linesize: vec![],
-            key: key != 0,
+        let (format, planes) = if pixfmt == AVPixelFormat::AV_PIX_FMT_YUV420P as c_int {
+            (AVPixelFormat::AV_PIX_FMT_YUV420P, 3)
+        } else if pixfmt == AVPixelFormat::AV_PIX_FMT_NV12 as c_int {
+            (AVPixelFormat::AV_PIX_FMT_NV12, 2)
+        } else {
+            error!("unsupported pixfmt {}", pixfmt);
+            return;
         };
 
-        if pixfmt == AVPixelFormat::AV_PIX_FMT_YUV420P as c_int {
-            let y = from_raw_parts(datas[0], (linesizes[0] * height) as usize).to_vec();
-            let u = from_raw_parts(datas[1], (linesizes[1] * height / 2) as usize).to_vec();
-            let v = from_raw_parts(datas[2], (linesizes[2] * height / 2) as usize).to_vec();
-
-            frame.data.push(y);
-            frame.data.push(u);
-            frame.data.push(v);
-
-            frame.linesize.push(linesizes[0]);
-            frame.linesize.push(linesizes[1]);
-            frame.linesize.push(linesizes[2]);
-
-            frames.push(frame);
-        } else if pixfmt == AVPixelFormat::AV_PIX_FMT_NV12 as c_int {
-            let y = from_raw_parts(datas[0], (linesizes[0] * height) as usize).to_vec();
-            let uv = from_raw_parts(datas[1], (linesizes[1] * height / 2) as usize).to_vec();
-
-            frame.data.push(y);
-            frame.data.push(uv);
-
-            frame.linesize.push(linesizes[0]);
-            frame.linesize.push(linesizes[1]);
-
-            frames.push(frame);
-        } else {
-            error!("unsupported pixfmt {}", pixfmt as i32);
+        if width <= 0 || height <= 0 {
+            return;
         }
+        let mut lengths = [0; 3];
+        for plane in 0..planes {
+            let rows = if plane == 0 {
+                height as usize
+            } else {
+                (height as usize).div_ceil(2)
+            };
+            let Ok(stride) = usize::try_from(linesizes[plane]) else {
+                return;
+            };
+            let Some(length) = stride.checked_mul(rows) else {
+                return;
+            };
+            if length == 0 || datas[plane].is_null() {
+                return;
+            }
+            lengths[plane] = length;
+        }
+
+        let mut frame = output
+            .reusable
+            .pop()
+            .filter(|frame| {
+                frame.pixfmt == format
+                    && frame.width == width
+                    && frame.height == height
+                    && frame.linesize.as_slice() == &linesizes[..planes]
+            })
+            .unwrap_or_else(|| DecodeFrame {
+                pixfmt: format,
+                width,
+                height,
+                data: Vec::new(),
+                linesize: Vec::new(),
+                key: key != 0,
+            });
+        frame.pixfmt = format;
+        frame.width = width;
+        frame.height = height;
+        frame.key = key != 0;
+        frame.data.resize_with(planes, Vec::new);
+        frame.linesize.clear();
+        frame.linesize.extend_from_slice(&linesizes[..planes]);
+        for plane in 0..planes {
+            let bytes = from_raw_parts(datas[plane], lengths[plane]);
+            frame.data[plane].clear();
+            frame.data[plane].extend_from_slice(bytes);
+        }
+        output.frames.push(frame);
     }
 
     pub fn available_decoders() -> Vec<CodecInfo> {
@@ -334,5 +370,87 @@ impl Drop for Decoder {
             self.codec = std::ptr::null_mut();
             let _ = Box::from_raw(self.frames);
         }
+    }
+}
+
+#[cfg(test)]
+mod decode_output_tests {
+    use super::*;
+
+    fn emit(output: &mut DecodeOutput, width: i32, height: i32, format: AVPixelFormat, value: u8) {
+        let planes = if format == AVPixelFormat::AV_PIX_FMT_NV12 {
+            2
+        } else {
+            3
+        };
+        let mut data = vec![vec![value; (width * height) as usize]];
+        for _ in 1..planes {
+            data.push(vec![value + 1; (width * ((height + 1) / 2)) as usize]);
+        }
+        let mut pointers = [std::ptr::null_mut(); AV_NUM_DATA_POINTERS as usize];
+        let mut strides = [0; AV_NUM_DATA_POINTERS as usize];
+        for index in 0..planes {
+            pointers[index] = data[index].as_mut_ptr();
+            strides[index] = width;
+        }
+        unsafe {
+            Decoder::callback(
+                output as *mut _ as _,
+                width,
+                height,
+                format as _,
+                strides.as_mut_ptr(),
+                pointers.as_mut_ptr(),
+                0,
+            );
+        }
+    }
+
+    #[test]
+    fn nv12_output_reuses_plane_allocations_without_retaining_old_pixels() {
+        let mut output = DecodeOutput::default();
+        emit(&mut output, 32, 16, AVPixelFormat::AV_PIX_FMT_NV12, 10);
+        let pointers: Vec<_> = output.frames[0].data.iter().map(|p| p.as_ptr()).collect();
+        output.begin_packet();
+        emit(&mut output, 32, 16, AVPixelFormat::AV_PIX_FMT_NV12, 20);
+        let frame = &output.frames[0];
+        assert_eq!(
+            frame.data.iter().map(|p| p.as_ptr()).collect::<Vec<_>>(),
+            pointers
+        );
+        assert!(frame.data[0].iter().all(|v| *v == 20));
+        assert!(frame.data[1].iter().all(|v| *v == 21));
+    }
+
+    #[test]
+    fn decoded_output_preserves_packet_order_and_resizes_odd_height_planes() {
+        let mut output = DecodeOutput::default();
+        emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 1);
+        emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 2);
+        output.begin_packet();
+        emit(&mut output, 24, 9, AVPixelFormat::AV_PIX_FMT_YUV420P, 3);
+        emit(&mut output, 24, 9, AVPixelFormat::AV_PIX_FMT_YUV420P, 4);
+        assert_eq!(output.frames.len(), 2);
+        for (frame, value) in output.frames.iter().zip([3, 4]) {
+            assert_eq!((frame.width, frame.height), (24, 9));
+            assert_eq!(
+                frame.data.iter().map(Vec::len).collect::<Vec<_>>(),
+                [216, 120, 120]
+            );
+            assert!(frame.data[0].iter().all(|v| *v == value));
+            assert!(frame.data[1].iter().all(|v| *v == value + 1));
+        }
+    }
+
+    #[test]
+    fn packet_without_decoded_output_exposes_no_stale_frame() {
+        let mut output = DecodeOutput::default();
+        emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 1);
+        output.begin_packet();
+        assert!(output.frames.is_empty());
+        output.begin_packet();
+        emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 2);
+        assert_eq!(output.frames.len(), 1);
+        assert!(output.frames[0].data[0].iter().all(|v| *v == 2));
     }
 }

@@ -13,6 +13,9 @@ cargo clippy --locked --manifest-path "$manifest" --no-default-features --featur
 cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target"
 # Test the same native role feature set that ships.
 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
+decode_tests=$(cargo test --locked -p hwcodec --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
+printf '%s\n' "$decode_tests"
+grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }
 cargo test --locked -p xscc-native-management --target "$target"
 cargo test --locked -p hbb_common --lib --target "$target" tcp::tests
 cargo test --locked -p scrap --lib --target "$target" codec::rate_control::tests::

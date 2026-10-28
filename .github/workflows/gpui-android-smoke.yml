@@ -258,7 +258,7 @@ jobs:
           python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
           cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
-          cp "$WORKSPACE/Cargo.lock" dist/gpui-android/
+          cp "$GITHUB_WORKSPACE/Cargo.lock" dist/gpui-android/
           scope="$FLAVOR-preview"
           signing=disposable-debug-key
           if [ "$FLAVOR" = management ]; then signing=repository-preview-key; fi

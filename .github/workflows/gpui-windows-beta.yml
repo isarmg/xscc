@@ -32,12 +32,13 @@ on:
       - 'packaging/gpui-windows/**'
       - '.github/workflows/gpui-windows-beta.yml'
       - '.github/scripts/*gpui*'
+  pull_request:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Candidate version, e.g. 0.1.0-beta.12 (does not create a tag or release)'
+        description: 'Candidate version, e.g. 0.1.0-beta.13 (does not create a tag or release)'
         required: true
-        default: '0.1.0-beta.12'
+        default: '0.1.0-beta.13'
         type: string
 permissions:
   contents: read
@@ -66,7 +67,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.12' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.13' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -74,7 +75,7 @@ jobs:
       - name: Validate candidate label
         run: |
           if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
-            throw 'Expected a numeric version such as 0.1.0-beta.12'
+            throw 'Expected a numeric version such as 0.1.0-beta.13'
           }
       - name: Verify beta packager rejects stable versions
         run: |
@@ -144,6 +145,16 @@ jobs:
         run: cargo clippy --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Test Windows preview
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
+      - name: Test FFmpeg decoded-plane reuse with native bindings
+        if: matrix.role == 'controller'
+        run: |
+          $env:PATH = (Resolve-Path vendor/hwcodec/externals/SDL/lib/x64).Path + [IO.Path]::PathSeparator + $env:PATH
+          $decodeTests = & cargo test --locked -p hwcodec --lib --target x86_64-pc-windows-msvc ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1
+          $decodeExit = $LASTEXITCODE
+          $decodeTests | Write-Output
+          if ($decodeExit -ne 0 -or ($decodeTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
+            throw 'Native decoded-plane reuse regression tests failed or did not run all three tests'
+          }
       - name: Test native session and host regression coverage
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
       - name: Test configurable virtual display mode preservation
@@ -228,7 +239,7 @@ jobs:
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.12' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '0.1.0-beta.13' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

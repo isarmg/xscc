@@ -18,6 +18,9 @@
 // to-do:
 // https://slhck.info/video/2017/03/01/rate-control.html
 
+#[cfg(feature = "gpui-host")]
+mod metrics;
+
 use super::video_pipeline::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
 #[cfg(target_os = "linux")]
@@ -709,6 +712,8 @@ fn run_encoder(
     // Set once the encoder emits its first packet; until then it may legitimately return nothing.
     let mut encoder_warmed_up = false;
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
+    #[cfg(feature = "gpui-host")]
+    let mut stages = metrics::Metrics::new(Instant::now());
 
     while sp.ok() {
         // A static desktop still needs a fresh reference frame for newly joined viewers.
@@ -729,6 +734,12 @@ fn run_encoder(
             &sp.name(),
             sp,
         )?;
+        #[cfg(feature = "gpui-host")]
+        if let Some(sample) = stages.sample(Instant::now(), spf) {
+            #[cfg(windows)]
+            let sample = sample.with_capture_gdi(c.is_gdi());
+            log::info!(target: "xscc::host_video_metrics", "host_video_pipeline {sample}");
+        }
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
         // not yet produced its first packet, restarting the warm-up forever. Defer until it has;
         // one that never does is still switched away from by max_fail_times in handle_one_frame.
@@ -789,6 +800,8 @@ fn run_encoder(
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
         let res = if replay_cached {
             replay_cached = false;
+            #[cfg(feature = "gpui-host")]
+            let encode_started = Instant::now();
             let ids = handle_one_frame(
                 display_idx,
                 &sp,
@@ -799,11 +812,26 @@ fn run_encoder(
                 &mut first_frame,
                 &mut encoder_warmed_up,
             )?;
+            #[cfg(feature = "gpui-host")]
+            stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Replay);
             frame_controller.set_send(now, ids);
             send_counter += 1;
             Ok(())
         } else {
-            match c.frame(spf) {
+            #[cfg(feature = "gpui-host")]
+            let capture_started = Instant::now();
+            let captured = c.frame(spf);
+            #[cfg(feature = "gpui-host")]
+            stages.captured(
+                capture_started.elapsed(),
+                match &captured {
+                    Ok(frame) if frame.valid() => metrics::CaptureState::Ready,
+                    Ok(_) => metrics::CaptureState::Empty,
+                    Err(error) if error.kind() == WouldBlock => metrics::CaptureState::WouldBlock,
+                    Err(_) => metrics::CaptureState::Failed,
+                },
+            );
+            match captured {
                 Ok(frame) => {
                     repeat_encode_counter = 0;
                     if frame.valid() {
@@ -856,8 +884,14 @@ fn run_encoder(
 
                         cached.texture = matches!(frame, scrap::Frame::Texture(_));
                         cached.format = (!cached.texture).then(|| encoder.yuvfmt());
+                        #[cfg(feature = "gpui-host")]
+                        let convert_started = Instant::now();
                         let frame = frame.to(encoder.yuvfmt(), &mut cached.yuv, &mut mid_data)?;
+                        #[cfg(feature = "gpui-host")]
+                        stages.converted(convert_started.elapsed());
                         cached.valid = !cached.texture;
+                        #[cfg(feature = "gpui-host")]
+                        let encode_started = Instant::now();
                         let send_conn_ids = handle_one_frame(
                             display_idx,
                             &sp,
@@ -868,6 +902,8 @@ fn run_encoder(
                             &mut first_frame,
                             &mut encoder_warmed_up,
                         )?;
+                        #[cfg(feature = "gpui-host")]
+                        stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Fresh);
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
                     }
@@ -905,6 +941,8 @@ fn run_encoder(
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
+                        #[cfg(feature = "gpui-host")]
+                        let encode_started = Instant::now();
                         let send_conn_ids = handle_one_frame(
                             display_idx,
                             &sp,
@@ -915,6 +953,8 @@ fn run_encoder(
                             &mut first_frame,
                             &mut encoder_warmed_up,
                         )?;
+                        #[cfg(feature = "gpui-host")]
+                        stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Repeat);
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
                     }

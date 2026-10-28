@@ -11,8 +11,6 @@ name = "xscc_gpui_android_management"
 path = "src/android.rs"
 crate-type = ["cdylib"]
 
-[workspace]
-
 [features]
 default = ["mobile-management"]
 mobile-management = []
@@ -51,9 +49,3 @@ tempfile = "3"
 # Keep test infrastructure outside Android/iOS checks and all production builds.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dev-dependencies]
 gpui_test_support = { package = "gpui", path = "../../vendor/gpui/crates/gpui", default-features = false, features = ["test-support"] }
-
-[patch.crates-io]
-tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
-
-[profile.dev]
-debug = 0

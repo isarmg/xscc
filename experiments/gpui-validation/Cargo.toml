@@ -6,8 +6,6 @@ rust-version = "1.99"
 license = "AGPL-3.0-only"
 publish = false
 
-[workspace]
-
 [features]
 mobile-management = []
 live-session = ["dep:librustdesk", "librustdesk/hwcodec"]
@@ -42,11 +40,6 @@ librustdesk = { package = "rustdesk", path = "../..", default-features = false, 
 [target.'cfg(target_os = "android")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
-[patch.crates-io]
-tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
-
-[profile.dev]
-debug = 0
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winres = "0.1"
