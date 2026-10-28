@@ -35,3 +35,10 @@ The FFmpeg RAM decoder reuses its previous packet's owned pixel-plane buffers.
 The synchronous callback still copies FFmpeg-owned planes before returning; no
 GPU resources or borrowed codec frame pointers escape to the application. Each
 packet clears the visible output before decode, including no-output/error paths.
+
+The common, FFmpeg RAM and mux binding generators allowlist their actual C
+interface types, functions and constants. Recursive dependency types remain
+enabled, as do bindgen layout tests. This avoids importing unrelated Darwin
+libc records whose old bindgen 0.59 field-offset tests dereference null pointers;
+the native decoded-plane regression tests remain enabled. No C ABI or codec
+link dependencies change.

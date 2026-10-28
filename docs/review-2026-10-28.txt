@@ -30,9 +30,11 @@ Cargo.lock：唯一产品解析结果；桌面和移动旧包的版本/来源/ch
 experiments/gpui-validation/Cargo.toml、experiments/gpui-mobile-management/Cargo.toml：移除独立工作区及重复 patch/profile，保留功能与 iOS 版本限制。
 experiments/gpui-validation/Cargo.lock、experiments/gpui-mobile-management/Cargo.lock：删除独立锁，防止再次测试A发布B。
 crates/native-management/src/manager.rs：仅删零调用整表密钥复制接口及无用导入。
+libs/base/src/direct_transport/quic.rs：统一产品依赖后 LengthDelimitedCodec 同时实现 Bytes 与 &[u8] 编码，显式指定已有 Bytes 发送类型，消除 flush 的类型歧义；原有刷新、FIN、确认等待和授权复核顺序不变。
 libs/scrap/src/common/codec.rs：只读能力表借用、同包最后可用图像转换；不改变参考帧解码顺序。
 vendor/hwcodec/src/ffmpeg_ram/decode.rs：仅同步 CPU 输出缓冲所有权和 FFI plane 复制边界；返回借用和 C ABI 保留。
 vendor/hwcodec/UPSTREAM.md、vendor/hwcodec/upstream.json：登记本地解码修改；原始导入清单保留。
+vendor/hwcodec/build.rs：common、RAM、mux 三个生成器只绑定项目真实 C 接口，保留递归依赖及布局测试；修复原生测试编译时引入无关 Darwin libc 结构的旧 bindgen 空指针偏移测试。13/11/4 项实际接口声明在局部真实生成对比中不变；完整 macOS C ABI 仍由最终提交 CI 验证。
 src/server/video_service.rs：gpui-host 阶段计时薄钩；原编码、QoS、队列和睡眠顺序保留。新增私有 metrics.rs 承载观测和两项回归。
 .github/scripts/check-gpui-workflows.py：统一依赖和 vendor 导入来源门禁；新增来源合同测试脚本。
 .github/scripts/validate-gpui-unix.sh：真实原生依赖下运行三项缓冲回归并拒绝空测试。

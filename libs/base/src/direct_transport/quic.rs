@@ -434,7 +434,7 @@ impl ReliableLane {
             &self.binding,
             self.authorization.as_ref(),
             async {
-                send.flush().await?;
+                SinkExt::<Bytes>::flush(send).await?;
                 send.get_mut().finish()?;
                 if send.get_ref().stopped().await?.is_some() {
                     bail!("QUIC reliable direction stopped before acknowledgement");

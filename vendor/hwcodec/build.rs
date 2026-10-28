@@ -29,6 +29,9 @@ fn build_common(builder: &mut Build) {
         .header(common_dir.join("common.h").to_string_lossy().to_string())
         .header(common_dir.join("callback.h").to_string_lossy().to_string())
         .rustified_enum("*")
+        // Keep the FFI boundary, not unrelated libc records from stdint.h.
+        .allowlist_type("(?:AdapterVendor|SurfaceFormat|DataFormat|Vendor|Quality|RateControl|HwcodecErrno|EncodeCallback|DecodeCallback)")
+        .allowlist_var("(?:MAX_GOP|TEST_TIMEOUT_MS|ENCODE_TIMEOUT_MS|DECODE_TIMEOUT_MS)")
         .parse_callbacks(Box::new(CommonCallbacks))
         .generate()
         .unwrap()
@@ -231,6 +234,9 @@ mod ffmpeg {
             .to_string();
         bindgen::builder()
             .header(ffi_header)
+            .allowlist_function("ffmpeg_ram_.*")
+            .allowlist_type("(?:RamDecodeCallback|RamEncodeCallback)")
+            .allowlist_var("AV_NUM_DATA_POINTERS")
             .rustified_enum("*")
             .generate()
             .unwrap()
@@ -269,6 +275,7 @@ mod ffmpeg {
         let mux_header = mux_dir.join("mux_ffi.h").to_string_lossy().to_string();
         bindgen::builder()
             .header(mux_header)
+            .allowlist_function("hwcodec_.*")
             .rustified_enum("*")
             .generate()
             .unwrap()
