@@ -352,7 +352,7 @@ impl ConnInner {
     pub(super) fn send_video(&self, message: Arc<Message>) -> bool {
         let writer = self.video_writer.lock().unwrap();
         if let Some(writer) = writer.as_ref() {
-            // A full queue fails this receiver rather than dropping a P-frame and continuing.
+            // Congested displays resume only on a newly queued keyframe.
             let _ = writer.send_video(message);
             false
         } else {
@@ -566,7 +566,13 @@ impl Connection {
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
 
         loop {
+            let video_refresh = conn.stream.video_refresh_requested();
             tokio::select! {
+                displays = video_refresh => {
+                    for display in displays {
+                        conn.refresh_video_display(Some(display));
+                    }
+                }
                 // Both end an unauthorized connection at once, not on the next timer tick:
                 // told to go to make room, or past the grace for its authorization. Neither
                 // fires once the connection has authorized.
@@ -2923,7 +2929,7 @@ impl Connection {
                     let id = self.inner.id();
                     let acknowledge = !self.video_ack_required;
                     // Old queued reference frames must precede all direct producer frames.
-                    // Overflow marks the writer failed; its reader then closes this session.
+                    // Discarded references enter keyframe recovery, but still release their old barrier.
                     allow_err!(
                         writer.migrate_video(&mut self.rx_video, |instant, message| {
                             if acknowledge {

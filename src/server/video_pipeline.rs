@@ -1,23 +1,24 @@
 //! Bounded TCP egress for explicitly selected low-latency streaming sessions.
 use crate::session_transport::SessionTransport;
-use base::message_proto::{login_response, message, misc, Message};
+use base::message_proto::{login_response, message, misc, video_frame, Message};
 use hbb_common::{
     anyhow::{anyhow, Context},
     bytes::BytesMut,
     tcp::{FramedStreamReader, FramedStreamWriter},
     tokio::{
         self,
-        sync::{mpsc, oneshot, watch},
+        sync::{mpsc, oneshot, watch, Notify},
         task::JoinHandle,
-        time::{timeout, Duration},
+        time::{timeout, Duration, Instant},
     },
     ResultType,
 };
 use std::{
+    collections::{HashMap, VecDeque},
     fmt, io,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -87,41 +88,141 @@ enum Payload {
     Raw(Vec<u8>),
 }
 
+const CONTROL_ADMISSION_TIMEOUT: Duration = Duration::from_millis(250);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct MediaQueues {
+    audio: VecDeque<Packet>,
+    video: VecDeque<Packet>,
+    frames: usize,
+    metadata: usize,
+    audio_next: bool,
+    recovering: HashMap<usize, u64>,
+    last_refresh: Option<Instant>,
+    progress: u64,
+    closed: bool,
+}
+
+struct MediaReceiver {
+    queues: Arc<Mutex<MediaQueues>>,
+    refresh: Arc<Notify>,
+}
+impl Drop for MediaReceiver {
+    fn drop(&mut self) {
+        let mut queues = self.queues.lock().unwrap();
+        queues.closed = true;
+        queues.audio.clear();
+        queues.video.clear();
+        queues.recovering.clear();
+        drop(queues);
+        self.refresh.notify_one();
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct VideoWriter {
     control: mpsc::Sender<Packet>,
-    audio: mpsc::Sender<Packet>,
-    video: mpsc::Sender<Packet>,
+    media: Arc<Mutex<MediaQueues>>,
+    available: Arc<Notify>,
+    refresh: Arc<Notify>,
     failure: watch::Sender<Option<String>>,
     send_timeout: Arc<AtomicU64>,
 }
 
+fn encoded_video(message: &Message) -> Option<(usize, bool)> {
+    let Some(message::Union::VideoFrame(frame)) = &message.union else {
+        return None;
+    };
+    let frames = match &frame.union {
+        Some(
+            video_frame::Union::Vp8s(frames)
+            | video_frame::Union::Vp9s(frames)
+            | video_frame::Union::H264s(frames)
+            | video_frame::Union::H265s(frames)
+            | video_frame::Union::Av1s(frames),
+        ) => frames,
+        // RGB/YUV are headers for separately sent planes, not independently droppable frames.
+        _ => return None,
+    };
+    Some((
+        frame.display as usize,
+        frames.frames.first().is_some_and(|frame| frame.key),
+    ))
+}
+
+fn packet_video(packet: &Packet) -> Option<(usize, bool)> {
+    match &packet.payload {
+        Payload::Message(message) => encoded_video(message),
+        _ => None,
+    }
+}
+
+fn discard_media(packet: Packet) {
+    if let Some(completed) = packet.completed {
+        let _ = completed.send(Ok(()));
+    }
+}
+
 impl VideoWriter {
-    fn enqueue(&self, packet: Packet) -> ResultType<()> {
+    fn fail(&self, reason: &str) -> hbb_common::anyhow::Error {
+        self.failure.send_replace(Some(reason.to_owned()));
+        anyhow!(reason.to_owned())
+    }
+
+    fn enqueue_media(&self, packet: Packet) -> ResultType<()> {
         if self.failure.borrow().is_some() {
             return Err(anyhow!("streaming writer is unavailable"));
         }
-        let queue = match &packet.payload {
-            Payload::Message(message) if video_message(message) => &self.video,
-            Payload::Message(message)
-                if matches!(message.union, Some(message::Union::AudioFrame(_))) =>
-            {
-                &self.audio
+        let mut queues = self.media.lock().unwrap();
+        if queues.closed {
+            return Err(anyhow!("streaming writer closed"));
+        }
+        if matches!(&packet.payload, Payload::Message(message) if matches!(message.union, Some(message::Union::AudioFrame(_))))
+        {
+            if queues.audio.len() == AUDIO_QUEUE {
+                if let Some(old) = queues.audio.pop_front() {
+                    discard_media(old);
+                }
             }
-            _ => &self.control,
-        };
-        queue.try_send(packet).map_err(|error| {
-            let reason = match error {
-                mpsc::error::TrySendError::Full(_) => "streaming receiver queue exhausted",
-                mpsc::error::TrySendError::Closed(_) => "streaming writer closed",
-            };
-            self.failure.send_replace(Some(reason.to_owned()));
-            anyhow!(reason)
-        })
+            queues.audio.push_back(packet);
+        } else if let Some((display, key)) = packet_video(&packet) {
+            if queues.recovering.contains_key(&display) && !key {
+                discard_media(packet);
+                return Ok(());
+            }
+            if queues.frames == VIDEO_QUEUE {
+                if !queues.recovering.contains_key(&display)
+                    && queues.recovering.len() == CONTROL_QUEUE
+                {
+                    drop(queues);
+                    return Err(self.fail("streaming recovery display limit exceeded"));
+                }
+                let progress = queues.progress;
+                queues.recovering.entry(display).or_insert(progress);
+                discard_media(packet);
+                drop(queues);
+                self.refresh.notify_one();
+                return Ok(());
+            }
+            queues.recovering.remove(&display);
+            queues.frames += 1;
+            queues.video.push_back(packet);
+        } else {
+            if queues.metadata == CONTROL_QUEUE {
+                drop(queues);
+                return Err(self.fail("streaming display metadata queue exhausted"));
+            }
+            queues.metadata += 1;
+            queues.video.push_back(packet);
+        }
+        drop(queues);
+        self.available.notify_one();
+        Ok(())
     }
 
     pub(super) fn send_video(&self, message: Arc<Message>) -> ResultType<()> {
-        self.enqueue(Packet {
+        self.enqueue_media(Packet {
             payload: Payload::Message(message),
             completed: None,
         })
@@ -134,20 +235,90 @@ impl VideoWriter {
         mut fetched: impl FnMut(T, &Message),
     ) -> ResultType<()> {
         while let Ok((instant, message)) = legacy.try_recv() {
-            self.send_video(message.clone())?;
+            let result = self.send_video(message.clone());
             fetched(instant, &message);
+            result?;
         }
         Ok(())
     }
 
+    async fn refresh_requested(&self) -> Vec<usize> {
+        loop {
+            let notified = self.refresh.notified();
+            let mut next = None;
+            let mut ready = Vec::new();
+            let closed;
+            {
+                let mut queues = self.media.lock().unwrap();
+                closed = queues.closed;
+                if !closed && queues.frames < VIDEO_QUEUE {
+                    let progress = queues.progress;
+                    let now = Instant::now();
+                    let deadline = queues.last_refresh.map(|last| last + REFRESH_INTERVAL);
+                    if queues.recovering.values().any(|floor| *floor != progress) {
+                        if deadline.is_none_or(|deadline| now >= deadline) {
+                            for (display, floor) in &mut queues.recovering {
+                                if *floor != progress {
+                                    *floor = progress;
+                                    ready.push(*display);
+                                }
+                            }
+                            queues.last_refresh = Some(now);
+                        } else {
+                            next = deadline;
+                        }
+                    }
+                }
+            }
+            if closed {
+                return std::future::pending().await;
+            }
+            if !ready.is_empty() {
+                return ready;
+            }
+            if let Some(deadline) = next {
+                tokio::select! { _ = notified => {}, _ = tokio::time::sleep_until(deadline) => {} }
+            } else {
+                notified.await;
+            }
+        }
+    }
+
     async fn send(&self, payload: Payload, wait: bool) -> ResultType<()> {
+        if self.failure.borrow().is_some() {
+            return Err(anyhow!("streaming writer is unavailable"));
+        }
         let (completed, received) = if wait {
             let (sender, receiver) = oneshot::channel();
             (Some(sender), Some(receiver))
         } else {
             (None, None)
         };
-        self.enqueue(Packet { payload, completed })?;
+        let packet = Packet { payload, completed };
+        if matches!(&packet.payload, Payload::Message(message) if video_message(message)
+            || matches!(message.union, Some(message::Union::AudioFrame(_))))
+        {
+            self.enqueue_media(packet)?;
+        } else {
+            let terminal = matches!(&packet.payload, Payload::Terminal(_))
+                || matches!(&packet.payload, Payload::Message(message) if terminal_message(message));
+            if terminal {
+                self.control.try_send(packet).map_err(|error| {
+                    self.fail(match error {
+                        mpsc::error::TrySendError::Full(_) => "streaming terminal queue exhausted",
+                        mpsc::error::TrySendError::Closed(_) => "streaming writer closed",
+                    })
+                })?;
+                self.available.notify_one();
+            } else {
+                // This bounds admission's pause of the connection's business/input loop.
+                match timeout(CONTROL_ADMISSION_TIMEOUT, self.control.send(packet)).await {
+                    Ok(Ok(())) => self.available.notify_one(),
+                    Ok(Err(_)) => return Err(self.fail("streaming writer closed")),
+                    Err(_) => return Err(self.fail("streaming control admission timed out")),
+                }
+            }
+        }
         if let Some(received) = received {
             timeout(
                 Duration::from_millis(self.send_timeout.load(Ordering::Acquire)),
@@ -312,6 +483,21 @@ impl ConnectionTransport {
         }
     }
 
+    pub(super) fn video_refresh_requested(
+        &self,
+    ) -> impl std::future::Future<Output = Vec<usize>> + Send + 'static {
+        let writer = match self {
+            Self::Split(transport) => Some(transport.writer.clone()),
+            _ => None,
+        };
+        async move {
+            match writer {
+                Some(writer) => writer.refresh_requested().await,
+                None => std::future::pending().await,
+            }
+        }
+    }
+
     pub(super) async fn next(&mut self) -> Option<io::Result<BytesMut>> {
         match self {
             Self::Legacy(stream) => stream.next().await,
@@ -334,20 +520,48 @@ impl ConnectionTransport {
 
 fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -> SplitTransport {
     let (control_tx, mut control) = mpsc::channel::<Packet>(CONTROL_QUEUE);
-    let (audio_tx, mut audio) = mpsc::channel::<Packet>(AUDIO_QUEUE);
-    let (video_tx, mut video) = mpsc::channel::<Packet>(VIDEO_QUEUE);
+    let media = Arc::new(Mutex::new(MediaQueues::default()));
+    let available = Arc::new(Notify::new());
+    let refresh = Arc::new(Notify::new());
+    let media_receiver = MediaReceiver {
+        queues: media.clone(),
+        refresh: refresh.clone(),
+    };
+    let writer_available = available.clone();
     let (failure, failed) = watch::channel(None);
     let writer_failure = failure.clone();
     let send_timeout = Arc::new(AtomicU64::new(12_000));
     let writer_timeout = send_timeout.clone();
     let task = tokio::spawn(async move {
+        let receiver = media_receiver;
         loop {
-            let packet = tokio::select! {
-                biased;
-                Some(packet) = control.recv() => packet,
-                Some(packet) = audio.recv() => packet,
-                Some(packet) = video.recv() => packet,
-                else => break,
+            let packet = loop {
+                let notified = writer_available.notified();
+                let packet = {
+                    let mut queues = receiver.queues.lock().unwrap();
+                    if let Ok(packet) = control.try_recv() {
+                        Some(packet)
+                    } else if !queues.audio.is_empty()
+                        && (queues.video.is_empty() || queues.audio_next)
+                    {
+                        queues.audio_next = false;
+                        queues.audio.pop_front()
+                    } else if let Some(packet) = queues.video.pop_front() {
+                        queues.audio_next = true;
+                        if packet_video(&packet).is_some() {
+                            queues.frames -= 1;
+                        } else {
+                            queues.metadata -= 1;
+                        }
+                        Some(packet)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(packet) = packet {
+                    break packet;
+                }
+                notified.await;
             };
             writer.set_send_timeout(writer_timeout.load(Ordering::Acquire));
             let terminal = matches!(&packet.payload, Payload::Terminal(_))
@@ -361,6 +575,16 @@ fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -
             .map_err(|error| error.to_string());
             if terminal && result.is_ok() {
                 result = writer.close().await.map_err(|error| error.to_string());
+            }
+            if result.is_ok() {
+                let recovering = {
+                    let mut queues = receiver.queues.lock().unwrap();
+                    queues.progress = queues.progress.wrapping_add(1);
+                    !queues.recovering.is_empty()
+                };
+                if recovering {
+                    receiver.refresh.notify_one();
+                }
             }
             if let Some(completed) = packet.completed {
                 let _ = completed.send(result.clone());
@@ -378,8 +602,9 @@ fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -
         reader,
         writer: VideoWriter {
             control: control_tx,
-            audio: audio_tx,
-            video: video_tx,
+            media,
+            available,
+            refresh,
             failure,
             send_timeout,
         },
@@ -555,8 +780,10 @@ mod tests {
                 .send_video(encoded_frame(index as i64, 32))
                 .unwrap();
         }
-        assert!(slow_writer.send_video(encoded_frame(3, 32)).is_err());
-        assert!(slow.next().await.unwrap().is_err());
+        slow_writer.send_video(encoded_frame(3, 32)).unwrap();
+        assert!(timeout(Duration::from_millis(50), slow.next())
+            .await
+            .is_err());
         assert!(fast_writer.failure.borrow().is_none());
         drop(slow);
         assert!(timeout(Duration::from_secs(1), blocked)
@@ -565,7 +792,7 @@ mod tests {
             .unwrap()
             .is_err());
         assert!(
-            slow_writer.video.is_closed(),
+            slow_writer.control.is_closed(),
             "drop cancels the blocked write and queued buffers"
         );
         fast_writer
@@ -605,15 +832,196 @@ mod tests {
     }
 
     #[tokio::test(crate = "hbb_common::tokio")]
-    async fn migration_overflow_fails_the_session_instead_of_skipping_a_reference_frame() {
-        let (local, _peer) = tcp_pair(false).await;
+    async fn migration_burst_recovers_at_a_new_first_key_and_preserves_switch_fifo() {
+        use base::message_proto::{EncodedVideoFrame, EncodedVideoFrames};
+        let (local, mut peer) = tcp_pair(false).await;
         let mut transport = ConnectionTransport::new(local.into());
         let writer = transport.set_streaming(true).unwrap();
         let (old_sender, mut old_receiver) = mpsc::unbounded_channel();
         for index in 0..3 {
             old_sender.send((index, encoded_frame(index, 32))).unwrap();
         }
-        assert!(writer.migrate_video(&mut old_receiver, |_, _| {}).is_err());
+        let mut misc = Misc::new();
+        misc.set_switch_display(SwitchDisplay::new());
+        let mut switch = Message::new();
+        switch.set_misc(misc);
+        old_sender.send((3, Arc::new(switch.clone()))).unwrap();
+        let mut fetched = Vec::new();
+        writer
+            .migrate_video(&mut old_receiver, |index, _| fetched.push(index))
+            .unwrap();
+        assert_eq!(fetched, [0, 1, 2, 3]);
+        writer.send_video(encoded_frame(3, 32)).unwrap();
+        for index in 0..2 {
+            assert_eq!(
+                read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+                index
+            );
+        }
+        assert_eq!(read_message(&mut peer).await, switch);
+        assert_eq!(
+            timeout(Duration::from_secs(1), transport.video_refresh_requested())
+                .await
+                .unwrap(),
+            [0]
+        );
+        let mut mixed = encoded_frame(3, 32).as_ref().clone();
+        mixed
+            .mut_video_frame()
+            .mut_h264s()
+            .frames
+            .push(EncodedVideoFrame {
+                key: true,
+                ..Default::default()
+            });
+        writer.send_video(Arc::new(mixed)).unwrap();
+        let key = |pts| {
+            let mut frame = VideoFrame::new();
+            frame.set_h264s(EncodedVideoFrames {
+                frames: vec![EncodedVideoFrame {
+                    key: true,
+                    pts,
+                    data: vec![7; 32].into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let mut msg = Message::new();
+            msg.set_video_frame(frame);
+            Arc::new(msg)
+        };
+        writer.send_video(key(4)).unwrap();
+        writer.send_video(encoded_frame(5, 32)).unwrap();
+        for index in [4, 5] {
+            assert_eq!(
+                read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+                index
+            );
+        }
+        assert!(writer.failure.borrow().is_none());
+        // A new gap immediately after recovery must retain the previous refresh rate limit.
+        for index in 6..9 {
+            writer.send_video(encoded_frame(index, 32)).unwrap();
+        }
+        for index in 6..8 {
+            assert_eq!(
+                read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+                index
+            );
+        }
+        assert!(timeout(
+            Duration::from_millis(50),
+            transport.video_refresh_requested()
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            timeout(Duration::from_secs(2), transport.video_refresh_requested())
+                .await
+                .unwrap(),
+            [0]
+        );
+    }
+
+    #[tokio::test(crate = "hbb_common::tokio")]
+    async fn transient_media_and_control_bursts_keep_the_transport_live() {
+        use base::message_proto::AudioFrame;
+        let (local, mut peer) = tcp_pair(false).await;
+        let mut transport = ConnectionTransport::new(local.into());
+        let writer = transport.set_streaming(true).unwrap();
+        // No yield between these calls: the old implementation disconnects at frame three.
+        for index in 0..4 {
+            assert!(writer.send_video(encoded_frame(index, 32)).is_ok());
+        }
+        for index in 0..AUDIO_QUEUE + 3 {
+            let mut msg = Message::new();
+            msg.set_audio_frame(AudioFrame {
+                data: vec![index as u8].into(),
+                ..Default::default()
+            });
+            writer
+                .send(Payload::Message(Arc::new(msg)), false)
+                .await
+                .unwrap();
+        }
+        let mut video_pts = Vec::new();
+        let mut audio_bytes = Vec::new();
+        let mut second_video_at = None;
+        for position in 0..AUDIO_QUEUE + VIDEO_QUEUE {
+            match read_message(&mut peer).await.union {
+                Some(message::Union::VideoFrame(frame)) => {
+                    video_pts.push(frame.h264s().frames[0].pts);
+                    if video_pts.len() == 2 {
+                        second_video_at = Some(position);
+                    }
+                }
+                Some(message::Union::AudioFrame(frame)) => audio_bytes.push(frame.data[0]),
+                _ => panic!("unexpected burst packet"),
+            }
+        }
+        assert_eq!(video_pts, [0, 1]);
+        assert_eq!(
+            audio_bytes,
+            (3..AUDIO_QUEUE + 3)
+                .map(|index| index as u8)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            second_video_at.unwrap() <= 2,
+            "queued audio must not starve video"
+        );
+        for index in 0..CONTROL_QUEUE + 3 {
+            writer
+                .send(Payload::Raw(vec![index as u8]), false)
+                .await
+                .unwrap();
+        }
+        for index in 0..CONTROL_QUEUE + 3 {
+            assert_eq!(&peer.next().await.unwrap().unwrap()[..], &[index as u8]);
+        }
+        peer.send_raw(vec![99]).await.unwrap();
+        assert_eq!(&transport.next().await.unwrap().unwrap()[..], &[99]);
+        assert!(writer.failure.borrow().is_none());
+    }
+
+    #[tokio::test(crate = "hbb_common::tokio")]
+    async fn control_admission_has_a_short_bound_without_blocking_the_split_reader() {
+        let (local, remote) = tokio::io::duplex(8);
+        let address = "127.0.0.1:21118".parse().unwrap();
+        let mut transport = ConnectionTransport::new(
+            hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(local, address)).into(),
+        );
+        let writer = transport.set_streaming(true).unwrap();
+        let mut peer =
+            hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(remote, address));
+        writer
+            .send(Payload::Raw(vec![1; 65536]), false)
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        for _ in 0..CONTROL_QUEUE {
+            writer.send(Payload::Raw(vec![2]), false).await.unwrap();
+        }
+        let started = Instant::now();
+        let pending = tokio::spawn(async move { writer.send(Payload::Raw(vec![3]), false).await });
+        peer.send_raw(vec![4]).await.unwrap();
+        assert_eq!(
+            &timeout(Duration::from_millis(100), transport.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()[..],
+            &[4]
+        );
+        assert!(timeout(Duration::from_secs(1), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
+        assert!(
+            started.elapsed() >= CONTROL_ADMISSION_TIMEOUT
+                && started.elapsed() < Duration::from_secs(1)
+        );
         assert!(transport.next().await.unwrap().is_err());
     }
 
@@ -622,7 +1030,7 @@ mod tests {
         use base::message_proto::{back_notification, BackNotification, LoginResponse};
         let (local, mut peer) = tcp_pair(false).await;
         let mut transport = ConnectionTransport::new(local.into());
-        transport.set_streaming(true).unwrap();
+        let writer = transport.set_streaming(true).unwrap();
         let mut response = LoginResponse::new();
         response.set_error(base::session_protocol::LOGIN_MSG_PASSWORD_WRONG.to_owned());
         let mut retry = Message::new();
@@ -640,6 +1048,8 @@ mod tests {
         misc.set_back_notification(notice);
         let mut terminal = Message::new();
         terminal.set_misc(misc);
+        writer.send_video(encoded_frame(1, 32)).unwrap();
+        writer.send_video(encoded_frame(2, 32)).unwrap();
         transport.send_terminal(&terminal).await.unwrap();
         drop(transport);
         assert_eq!(read_message(&mut peer).await, terminal);
@@ -653,7 +1063,7 @@ mod tests {
     async fn raw_send_awaits_completion_before_the_transport_is_dropped() {
         let (local, mut peer) = tcp_pair(false).await;
         let mut transport = ConnectionTransport::new(local.into());
-        transport.set_streaming(true).unwrap();
+        let writer = transport.set_streaming(true).unwrap();
         transport.send_raw(vec![42; 65536]).await.unwrap();
         drop(transport);
         let received = timeout(Duration::from_secs(1), peer.next())
@@ -662,51 +1072,104 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(&received[..], &[42; 65536]);
+        assert!(
+            timeout(Duration::from_millis(50), writer.refresh_requested())
+                .await
+                .is_err(),
+            "a closed writer must not repeatedly return an empty refresh"
+        );
     }
 
     #[tokio::test(crate = "hbb_common::tokio")]
-    async fn control_reads_continue_while_a_large_video_write_is_blocked() {
-        use base::message_proto::{EncodedVideoFrame, EncodedVideoFrames};
+    async fn input_and_recovery_follow_write_progress_even_while_the_next_frame_is_blocked() {
         let (local, remote) = tokio::io::duplex(8);
         let address = "127.0.0.1:21118".parse().unwrap();
-        let stream = hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(local, address));
-        let mut transport = ConnectionTransport::new(stream.into());
+        let mut transport = ConnectionTransport::new(
+            hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(local, address)).into(),
+        );
         let writer = transport.set_streaming(true).unwrap();
         let mut peer =
             hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(remote, address));
-        let mut frame = VideoFrame::new();
-        frame.set_h264s(EncodedVideoFrames {
-            frames: vec![EncodedVideoFrame {
-                data: vec![7; 65536].into(),
-                key: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        let mut message = Message::new();
-        message.set_video_frame(frame);
-        let blocked =
-            tokio::spawn(
-                async move { writer.send(Payload::Message(Arc::new(message)), true).await },
-            );
+        for index in 0..3 {
+            writer.send_video(encoded_frame(index, 65536)).unwrap();
+        }
         tokio::task::yield_now().await;
         peer.send_raw(vec![9]).await.unwrap();
-        let received = timeout(Duration::from_secs(1), transport.next())
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
-        assert_eq!(&received[..], &[9]);
-        assert!(
-            !blocked.is_finished(),
-            "the peer never drained its eight-byte video buffer"
+        assert_eq!(
+            &timeout(Duration::from_secs(1), transport.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()[..],
+            &[9]
         );
-        drop(transport);
-        assert!(timeout(Duration::from_secs(1), blocked)
+        assert_eq!(
+            read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+            0
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(
+            timeout(Duration::from_secs(1), transport.video_refresh_requested())
+                .await
+                .unwrap(),
+            [0]
+        );
+        assert!(
+            timeout(
+                Duration::from_millis(1100),
+                transport.video_refresh_requested()
+            )
             .await
-            .unwrap()
-            .unwrap()
-            .is_err());
+            .is_err(),
+            "a fully stalled socket must not request another global refresh on a timer"
+        );
+        assert!(transport.set_streaming(false).is_none());
+        timeout(
+            Duration::from_millis(100),
+            transport.send(&encoded_frame(3, 32)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut key = encoded_frame(4, 32).as_ref().clone();
+        key.mut_video_frame().mut_h264s().frames[0].key = true;
+        let completed =
+            tokio::spawn(async move { writer.send(Payload::Message(Arc::new(key)), true).await });
+        assert_eq!(
+            read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+            1
+        );
+        assert_eq!(
+            read_message(&mut peer).await.video_frame().h264s().frames[0].pts,
+            4,
+            "completing the old in-flight key must not reopen the broken reference chain"
+        );
+        completed.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(crate = "hbb_common::tokio")]
+    async fn terminal_does_not_wait_for_admission_to_a_saturated_control_queue() {
+        let (local, _remote) = tokio::io::duplex(8);
+        let address = "127.0.0.1:21118".parse().unwrap();
+        let mut transport = ConnectionTransport::new(
+            hbb_common::Stream::Tcp(hbb_common::tcp::FramedStream::from(local, address)).into(),
+        );
+        let writer = transport.set_streaming(true).unwrap();
+        writer
+            .send(Payload::Raw(vec![1; 65536]), false)
+            .await
+            .unwrap();
+        tokio::task::yield_now().await;
+        for _ in 0..CONTROL_QUEUE {
+            writer.send(Payload::Raw(vec![2]), false).await.unwrap();
+        }
+        let mut misc = Misc::new();
+        misc.set_close_reason("revoked".to_owned());
+        let mut terminal = Message::new();
+        terminal.set_misc(misc);
+        let started = Instant::now();
+        assert!(transport.send_terminal(&terminal).await.is_err());
+        assert!(started.elapsed() < CONTROL_ADMISSION_TIMEOUT);
     }
 
     #[tokio::test(crate = "hbb_common::tokio")]

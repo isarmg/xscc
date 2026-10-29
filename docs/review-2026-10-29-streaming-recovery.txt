@@ -1,0 +1,20 @@
+2026-10-29 TCP streaming 队列实机问题与增量修复
+
+已确认的触发
+beta.15/deff93921 的 Windows Host 两次关闭日志具有同一安全摘要对应文本 streaming receiver queue exhausted，位置 src/server/video_pipeline.rs:115。原 VideoWriter 对视频、音频和普通控制队列的任意 TrySend Full 都设置永久 failure，Connection 的 reader 随即结束。视频只有两个名额；在同一任务里迁移三个旧包时，writer 尚未得到调度也会触发。原两个测试甚至把这种关闭作为预期，因此不能以此前 CI 通过代替实机验收。
+
+本轮边界
+src/server/video_pipeline.rs：保持两个编码视频帧名额，另设有限显示元数据名额；SwitchDisplay 与视频同 FIFO。发现参考链缺口后，仅该 display 等待新关键帧，必须是包的首个编码子帧为 key 且成功入队才恢复。恢复状态和可靠元数据都有硬上限；不使用无界待发送列表或无限后台任务。仅在真实成功写入已有进展且有空位时发恢复通知，跨恢复周期保留 writer 的刷新限频，完全停滞的观看端不会反复触发全局编码重启。
+音频保持 16 项，满时淘汰旧 AudioFrame，不丢 AudioFormat。媒体调度兼顾音频和视频，避免持续音频积压使视频饿死。普通控制消息最多等待 250ms 入队，明确这是本连接业务处理可能暂停的上界；不宣称所有输入处理在此期间仍无条件独立。终止或永久登录错误保留立即 TrySend、满即关闭的边界；终止及 Raw 的完成仍对应实际发送/关闭，不伪报成功。
+src/server/connection.rs：在连接选择分支处理本地恢复通知，然后调用既有屏幕刷新 API。不会从持有 Service 读锁或 publication Mutex 的视频生产回调里请求写锁；不会伪造对端消息或延长对端活性时间。迁移时每个已消费旧项恰好释放一次 fetched barrier，包括显式参考恢复过程中安全丢弃的旧帧。
+.github/workflows/gpui-windows-beta.yml、gpui-unix-beta.yml、packaging/gpui-android/app/build.gradle：新候选 beta.16 / Android versionCode16。beta.15 的提交、签名及发布文件保持原样；其公开说明补充已知问题。
+
+保持
+用户确认的客户端新配色继续使用，XSCS 页面不改。XSCS 的设备心跳和健康实际保持新鲜；实际 Host owner 使用 crates/management/src/transport.rs，每 15 秒发送业务 Heartbeat 后发送 Ping。服务器策略每 5 秒重新检查并发布、租期 30 秒，未发现这条路径在本轮存在续期回归，因此没有盲目回退服务端优化或延长租期。
+
+验证
+本机软件 Host 的 server::video_ 测试候选 48 项已通过，覆盖真实 TCP 慢/快观看端隔离、突发队列恢复、关键帧前缀、显示顺序、迁移 barrier、受限控制等待、终止和 Raw 完成；后续最终源码检查与原生多平台构建单独记录。伪 H264 包的单元测试证明包顺序和 key 标记，不冒充真实解码器参考链验收。
+第一轮 45 秒诊断的端到端采集因测试前会话已关闭而被采集器拒绝，未生成性能通过证明。独立 GPUI 渲染报告不能当作远程呈现 FPS；实际新包和手机帧率仍需独立验证。
+
+冻结检查补充
+最终两处运行源码经过独立审阅，48 项 server::video_ 测试通过，其中 12 项为发送管线回归，模块格式与 git diff --check 通过。本机额外 Core Clippy 被未改的 src/platform/gtk_sudo.rs:761 既有无效正则阻断；可选 experimental-quic 额外 check 被未改 src/session_transport.rs 六处裸 tokio 引用阻断，未将它们算作通过，也没有扩大本补丁修改这些旧问题。正式原生产品未启用 experimental-quic；最终提交的七组正常产品 CI 与实机测试继续独立核验。
