@@ -2,9 +2,9 @@ name: GPUI framework validation
 on:
   push:
     branches: [main, feat/management-prep]
-    paths: ["experiments/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui-validation.yml"]
+    paths: ["experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "vendor/hwcodec/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", ".github/workflows/ui-validation.yml"]
   pull_request:
-    paths: ["experiments/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui-validation.yml"]
+    paths: ["experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "vendor/hwcodec/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", ".github/workflows/ui-validation.yml"]
   workflow_dispatch:
 permissions:
   contents: read

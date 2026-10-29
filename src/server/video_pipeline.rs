@@ -1,4 +1,5 @@
 //! Bounded TCP egress for explicitly selected low-latency streaming sessions.
+//! Recovery preserves per-display references and never counts as peer activity.
 use crate::session_transport::SessionTransport;
 use base::message_proto::{login_response, message, misc, video_frame, Message};
 use hbb_common::{
