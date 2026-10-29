@@ -77,14 +77,14 @@ impl FileBindingStore {
     fn path(&self, server: &ServerOrigin) -> PathBuf {
         self.directory.path().join(self.name(server))
     }
-    fn read(&self, server: &ServerOrigin) -> Result<Option<Record>> {
+    fn read(&self, server: &ServerOrigin) -> Result<Option<(Record, SavedBinding)>> {
         self.directory
             .read(&self.name(server), 4096)
             .map_err(storage)?
             .map(|b| {
                 let r: Record = serde_json::from_slice(&b).map_err(storage)?;
-                r.saved(server, self.installation_id)?;
-                Ok(r)
+                let saved = r.saved(server, self.installation_id)?;
+                Ok((r, saved))
             })
             .transpose()
     }
@@ -93,7 +93,7 @@ impl FileBindingStore {
             return Err(EnrollmentError::Storage);
         }
         if enrolled {
-            let current = self
+            let (current, _) = self
                 .read(saved.server())?
                 .ok_or(EnrollmentError::MissingBinding)?;
             if current.binding != *saved.binding() || current.credential != saved.credential() {
@@ -137,33 +137,20 @@ impl BindingStore for FileBindingStore {
     async fn load(&self, server: &ServerOrigin) -> Result<Option<SavedBinding>> {
         let store = self.clone();
         let server = server.clone();
-        tokio::task::spawn_blocking(move || {
-            store
-                .read(&server)?
-                .map(|r| r.saved(&server, store.installation_id))
-                .transpose()
-        })
-        .await
-        .map_err(storage)?
+        tokio::task::spawn_blocking(move || Ok(store.read(&server)?.map(|(_, saved)| saved)))
+            .await
+            .map_err(storage)?
     }
     async fn create(&self, pending: &SavedBinding) -> Result<()> {
         let store = self.clone();
-        let saved = SavedBinding::restore(
-            pending.server().clone(),
-            pending.binding().clone(),
-            Zeroizing::new(pending.credential().to_owned()),
-        )?;
+        let saved = pending.clone();
         tokio::task::spawn_blocking(move || store.write(&saved, false))
             .await
             .map_err(storage)?
     }
     async fn mark_enrolled(&self, saved: &SavedBinding) -> Result<()> {
         let store = self.clone();
-        let saved = SavedBinding::restore(
-            saved.server().clone(),
-            saved.binding().clone(),
-            Zeroizing::new(saved.credential().to_owned()),
-        )?;
+        let saved = saved.clone();
         tokio::task::spawn_blocking(move || store.write(&saved, true))
             .await
             .map_err(storage)?
@@ -210,7 +197,7 @@ mod tests {
         assert_eq!(loaded.binding(), saved.binding());
         assert_eq!(loaded.credential(), saved.credential());
         reopened.mark_enrolled(&loaded).await.unwrap();
-        assert!(reopened.read(saved.server()).unwrap().unwrap().enrolled);
+        assert!(reopened.read(saved.server()).unwrap().unwrap().0.enrolled);
         assert_eq!(
             reopened
                 .load(saved.server())
@@ -249,6 +236,39 @@ mod tests {
             fs::read_to_string(store.path(saved.server())).unwrap(),
             "corrupt"
         );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn enrollment_cannot_overwrite_a_binding_changed_since_load() {
+        let (directory, id, saved) = fixture();
+        let store = FileBindingStore::open(&directory, id).unwrap();
+        store.create(&saved).await.unwrap();
+        let loaded = store.load(saved.server()).await.unwrap().unwrap();
+        let mut other_binding = saved.binding().clone();
+        other_binding.device_id = Uuid::new_v4();
+        for replacement in [
+            SavedBinding::restore(
+                saved.server().clone(),
+                saved.binding().clone(),
+                Zeroizing::new("b".repeat(64)),
+            )
+            .unwrap(),
+            SavedBinding::restore(
+                saved.server().clone(),
+                other_binding,
+                Zeroizing::new(saved.credential().to_owned()),
+            )
+            .unwrap(),
+        ] {
+            let bytes = serde_json::to_vec(&Record::from_saved(&replacement, false)).unwrap();
+            fs::write(store.path(saved.server()), &bytes).unwrap();
+            assert_eq!(
+                store.mark_enrolled(&loaded).await,
+                Err(EnrollmentError::BindingMismatch)
+            );
+            assert_eq!(fs::read(store.path(saved.server())).unwrap(), bytes);
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

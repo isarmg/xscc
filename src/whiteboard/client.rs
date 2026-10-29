@@ -4,9 +4,7 @@ use crate::{
     CHILD_PROCESS,
 };
 use hbb_common::{
-    allow_err,
-    anyhow::anyhow,
-    bail, log, sleep,
+    allow_err, bail, log, sleep,
     tokio::{
         self,
         sync::mpsc::{unbounded_channel, UnboundedSender},
@@ -200,12 +198,11 @@ async fn start_whiteboard_() -> ResultType<()> {
                 break;
             }
         }
-        if stream.is_none() {
-            bail!("Failed to connect to connection manager");
-        }
     }
 
-    let mut stream = stream.ok_or(anyhow!("none stream"))?;
+    let Some(mut stream) = stream else {
+        bail!("Failed to connect to the whiteboard process");
+    };
     let (tx, mut rx) = unbounded_channel();
     tx_whiteboard.replace(tx);
     drop(tx_whiteboard);

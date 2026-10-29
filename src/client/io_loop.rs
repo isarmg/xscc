@@ -589,7 +589,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let max_queue_len = self
             .video_threads
             .iter()
-            .map(|v| v.1.video_queue.read().unwrap().len())
+            .map(|v| v.1.video_queue.len())
             .max()
             .unwrap_or_default();
         let min_decode_fps = self
@@ -615,7 +615,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let mut fps_trending = |display: usize| {
             let thread = self.video_threads.get_mut(&display)?;
             let ctl = &mut thread.fps_control;
-            let len = thread.video_queue.read().unwrap().len();
+            let len = thread.video_queue.len();
             let decode_fps = thread.decode_fps.read().unwrap().clone()?;
             let last_auto_fps = last_auto_fps.clone().unwrap_or(custom_fps as _);
             if ctl.inactive_counter > inactive_threshold {
@@ -664,14 +664,13 @@ impl<T: InvokeUiSession> Remote<T> {
         let mut refresh_displays = Vec::new();
         for (display, thread) in self.video_threads.iter_mut() {
             let ctl = &mut thread.fps_control;
-            let video_queue = thread.video_queue.read().unwrap();
+            let video_queue = &thread.video_queue;
             let tolerable = std::cmp::min(min_decode_fps, video_queue.capacity() / 2);
             if ctl.refresh_times < 20 // enough
                     && (video_queue.len() > tolerable
                             && (ctl.refresh_times == 0 || ctl.last_refresh_instant.map(|t|t.elapsed().as_secs() > 10).unwrap_or(false)))
             {
                 // Refresh causes client set_display, left frames cause flickering.
-                drop(video_queue);
                 if begin_congestion_refresh(&thread.discard_queue) {
                     refresh_displays.push(*display);
                     ctl.refresh_times += 1;
@@ -1377,7 +1376,7 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     fn new_video_thread(&mut self, display: usize) {
-        let video_queue = Arc::new(RwLock::new(ArrayQueue::new(client::VIDEO_QUEUE_SIZE)));
+        let video_queue = Arc::new(ArrayQueue::new(client::VIDEO_QUEUE_SIZE));
         let (video_sender, video_receiver) = std::sync::mpsc::channel::<MediaData>();
         let decode_fps = Arc::new(RwLock::new(None));
         let frame_count = Arc::new(RwLock::new(0));
@@ -1572,7 +1571,8 @@ struct FpsControl {
 }
 
 struct VideoThread {
-    video_queue: Arc<RwLock<ArrayQueue<VideoFrame>>>,
+    // ArrayQueue is already lock-free; no lock wrapper is needed around it.
+    video_queue: Arc<ArrayQueue<VideoFrame>>,
     video_sender: MediaSender,
     decode_fps: Arc<RwLock<Option<usize>>>,
     frame_count: Arc<RwLock<usize>>,
@@ -1589,16 +1589,14 @@ fn begin_congestion_refresh(discard_queue: &RwLock<bool>) -> bool {
 
 impl VideoThread {
     fn queue_delta_frame(&self, frame: VideoFrame) -> bool {
-        let queue = self.video_queue.read().unwrap();
         // Synchronize invalidation with the decoder before removing a reference frame.
         let mut discard = self.discard_queue.write().unwrap();
-        let overflow = queue.force_push(frame).is_some();
+        let overflow = self.video_queue.force_push(frame).is_some();
         let refresh = overflow && !*discard;
         if overflow {
             *discard = true;
         }
         drop(discard);
-        drop(queue);
         if !overflow {
             self.video_sender.send(MediaData::VideoQueue).ok();
         }
@@ -1620,7 +1618,7 @@ mod congestion_recovery_tests {
     fn video_thread() -> (VideoThread, std::sync::mpsc::Receiver<MediaData>) {
         let (video_sender, receiver) = std::sync::mpsc::channel();
         (VideoThread {
-            video_queue: Arc::new(RwLock::new(ArrayQueue::new(1))),
+            video_queue: Arc::new(ArrayQueue::new(1)),
             video_sender,
             decode_fps: Arc::new(RwLock::new(None)),
             frame_count: Arc::new(RwLock::new(0)),

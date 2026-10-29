@@ -6,13 +6,16 @@ use gpui::{
 
 mod bitrate;
 
-const PAGE: u32 = 0x111318;
-const SURFACE: u32 = 0x1b1e25;
-const RAISED: u32 = 0x272c35;
-const BORDER: u32 = 0x343b48;
-const TEXT: u32 = 0xf3f6fa;
-const MUTED: u32 = 0x9ca5b5;
-const BLUE: u32 = 0x267cf5;
+// The always-dark session chrome derives from the shared dark palette, so the
+// session matches the rest of the application. RAISED and BORDER are two local
+// neutral steps above `panel` (keys, outlines) that have no palette slot.
+const PAGE: u32 = crate::theme::DARK.page;
+const SURFACE: u32 = crate::theme::DARK.panel;
+const RAISED: u32 = 0x262b31;
+const BORDER: u32 = 0x363c44;
+const TEXT: u32 = crate::theme::DARK.text;
+const MUTED: u32 = crate::theme::DARK.muted;
+const ACCENT: u32 = crate::theme::DARK.accent;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChromeMonitor {
@@ -135,8 +138,12 @@ impl SessionChrome {
             .items_center()
             .justify_center()
             .rounded(px(14.))
-            .bg(rgb(if selected { BLUE } else { RAISED }))
-            .text_color(rgb(TEXT))
+            .bg(rgb(if selected { ACCENT } else { RAISED }))
+            .text_color(rgb(if selected {
+                crate::theme::DARK.on_accent
+            } else {
+                TEXT
+            }))
             .text_size(px(13.))
             .opacity(if enabled { 1. } else { 0.42 })
             .child(label.to_owned())
@@ -172,7 +179,7 @@ impl SessionChrome {
                     .w(px(38.))
                     .h(px(22.))
                     .rounded_full()
-                    .bg(rgb(if selected { BLUE } else { BORDER }))
+                    .bg(rgb(if selected { ACCENT } else { BORDER }))
                     .child(
                         div()
                             .absolute()
@@ -180,7 +187,11 @@ impl SessionChrome {
                             .left(px(if selected { 19. } else { 3. }))
                             .size(px(16.))
                             .rounded_full()
-                            .bg(rgb(TEXT)),
+                            .bg(rgb(if selected {
+                                crate::theme::DARK.on_accent
+                            } else {
+                                TEXT
+                            })),
                     ),
             )
     }
@@ -452,7 +463,7 @@ impl SessionChrome {
             body = body.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(0xf18b91))
+                    .text_color(rgb(crate::theme::DARK.danger))
                     .child(error.clone()),
             );
         }
@@ -673,14 +684,30 @@ impl SessionChrome {
             dock = dock.child(
                 at(rect)
                     .rounded_full()
-                    .bg(gpui::rgba(if pressed { 0x267cf5e8 } else { 0x272c35b8 }))
+                    .bg(gpui::rgba(if pressed {
+                        (ACCENT << 8) | 0xe8
+                    } else {
+                        (RAISED << 8) | 0xb8
+                    }))
                     .border_1()
-                    .border_color(rgb(if pressed { BLUE } else { BORDER }))
+                    .border_color(rgb(if pressed { ACCENT } else { BORDER }))
                     .flex()
                     .items_center()
                     .justify_center()
                     .flex_col()
-                    .child(glyph(icon, TEXT))
+                    .text_color(rgb(if pressed {
+                        crate::theme::DARK.on_accent
+                    } else {
+                        TEXT
+                    }))
+                    .child(glyph(
+                        icon,
+                        if pressed {
+                            crate::theme::DARK.on_accent
+                        } else {
+                            TEXT
+                        },
+                    ))
                     .child(div().text_size(px(10.)).line_height(px(12.)).child(label)),
             );
         }

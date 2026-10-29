@@ -968,7 +968,9 @@ impl VideoHandler {
                         } else {
                             self.fail_counter += 1;
                         }
-                        log::error!(
+                        hbb_common::throttled_log!(
+                            std::time::Duration::from_secs(1),
+                            error,
                             "Failed to handle video frame, fail counter: {}",
                             self.fail_counter
                         );
@@ -2000,7 +2002,7 @@ pub fn start_video_thread<F, T>(
     session: Session<T>,
     display: usize,
     video_receiver: mpsc::Receiver<MediaData>,
-    video_queue: Arc<RwLock<ArrayQueue<VideoFrame>>>,
+    video_queue: Arc<ArrayQueue<VideoFrame>>,
     fps: Arc<RwLock<Option<usize>>>,
     chroma: Arc<RwLock<Option<Chroma>>>,
     discard_queue: Arc<RwLock<bool>>,
@@ -2031,7 +2033,7 @@ pub fn start_video_thread<F, T>(
                                 *vf
                             }
                             MediaData::VideoQueue => {
-                                if let Some(vf) = video_queue.read().unwrap().pop() {
+                                if let Some(vf) = video_queue.pop() {
                                     if discard_queue.read().unwrap().clone() {
                                         continue;
                                     }
@@ -2088,7 +2090,7 @@ pub fn start_video_thread<F, T>(
                                     let present = presentation_fps.map_or(true, |fps| {
                                         presentation::should_present(
                                             true,
-                                            video_queue.read().unwrap().len(),
+                                            video_queue.len(),
                                             last_presented.map(|instant| instant.elapsed()),
                                             Duration::from_secs_f64(1.0 / fps as f64),
                                         )
@@ -2131,7 +2133,12 @@ pub fn start_video_thread<F, T>(
                                     // 3. If the error does not occur. Switch from A to display B. The error occurs.
                                     //
                                     // to-do: fix the error
-                                    log::error!("handle video frame error, {}", e);
+                                    hbb_common::throttled_log!(
+                                        Duration::from_secs(1),
+                                        error,
+                                        "handle video frame error, {}",
+                                        e
+                                    );
                                     session.refresh_video(display as _);
                                 }
                                 _ => {}

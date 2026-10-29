@@ -16,7 +16,7 @@ generate_call_macro!(call_yuv, false);
 #[cfg(not(target_os = "ios"))]
 pub fn convert_to_yuv(
     captured: &PixelBuffer,
-    dst_fmt: EncodeYuvFormat,
+    dst_fmt: &EncodeYuvFormat,
     dst: &mut Vec<u8>,
     mid_data: &mut Vec<u8>,
 ) -> ResultType<()> {
@@ -54,10 +54,12 @@ pub fn convert_to_yuv(
         }
     }
     let align = |x: usize| (x + 63) / 64 * 64;
-    let unsupported = format!(
-        "unsupported pixfmt conversion: {src_pixfmt:?} -> {:?}",
-        dst_fmt.pixfmt
-    );
+    let unsupported = || {
+        format!(
+            "unsupported pixfmt conversion: {src_pixfmt:?} -> {:?}",
+            dst_fmt.pixfmt
+        )
+    };
 
     match (src_pixfmt, dst_fmt.pixfmt) {
         (crate::Pixfmt::BGRA, crate::Pixfmt::I420)
@@ -73,7 +75,7 @@ pub fn convert_to_yuv(
                 crate::Pixfmt::BGRA => ARGBToI420,
                 crate::Pixfmt::RGBA => ABGRToI420,
                 crate::Pixfmt::RGB565LE => RGB565ToI420,
-                _ => bail!(unsupported),
+                _ => bail!(unsupported()),
             };
             call_yuv!(f(
                 src.as_ptr(),
@@ -115,13 +117,13 @@ pub fn convert_to_yuv(
                     ));
                     (mid_data.as_ptr(), mid_stride)
                 }
-                _ => bail!(unsupported),
+                _ => bail!(unsupported()),
             };
             let f = match src_pixfmt {
                 crate::Pixfmt::BGRA => ARGBToNV12,
                 crate::Pixfmt::RGBA => ABGRToNV12,
                 crate::Pixfmt::RGB565LE => ARGBToNV12,
-                _ => bail!(unsupported),
+                _ => bail!(unsupported()),
             };
             call_yuv!(f(
                 input,
@@ -175,7 +177,7 @@ pub fn convert_to_yuv(
                     ));
                     (mid_data.as_ptr(), mid_stride)
                 }
-                _ => bail!(unsupported),
+                _ => bail!(unsupported()),
             };
 
             call_yuv!(ARGBToI444(
@@ -192,7 +194,7 @@ pub fn convert_to_yuv(
             ));
         }
         _ => {
-            bail!(unsupported);
+            bail!(unsupported());
         }
     }
     Ok(())
@@ -211,11 +213,6 @@ pub fn convert(captured: &PixelBuffer, pixfmt: crate::Pixfmt, dst: &mut Vec<u8>)
     let src_width = captured.width();
     let src_height = captured.height();
 
-    let unsupported = format!(
-        "unsupported pixfmt conversion: {src_pixfmt:?} -> {:?}",
-        pixfmt
-    );
-
     match (src_pixfmt, pixfmt) {
         (crate::Pixfmt::BGRA, crate::Pixfmt::RGBA) | (crate::Pixfmt::RGBA, crate::Pixfmt::BGRA) => {
             dst.resize(src.len(), 0);
@@ -229,7 +226,10 @@ pub fn convert(captured: &PixelBuffer, pixfmt: crate::Pixfmt, dst: &mut Vec<u8>)
             ));
         }
         _ => {
-            bail!(unsupported);
+            bail!(
+                "unsupported pixfmt conversion: {src_pixfmt:?} -> {:?}",
+                pixfmt
+            );
         }
     }
     Ok(())

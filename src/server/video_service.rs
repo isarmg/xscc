@@ -714,6 +714,7 @@ fn run_encoder(
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
     #[cfg(feature = "gpui-host")]
     let mut stages = metrics::Metrics::new(Instant::now());
+    let sp_name = sp.name();
 
     while sp.ok() {
         // A static desktop still needs a fresh reference frame for newly joined viewers.
@@ -731,7 +732,7 @@ fn run_encoder(
             &mut spf,
             &mut send_counter,
             &mut second_instant,
-            &sp.name(),
+            &sp_name,
             sp,
         )?;
         #[cfg(feature = "gpui-host")]
@@ -883,10 +884,14 @@ fn run_encoder(
                         }
 
                         cached.texture = matches!(frame, scrap::Frame::Texture(_));
-                        cached.format = (!cached.texture).then(|| encoder.yuvfmt());
+                        if cached.texture {
+                            cached.format = None;
+                        } else {
+                            cached.format.get_or_insert_with(|| yuv_format.clone());
+                        }
                         #[cfg(feature = "gpui-host")]
                         let convert_started = Instant::now();
-                        let frame = frame.to(encoder.yuvfmt(), &mut cached.yuv, &mut mid_data)?;
+                        let frame = frame.to(&yuv_format, &mut cached.yuv, &mut mid_data)?;
                         #[cfg(feature = "gpui-host")]
                         stages.converted(convert_started.elapsed());
                         cached.valid = !cached.texture;
@@ -1303,7 +1308,12 @@ fn handle_one_frame(
             *encode_fail_counter += 1;
             // Encoding errors are not frequent except on Android
             if !cfg!(target_os = "android") {
-                log::error!("encode fail: {e:?}, times: {}", *encode_fail_counter,);
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1),
+                    error,
+                    "encode fail: {e:?}, times: {}",
+                    *encode_fail_counter
+                );
             }
             if scrap::codec::encoder_needs_reconfigure(&e) {
                 encoder.disable();

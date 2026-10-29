@@ -12,7 +12,6 @@ use std::{
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::Rng;
-use regex::Regex;
 use serde as de;
 use serde_derive::{Deserialize, Serialize};
 use serde_json;
@@ -1452,21 +1451,14 @@ impl PeerConfig {
     }
 
     fn path(id: &str) -> PathBuf {
-        //If the id contains invalid chars, encode it
-        let forbidden_paths = Regex::new(r".*[<>:/\\|\?\*].*");
-        let path: PathBuf;
-        if let Ok(forbidden_paths) = forbidden_paths {
-            let id_encoded = if forbidden_paths.is_match(id) {
-                "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
-            } else {
-                id.to_string()
-            };
-            path = [PEERS, id_encoded.as_str()].iter().collect();
+        // Preserve the existing encoded peer file names.
+        let forbidden = ['<', '>', ':', '/', '\\', '|', '?', '*'];
+        let id_encoded = if id.contains(forbidden) {
+            "base64_".to_string() + base64::encode(id, base64::Variant::Original).as_str()
         } else {
-            log::warn!("Regex create failed: {:?}", forbidden_paths.err());
-            // fallback for failing to create this regex.
-            path = [PEERS, id.replace(":", "_").as_str()].iter().collect();
-        }
+            id.to_string()
+        };
+        let path: PathBuf = [PEERS, id_encoded.as_str()].iter().collect();
         Config::with_extension(Config::path(path))
     }
 
@@ -3263,6 +3255,25 @@ mod tests {
                 ..Default::default()
             })
         );
+    }
+
+    #[test]
+    fn peer_file_names_keep_existing_storage_paths() {
+        for (id, name) in [
+            ("peer-id", "peer-id.toml"),
+            ("peer.name", "peer.name.toml"),
+            ("管理设备", "管理设备.toml"),
+            ("a/b", "base64_YS9i.toml"),
+            ("a\\b", "base64_YVxi.toml"),
+            ("a:b", "base64_YTpi.toml"),
+            ("a<b", "base64_YTxi.toml"),
+            ("a>b", "base64_YT5i.toml"),
+            ("a|b", "base64_YXxi.toml"),
+            ("a?b", "base64_YT9i.toml"),
+            ("a*b", "base64_YSpi.toml"),
+        ] {
+            assert_eq!(PeerConfig::path(id).file_name().unwrap(), name);
+        }
     }
 
     #[test]

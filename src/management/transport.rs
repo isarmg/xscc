@@ -101,12 +101,11 @@ pub(crate) async fn connect(
         let (stream, key, kind) = crate::test_lan::connect(peer).await?;
         return Ok((stream, key, kind, None));
     }
-    let status = rpc(Request::Status {}).await?;
-    if status
-        .get("configured")
-        .and_then(serde_json::Value::as_bool)
-        != Some(true)
-    {
+    let unconfigured = rpc(Request::Check { permit: None })
+        .await?
+        .as_bool()
+        .context("Invalid management availability response")?;
+    if unconfigured {
         if peer.starts_with("managed:") {
             bail!("Managed authorization is unavailable");
         }

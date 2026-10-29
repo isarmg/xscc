@@ -108,7 +108,9 @@ fn test_vpx(
         match c.frame(std::time::Duration::from_millis(30)) {
             Ok(frame) => {
                 let tmp_timer = Instant::now();
-                let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data).unwrap();
+                let frame = frame
+                    .to(&encoder.yuvfmt(), &mut yuv, &mut mid_data)
+                    .unwrap();
                 let yuv = frame.yuv().unwrap();
                 for ref frame in encoder
                     .encode(start.elapsed().as_millis() as _, &yuv, STRIDE_ALIGN)
@@ -186,7 +188,9 @@ fn test_av1(
         match c.frame(std::time::Duration::from_millis(30)) {
             Ok(frame) => {
                 let tmp_timer = Instant::now();
-                let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data).unwrap();
+                let frame = frame
+                    .to(&encoder.yuvfmt(), &mut yuv, &mut mid_data)
+                    .unwrap();
                 let yuv = frame.yuv().unwrap();
                 for ref frame in encoder
                     .encode(start.elapsed().as_millis() as _, &yuv, STRIDE_ALIGN)
@@ -279,7 +283,9 @@ mod hw {
             match c.frame(std::time::Duration::from_millis(30)) {
                 Ok(frame) => {
                     let tmp_timer = Instant::now();
-                    let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data).unwrap();
+                    let frame = frame
+                        .to(&encoder.yuvfmt(), &mut yuv, &mut mid_data)
+                        .unwrap();
                     let yuv = frame.yuv().unwrap();
                     for ref frame in encoder
                         .encode(&yuv, start.elapsed().as_millis() as _)

@@ -483,20 +483,19 @@ impl NativeManager {
             .as_ref()
             .map(|s| s.server.clone())
             .ok_or(Error::Denied)?;
-        let client = EnrollmentClient::new(origin.clone())?;
-        loop {
+        let client = EnrollmentClient::new(origin)?;
+        let saved = loop {
             let recovered = tokio::select! {_=shutdown.changed()=>return Ok(()),value=client.recover(&self.store)=>value};
             match recovered {
-                Ok(binding) => {
+                Ok((saved, binding)) => {
                     *self.binding.write().unwrap() = Some(binding);
-                    break;
+                    break saved;
                 }
                 Err(EnrollmentError::Unavailable) => {}
                 Err(e) => return Err(e.into()),
             }
             tokio::select! {_=shutdown.changed()=>return Ok(()),_=tokio::time::sleep(Duration::from_secs(5))=>{}}
-        }
-        let saved = self.store.load(&origin).await?.ok_or(Error::Denied)?;
+        };
         let connection = saved.connection()?;
         let access = connection.access_policy();
         *self.access.write().unwrap() = Some(access);

@@ -1101,8 +1101,8 @@ pub async fn start_pa() {
                         Ok(stream) => {
                             let mut stream = Connection::new(stream);
                             let mut device: String = "".to_owned();
-                            if let Some(Ok(Some(Data::Config((_, Some(x)))))) =
-                                stream.next_timeout2(1000).await
+                            if let Ok(Some(Data::Config((_, Some(x))))) =
+                                stream.next_timeout(1000).await
                             {
                                 device = x;
                             }
@@ -1200,14 +1200,6 @@ where
 
     pub async fn next_timeout(&mut self, ms_timeout: u64) -> ResultType<Option<Data>> {
         Ok(timeout(ms_timeout, self.next()).await??)
-    }
-
-    pub async fn next_timeout2(&mut self, ms_timeout: u64) -> Option<ResultType<Option<Data>>> {
-        if let Ok(x) = timeout(ms_timeout, self.next()).await {
-            Some(x)
-        } else {
-            None
-        }
     }
 
     pub async fn next(&mut self) -> ResultType<Option<Data>> {

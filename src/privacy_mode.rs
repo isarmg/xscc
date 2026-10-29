@@ -196,6 +196,8 @@ pub fn switch(impl_key: &str) {
 }
 
 fn get_supported_impl(impl_key: &str) -> String {
+    // Computing the supported list probes capture, magnifier and service state on
+    // Windows; one probe answers both the direct match and the fallback check.
     let supported_impls = get_supported_privacy_mode_impl();
     if supported_impls.iter().any(|(k, _)| k == &impl_key) {
         return impl_key.to_owned();
@@ -203,10 +205,7 @@ fn get_supported_impl(impl_key: &str) -> String {
     // TODO: Is it a good idea to use fallback here? Because user do not know the fallback.
     // fallback
     let mut cur_impl = get_option("privacy-mode-impl-key".to_owned());
-    if !get_supported_privacy_mode_impl()
-        .iter()
-        .any(|(k, _)| k == &cur_impl)
-    {
+    if !supported_impls.iter().any(|(k, _)| k == &cur_impl) {
         // fallback
         cur_impl = DEFAULT_PRIVACY_MODE_IMPL.to_owned();
     }

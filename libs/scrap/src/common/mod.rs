@@ -191,7 +191,7 @@ impl Frame<'_> {
 
     pub fn to<'a>(
         &'a self,
-        yuvfmt: EncodeYuvFormat,
+        yuvfmt: &EncodeYuvFormat,
         yuv: &'a mut Vec<u8>,
         mid_data: &mut Vec<u8>,
     ) -> ResultType<EncodeInput<'a>> {

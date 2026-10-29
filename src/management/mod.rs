@@ -39,7 +39,7 @@ use xscc_native_management::{
     private_fs::default_directory,
 };
 
-static MANAGER: OnceLock<Result<Arc<NativeManager>, ()>> = OnceLock::new();
+static MANAGER: OnceLock<Result<Arc<NativeManager>, String>> = OnceLock::new();
 static UI_RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
 
 pub(crate) fn attach_ui_runtime() {
@@ -134,20 +134,23 @@ impl NativeHost for Host {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn start() {
-    let opened = tokio::task::spawn_blocking(|| {
-        NativeManager::open(default_directory().map_err(|_| ())?, Arc::new(Host)).map_err(|_| ())
+    let opened = tokio::task::spawn_blocking(|| -> Result<Arc<NativeManager>, String> {
+        let directory =
+            default_directory().map_err(|error| format!("protected storage directory: {error}"))?;
+        NativeManager::open(directory, Arc::new(Host))
+            .map_err(|error| format!("open management storage: {error}"))
     })
     .await
-    .unwrap_or(Err(()));
+    .unwrap_or_else(|error| Err(format!("management startup task failed: {error}")));
     match MANAGER.set(opened) {
         Ok(()) => {
             if let Ok(manager) = owner() {
                 if let Err(error) = manager.resume().await {
                     log::error!("Management startup failed: {error}");
                 }
-            } else {
+            } else if let Some(Err(error)) = MANAGER.get() {
                 log::error!(
-                    "Protected management storage unavailable; managed connections are disabled"
+                    "Protected management storage unavailable; managed connections are disabled: {error}"
                 );
             }
         }
@@ -174,7 +177,8 @@ fn owner() -> ResultType<Arc<NativeManager>> {
 fn owner() -> ResultType<&'static Arc<NativeManager>> {
     match MANAGER.get() {
         Some(Ok(manager)) => Ok(manager),
-        _ => bail!("Native management owner is unavailable"),
+        Some(Err(error)) => bail!("Native management owner is unavailable: {error}"),
+        None => bail!("Native management owner is unavailable"),
     }
 }
 

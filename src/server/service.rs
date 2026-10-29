@@ -170,7 +170,11 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
 
     #[inline]
     pub fn is_option_true(&self, opt: &str) -> bool {
-        self.get_option(opt)
+        self.0
+            .read()
+            .unwrap()
+            .options
+            .get(opt)
             .map_or(false, |v| v == SERVICE_OPTION_VALUE_TRUE)
     }
 
@@ -371,8 +375,8 @@ impl ServiceTmpl<ConnInner> {
 
     pub fn send_video_frame_shared(&self, msg: Arc<Message>) -> HashSet<i32> {
         let mut conn_ids = HashSet::new();
-        let mut lock = self.0.write().unwrap();
-        for s in lock.subscribes.values_mut() {
+        let lock = self.0.read().unwrap();
+        for s in lock.subscribes.values() {
             if s.send_video(msg.clone()) {
                 conn_ids.insert(s.id());
             }

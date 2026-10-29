@@ -16,6 +16,11 @@ cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --fea
 decode_tests=$(cargo test --locked -p hwcodec --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
 printf '%s\n' "$decode_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }
+if [[ $target == aarch64-apple-darwin ]]; then
+    quartz_tests=$(cargo test --locked -p scrap --lib --no-default-features --features capture --target "$target" quartz::frame::tests:: -- --nocapture 2>&1) || { printf '%s\n' "$quartz_tests"; exit 1; }
+    printf '%s\n' "$quartz_tests"
+    grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz borrowed-plane tests did not run both tests' >&2; exit 1; }
+fi
 cargo test --locked -p xscc-native-management --target "$target"
 cargo test --locked -p hbb_common --lib --target "$target" tcp::tests
 cargo test --locked -p scrap --lib --target "$target" codec::rate_control::tests::

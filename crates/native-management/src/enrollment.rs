@@ -93,20 +93,21 @@ impl ServerOrigin {
         url
     }
 
-    pub fn connection_url(&self) -> Result<Url> {
+    pub fn connection_url(&self) -> Url {
         let mut url = self.endpoint(protocol::CONNECT_PATH);
         url.set_scheme(if self.0.scheme() == "http" {
             "ws"
         } else {
             "wss"
         })
-        .map_err(|_| EnrollmentError::Configuration)?;
-        Ok(url)
+        .expect("invariant: validated HTTP origin supports a WebSocket scheme");
+        url
     }
 }
 
 /// No Debug implementation: the independent credential belongs only in protected
 /// service storage. The one-time authorization code is deliberately absent.
+#[derive(Clone)]
 pub struct SavedBinding {
     server: ServerOrigin,
     binding: Binding,
@@ -149,7 +150,7 @@ impl SavedBinding {
 
     pub fn connection(&self) -> Result<xscc::transport::ManagerConnection> {
         xscc::transport::ManagerConnection::new(
-            self.server.connection_url()?.as_str(),
+            self.server.connection_url().as_str(),
             Zeroizing::new(self.credential.to_string()),
         )
         .map_err(|_| EnrollmentError::Configuration)
@@ -224,12 +225,14 @@ impl EnrollmentClient {
 
     /// First action after an ambiguous enrollment result, including a restart.
     /// Failure never deletes the original credential or creates another identity.
-    pub async fn recover<S: BindingStore>(&self, store: &S) -> Result<Binding> {
+    /// Returns the verified saved binding too, so the caller does not reload
+    /// and re-validate the same record from disk right after.
+    pub async fn recover<S: BindingStore>(&self, store: &S) -> Result<(SavedBinding, Binding)> {
         let saved = self.load(store).await?;
         let binding = self.identity(&saved).await?;
         verify_binding(&saved.binding, &binding)?;
         store.mark_enrolled(&saved).await?;
-        Ok(binding)
+        Ok((saved, binding))
     }
 
     /// Retry only the same saved transaction. Identity recovery always precedes
@@ -545,7 +548,7 @@ mod tests {
         ] {
             let server = ServerOrigin::parse(&format!("http://{host}:18104")).unwrap();
             assert_eq!(
-                server.connection_url().unwrap().as_str(),
+                server.connection_url().as_str(),
                 format!("ws://{host}:18104/xscc/v2/connect")
             );
         }
@@ -558,7 +561,7 @@ mod tests {
             server
         );
         assert_eq!(
-            server.connection_url().unwrap().as_str(),
+            server.connection_url().as_str(),
             "wss://example.com/xscc/v2/connect"
         );
     }
@@ -568,7 +571,7 @@ mod tests {
         let server = ServerOrigin::parse("http://192.168.31.245:18104").unwrap();
         assert_eq!(server.as_str(), "http://192.168.31.245:18104/");
         assert_eq!(
-            server.connection_url().unwrap().as_str(),
+            server.connection_url().as_str(),
             "ws://192.168.31.245:18104/xscc/v2/connect"
         );
         // Build the real enrollment client/request without depending on a
@@ -637,6 +640,73 @@ mod tests {
         let pairing = client.pairing(&"a".repeat(36)).await.unwrap();
         assert_eq!(pairing.manager_id, manager_id);
         assert_eq!(pairing.device_id, device_id);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_returns_the_saved_credential_verified_by_the_server() {
+        use crate::{binding_store::FileBindingStore, private_fs::PrivateDirectory};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::create(temporary.path(), "native").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin =
+            ServerOrigin::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let binding = Binding {
+            manager_id: Uuid::new_v4(),
+            device_id: Uuid::new_v4(),
+            installation_id: Uuid::new_v4(),
+        };
+        let saved = SavedBinding::restore(
+            origin.clone(),
+            binding.clone(),
+            Zeroizing::new("a".repeat(64)),
+        )
+        .unwrap();
+        let store = FileBindingStore::open(root.path(), binding.installation_id).unwrap();
+        store.create(&saved).await.unwrap();
+        let response = serde_json::to_vec(&binding).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let mut chunk = [0; 512];
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert!(count > 0 && request.len() + count <= 4096);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with(&format!("GET {} ", protocol::IDENTITY_PATH)));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains(&format!("authorization: bearer {}", "a".repeat(64)))
+            );
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        response.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(&response).await.unwrap();
+        });
+        let (recovered, identity) = EnrollmentClient::new(origin.clone())
+            .unwrap()
+            .recover(&store)
+            .await
+            .unwrap();
+        assert_eq!(identity, binding);
+        assert_eq!(recovered.binding(), &binding);
+        assert_eq!(recovered.server(), &origin);
+        assert_eq!(recovered.credential(), saved.credential());
         server.await.unwrap();
     }
 

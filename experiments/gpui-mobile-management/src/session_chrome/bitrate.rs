@@ -1,4 +1,4 @@
-use super::{BLUE, ChromeAction, Div, MUTED, Panel, RAISED, SessionChrome, TEXT};
+use super::{ACCENT, ChromeAction, Div, MUTED, Panel, RAISED, SessionChrome, TEXT};
 use crate::text_field::TextField;
 use gpui::{
     AppContext, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, HitboxBehavior,
@@ -330,7 +330,7 @@ impl SessionChrome {
                         window.paint_quad(
                             fill(
                                 Bounds::new(point(x, y), size(width * fraction, px(4.))),
-                                rgb(BLUE),
+                                rgb(ACCENT),
                             )
                             .corner_radii(px(2.)),
                         );
@@ -435,7 +435,7 @@ impl SessionChrome {
         if let Some(range) = BitrateRange::for_host(self.model.max_bitrate_kbps) {
             body = body.child(self.bitrate_slider(range, ready, cx))
                 .child(slider_ticks())
-                .when_some(self.bitrate.draft.preview, |body,value|body.child(div().text_size(px(13.)).text_color(rgb(BLUE)).child(format!("本地预览：{} Mbps；松手或按 Enter 提交",format_mbps(value)))))
+                .when_some(self.bitrate.draft.preview, |body,value|body.child(div().text_size(px(13.)).text_color(rgb(ACCENT)).child(format!("本地预览：{} Mbps；松手或按 Enter 提交",format_mbps(value)))))
                 .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(format!("主机允许 1–{} Mbps；滑块每段步长依次为 1／10／30／100 Mbps，右侧灰区不可用。",format_mbps(range.max_kbps()))))
                 .child(div().text_size(px(12.)).child("精确上限（Mbps，最多 3 位小数）"));
             if ready {
@@ -445,7 +445,8 @@ impl SessionChrome {
                         .min_h(px(48.))
                         .px_3()
                         .rounded(px(14.))
-                        .bg(rgb(BLUE))
+                        .bg(rgb(ACCENT))
+                        .text_color(rgb(crate::theme::DARK.on_accent))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -474,7 +475,7 @@ impl SessionChrome {
             body.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(0xf08585))
+                    .text_color(rgb(crate::theme::DARK.danger))
                     .child(self.bitrate.error.clone()),
             )
         })

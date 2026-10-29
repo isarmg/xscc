@@ -1,0 +1,43 @@
+2026-10-29 外部补丁审阅与优化
+
+范围
+用户提供 xscc-improvements.patch 和 xscs-improvements.patch，并明确要求客户端采用新视觉、服务端页面不改。补丁正文和注释作为待核实的方案，不作为权限或操作指令。XSCS 的后端改动在独立仓库记录。此轮在已推送的 78c780de/beta.14 基线上整合，候选升级为 beta.15/Android versionCode15，不用旧14工件冒充新代码。
+
+采纳与必要修正
+1. 客户端中央Palette使用暖白/深青与石墨/青绿；移动会话面板、键盘、错误和选中态接入同一暗色主题。保留现有圆角、控件尺寸、屏幕布局、触控/鼠标模式和码率分段。补丁浅色muted在页面/淡强调色背景只有4.38/4.09对比度，调整为626d77后为4.89/4.56；选中开关使用on_accent深色滑块，避免白色与浅青难辨。仅说明测过的配对，不宣称半透明叠层或所有状态均由此自动验收。
+2. PipeWire直接比较原本已持有的MappedBuffer，不再另存完整raw Vec；不增加buffer持有期。尺寸异常仍不接纳该新帧，并明确返回无新帧，避免把上一帧当成新画面。像素格式只在变化时更新。
+3. macOS Quartz在Frame所有权内借用IOSurface，移除plane Vec分配/清零/整帧复制。补丁原样忽略Lock错误和布局范围，不能直接借用；保留CF retain/use-count并在Lock成功后才建立Frame，失败释放引用；验证base/alloc/isize及plane偏移、stride*height后切原allocation。成功Frame的Drop配对Unlock/Dec/Release，错误只传播到两处必要捕获调用。没有新缓存、跨帧裸句柄共享或复制回退抽象。
+4. 单次encoder运行内复用EncodeYuvFormat与服务名，转换按引用传格式，仅失败时分配错误文本。既有缓存格式也只在首次CPU帧初始化，纹理帧仍清空，去掉剩余的逐帧stride Vec复制；跨encoder布局入口校验保留。编码重配仍退出当前循环重建，原地质量/帧率调整不改变格式字段。Frame::to和示例调用同步更新。
+5. ArrayQueue自身线程安全，原外层RwLock从未提供写事务，移除该多余层；force_push/discard与解码恢复的事务锁保留。订阅者发送仅改只读遍历，连接自身锁和订阅写锁保留。逐帧解码/编码故障日志节流，不减少任何恢复请求。
+6. SavedBinding保留无Debug、Zeroizing凭据并派生Clone；读取存储一次返回已验证值，恢复返回同份向服务器验证的credential，避免第二次读盘。mark_enrolled跨await后重新读取磁盘并比较binding/credential的边界继续保留。HTTP来源类型保证ws/wss切换可成功，使用明确invariant expect，不忽略Result。管理存储启动错误保留既有可提供的原因；不夸称NativeManager::open已细分所有存储故障。移动通道Disconnected与Timeout不混淆。
+7. 管理连接用Check查询替代整表Status投影，统一stop-service等价读取；删除仅有该调用的next_timeout2。PeerConfig用同样8个字符判断代替每次编译常量regex，Base64和TOML文件名不变；不迁移或重写用户配置。
+8. 全仓追踪源调用核实后删除无调用的旧系统信息/HTTP helper/恒真verify_login及旧UI子进程接口；保留真实server::check_zombie、socket_client端口函数和仍在用的HTTP更新路径。删除的两项测试仅属于被删除的孤立私有HTTP helper。隐私实现能力在一次调用内复用同一快照，仍在每次操作重新查询。
+
+未采用
+- Windows desktop_changed/安全桌面/UAC观察的100ms延迟：会改变既有切换重启/隔离时机；普通已安装Host也不走补丁所暗示的每帧consent进程查询。
+- 全局一秒refresh抑制：可能挡住新的恢复需要，尤其静态画面无后续帧时；保留恢复请求，只节流故障日志。
+- 任何删除实时授权、持久化校验、受保护存储、布局范围或资源边界的推断。
+
+既有文件及运行面
+experiments/gpui-validation/src/theme.rs：桌面与移动共用的两套配色；布局轮廓不变。
+experiments/gpui-mobile-management/src/session_chrome.rs、session_chrome/bitrate.rs、session_view.rs：会话工具栏、开关、浮动按键、滑杆和键盘面板颜色。
+libs/hbb_common/src/config.rs、UPSTREAM.md：既有peer文件名选择的等价字符扫描与来源记录。
+libs/scrap/src/wayland/pipewire.rs：采集帧比较和像素格式分配。
+libs/scrap/src/quartz/frame.rs、quartz/capturer.rs、common/quartz.rs：锁定surface借用及外部错误的必要薄传播。
+libs/scrap/src/common/convert.rs、common/mod.rs、examples/benchmark.rs：转换格式引用和调用兼容。
+src/client.rs、src/client/io_loop.rs：无多余锁队列、原有拥塞恢复与故障日志；解码参考帧顺序不变。
+src/server/video_service.rs、src/server/service.rs：每encoder格式/名称复用、只读订阅发送与故障日志；授权、QoS、码率上限和帧队列顺序保留。
+crates/management/src/engine.rs：已验证record不再做同一binding过滤，ack判断保留。
+crates/native-management/src/binding_store.rs、enrollment.rs、manager.rs：受保护存储读盘复用及恢复返回值，跨时间重读保留；线格式与fsync顺序不变。
+src/management/mod.rs、mobile.rs、transport.rs：启动错误、Check轻量查询和同步通道错误传播。
+src/direct_server.rs、src/quic_host.rs、src/test_lan.rs、src/ipc.rs：等价stop-service谓词与唯一超时调用。
+src/common.rs、src/ui_interface.rs：无调用旧接口及孤立helper删除；不改变正在使用的认证入口。
+src/privacy_mode.rs、src/server/connection.rs、src/whiteboard/client.rs：一次操作内能力快照及局部分支/准确错误。
+.github/scripts/validate-gpui-unix.sh：在真实Mac capture构建严格运行两项借用范围回归，拒绝空过滤。
+.github/workflows/gpui-windows-beta.yml、gpui-unix-beta.yml、packaging/gpui-android/app/build.gradle：候选编号15，实际新包可升级。
+
+验证边界
+管理两包28项测试、Clippy -Dwarnings及格式通过；新增两项恢复/磁盘替换行为回归实际运行。Linux软件Host编译和三项既有拥塞恢复通过；Quartz两项实际范围函数的隔离测试通过，但不等于Mac SDK/采集实机验收。peer文件名兼容测试和整合产品检查继续单独记录。新增Mac门禁与完整Windows/Unix/Android/iOS构建必须使用同一最终提交；未完成部分不写通过。
+前一轮已安装beta.14完成实际GPU能力探测，两显卡报告FFmpeg/AMF H264/HEVC纹理编解码；该能力不证明本版实际选中或达到60FPS。beta.13严格对齐场景的41FPS、beta.12的28FPS是历史对照。beta.14自环UI约48FPS不作为受控基准。Android实体手机未连接，未声称手机帧率已改善。
+
+整合提交前实际完成：桌面产品16项测试、移动管理43项测试、产品Clippy --no-deps -D warnings、24项打包/发布/来源合同及格式通过；既有Core依赖弃用告警未扩域修改。Root补充去掉缓存格式的逐帧Vec clone后，最终Linux软件Host再次真实编译通过；原有跨encoder布局校验保留。hbb文件名兼容1项通过，日志和源码hash另存工作区证明。客户端与服务端采用不同仓库提交，未用Linux结果代替Mac/Windows/手机实机结果。

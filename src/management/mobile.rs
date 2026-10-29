@@ -15,7 +15,7 @@ use xscc_native_management::{
     private_fs::PrivateDirectory,
 };
 
-static STARTED: OnceLock<Result<(), ()>> = OnceLock::new();
+static STARTED: OnceLock<Result<(), String>> = OnceLock::new();
 
 struct Host;
 #[async_trait]
@@ -49,30 +49,40 @@ pub(crate) fn start_runtime(directory: String) -> ResultType<()> {
                     .build()
                 {
                     Ok(runtime) => runtime,
-                    Err(_) => {
-                        let _ = sender.send(Err(()));
+                    Err(error) => {
+                        let _ = sender.send(Err(format!("management runtime: {error}")));
                         return;
                     }
                 };
                 runtime.block_on(async move {
                     attach_ui_runtime();
-                    let opened = tokio::task::spawn_blocking(move || {
-                        NativeManager::open(
-                            PrivateDirectory::create(&PathBuf::from(directory), "xscc-managed")
-                                .map_err(|_| ())?,
-                            Arc::new(Host),
-                        )
-                        .map_err(|_| ())
-                    })
+                    let opened = tokio::task::spawn_blocking(
+                        move || -> Result<Arc<NativeManager>, String> {
+                            let directory =
+                                PrivateDirectory::create(&PathBuf::from(directory), "xscc-managed")
+                                    .map_err(|error| {
+                                        format!("protected storage directory: {error}")
+                                    })?;
+                            NativeManager::open(directory, Arc::new(Host))
+                                .map_err(|error| format!("open management storage: {error}"))
+                        },
+                    )
                     .await
-                    .unwrap_or(Err(()));
+                    .unwrap_or_else(|error| {
+                        Err(format!("management startup task failed: {error}"))
+                    });
                     if MANAGER.set(opened).is_err() {
-                        let _ = sender.send(Err(()));
+                        let _ =
+                            sender.send(Err("management owner was already initialized".to_owned()));
                         return;
                     }
                     let result = match MANAGER.get() {
-                        Some(Ok(manager)) => manager.resume().await.map_err(|_| ()),
-                        _ => Err(()),
+                        Some(Ok(manager)) => manager
+                            .resume()
+                            .await
+                            .map_err(|error| format!("management resume: {error}")),
+                        Some(Err(error)) => Err(error.clone()),
+                        None => Err("management owner is unavailable".to_owned()),
                     };
                     let succeeded = result.is_ok();
                     let _ = sender.send(result);
@@ -81,13 +91,13 @@ pub(crate) fn start_runtime(directory: String) -> ResultType<()> {
                     }
                 });
             })
-            .map_err(|_| ())?;
+            .map_err(|error| format!("spawn management thread: {error}"))?;
         receiver
             .recv_timeout(Duration::from_secs(55))
-            .map_err(|_| ())?
+            .map_err(|error| format!("receive management startup result: {error}"))?
     });
     match result {
         Ok(()) => Ok(()),
-        Err(()) => bail!("Protected native management storage unavailable"),
+        Err(error) => bail!("Protected native management storage unavailable: {error}"),
     }
 }

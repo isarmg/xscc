@@ -99,7 +99,7 @@ impl<H: RustDeskHost, J: Journal> Executor<H, J> {
         }
         Ok(records
             .into_iter()
-            .filter(|(_, r)| r.binding == self.binding && !r.acknowledged)
+            .filter(|(_, r)| !r.acknowledged)
             .collect())
     }
     fn validate_record(&self, record: &ExecutionRecord) -> Result<(), JournalError> {

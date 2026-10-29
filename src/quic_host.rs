@@ -81,7 +81,7 @@ impl Settings {
 fn disabled() -> bool {
     config::is_outgoing_only()
         || config::is_disable_tcp_listen()
-        || config::option2bool("stop-service", &Config::get_option("stop-service"))
+        || Config::get_bool_option("stop-service")
         || crate::platform::installing_service()
 }
 

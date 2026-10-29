@@ -5,8 +5,6 @@ use std::{
     task::Poll,
 };
 
-use serde_json::{json, Map, Value};
-
 use base::{config::keys, message_proto::*};
 pub use base::session_protocol::input;
 #[cfg(not(target_os = "ios"))]
@@ -131,11 +129,6 @@ pub fn cursor_content_id(width: i32, height: i32, hotx: i32, hoty: i32, colors: 
 }
 
 #[inline]
-pub fn is_support_screenshot(ver: &str) -> bool {
-    is_support_multi_ui_session_num(hbb_common::get_version_number(ver))
-}
-
-#[inline]
 pub fn is_support_screenshot_num(ver: i64) -> bool {
     ver >= hbb_common::get_version_number("1.4.0")
 }
@@ -143,11 +136,6 @@ pub fn is_support_screenshot_num(ver: i64) -> bool {
 /// Minimum server version required for relative mouse mode support.
 /// This constant must mirror Flutter's `kMinVersionForRelativeMouseMode` in `consts.dart`.
 const MIN_VERSION_RELATIVE_MOUSE_MODE: &str = "1.4.5";
-
-#[inline]
-pub fn is_support_relative_mouse_mode(ver: &str) -> bool {
-    is_support_relative_mouse_mode_num(hbb_common::get_version_number(ver))
-}
 
 #[inline]
 pub fn is_support_relative_mouse_mode_num(ver: i64) -> bool {
@@ -184,19 +172,6 @@ pub fn valid_for_numlock(evt: &KeyEvent) -> bool {
             || v == ControlKey::Decimal.value()
     } else {
         false
-    }
-}
-
-/// Set sound input device.
-pub fn set_sound_input(device: String) {
-    let prior_device = get_option("audio-input".to_owned());
-    if prior_device != device {
-        log::info!("switch to audio input device {}", device);
-        std::thread::spawn(move || {
-            set_option("audio-input".to_owned(), device);
-        });
-    } else {
-        log::info!("audio input is already set to {}", device);
     }
 }
 
@@ -578,64 +553,6 @@ pub fn hostname() -> String {
     return DEVICE_NAME.lock().unwrap().clone();
 }
 
-#[inline]
-#[cfg(not(target_os = "ios"))]
-pub fn get_sysinfo() -> serde_json::Value {
-    use hbb_common::sysinfo::System;
-    let mut system = System::new();
-    system.refresh_memory();
-    system.refresh_cpu();
-    let memory = system.total_memory();
-    let memory = (memory as f64 / 1024. / 1024. / 1024. * 100.).round() / 100.;
-    let cpus = system.cpus();
-    let cpu_name = cpus.first().map(|x| x.brand()).unwrap_or_default();
-    let cpu_name = cpu_name.trim_end();
-    let cpu_freq = cpus.first().map(|x| x.frequency()).unwrap_or_default();
-    let cpu_freq = (cpu_freq as f64 / 1024. * 100.).round() / 100.;
-    let cpu = if cpu_freq > 0. {
-        format!("{}, {}GHz, ", cpu_name, cpu_freq)
-    } else {
-        "".to_owned() // android
-    };
-    let num_cpus = num_cpus::get();
-    let num_pcpus = num_cpus::get_physical();
-    let mut os = system.distribution_id();
-    os = format!("{} / {}", os, system.long_os_version().unwrap_or_default());
-    #[cfg(windows)]
-    {
-        os = format!("{os} - {}", system.os_version().unwrap_or_default());
-    }
-    let hostname = hostname(); // sys.hostname() return localhost on android in my test
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let out;
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let mut out;
-    out = json!({
-        "cpu": format!("{cpu}{num_cpus}/{num_pcpus} cores"),
-        "memory": format!("{memory}GB"),
-        "os": os,
-        "hostname": hostname,
-    });
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let username = crate::platform::get_active_username();
-        if !username.is_empty() && (!cfg!(windows) || username != "SYSTEM") {
-            out["username"] = json!(username);
-        }
-    }
-    out
-}
-
-#[inline]
-pub fn check_port<T: std::string::ToString>(host: T, port: i32) -> String {
-    hbb_common::socket_client::check_port(host, port)
-}
-
-#[inline]
-pub fn increase_port<T: std::string::ToString>(host: T, offset: i32) -> String {
-    hbb_common::socket_client::increase_port(host, offset)
-}
-
 pub const POSTFIX_SERVICE: &'static str = "_service";
 
 #[inline]
@@ -973,14 +890,6 @@ pub async fn post_request(url: String, body: String, header: &str) -> ResultType
         .map(|(_, text)| text)
 }
 
-pub async fn post_request_with_status(
-    url: String,
-    body: String,
-    header: &str,
-) -> ResultType<(u16, String)> {
-    post_request_http(&url, &body, header).await
-}
-
 #[async_recursion]
 async fn post_request_(
     url: &str,
@@ -1078,172 +987,6 @@ async fn post_request_(
 #[tokio::main(flavor = "current_thread")]
 pub async fn post_request_sync(url: String, body: String, header: &str) -> ResultType<String> {
     post_request(url, body, header).await
-}
-
-fn parse_json_header_entries(header: &str) -> ResultType<Map<String, Value>> {
-    match serde_json::from_str(header)? {
-        Value::Object(headers) => Ok(headers),
-        _ => Err(anyhow!("HTTP header information parsing failed!")),
-    }
-}
-
-#[async_recursion]
-async fn get_http_response_async(
-    url: &str,
-    tls_url: &str,
-    method: &str,
-    body: Option<String>,
-    header: &str,
-    tls_type: Option<TlsType>,
-    danger_accept_invalid_cert: Option<bool>,
-    original_danger_accept_invalid_cert: Option<bool>,
-) -> ResultType<reqwest::Response> {
-    let http_client = create_http_client_async(
-        tls_type.unwrap_or(TlsType::Rustls),
-        danger_accept_invalid_cert.unwrap_or(false),
-    )?;
-    let normalized_method = method.to_ascii_lowercase();
-    let mut http_client = match normalized_method.as_str() {
-        "get" => http_client.get(url),
-        "post" => http_client.post(url),
-        "put" => http_client.put(url),
-        "delete" => http_client.delete(url),
-        _ => return Err(anyhow!("The HTTP request method is not supported!")),
-    };
-    for (name, value) in parse_json_header_entries(header)? {
-        http_client = http_client.header(name, value.as_str().unwrap_or_default());
-    }
-
-    if tls_type.is_some() && danger_accept_invalid_cert.is_some() {
-        if let Some(b) = body {
-            http_client = http_client.body(b);
-        }
-        match http_client
-            .timeout(std::time::Duration::from_secs(12))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                upsert_tls_cache(
-                    tls_url,
-                    tls_type.unwrap_or(TlsType::Rustls),
-                    danger_accept_invalid_cert.unwrap_or(false),
-                );
-                Ok(resp)
-            }
-            Err(e) => Err(anyhow!("{:?}", e)),
-        }
-    } else {
-        if let Some(b) = body.clone() {
-            http_client = http_client.body(b);
-        }
-
-        match http_client
-            .timeout(std::time::Duration::from_secs(12))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                upsert_tls_cache(
-                    tls_url,
-                    tls_type.unwrap_or(TlsType::Rustls),
-                    danger_accept_invalid_cert.unwrap_or(false),
-                );
-                Ok(resp)
-            }
-            Err(e) => {
-                if (tls_type.is_none() || danger_accept_invalid_cert.is_none()) && e.is_request() {
-                    if danger_accept_invalid_cert.is_none() {
-                        log::warn!(
-                            "HTTP request failed: {:?}, try again, danger accept invalid cert",
-                            e
-                        );
-                        get_http_response_async(
-                            url,
-                            tls_url,
-                            method,
-                            body,
-                            header,
-                            tls_type,
-                            Some(true),
-                            original_danger_accept_invalid_cert,
-                        )
-                        .await
-                    } else {
-                        log::warn!("HTTP request failed: {:?}, try again with native-tls", e);
-                        get_http_response_async(
-                            url,
-                            tls_url,
-                            method,
-                            body,
-                            header,
-                            Some(TlsType::NativeTls),
-                            original_danger_accept_invalid_cert,
-                            original_danger_accept_invalid_cert,
-                        )
-                        .await
-                    }
-                } else {
-                    Err(anyhow!("{:?}", e))
-                }
-            }
-        }
-    }
-}
-
-/// Returns (status_code, json_string) so the caller can inspect the status
-/// without re-parsing the serialized JSON.
-async fn http_request_http(
-    url: &str,
-    method: &str,
-    body: Option<String>,
-    header: &str,
-) -> ResultType<(u16, String)> {
-    let tls_url = url;
-    let tls_type = get_cached_tls_type(tls_url);
-    let danger_accept_invalid_cert = get_cached_tls_accept_invalid_cert(tls_url);
-    let response = get_http_response_async(
-        url,
-        tls_url,
-        method,
-        body,
-        header,
-        tls_type,
-        danger_accept_invalid_cert,
-        danger_accept_invalid_cert,
-    )
-    .await?;
-    // Serialize response headers
-    let mut response_headers = Map::new();
-    for (key, value) in response.headers() {
-        response_headers.insert(key.to_string(), json!(value.to_str().unwrap_or("")));
-    }
-
-    let status_code = response.status().as_u16();
-    let response_body = response.text().await?;
-
-    // Construct the JSON object
-    let mut result = Map::new();
-    result.insert("status_code".to_string(), json!(status_code));
-    result.insert("headers".to_string(), Value::Object(response_headers));
-    result.insert("body".to_string(), json!(response_body));
-
-    // Convert map to JSON string
-    let json_str = serde_json::to_string(&result)
-        .map_err(|e| anyhow!("Failed to serialize response: {}", e))?;
-    Ok((status_code, json_str))
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn http_request_sync(
-    url: String,
-    method: String,
-    body: Option<String>,
-    header: String,
-) -> ResultType<String> {
-    http_request_http(&url, &method, body, &header)
-        .await
-        .map(|(_, response)| response)
 }
 
 #[inline]
@@ -1665,32 +1408,6 @@ pub fn is_custom_client() -> bool {
     get_app_name() != "RustDesk"
 }
 
-pub fn verify_login(_raw: &str, _id: &str) -> bool {
-    true
-    /*
-    if is_custom_client() {
-        return true;
-    }
-    #[cfg(debug_assertions)]
-    return true;
-    let Ok(pk) = crate::decode64("IycjQd4TmWvjjLnYd796Rd+XkK+KG+7GU1Ia7u4+vSw=") else {
-        return false;
-    };
-    let Some(key) = get_pk(&pk).map(|x| sign::PublicKey(x)) else {
-        return false;
-    };
-    let Ok(v) = crate::decode64(raw) else {
-        return false;
-    };
-    let raw = sign::verify(&v, &key).unwrap_or_default();
-    let v_str = std::str::from_utf8(&raw)
-        .unwrap_or_default()
-        .split(":")
-        .next()
-        .unwrap_or_default();
-    v_str == id
-    */
-}
 
 // The color is the same to `str2color()` in flutter.
 pub fn str2color(s: &str, alpha: u8) -> u32 {
@@ -1756,25 +1473,6 @@ mod tests {
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
     use std::collections::HashSet;
-
-    #[test]
-    fn json_http_headers_preserve_custom_headers_and_accept_empty_objects() {
-        let headers = parse_json_header_entries(
-            r#"{"Content-Type":"text/plain","Authorization":"Bearer token"}"#,
-        )
-        .unwrap();
-        assert_eq!(headers.len(), 2);
-        assert_eq!(headers["Content-Type"], "text/plain");
-        assert_eq!(headers["Authorization"], "Bearer token");
-        assert!(parse_json_header_entries("{}").unwrap().is_empty());
-    }
-
-    #[test]
-    fn json_http_headers_reject_malformed_json_and_non_objects() {
-        for header in ["", "{", "[]", "null", "1", r#""header""#] {
-            assert!(parse_json_header_entries(header).is_err(), "{header:?}");
-        }
-    }
 
     #[test]
     fn update_checks_require_an_explicit_https_endpoint() {

@@ -3627,11 +3627,9 @@ async fn start_ipc(
             }
         }
     }
-    if stream.is_none() {
+    let Some(mut stream) = stream else {
         bail!("Failed to connect to connection manager");
-    }
-
-    let mut stream = stream.ok_or(anyhow!("none stream"))?;
+    };
     loop {
         tokio::select! {
             res = stream.next() => {

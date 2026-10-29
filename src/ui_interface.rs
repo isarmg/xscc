@@ -14,8 +14,6 @@ use hbb_common::{
     tokio::{sync::mpsc, time},
 };
 use serde_derive::Serialize;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use std::process::Child;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -24,9 +22,6 @@ use std::{
 use crate::common::SOFTWARE_UPDATE_URL;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub type Children = Arc<Mutex<(bool, HashMap<(String, String), Child>)>>;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct UiStatus {
@@ -69,7 +64,6 @@ lazy_static::lazy_static! {
     static ref OPTION_SYNCED: Arc<Mutex<bool>> = Default::default();
     static ref OPTIONS : Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(Config::get_options()));
     pub static ref SENDER : Mutex<mpsc::UnboundedSender<ipc::Data>> = Mutex::new(check_connect_status(true));
-    static ref CHILDREN : Children = Default::default();
 }
 
 
@@ -817,70 +811,6 @@ pub fn check_super_user_permission() -> bool {
     return crate::platform::check_super_user_permission().unwrap_or(false);
     #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     return true;
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "flutter")))]
-pub fn check_zombie() {
-    let mut deads = Vec::new();
-    loop {
-        let mut lock = CHILDREN.lock().unwrap();
-        let mut n = 0;
-        for (id, c) in lock.1.iter_mut() {
-            if let Ok(Some(_)) = c.try_wait() {
-                deads.push(id.clone());
-                n += 1;
-            }
-        }
-        for ref id in deads.drain(..) {
-            lock.1.remove(id);
-        }
-        if n > 0 {
-            lock.0 = true;
-        }
-        drop(lock);
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-}
-
-#[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "flutter")))]
-pub fn recent_sessions_updated() -> bool {
-    let mut children = CHILDREN.lock().unwrap();
-    if children.0 {
-        children.0 = false;
-        true
-    } else {
-        false
-    }
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios", feature = "flutter")))]
-pub fn new_remote(id: String, remote_type: String) {
-    let mut lock = CHILDREN.lock().unwrap();
-    let args = vec![format!("--{}", remote_type), id.clone()];
-    let key = (id.clone(), remote_type.clone());
-    if let Some(c) = lock.1.get_mut(&key) {
-        if let Ok(Some(_)) = c.try_wait() {
-            lock.1.remove(&key);
-        } else {
-            if remote_type == "rdp" {
-                allow_err!(c.kill());
-                std::thread::sleep(std::time::Duration::from_millis(30));
-                c.try_wait().ok();
-                lock.1.remove(&key);
-            } else {
-                return;
-            }
-        }
-    }
-    match crate::run_me(args) {
-        Ok(child) => {
-            lock.1.insert(key, child);
-        }
-        Err(err) => {
-            log::error!("Failed to spawn remote: {}", err);
-        }
-    }
 }
 
 // Make sure `SENDER` is inited here.

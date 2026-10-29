@@ -62,7 +62,7 @@ async fn direct_server(server: ServerPtr) {
     loop {
         let disabled = config::is_outgoing_only()
             || config::is_disable_tcp_listen()
-            || config::option2bool("stop-service", &Config::get_option("stop-service"))
+            || Config::get_bool_option("stop-service")
             || crate::platform::installing_service();
         let requested_port = get_direct_port();
         let restarted = RESTART_REQUESTED.swap(false, Ordering::SeqCst);

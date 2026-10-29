@@ -1394,11 +1394,15 @@ impl Render for SessionView {
                         .justify_center()
                         .rounded(px(10.))
                         .bg(rgb(if self.keyboard_page == page {
-                            0x267cf5
+                            crate::theme::DARK.accent
                         } else {
-                            0x272c35
+                            0x262b31
                         }))
-                        .text_color(rgb(0xf3f6fa))
+                        .text_color(rgb(if self.keyboard_page == page {
+                            crate::theme::DARK.on_accent
+                        } else {
+                            crate::theme::DARK.text
+                        }))
                         .text_size(px(13.))
                         .child(label)
                         .on_click(cx.listener(move |view, _, window, cx| {
@@ -1415,7 +1419,7 @@ impl Render for SessionView {
                     .items_center()
                     .justify_center()
                     .rounded(px(10.))
-                    .text_color(rgb(0xf3f6fa))
+                    .text_color(rgb(crate::theme::DARK.text))
                     .child("×")
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.chrome_action(ChromeAction::ClosePanel, window, cx);
@@ -1424,7 +1428,7 @@ impl Render for SessionView {
             root = root.child(
                 at(keyboard_bounds)
                     .occlude()
-                    .bg(rgb(0x1b1e25))
+                    .bg(rgb(crate::theme::DARK.panel))
                     .flex()
                     .flex_col()
                     .overflow_hidden()

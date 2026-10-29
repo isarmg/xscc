@@ -86,7 +86,7 @@ pub(crate) fn configured_bind() -> ResultType<SocketAddr> {
 pub(crate) async fn run_host(address: SocketAddr) -> ResultType<()> {
     if config::is_outgoing_only()
         || config::is_disable_tcp_listen()
-        || config::option2bool("stop-service", &Config::get_option("stop-service"))
+        || Config::get_bool_option("stop-service")
     {
         bail!("Host listening is disabled");
     }

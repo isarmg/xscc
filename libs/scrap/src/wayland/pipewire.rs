@@ -269,7 +269,6 @@ pub struct PipeWireRecorder {
     appsink: AppSink,
     width: usize,
     height: usize,
-    saved_raw_data: Vec<u8>, // for faster compare and copy
 }
 
 // Element creation fails the same way for a plugin that is not installed as for one that is
@@ -370,7 +369,6 @@ impl PipeWireRecorder {
             height: 0,
             buffer_cropped: vec![],
             is_cropped: false,
-            saved_raw_data: Vec::new(),
         })
     }
 }
@@ -390,10 +388,12 @@ impl Recorder for PipeWireRecorder {
             let h: i32 = cap.get_value("height")?.get_some()?;
             let w = w as usize;
             let h = h as usize;
-            self.pix_fmt = cap
+            let pix_fmt = cap
                 .get::<&str>("format")?
-                .ok_or("Failed to get pixel format")?
-                .to_string();
+                .ok_or("Failed to get pixel format")?;
+            if self.pix_fmt != pix_fmt {
+                self.pix_fmt = pix_fmt.to_string();
+            }
 
             let buf = sample
                 .get_buffer_owned()
@@ -408,8 +408,12 @@ impl Recorder for PipeWireRecorder {
             let buf = buf
                 .into_mapped_buffer_readable()
                 .map_err(|_| GStreamerError("Failed to map buffer.".into()))?;
-            if let Err(..) = crate::would_block_if_equal(&mut self.saved_raw_data, buf.as_slice()) {
-                return Ok(PixelProvider::NONE);
+            // The previous mapped buffer is retained in `self.buffer`; comparing
+            // against it dedupes unchanged frames without copying the new frame.
+            if let Some(prev) = &self.buffer {
+                if prev.as_slice() == buf.as_slice() {
+                    return Ok(PixelProvider::NONE);
+                }
             }
             let buf_size = buf.get_size();
             // BGRx is 4 bytes per pixel
@@ -424,6 +428,7 @@ impl Recorder for PipeWireRecorder {
                     w,
                     h
                 );
+                return Ok(PixelProvider::NONE);
             } else {
                 // Copy region specified by crop into self.buffer_cropped
                 // TODO: Figure out if ffmpeg provides a zero copy alternative
@@ -1707,7 +1712,7 @@ fn fill_multi_matched_positions_cursor(
                         && wd.height as usize == d.0.physical_size.1
                     {
                         mouse_move_to_(&mouse_move_to, get_cursor_pos, wd.x + 8, wd.y + 8);
-                        rec.saved_raw_data.clear();
+                        rec.buffer = None;
                         match rec.capture(CAPTURE_TIMEOUT_MS) {
                             Ok(PixelProvider::BGR0(_, _, data2)) if is_bgr => {
                                 if compare_left_up_corner(w, &first_buf, data2) {

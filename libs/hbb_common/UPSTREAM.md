@@ -22,3 +22,6 @@ application. LAN discovery retains envelope field 22 and UDP port 21119.
 Application-level SOCKS/HTTP proxy support and configuration have also been
 removed. TCP/WebSocket connect directly, and HTTP clients explicitly disable
 automatic environment proxy discovery. System network routing is unchanged.
+
+Peer configuration filename selection uses direct character matching instead of
+recompiling a constant regex. The existing encoded names and TOML paths are retained.

@@ -18,29 +18,30 @@ pub struct Palette {
     pub success: u32,
 }
 
+// Shared desktop and mobile palettes; session controls always use DARK.
 pub const LIGHT: Palette = Palette {
-    page: 0xf5f7fb,
+    page: 0xf7f6f3,
     panel: 0xffffff,
-    text: 0x19243b,
-    muted: 0x65738b,
-    accent: 0x365ce6,
-    danger: 0xb83a48,
-    border: 0xe2e8f1,
-    accent_soft: 0xeaf0ff,
+    text: 0x1f2328,
+    muted: 0x626d77,
+    accent: 0x0f766e,
+    danger: 0xb42318,
+    border: 0xe7e5e0,
+    accent_soft: 0xe4f1ef,
     on_accent: 0xffffff,
-    success: 0x18794e,
+    success: 0x1a7f37,
 };
 pub const DARK: Palette = Palette {
-    page: 0x101725,
-    panel: 0x192337,
-    text: 0xedf2fc,
-    muted: 0xa3b0c7,
-    accent: 0x9ab5ff,
-    danger: 0xff99a6,
-    border: 0x2c3a52,
-    accent_soft: 0x26395c,
-    on_accent: 0x101725,
-    success: 0x78d9ac,
+    page: 0x131518,
+    panel: 0x1c1f24,
+    text: 0xe9ecef,
+    muted: 0x9aa3ad,
+    accent: 0x5ac8bc,
+    danger: 0xf2868e,
+    border: 0x2b3036,
+    accent_soft: 0x1d2f2c,
+    on_accent: 0x10201d,
+    success: 0x6fd39f,
 };
 
 pub fn palette(appearance: WindowAppearance) -> Palette {
