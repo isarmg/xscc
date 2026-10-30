@@ -1,5 +1,6 @@
 mod bitrate_controls;
 mod media_controls;
+mod window_chrome;
 
 use crate::{
     dashboard as ui,
@@ -10,7 +11,7 @@ use crate::{
 use gpui::{
     App, AppContext, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement,
     KeyDownEvent, Render, StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, point, prelude::*, px, rgb, size,
+    WindowControlArea, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -364,12 +365,18 @@ impl ManagementPanel {
             .flex()
             .items_center()
             .justify_between()
-            .flex_wrap()
             .gap_2()
-            .pb_1()
+            .when(cfg!(target_os = "windows"), |row| row.h(px(32.)).px_3())
+            .when(!cfg!(target_os = "windows"), |row| row.flex_wrap().pb_1())
             .line_height(px(18.))
             .border_b_1()
             .border_color(rgb(palette.border))
+            .when(cfg!(target_os = "windows"), |row| {
+                row.child(window_chrome::traffic_lights(
+                    palette,
+                    window.is_fullscreen(),
+                ))
+            })
             .child(
                 div()
                     .flex()
@@ -397,13 +404,35 @@ impl ManagementPanel {
                             } else {
                                 "XSCC 控制端"
                             }),
-                    ),
+                    )
+                    .when(cfg!(target_os = "windows"), |brand| {
+                        brand
+                            .flex_shrink_0()
+                            .window_control_area(WindowControlArea::Drag)
+                    }),
             )
+            .when(cfg!(target_os = "windows"), |row| {
+                row.child(
+                    div()
+                        .flex_1()
+                        .min_w(px(16.))
+                        .h_full()
+                        .window_control_area(WindowControlArea::Drag),
+                )
+            })
             .child(
                 div()
+                    .id("window-titlebar-actions")
                     .flex()
                     .items_center()
-                    .flex_wrap()
+                    .when(cfg!(target_os = "windows"), |actions| {
+                        actions
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .whitespace_nowrap()
+                            .occlude()
+                    })
+                    .when(!cfg!(target_os = "windows"), |actions| actions.flex_wrap())
                     .gap_2()
                     .child(
                         ui::badge(
@@ -907,6 +936,23 @@ impl ManagementPanel {
             format!("{} · {summary}", state.notice)
         };
         toolbar
+            .when(cfg!(target_os = "windows"), |toolbar| {
+                toolbar.child(
+                    div()
+                        .flex()
+                        .h(px(28.))
+                        .child(window_chrome::traffic_lights(
+                            palette,
+                            window.is_fullscreen(),
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .h_full()
+                                .window_control_area(WindowControlArea::Drag),
+                        ),
+                )
+            })
             .child(div().flex().items_center().flex_wrap().gap_2().children(
                 state.monitors.iter().map(|monitor| {
                     let index = monitor.index;
@@ -1101,7 +1147,9 @@ impl Render for Client {
             .size_full()
             .flex()
             .flex_col()
-            .when(!remote_visible, |root| root.gap_1().px_6().py_1())
+            .when(!remote_visible && !cfg!(target_os = "windows"), |root| {
+                root.gap_1().px_6().py_1()
+            })
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .font_family(self.font.clone())
@@ -1115,6 +1163,9 @@ impl Render for Client {
                     .flex()
                     .flex_1()
                     .min_h(px(0.0))
+                    .when(!remote_visible && cfg!(target_os = "windows"), |row| {
+                        row.px_6().pt_1().pb_1()
+                    })
                     .when(!remote_visible, |row| {
                         row.child(
                             div().h_full().flex_shrink_0().w_full().child(
@@ -1185,6 +1236,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                 window_min_size: Some(size(px(minimum[0]), px(minimum[1]))),
                 is_resizable: true,
                 titlebar: Some(TitlebarOptions {
+                    appears_transparent: cfg!(target_os = "windows"),
                     title: Some(
                         if host {
                             "XSCC 被控端 beta"
