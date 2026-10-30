@@ -334,7 +334,33 @@ impl ManagementPanel {
     fn render_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let palette = theme::palette(window.appearance());
         let header_button = |id: &'static str, label: &str, primary, enabled| {
-            ui::button(id, label, primary, enabled, palette)
+            let button = if cfg!(target_os = "windows") {
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(if primary {
+                        palette.accent
+                    } else {
+                        palette.text
+                    }))
+                    .opacity(if enabled { 1. } else { 0.45 })
+                    .child(label.to_owned())
+                    .when(enabled, |button| {
+                        button
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.85))
+                            .active(|style| style.opacity(0.65))
+                            .focusable()
+                            .tab_index(0)
+                            .focus(|style| style.opacity(0.75))
+                    })
+            } else {
+                ui::button(id, label, primary, enabled, palette)
+            };
+            button
                 .min_h(px(24.))
                 .h(px(24.))
                 .py_0()
@@ -369,48 +395,43 @@ impl ManagementPanel {
             .when(cfg!(target_os = "windows"), |row| row.h(px(32.)).px_3())
             .when(!cfg!(target_os = "windows"), |row| row.flex_wrap().pb_1())
             .line_height(px(18.))
-            .border_b_1()
-            .border_color(rgb(palette.border))
-            .when(cfg!(target_os = "windows"), |row| {
-                row.child(window_chrome::traffic_lights(
-                    palette,
-                    window.is_fullscreen(),
-                ))
+            .when(!cfg!(target_os = "windows"), |row| {
+                row.border_b_1().border_color(rgb(palette.border))
             })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .size(px(24.))
-                            .rounded_md()
-                            .bg(rgb(palette.accent))
-                            .text_color(rgb(palette.on_accent))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_size(px(14.))
-                            .child("X"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(if self.host {
-                                "XSCC 被控端"
-                            } else {
-                                "XSCC 控制端"
-                            }),
-                    )
-                    .when(cfg!(target_os = "windows"), |brand| {
-                        brand
-                            .flex_shrink_0()
-                            .window_control_area(WindowControlArea::Drag)
-                    }),
-            )
+            .when(cfg!(target_os = "windows"), |row| {
+                row.child(window_chrome::traffic_lights(window.is_fullscreen()))
+            })
+            .when(!cfg!(target_os = "windows"), |row| {
+                row.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .size(px(24.))
+                                .rounded_md()
+                                .bg(rgb(palette.accent))
+                                .text_color(rgb(palette.on_accent))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .font_weight(gpui::FontWeight::BOLD)
+                                .text_size(px(14.))
+                                .child("X"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(16.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(if self.host {
+                                    "XSCC 被控端"
+                                } else {
+                                    "XSCC 控制端"
+                                }),
+                        ),
+                )
+            })
             .when(cfg!(target_os = "windows"), |row| {
                 row.child(
                     div()
@@ -445,7 +466,8 @@ impl ManagementPanel {
                             palette.panel,
                         )
                         .h(px(24.))
-                        .py_0(),
+                        .py_0()
+                        .when(cfg!(target_os = "windows"), |badge| badge.bg(gpui::rgba(0))),
                     )
                     .when(!configured || !self.host, |row| {
                         row.child(
@@ -941,10 +963,7 @@ impl ManagementPanel {
                     div()
                         .flex()
                         .h(px(28.))
-                        .child(window_chrome::traffic_lights(
-                            palette,
-                            window.is_fullscreen(),
-                        ))
+                        .child(window_chrome::traffic_lights(window.is_fullscreen()))
                         .child(
                             div()
                                 .flex_1()

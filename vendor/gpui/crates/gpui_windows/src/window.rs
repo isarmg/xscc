@@ -572,6 +572,18 @@ impl WindowsWindow {
         register_drag_drop(&this)?;
         set_non_rude_hwnd(hwnd, true);
         configure_dwm_dark_mode(hwnd, appearance);
+        if hide_title_bar {
+            let border_color = DWMWA_COLOR_NONE;
+            unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_BORDER_COLOR,
+                    &border_color as *const _ as _,
+                    std::mem::size_of_val(&border_color) as u32,
+                )
+                .log_err();
+            }
+        }
         this.state.border_offset.update(hwnd)?;
         let placement =
             retrieve_window_placement(hwnd, display, params.bounds, &this.state.border_offset)?;

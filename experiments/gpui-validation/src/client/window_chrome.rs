@@ -1,4 +1,3 @@
-use crate::theme;
 use gpui::{div, prelude::*, px, rgb};
 
 #[derive(Clone, Copy)]
@@ -8,7 +7,7 @@ enum WindowAction {
     Fullscreen,
 }
 
-pub(super) fn traffic_lights(palette: theme::Palette, fullscreen: bool) -> gpui::Div {
+pub(super) fn traffic_lights(fullscreen: bool) -> gpui::Div {
     div()
         .flex()
         .flex_shrink_0()
@@ -36,8 +35,7 @@ pub(super) fn traffic_lights(palette: theme::Palette, fullscreen: bool) -> gpui:
                     .justify_center()
                     .cursor_pointer()
                     .occlude()
-                    .rounded_md()
-                    .hover(move |style| style.bg(rgb(palette.accent_soft)))
+                    .hover(|style| style.opacity(0.75))
                     .child(
                         div()
                             .size(px(14.))
