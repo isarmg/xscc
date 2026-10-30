@@ -757,14 +757,14 @@ impl Render for ManagementPanel {
                     let address = if peer.addresses.is_empty() { "等待设备上报地址".into() } else {
                         peer.addresses.iter().map(|address| format_peer_address(&address.host, address.port)).collect::<Vec<_>>().join("，")
                     };
-                    ui::card(palette).id(gpui::SharedString::from(id.clone())).gap_3()
-                        .child(div().flex().items_center().justify_between().gap_2()
+                    ui::card(palette).id(gpui::SharedString::from(id.clone())).aspect_ratio(3. / 2.).min_h(px(0.)).p_3().gap_2()
+                        .child(div().h(px(20.)).flex_shrink_0().flex().items_center().justify_between().gap_2().line_height(px(20.))
                             .child(div().flex_1().min_w_0().truncate().font_weight(gpui::FontWeight::SEMIBOLD).text_size(px(16.)).child(peer.name.clone()))
-                            .child(ui::badge(crate::window_layout::peer_status(current_peers.then_some(peer.online)), if current_peers && peer.online { palette.success } else { palette.muted }, palette.page)))
-                        .child(div().h(px(96.)).rounded_lg().bg(rgb(palette.page)).flex().items_center().justify_center().child(ui::monitor(palette)))
-                        .child(div().text_size(px(12.)).text_color(rgb(palette.muted)).overflow_hidden().child(address))
+                            .child(ui::badge(crate::window_layout::peer_status(current_peers.then_some(peer.online)), if current_peers && peer.online { palette.success } else { palette.muted }, palette.page).h(px(20.)).py_0().text_size(px(11.)).line_height(px(16.))))
+                        .child(div().flex_1().min_h(px(0.)).overflow_hidden().rounded_lg().bg(rgb(palette.page)).flex().items_center().justify_center().child(ui::monitor(palette)))
+                        .child(div().h(px(16.)).flex_shrink_0().text_size(px(12.)).line_height(px(16.)).text_color(rgb(palette.muted)).truncate().child(address))
                         .when(!self.host, |card| card.child(
-                            div().relative().min_h(px(theme::CONTROL_HEIGHT)).flex().items_center().justify_between().px_3().py_2()
+                            div().relative().h(px(28.)).min_h(px(28.)).flex_shrink_0().flex().items_center().justify_between().px_3().py_0().text_size(px(12.)).line_height(px(18.))
                                 .child(theme::surface(rgb(if available { palette.accent_soft } else { palette.page }), None, theme::CONTROL_EXTENT))
                                 .text_color(rgb(if available { palette.accent } else { palette.muted }))
                                 .child(if available { "连接设备" } else if self.video_state.connecting { "正在连接…" } else if self.video_state.has_session { "会话进行中" } else if !current_peers { "等待状态同步" } else { "暂不可连接" })
