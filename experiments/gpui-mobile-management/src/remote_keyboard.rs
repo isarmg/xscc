@@ -345,7 +345,7 @@ impl EntityInputHandler for RemoteKeyboard {
 }
 impl Render for RemoteKeyboard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::DARK;
+        let palette = theme::LIGHT;
         let entity = cx.entity();
         let focus = self.focus.clone();
         let enabled = self.control.enabled.get();
@@ -519,7 +519,7 @@ impl Render for RemoteKeyboard {
 }
 
 fn key_button(id: &'static str, label: &str, enabled: bool) -> gpui::Stateful<gpui::Div> {
-    let palette = theme::DARK;
+    let palette = theme::LIGHT;
     div()
         .id(id)
         .min_h(gpui::px(48.))

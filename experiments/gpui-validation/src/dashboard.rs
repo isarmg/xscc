@@ -95,35 +95,14 @@ pub fn heading(title: &str, subtitle: &str, palette: Palette) -> Div {
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title.to_owned()),
         )
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(rgb(palette.muted))
-                .child(subtitle.to_owned()),
-        )
-}
-
-pub fn metric(label: &str, value: String, description: &str, palette: Palette) -> Div {
-    card(palette)
-        .gap_2()
-        .child(
-            div()
-                .text_size(px(13.))
-                .text_color(rgb(palette.muted))
-                .child(label.to_owned()),
-        )
-        .child(
-            div()
-                .text_size(px(26.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(value),
-        )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(palette.muted))
-                .child(description.to_owned()),
-        )
+        .when(!subtitle.is_empty(), |heading| {
+            heading.child(
+                div()
+                    .text_size(px(13.))
+                    .text_color(rgb(palette.muted))
+                    .child(subtitle.to_owned()),
+            )
+        })
 }
 
 pub fn monitor(palette: Palette) -> Div {

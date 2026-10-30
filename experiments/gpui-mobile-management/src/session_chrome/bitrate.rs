@@ -446,7 +446,7 @@ impl SessionChrome {
                         .px_3()
                         .rounded(px(14.))
                         .bg(rgb(ACCENT))
-                        .text_color(rgb(crate::theme::DARK.on_accent))
+                        .text_color(rgb(crate::theme::LIGHT.on_accent))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -475,7 +475,7 @@ impl SessionChrome {
             body.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(crate::theme::DARK.danger))
+                    .text_color(rgb(crate::theme::LIGHT.danger))
                     .child(self.bitrate.error.clone()),
             )
         })

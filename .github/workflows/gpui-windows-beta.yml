@@ -40,6 +40,11 @@ on:
         required: true
         default: '0.1.0-beta.16'
         type: string
+      build_only:
+        description: 'Build and package without additional lint, tests or smoke checks'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -78,6 +83,7 @@ jobs:
             throw 'Expected a numeric version such as 0.1.0-beta.16'
           }
       - name: Verify beta packager rejects stable versions
+        if: ${{ !inputs.build_only }}
         run: |
           $candidateVersion = $env:PACKAGE_VERSION
           try {
@@ -135,18 +141,21 @@ jobs:
           if (-not (Test-Path "$clang/libclang.dll")) { throw 'Runner LLVM/libclang is missing' }
           "LIBCLANG_PATH=$clang" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Check formatting
+        if: ${{ !inputs.build_only }}
         run: cargo fmt --manifest-path experiments/gpui-validation/Cargo.toml -- --check
       - name: Compile optional Windows VRAM reconfiguration path
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: |
           cargo check --locked --manifest-path Cargo.toml --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Lint Windows preview
+        if: ${{ !inputs.build_only }}
         run: cargo clippy --locked --no-deps --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Test Windows preview
+        if: ${{ !inputs.build_only }}
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test FFmpeg decoded-plane reuse with native bindings
-        if: matrix.role == 'controller'
+        if: matrix.role == 'controller' && !inputs.build_only
         run: |
           $env:PATH = (Resolve-Path vendor/hwcodec/externals/SDL/lib/x64).Path + [IO.Path]::PathSeparator + $env:PATH
           $decodeTests = & cargo test --locked -p hwcodec --lib --target x86_64-pc-windows-msvc ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1
@@ -156,7 +165,7 @@ jobs:
             throw 'Native decoded-plane reuse regression tests failed or did not run all three tests'
           }
       - name: Test same-codec VRAM initialization fallback parameters
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: |
           $fallbackTests = & cargo test --locked -p scrap --lib --features hwcodec,vram --target x86_64-pc-windows-msvc vram::ram_fallback_tests:: 2>&1
           $fallbackExit = $LASTEXITCODE
@@ -165,17 +174,19 @@ jobs:
             throw 'VRAM fallback regression tests failed or did not run both tests'
           }
       - name: Test native session and host regression coverage
+        if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
       - name: Test configurable virtual display mode preservation
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
       - name: Test encrypted management handshake and connection-close errors
+        if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::transport::tests"
       - name: Test framed transport wire compatibility and blocked-write isolation
-        if: matrix.role == 'controller'
+        if: matrix.role == 'controller' && !inputs.build_only
         run: cargo test --locked -p hbb_common --lib --target x86_64-pc-windows-msvc tcp::tests
       - name: Test frame-rate-aware codec budget and timestamp duration
-        if: matrix.role == 'controller'
+        if: matrix.role == 'controller' && !inputs.build_only
         run: |
           cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::rate_control::tests::
           if ($LASTEXITCODE -ne 0) { throw 'Codec rate-control tests failed' }
@@ -188,21 +199,24 @@ jobs:
             throw 'Explicit bitrate tests failed or matched no tests'
           }
       - name: Test video pacing, queue bounds and intentional reconfiguration
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: |
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_"
           if ($LASTEXITCODE -ne 0) { throw 'Video regression tests failed' }
       - name: Test managed IPC peer authorization
+        if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"
       - name: Test host management authorization policy
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::host_tests"
       - name: Test native codec probe parser and failure handling
+        if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::hwcodec::tests"
       - name: Test idle host input unblock is a no-op
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::connection::test::unblock_without_owned_input_block_is_a_noop"
       - name: Compile and test test-only IP role
+        if: ${{ !inputs.build_only }}
         run: |
           cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features "${{ matrix.features }},test-lan-direct" --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'Test-only IP role tests failed' }
@@ -226,6 +240,7 @@ jobs:
             throw 'Host CLI requires an already elevated runner token; this workflow will not bypass UAC'
           }
       - name: Smoke test release CLI and bounded hardware codec probe
+        if: ${{ !inputs.build_only }}
         timeout-minutes: 3
         run: ./.github/scripts/test-gpui-codec-probe.ps1
       - name: Install NSIS compiler
@@ -240,10 +255,10 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: ./.github/scripts/package-gpui-windows.ps1
       - name: Smoke test per-user installer and uninstaller
-        if: matrix.role == 'controller'
+        if: matrix.role == 'controller' && !inputs.build_only
         run: ./.github/scripts/test-gpui-installer.ps1
       - name: Smoke test host service install and uninstall on disposable runner
-        if: matrix.role == 'host'
+        if: matrix.role == 'host' && !inputs.build_only
         timeout-minutes: 5
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

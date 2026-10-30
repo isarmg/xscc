@@ -23,6 +23,12 @@ on:
       - '.github/scripts/*gpui-game-activity*'
       - '.github/scripts/*gpui*mobile*'
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: 'Build and package without additional host-side tests'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -70,6 +76,7 @@ jobs:
           submodules: recursive
 
       - name: Check source and package validation tests
+        if: ${{ !inputs.build_only }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           python3 .github/scripts/test-gpui-mobile-test-gate.py
@@ -130,6 +137,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Test GPUI Android geometry on the host
+        if: ${{ !inputs.build_only }}
         run: |
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/geometry.rs -o "$RUNNER_TEMP/gpui-android-geometry-tests"
           "$RUNNER_TEMP/gpui-android-geometry-tests"
@@ -143,6 +151,7 @@ jobs:
           cache-on-failure: true
 
       - name: Test mobile enrollment input against the shared protocol
+        if: ${{ !inputs.build_only }}
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/${{ matrix.workspace }}/target
           CARGO_BUILD_JOBS: '4'
@@ -196,6 +205,7 @@ jobs:
           java-version: '27'
 
       - name: Test Java IME generation and single-line editor actions on the host
+        if: ${{ !inputs.build_only }}
         run: |
           python3 .github/scripts/test-gpui-android-ime.py
           python3 .github/scripts/test-gpui-android-editor-action.py

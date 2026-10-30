@@ -1,8 +1,8 @@
 /// All dimensions are logical pixels from the display's usable work area.
-pub fn window_sizes(work: [f32; 2], host: bool) -> ([f32; 2], [f32; 2]) {
+pub fn window_sizes(work: [f32; 2], _host: bool) -> ([f32; 2], [f32; 2]) {
     // Leave room for native window decorations as well as a visible desktop margin.
     let available = [(work[0] - 48.).max(1.), (work[1] - 48.).max(1.)];
-    let desired: [f32; 2] = if host { [720., 680.] } else { [1080., 720.] };
+    let desired: [f32; 2] = [1080., 720.];
     let initial = [desired[0].min(available[0]), desired[1].min(available[1])];
     let minimum = [360_f32.min(initial[0]), 320_f32.min(initial[1])];
     (initial, minimum)

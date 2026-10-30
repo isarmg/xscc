@@ -6,16 +6,13 @@ use gpui::{
 
 mod bitrate;
 
-// The always-dark session chrome derives from the shared dark palette, so the
-// session matches the rest of the application. RAISED and BORDER are two local
-// neutral steps above `panel` (keys, outlines) that have no palette slot.
-const PAGE: u32 = crate::theme::DARK.page;
-const SURFACE: u32 = crate::theme::DARK.panel;
-const RAISED: u32 = 0x262b31;
-const BORDER: u32 = 0x363c44;
-const TEXT: u32 = crate::theme::DARK.text;
-const MUTED: u32 = crate::theme::DARK.muted;
-const ACCENT: u32 = crate::theme::DARK.accent;
+const PAGE: u32 = crate::theme::LIGHT.page;
+const SURFACE: u32 = crate::theme::LIGHT.panel;
+const RAISED: u32 = crate::theme::LIGHT.accent_soft;
+const BORDER: u32 = crate::theme::LIGHT.border;
+const TEXT: u32 = crate::theme::LIGHT.text;
+const MUTED: u32 = crate::theme::LIGHT.muted;
+const ACCENT: u32 = crate::theme::LIGHT.accent;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChromeMonitor {
@@ -140,7 +137,7 @@ impl SessionChrome {
             .rounded(px(14.))
             .bg(rgb(if selected { ACCENT } else { RAISED }))
             .text_color(rgb(if selected {
-                crate::theme::DARK.on_accent
+                crate::theme::LIGHT.on_accent
             } else {
                 TEXT
             }))
@@ -188,7 +185,7 @@ impl SessionChrome {
                             .size(px(16.))
                             .rounded_full()
                             .bg(rgb(if selected {
-                                crate::theme::DARK.on_accent
+                                crate::theme::LIGHT.on_accent
                             } else {
                                 TEXT
                             })),
@@ -463,7 +460,7 @@ impl SessionChrome {
             body = body.child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(crate::theme::DARK.danger))
+                    .text_color(rgb(crate::theme::LIGHT.danger))
                     .child(error.clone()),
             );
         }
@@ -696,14 +693,14 @@ impl SessionChrome {
                     .justify_center()
                     .flex_col()
                     .text_color(rgb(if pressed {
-                        crate::theme::DARK.on_accent
+                        crate::theme::LIGHT.on_accent
                     } else {
                         TEXT
                     }))
                     .child(glyph(
                         icon,
                         if pressed {
-                            crate::theme::DARK.on_accent
+                            crate::theme::LIGHT.on_accent
                         } else {
                             TEXT
                         },

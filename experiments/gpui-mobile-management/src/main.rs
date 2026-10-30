@@ -90,7 +90,6 @@ mod session_layout;
 mod session_view;
 #[path = "../../gpui-validation/src/text_field.rs"]
 mod text_field;
-#[path = "../../gpui-validation/src/theme.rs"]
 mod theme;
 #[cfg(any(
     test,

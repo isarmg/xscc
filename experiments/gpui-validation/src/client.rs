@@ -334,29 +334,13 @@ impl ManagementPanel {
                     )
                     .child(
                         div()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(px(20.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(if self.host {
-                                        "XSCC 被控端"
-                                    } else {
-                                        "XSCC 控制端"
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(palette.muted))
-                                    .child(if self.host {
-                                        "管理这台设备的远程访问"
-                                    } else {
-                                        "你的设备，随时连接"
-                                    }),
-                            ),
+                            .text_size(px(20.))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(if self.host {
+                                "XSCC 被控端"
+                            } else {
+                                "XSCC 控制端"
+                            }),
                     ),
             )
             .child(
@@ -477,11 +461,7 @@ impl ManagementPanel {
 
     fn render_binding(&self, palette: theme::Palette, cx: &mut Context<Self>) -> gpui::Div {
         ui::card(palette)
-            .child(ui::heading(
-                "绑定管理实例",
-                "输入管理端提供的信息，加载你的授权设备。",
-                palette,
-            ))
+            .child(ui::heading("绑定管理实例", "", palette))
             .child(
                 div()
                     .flex()
@@ -503,31 +483,20 @@ impl ManagementPanel {
                     .child(self.password.clone()),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_wrap()
-                    .gap_3()
-                    .child(
-                        ui::button(
-                            "enroll",
-                            if self.action_pending {
-                                "正在绑定…"
-                            } else {
-                                "绑定并连接"
-                            },
-                            true,
-                            self.can_act(),
-                            palette,
-                        )
-                        .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
+                div().flex().items_center().flex_wrap().gap_3().child(
+                    ui::button(
+                        "enroll",
+                        if self.action_pending {
+                            "正在绑定…"
+                        } else {
+                            "绑定并连接"
+                        },
+                        true,
+                        self.can_act(),
+                        palette,
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child("实例密码由管理端提供，仅用于绑定此设备。"),
-                    ),
+                    .on_click(cx.listener(|view, _, window, cx| view.enroll(window, cx))),
+                ),
             )
     }
 
@@ -539,11 +508,7 @@ impl ManagementPanel {
     ) -> gpui::Div {
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
         ui::card(palette)
-            .child(ui::heading(
-                "设备连接地址",
-                "向已授权的控制端上报可访问地址，留空则自动获取。",
-                palette,
-            ))
+            .child(ui::heading("设备连接地址", "", palette))
             .child(
                 div()
                     .rounded_lg()
@@ -655,9 +620,6 @@ impl Render for ManagementPanel {
             .bg(rgb(palette.page)).text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE)).line_height(px(theme::LINE_HEIGHT))
             .on_key_down(cx.listener(Self::form_key_down))
-            .child(ui::heading(
-                if self.host { "访问工作台" } else { "设备工作台" },
-                if self.host { "查看本机连接信息，管理获准访问的设备。" } else { "在一个地方查看并连接你的授权设备。" }, palette))
             .when(!self.host && self.video_state.connected, |root| root.child(self.render_media_controls(palette, cx)))
             .when(!self.notice.is_empty(), |root| root.child(
                 div().p_3().rounded_lg().bg(rgb(palette.accent_soft)).child(self.notice.clone())))
@@ -669,22 +631,30 @@ impl Render for ManagementPanel {
                 ui::card(palette).text_color(rgb(palette.danger))
                     .child("此实例角色与当前应用不匹配。请在管理端创建对应角色的实例，再解绑并重新绑定。")))
             .when(configured && !self.video_state.has_session, |root| root.child(
-                div().flex_shrink_0().grid().grid_cols(if content_width < 560. { 1 } else { 3 }).gap_3()
-                    .child(ui::metric(if self.host { "授权控制端" } else { "授权设备" }, if configured { peers.len().to_string() } else { "—".into() }, "由管理端分配访问权限", palette))
-                    .child(ui::metric("当前在线", online_count, if current_peers { "已同步最新设备状态" } else { "连接管理端后同步" }, palette))
-                    .child(ui::metric("管理连接", if current_peers { "已连接" } else if configured { "待连接" } else { "未绑定" }.into(), "使用实例授权建立连接", palette))))
+                ui::card(palette).p_4().gap_2()
+                    .child(div().flex().items_center().flex_wrap().gap_5()
+                        .children([
+                            (if self.host { "授权控制端" } else { "授权设备" }, peers.len().to_string()),
+                            ("当前在线", online_count),
+                            ("管理连接", if current_peers { "已连接" } else { "待连接" }.into()),
+                        ].into_iter().map(|(label, value)| {
+                            div().flex().items_center().gap_2()
+                                .child(div().text_color(rgb(palette.muted)).child(label))
+                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(value))
+                        })))
+                    .when(self.host || self.show_login, |card| {
+                        let status = self.status.as_ref();
+                        card.child(div().flex().items_center().flex_wrap().gap_3()
+                            .text_size(px(12.)).text_color(rgb(palette.muted))
+                            .child("当前管理实例")
+                            .when_some(status.and_then(|status| status.server.as_ref()), |row, server| {
+                                row.child(div().child(server.clone()))
+                            })
+                            .when_some(status.and_then(|status| status.binding.as_ref()), |row, binding| {
+                                row.child(div().child(format!("实例编号：{}", binding.device_id)))
+                            }))
+                    })))
             .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
-            .when(configured && (self.host || self.show_login), |root| {
-                let status = self.status.as_ref();
-                root.child(ui::card(palette).gap_2()
-                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("当前管理实例"))
-                    .when_some(status.and_then(|status| status.server.as_ref()), |card, server| {
-                        card.child(div().text_color(rgb(palette.muted)).overflow_hidden().child(server.clone()))
-                    })
-                    .when_some(status.and_then(|status| status.binding.as_ref()), |card, binding| {
-                        card.child(div().text_size(px(12.)).text_color(rgb(palette.muted)).child(format!("实例编号：{}", binding.device_id)))
-                    }))
-            })
             .when(self.host && self.initialized, |root| root.child(self.render_addresses(&current_addresses, palette, cx)))
             .child(div().flex().items_center().justify_between().gap_2()
                 .child(div().text_size(px(18.)).font_weight(gpui::FontWeight::SEMIBOLD)
@@ -838,8 +808,8 @@ impl Render for ManagementMenu {
         });
         div()
             .id("management-menu")
-            .size_full()
-            .overflow_y_scroll()
+            .w_full()
+            .flex_shrink_0()
             .child(content)
     }
 }
@@ -1098,20 +1068,7 @@ impl Render for Client {
             .on_key_down(cx.listener(Self::key_down))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
-            .child(
-                self.menu.clone().cached(
-                    StyleRefinement::default()
-                        .w_full()
-                        .h(px(if remote_visible {
-                            96.
-                        } else if f32::from(window.viewport_size().width) < 900. {
-                            128.
-                        } else {
-                            76.
-                        }))
-                        .flex_shrink_0(),
-                ),
-            )
+            .child(self.menu.clone())
             .child(
                 div()
                     .flex()
