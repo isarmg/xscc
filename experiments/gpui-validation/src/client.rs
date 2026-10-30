@@ -161,6 +161,7 @@ impl ManagementPanel {
         if self.host || self.action_pending || self.status_error.is_some() {
             return;
         }
+        self.sidebar_visible = false;
         self.video
             .update(cx, |video, cx| video.connect(device_id, window, cx));
     }
@@ -520,44 +521,33 @@ impl ManagementPanel {
             .child(
                 div()
                     .flex()
-                    .flex_wrap()
+                    .items_center()
                     .gap_3()
+                    .child(div().flex_1().min_w_0().child(self.address_host.clone()))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w(px(170.))
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child("域名或 IP")
-                            .child(self.address_host.clone()),
-                    )
-                    .child(
-                        div()
-                            .w(px(160.))
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child("端口")
+                            .w(px(144.))
+                            .flex_shrink_0()
                             .child(self.address_port.clone()),
-                    ),
-            )
-            .when(configured, |section| {
-                section.child(
-                    ui::button(
-                        "save-address",
-                        if self.action_pending {
-                            "正在保存…"
-                        } else {
-                            "保存地址"
-                        },
-                        false,
-                        self.can_act(),
-                        palette,
                     )
-                    .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
-                )
-            })
+                    .when(configured, |row| {
+                        row.child(
+                            ui::button(
+                                "save-address",
+                                if self.action_pending {
+                                    "正在保存…"
+                                } else {
+                                    "保存地址"
+                                },
+                                false,
+                                self.can_act(),
+                                palette,
+                            )
+                            .flex_shrink_0()
+                            .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
+                        )
+                    }),
+            )
     }
 }
 
@@ -599,7 +589,7 @@ impl Render for ManagementPanel {
                 .is_some_and(|status| status.phase == "online");
         let panel_width =
             if !self.host && (self.video_state.connecting || self.video_state.has_session) {
-                (f32::from(window.viewport_size().width) * 0.38).min(420.)
+                (f32::from(window.viewport_size().width) - 24.).min(680.) - 24.
             } else {
                 f32::from(window.viewport_size().width) - 48.
             };
@@ -799,24 +789,86 @@ struct ManagementMenu {
 
 impl Render for ManagementMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (remote_visible, expanded) = {
+            let management = self.management.read(cx);
+            (
+                !management.host
+                    && (management.video_state.connecting || management.video_state.has_session),
+                management.sidebar_visible,
+            )
+        };
         let content = self.management.update(cx, |view, cx| {
-            if !view.host && (view.video_state.connecting || view.video_state.has_session) {
+            if remote_visible {
                 view.render_session_toolbar(window, cx)
             } else {
                 view.render_menu(window, cx)
             }
         });
+        let palette = theme::palette(window.appearance());
         div()
             .id("management-menu")
             .w_full()
             .flex_shrink_0()
+            .when(remote_visible, |menu| {
+                menu.relative()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .on_any_mouse_up(|_, _, cx| cx.stop_propagation())
+                    .when(expanded, |menu| {
+                        menu.p_3()
+                            .max_h(px((f32::from(window.viewport_size().height) - 24.).max(1.)))
+                            .overflow_y_scroll()
+                            .child(theme::surface(
+                                rgb(palette.panel),
+                                Some(rgb(palette.border)),
+                                theme::PANEL_EXTENT,
+                            ))
+                    })
+            })
             .child(content)
+            .when(remote_visible && expanded, |menu| {
+                menu.child(
+                    div()
+                        .mt_3()
+                        .h(px(
+                            (f32::from(window.viewport_size().height) * 0.55).min(420.)
+                        ))
+                        .w_full()
+                        .flex_shrink_0()
+                        .child(
+                            self.management
+                                .clone()
+                                .cached(StyleRefinement::default().size_full()),
+                        ),
+                )
+            })
     }
 }
 
 impl ManagementPanel {
     fn render_session_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let palette = theme::palette(window.appearance());
+        let toggle = ui::button(
+            "session-settings-toggle",
+            if self.sidebar_visible {
+                "会话设置  ▴"
+            } else {
+                "会话设置  ▾"
+            },
+            !self.sidebar_visible,
+            true,
+            palette,
+        )
+        .w_full()
+        .on_click(cx.listener(|view, _, _, cx| {
+            view.sidebar_visible = !view.sidebar_visible;
+            cx.stop_propagation();
+            cx.notify();
+        }));
+        let toolbar = div().flex().flex_col().gap_3().child(toggle);
+        if !self.sidebar_visible {
+            return toolbar;
+        }
         let state = &self.video_state;
         let summary = session_statistics(state, self.statistics);
         let status = if state.notice.is_empty() {
@@ -826,154 +878,110 @@ impl ManagementPanel {
         } else {
             format!("{} · {summary}", state.notice)
         };
-        div()
-            .flex_shrink_0()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_2()
-            .bg(rgb(palette.panel))
-            .border_b_1()
-            .border_color(rgb(palette.border))
+        toolbar
+            .child(div().flex().items_center().flex_wrap().gap_2().children(
+                state.monitors.iter().map(|monitor| {
+                    let index = monitor.index;
+                    let selected = state.current_monitor == index;
+                    let enabled = state.connected
+                        && !state.switching_monitor
+                        && state.pending_media.is_none()
+                        && monitor.available;
+                    ui::button(
+                        ("session-monitor", index),
+                        &format!(
+                            "屏幕 {} · {} · {}×{}{}",
+                            index + 1,
+                            monitor.name,
+                            monitor.width,
+                            monitor.height,
+                            if monitor.available {
+                                ""
+                            } else {
+                                " · 不可用"
+                            }
+                        ),
+                        selected,
+                        enabled,
+                        palette,
+                    )
+                    .max_w_full()
+                    .truncate()
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if enabled {
+                            view.video
+                                .update(cx, |video, cx| video.switch_monitor(index, cx));
+                        }
+                    }))
+                }),
+            ))
             .child(
                 div()
                     .flex()
                     .items_center()
+                    .flex_wrap()
                     .gap_2()
+                    .children(
+                        [
+                            ("session-fps-30", TargetFps::Fps30),
+                            ("session-fps-60", TargetFps::Fps60),
+                            ("session-fps-90", TargetFps::Fps90),
+                            ("session-fps-120", TargetFps::Fps120),
+                        ]
+                        .into_iter()
+                        .map(|(id, target)| {
+                            ui::button(
+                                id,
+                                &format!("{} FPS", target.value()),
+                                state.target_fps == target,
+                                state.connected,
+                                palette,
+                            )
+                            .flex_shrink_0()
+                            .on_click(cx.listener(
+                                move |view, _, _, cx| {
+                                    if view.video_state.connected {
+                                        view.video
+                                            .update(cx, |video, cx| video.request_fps(target, cx));
+                                    }
+                                },
+                            ))
+                        }),
+                    )
                     .child(
-                        div()
-                            .id("session-toolbar-actions")
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .min_h(px(theme::CONTROL_HEIGHT))
-                            .overflow_x_scroll()
-                            .whitespace_nowrap()
-                            .gap_2()
-                            .child(
-                                ui::button(
-                                    "session-devices",
-                                    if self.sidebar_visible {
-                                        "收起设备与画质"
-                                    } else {
-                                        "设备与画质"
-                                    },
-                                    false,
-                                    true,
-                                    palette,
-                                )
-                                .flex_shrink_0()
-                                .on_click(cx.listener(
-                                    |view, _, _, cx| {
-                                        view.sidebar_visible = !view.sidebar_visible;
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                            .children(state.monitors.iter().map(|monitor| {
-                                let index = monitor.index;
-                                let selected = state.current_monitor == index;
-                                let enabled = state.connected
-                                    && !state.switching_monitor
-                                    && state.pending_media.is_none()
-                                    && monitor.available;
-                                ui::button(
-                                    ("session-monitor", index),
-                                    &format!(
-                                        "屏幕 {} · {} · {}×{}{}",
-                                        index + 1,
-                                        monitor.name,
-                                        monitor.width,
-                                        monitor.height,
-                                        if monitor.available {
-                                            ""
-                                        } else {
-                                            " · 不可用"
-                                        }
-                                    ),
-                                    selected,
-                                    enabled,
-                                    palette,
-                                )
-                                .flex_shrink_0()
-                                .on_click(cx.listener(
-                                    move |view, _, _, cx| {
-                                        if enabled {
-                                            view.video.update(cx, |video, cx| {
-                                                video.switch_monitor(index, cx)
-                                            });
-                                        }
-                                    },
-                                ))
-                            }))
-                            .children(
-                                [
-                                    ("session-fps-30", TargetFps::Fps30),
-                                    ("session-fps-60", TargetFps::Fps60),
-                                    ("session-fps-90", TargetFps::Fps90),
-                                    ("session-fps-120", TargetFps::Fps120),
-                                ]
-                                .into_iter()
-                                .map(|(id, target)| {
-                                    ui::button(
-                                        id,
-                                        &format!("{} FPS", target.value()),
-                                        state.target_fps == target,
-                                        state.connected,
-                                        palette,
-                                    )
-                                    .flex_shrink_0()
-                                    .on_click(cx.listener(
-                                        move |view, _, _, cx| {
-                                            if view.video_state.connected {
-                                                view.video.update(cx, |video, cx| {
-                                                    video.request_fps(target, cx)
-                                                });
-                                            }
-                                        },
-                                    ))
-                                }),
-                            )
-                            .child(
-                                ui::button(
-                                    "session-statistics",
-                                    self.statistics.label(),
-                                    false,
-                                    true,
-                                    palette,
-                                )
-                                .flex_shrink_0()
-                                .on_click(cx.listener(
-                                    |view, _, _, cx| {
-                                        view.statistics = view.statistics.next();
-                                        cx.notify();
-                                    },
-                                )),
-                            )
-                            .child(
-                                ui::button(
-                                    "session-fullscreen",
-                                    if window.is_fullscreen() {
-                                        "退出全屏"
-                                    } else {
-                                        "全屏"
-                                    },
-                                    false,
-                                    state.connected,
-                                    palette,
-                                )
-                                .flex_shrink_0()
-                                .on_click(cx.listener(
-                                    |view, _, window, cx| {
-                                        if view.video_state.connected {
-                                            view.video.read(cx).focus_handle(cx).focus(window, cx);
-                                            window.toggle_fullscreen();
-                                            cx.notify();
-                                        }
-                                    },
-                                )),
-                            ),
+                        ui::button(
+                            "session-statistics",
+                            self.statistics.label(),
+                            false,
+                            true,
+                            palette,
+                        )
+                        .flex_shrink_0()
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.statistics = view.statistics.next();
+                            cx.notify();
+                        })),
+                    )
+                    .child(
+                        ui::button(
+                            "session-fullscreen",
+                            if window.is_fullscreen() {
+                                "退出全屏"
+                            } else {
+                                "全屏"
+                            },
+                            false,
+                            state.connected,
+                            palette,
+                        )
+                        .flex_shrink_0()
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            if view.video_state.connected {
+                                view.video.read(cx).focus_handle(cx).focus(window, cx);
+                                window.toggle_fullscreen();
+                                cx.notify();
+                            }
+                        })),
                     )
                     .child(
                         ui::button(
@@ -997,9 +1005,6 @@ impl ManagementPanel {
             .child(
                 div()
                     .id("session-statistics-text")
-                    .h(px(theme::LINE_HEIGHT))
-                    .overflow_x_scroll()
-                    .whitespace_nowrap()
                     .text_size(px(12.))
                     .text_color(rgb(palette.muted))
                     .child(status),
@@ -1052,11 +1057,18 @@ impl Render for Client {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = theme::palette(window.appearance());
         // Cached views require a definite viewport; panel content scrolls within it.
-        let panel_width = (f32::from(window.viewport_size().width) * 0.38).min(420.0);
+        let settings_width = if self.management.read(cx).sidebar_visible {
+            (f32::from(window.viewport_size().width) - 24.)
+                .min(680.)
+                .max(1.)
+        } else {
+            136.
+        };
+        let settings_left =
+            ((f32::from(window.viewport_size().width) - settings_width) / 2.).max(0.);
         let management = self.management.read(cx);
         let remote_visible =
             !self.host && (management.video_state.connecting || management.video_state.has_session);
-        let sidebar_visible = management.sidebar_visible;
         div()
             .size_full()
             .flex()
@@ -1068,25 +1080,20 @@ impl Render for Client {
             .on_key_down(cx.listener(Self::key_down))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
-            .child(self.menu.clone())
+            .when(!remote_visible, |root| root.child(self.menu.clone()))
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap_3()
-                    .when(!remote_visible || sidebar_visible, |row| {
+                    .when(!remote_visible, |row| {
                         row.child(
-                            div()
-                                .h_full()
-                                .flex_shrink_0()
-                                .when(remote_visible, |panel| panel.w(px(panel_width)))
-                                .when(!remote_visible, |panel| panel.w_full())
-                                .child(
-                                    self.management
-                                        .clone()
-                                        .cached(StyleRefinement::default().size_full()),
-                                ),
+                            div().h_full().flex_shrink_0().w_full().child(
+                                self.management
+                                    .clone()
+                                    .cached(StyleRefinement::default().size_full()),
+                            ),
                         )
                     })
                     .when(remote_visible, |root| {
@@ -1096,6 +1103,14 @@ impl Render for Client {
                                 .h_full()
                                 .min_w(px(0.0))
                                 .child(self.video.clone()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .top_3()
+                                .left(px(settings_left))
+                                .w(px(settings_width))
+                                .child(self.menu.clone()),
                         )
                     }),
             )
