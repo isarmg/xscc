@@ -522,11 +522,11 @@ impl ManagementPanel {
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_2()
                     .child(div().flex_1().min_w_0().child(self.address_host.clone()))
                     .child(
                         div()
-                            .w(px(144.))
+                            .w(px(120.))
                             .flex_shrink_0()
                             .child(self.address_port.clone()),
                     )
@@ -544,6 +544,7 @@ impl ManagementPanel {
                                 palette,
                             )
                             .flex_shrink_0()
+                            .px_3()
                             .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
                         )
                     }),
@@ -813,7 +814,6 @@ impl Render for ManagementMenu {
                 menu.relative()
                     .occlude()
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                    .on_any_mouse_up(|_, _, cx| cx.stop_propagation())
                     .when(expanded, |menu| {
                         menu.p_3()
                             .max_h(px((f32::from(window.viewport_size().height) - 24.).max(1.)))
