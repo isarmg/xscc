@@ -9,7 +9,7 @@ pub fn window_sizes(work: [f32; 2], _host: bool) -> ([f32; 2], [f32; 2]) {
 }
 
 pub fn card_columns(width: f32) -> u16 {
-    ((width + 12.) / 332.).floor().clamp(1., 3.) as u16
+    ((width + 16.) / 252.).floor().clamp(1., 4.) as u16
 }
 
 pub fn peer_status(online: Option<bool>) -> &'static str {
@@ -41,7 +41,8 @@ mod tests {
     fn cards_reflow_and_unknown_status_never_claims_online() {
         assert_eq!(card_columns(300.), 1);
         assert_eq!(card_columns(660.), 2);
-        assert_eq!(card_columns(1024.), 3);
+        assert_eq!(card_columns(1024.), 4);
+        assert_eq!(card_columns(4096.), 4);
         assert_eq!(peer_status(None), "状态未知");
         assert_eq!(peer_status(Some(false)), "离线");
         assert_eq!(peer_status(Some(true)), "在线");

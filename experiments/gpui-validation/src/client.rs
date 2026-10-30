@@ -8,9 +8,9 @@ use crate::{
     theme,
 };
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, KeyDownEvent, Render,
-    StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
-    point, prelude::*, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement,
+    KeyDownEvent, Render, StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds,
+    WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -213,6 +213,34 @@ impl ManagementPanel {
         }
     }
 
+    fn populate_address_fields(
+        &self,
+        status: &Status,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.host {
+            return;
+        }
+        let address = status.addresses.first();
+        self.address_host.update(cx, |field, cx| {
+            let range = 0..field.value().encode_utf16().count();
+            field.replace_text_in_range(
+                Some(range),
+                address.map(|address| address.host.as_str()).unwrap_or(""),
+                window,
+                cx,
+            );
+        });
+        let port = address
+            .map(|address| address.port.to_string())
+            .unwrap_or_default();
+        self.address_port.update(cx, |field, cx| {
+            let range = 0..field.value().encode_utf16().count();
+            field.replace_text_in_range(Some(range), &port, window, cx);
+        });
+    }
+
     fn consume_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         while let Ok(reply) = self.receiver.try_recv() {
@@ -230,6 +258,22 @@ impl ManagementPanel {
                     }
                     match result {
                         Ok(status) => {
+                            if self.status.is_none()
+                                && self.address_host.read(cx).value().is_empty()
+                                && self.address_port.read(cx).value().is_empty()
+                                && !self
+                                    .address_host
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .is_focused(window)
+                                && !self
+                                    .address_port
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .is_focused(window)
+                            {
+                                self.populate_address_fields(&status, window, cx);
+                            }
                             changed |= self.status.as_ref() != Some(&status)
                                 || self.status_error.is_some();
                             if !self.host {
@@ -253,6 +297,7 @@ impl ManagementPanel {
                     self.action_pending = false;
                     match result {
                         Ok(status) => {
+                            self.populate_address_fields(&status, window, cx);
                             if enrollment {
                                 self.password
                                     .update(cx, |field, cx| field.clear(window, cx));
@@ -287,6 +332,15 @@ impl ManagementPanel {
 impl ManagementPanel {
     fn render_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let palette = theme::palette(window.appearance());
+        let header_button = |id: &'static str, label: &str, primary, enabled| {
+            ui::button(id, label, primary, enabled, palette)
+                .min_h(px(24.))
+                .h(px(24.))
+                .py_0()
+                .px_3()
+                .text_size(px(12.))
+                .line_height(px(18.))
+        };
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
         let idle = self.can_act();
         let online = self.status_error.is_none()
@@ -311,31 +365,32 @@ impl ManagementPanel {
             .items_center()
             .justify_between()
             .flex_wrap()
-            .gap_4()
-            .pb_4()
+            .gap_2()
+            .pb_1()
+            .line_height(px(18.))
             .border_b_1()
             .border_color(rgb(palette.border))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_3()
+                    .gap_2()
                     .child(
                         div()
-                            .size(px(44.))
-                            .rounded_xl()
+                            .size(px(24.))
+                            .rounded_md()
                             .bg(rgb(palette.accent))
                             .text_color(rgb(palette.on_accent))
                             .flex()
                             .items_center()
                             .justify_center()
                             .font_weight(gpui::FontWeight::BOLD)
-                            .text_size(px(19.))
+                            .text_size(px(14.))
                             .child("X"),
                     )
                     .child(
                         div()
-                            .text_size(px(20.))
+                            .text_size(px(16.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(if self.host {
                                 "XSCC 被控端"
@@ -350,18 +405,22 @@ impl ManagementPanel {
                     .items_center()
                     .flex_wrap()
                     .gap_2()
-                    .child(ui::badge(
-                        status_text,
-                        if online {
-                            palette.success
-                        } else {
-                            palette.muted
-                        },
-                        palette.panel,
-                    ))
+                    .child(
+                        ui::badge(
+                            status_text,
+                            if online {
+                                palette.success
+                            } else {
+                                palette.muted
+                            },
+                            palette.panel,
+                        )
+                        .h(px(24.))
+                        .py_0(),
+                    )
                     .when(!configured || !self.host, |row| {
                         row.child(
-                            ui::button(
+                            header_button(
                                 "login-menu",
                                 if configured {
                                     if self.show_login {
@@ -376,7 +435,6 @@ impl ManagementPanel {
                                 },
                                 true,
                                 self.initialized,
-                                palette,
                             )
                             .on_click(cx.listener(|view, _, _, cx| {
                                 if view.initialized {
@@ -387,7 +445,7 @@ impl ManagementPanel {
                         )
                     })
                     .child(
-                        ui::button(
+                        header_button(
                             "refresh",
                             if self.manual_refresh_pending {
                                 "刷新中…"
@@ -396,7 +454,6 @@ impl ManagementPanel {
                             },
                             false,
                             idle && !self.manual_refresh_pending,
-                            palette,
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.refresh(true);
@@ -409,19 +466,17 @@ impl ManagementPanel {
                                 !matches!(status.phase.as_str(), "online" | "connecting")
                             }),
                         |row| {
-                            row.child(
-                                ui::button("resume", "重新连接", true, idle, palette).on_click(
-                                    cx.listener(|view, _, _, cx| {
-                                        view.action(Command::Resume);
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
+                            row.child(header_button("resume", "重新连接", true, idle).on_click(
+                                cx.listener(|view, _, _, cx| {
+                                    view.action(Command::Resume);
+                                    cx.notify();
+                                }),
+                            ))
                         },
                     )
                     .when(configured, |row| {
                         row.child(
-                            ui::button(
+                            header_button(
                                 "unbind",
                                 if self.confirm_unbind {
                                     "确认解绑并断开"
@@ -430,7 +485,6 @@ impl ManagementPanel {
                                 },
                                 false,
                                 idle,
-                                palette,
                             )
                             .text_color(rgb(palette.danger))
                             .on_click(cx.listener(|view, _, _, cx| {
@@ -449,7 +503,7 @@ impl ManagementPanel {
                     })
                     .when(self.confirm_unbind, |row| {
                         row.child(
-                            ui::button("cancel-unbind", "取消", false, true, palette).on_click(
+                            header_button("cancel-unbind", "取消", false, true).on_click(
                                 cx.listener(|view, _, _, cx| {
                                     view.confirm_unbind = false;
                                     cx.notify();
@@ -501,54 +555,44 @@ impl ManagementPanel {
             )
     }
 
-    fn render_addresses(
-        &self,
-        current: &str,
-        palette: theme::Palette,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn render_addresses(&self, palette: theme::Palette, cx: &mut Context<Self>) -> gpui::Div {
         let configured = self.status.as_ref().is_some_and(|status| status.configured);
-        ui::card(palette)
-            .child(ui::heading("设备连接地址", "", palette))
-            .child(
-                div()
-                    .rounded_lg()
-                    .p_3()
-                    .bg(rgb(palette.page))
-                    .text_color(rgb(palette.muted))
-                    .child(format!("当前地址：{current}")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().child(self.address_host.clone()))
-                    .child(
-                        div()
-                            .w(px(120.))
-                            .flex_shrink_0()
-                            .child(self.address_port.clone()),
-                    )
-                    .when(configured, |row| {
-                        row.child(
-                            ui::button(
-                                "save-address",
-                                if self.action_pending {
-                                    "正在保存…"
-                                } else {
-                                    "保存地址"
-                                },
-                                false,
-                                self.can_act(),
-                                palette,
-                            )
-                            .flex_shrink_0()
-                            .px_3()
-                            .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
+        ui::card(palette).p_3().w_full().max_w(px(548.)).child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .w(px(260.))
+                        .min_w(px(64.))
+                        .child(self.address_host.clone()),
+                )
+                .child(
+                    div()
+                        .w(px(168.))
+                        .min_w(px(80.))
+                        .child(self.address_port.clone()),
+                )
+                .when(configured, |row| {
+                    row.child(
+                        ui::button(
+                            "save-address",
+                            if self.action_pending {
+                                "正在保存…"
+                            } else {
+                                "保存地址"
+                            },
+                            false,
+                            self.can_act(),
+                            palette,
                         )
-                    }),
-            )
+                        .flex_shrink_0()
+                        .px_3()
+                        .on_click(cx.listener(|view, _, _, cx| view.save_address(cx))),
+                    )
+                }),
+        )
     }
 }
 
@@ -561,22 +605,6 @@ impl Render for ManagementPanel {
             .as_ref()
             .map(|status| status.peers.as_slice())
             .unwrap_or_default();
-        let current_addresses = self
-            .status
-            .as_ref()
-            .map(|status| {
-                if status.addresses.is_empty() {
-                    "自动获取本机地址".into()
-                } else {
-                    status
-                        .addresses
-                        .iter()
-                        .map(|address| format_peer_address(&address.host, address.port))
-                        .collect::<Vec<_>>()
-                        .join("，")
-                }
-            })
-            .unwrap_or_else(|| "正在读取…".into());
         let correct_role = self.status.as_ref().is_some_and(|status| {
             matches!(
                 (&status.role, self.host),
@@ -646,7 +674,7 @@ impl Render for ManagementPanel {
                             }))
                     })))
             .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
-            .when(self.host && self.initialized, |root| root.child(self.render_addresses(&current_addresses, palette, cx)))
+            .when(self.host && self.initialized, |root| root.child(self.render_addresses(palette, cx)))
             .child(div().flex().items_center().justify_between().gap_2()
                 .child(div().text_size(px(18.)).font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(if self.host { "允许访问的控制端" } else { "我的设备" }))
@@ -1073,7 +1101,7 @@ impl Render for Client {
             .size_full()
             .flex()
             .flex_col()
-            .when(!remote_visible, |root| root.gap_4().p_6())
+            .when(!remote_visible, |root| root.gap_1().px_6().py_1())
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .font_family(self.font.clone())
@@ -1243,9 +1271,8 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         server: cx
                             .new(|cx| TextField::new("服务端地址（本机可用 HTTP）", false, cx)),
                         password: cx.new(|cx| TextField::new("实例密码", true, cx)),
-                        address_host: cx
-                            .new(|cx| TextField::new("新的域名或 IP（不含端口）", false, cx)),
-                        address_port: cx.new(|cx| TextField::new("端口（默认 21118）", false, cx)),
+                        address_host: cx.new(|cx| TextField::new("域名或 IP", false, cx)),
+                        address_port: cx.new(|cx| TextField::new("端口", false, cx)),
                         host,
                         initialized,
                         status: None,
