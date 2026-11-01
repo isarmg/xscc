@@ -1,11 +1,12 @@
 use super::ManagementPanel;
 use crate::{dashboard as ui, remote_video::MediaRequest, theme};
-use gpui::{Context, div, prelude::*, px, rgb};
+use gpui::{Context, Window, div, prelude::*, px, rgb};
 use librustdesk::gpui_session::BitrateMode;
 
 impl ManagementPanel {
     pub(super) fn render_media_controls(
         &self,
+        window: &Window,
         palette: theme::Palette,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -62,87 +63,7 @@ impl ManagementPanel {
                     .child(self.render_bitrate_editor(palette, cx)),
             )
             .child(div().h(px(1.)).bg(rgb(palette.border)))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("分辨率与刷新率"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child(
-                                controls
-                                    .current_resolution
-                                    .map(|mode| {
-                                        if mode.refresh_rate == 0 {
-                                            format!("当前 {}×{}", mode.width, mode.height)
-                                        } else {
-                                            format!(
-                                                "当前 {}×{} @{} Hz",
-                                                mode.width, mode.height, mode.refresh_rate
-                                            )
-                                        }
-                                    })
-                                    .unwrap_or("等待主机上报当前分辨率…".into()),
-                            ),
-                    )
-                    .when(!controls.can_change_resolution && !busy, |section| {
-                        section.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette.muted))
-                                .child("主机未授权更改分辨率、没有可用模式，或被控端需要升级。"),
-                        )
-                    })
-                    .child(
-                        div()
-                            .id("session-resolution-modes")
-                            .max_h(px(192.))
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .children(controls.resolutions.iter().enumerate().map(
-                                |(index, &mode)| {
-                                    let selected = controls.current_resolution == Some(mode);
-                                    let enabled =
-                                        idle && controls.can_change_resolution && !selected;
-                                    ui::button(
-                                        ("session-resolution", index),
-                                        &if mode.refresh_rate == 0 {
-                                            format!("{}×{}", mode.width, mode.height)
-                                        } else {
-                                            format!(
-                                                "{}×{} @{} Hz",
-                                                mode.width, mode.height, mode.refresh_rate
-                                            )
-                                        },
-                                        selected,
-                                        enabled,
-                                        palette,
-                                    )
-                                    .on_click(cx.listener(
-                                        move |view, _, _, cx| {
-                                            if enabled {
-                                                view.video.update(cx, |video, cx| {
-                                                    video.request_media(
-                                                        MediaRequest::Resolution(mode),
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        },
-                                    ))
-                                },
-                            )),
-                    ),
-            )
+            .child(self.render_resolution_controls(window, palette, cx))
             .child(div().h(px(1.)).bg(rgb(palette.border)))
             .child(
                 div()

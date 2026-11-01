@@ -1,5 +1,6 @@
 mod bitrate_controls;
 mod media_controls;
+mod resolution_controls;
 mod window_chrome;
 
 use crate::{
@@ -54,6 +55,7 @@ struct ManagementPanel {
     video: Entity<RemoteVideo>,
     video_state: VideoState,
     bitrate: bitrate_controls::BitrateEditor,
+    resolution: resolution_controls::ResolutionEditor,
     _subscriptions: Vec<Subscription>,
     _tasks: Vec<gpui::Task<()>>,
 }
@@ -690,7 +692,7 @@ impl Render for ManagementPanel {
             .bg(rgb(palette.page)).text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE)).line_height(px(theme::LINE_HEIGHT))
             .on_key_down(cx.listener(Self::form_key_down))
-            .when(!self.host && self.video_state.connected, |root| root.child(self.render_media_controls(palette, cx)))
+            .when(!self.host && self.video_state.connected, |root| root.child(self.render_media_controls(window, palette, cx)))
             .when(!self.notice.is_empty(), |root| root.child(
                 div().p_3().rounded_lg().bg(rgb(palette.accent_soft)).child(self.notice.clone())))
             .when_some(self.status_error.clone(), |root, error| root.child(
@@ -1453,6 +1455,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         video: video.clone(),
                         video_state,
                         bitrate: bitrate_controls::BitrateEditor::new(cx),
+                        resolution: resolution_controls::ResolutionEditor::new(cx),
                         _subscriptions: subscriptions,
                         _tasks: vec![update_task, management_task],
                     }
