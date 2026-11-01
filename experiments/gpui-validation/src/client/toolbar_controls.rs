@@ -10,6 +10,9 @@ use librustdesk::gpui_session::TargetFps;
 pub(super) enum ToolbarMenu {
     FrameRate,
     Resolution,
+    RefreshRate,
+    Bitrate,
+    VirtualDisplays,
 }
 
 impl ManagementPanel {
@@ -52,6 +55,24 @@ impl ManagementPanel {
                 360_f32,
                 self.resolution_edit_enabled(),
             ),
+            ToolbarMenu::RefreshRate => (
+                "session-refresh-dropdown",
+                "刷新率  ▾".into(),
+                168_f32,
+                self.video_state.connected,
+            ),
+            ToolbarMenu::Bitrate => (
+                "session-bitrate-dropdown",
+                "码率  ▾".into(),
+                440_f32,
+                self.video_state.connected,
+            ),
+            ToolbarMenu::VirtualDisplays => (
+                "session-virtual-displays-dropdown",
+                "虚拟显示器  ▾".into(),
+                360_f32,
+                self.video_state.connected,
+            ),
         };
         let trigger = ui::button(id, &label, open, enabled, palette)
             .when(!fullscreen, |button| {
@@ -67,6 +88,9 @@ impl ManagementPanel {
                 let enabled = match menu {
                     ToolbarMenu::FrameRate => view.video_state.connected,
                     ToolbarMenu::Resolution => view.resolution_edit_enabled(),
+                    ToolbarMenu::RefreshRate
+                    | ToolbarMenu::Bitrate
+                    | ToolbarMenu::VirtualDisplays => view.video_state.connected,
                 };
                 if enabled {
                     view.toolbar_menu = Some(menu);

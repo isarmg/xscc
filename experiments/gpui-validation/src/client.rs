@@ -13,7 +13,7 @@ use crate::{
 use gpui::{
     App, AppContext, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement,
     KeyDownEvent, Render, StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions, deferred, div, point, prelude::*, px, rgb, size,
+    WindowControlArea, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -694,7 +694,6 @@ impl Render for ManagementPanel {
             .bg(rgb(palette.page)).text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE)).line_height(px(theme::LINE_HEIGHT))
             .on_key_down(cx.listener(Self::form_key_down))
-            .when(!self.host && self.video_state.connected, |root| root.child(self.render_media_controls(window, palette, cx)))
             .when(!self.notice.is_empty(), |root| root.child(
                 div().p_3().rounded_lg().bg(rgb(palette.accent_soft)).child(self.notice.clone())))
             .when_some(self.status_error.clone(), |root, error| root.child(
@@ -910,41 +909,6 @@ impl Render for ManagementMenu {
                     })
             })
             .child(content)
-            .when(remote_visible && expanded, |menu| {
-                let panel = div()
-                    .h(px(
-                        (f32::from(window.viewport_size().height) * 0.55).min(420.)
-                    ))
-                    .w_full()
-                    .flex_shrink_0()
-                    .child(
-                        self.management
-                            .clone()
-                            .cached(StyleRefinement::default().size_full()),
-                    );
-                if fullscreen {
-                    menu.child(panel.mt_3())
-                } else {
-                    menu.child(deferred(
-                        div()
-                            .absolute()
-                            .top_full()
-                            .left_3()
-                            .w(px((f32::from(window.viewport_size().width) - 24.)
-                                .min(680.)
-                                .max(1.)))
-                            .p_3()
-                            .occlude()
-                            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                            .child(theme::surface(
-                                rgb(palette.panel),
-                                Some(rgb(palette.border)),
-                                theme::PANEL_EXTENT,
-                            ))
-                            .child(panel),
-                    ))
-                }
-            })
     }
 }
 
@@ -964,12 +928,8 @@ impl ManagementPanel {
             })
         };
         let toggle = ui::button(
-            "session-settings-toggle",
-            if self.sidebar_visible {
-                "会话设置  ▴"
-            } else {
-                "会话设置  ▾"
-            },
+            "session-toolbar-toggle",
+            if self.sidebar_visible { "⌃" } else { "⋯" },
             !self.sidebar_visible,
             true,
             palette,
@@ -979,6 +939,7 @@ impl ManagementPanel {
         .when(fullscreen, |button| button.w_full())
         .on_click(cx.listener(|view, _, _, cx| {
             view.sidebar_visible = !view.sidebar_visible;
+            view.toolbar_menu = None;
             cx.stop_propagation();
             cx.notify();
         }));
@@ -989,7 +950,7 @@ impl ManagementPanel {
             .when(!fullscreen, |toolbar| {
                 toolbar.flex_row().items_center().gap_2()
             })
-            .child(toggle);
+            .when(fullscreen, |toolbar| toolbar.child(toggle));
         if fullscreen && !self.sidebar_visible {
             return toolbar;
         }
@@ -1070,6 +1031,9 @@ impl ManagementPanel {
                     .gap_2()
                     .child(self.render_fps_dropdown(window, cx))
                     .child(self.render_resolution_dropdown(window, cx))
+                    .child(self.render_refresh_dropdown(window, cx))
+                    .child(self.render_bitrate_dropdown(window, cx))
+                    .child(self.render_virtual_display_dropdown(window, cx))
                     .child(
                         ui::button(
                             "session-statistics",
@@ -1222,7 +1186,7 @@ impl Render for Client {
                 .min(680.)
                 .max(1.)
         } else {
-            136.
+            44.
         };
         let settings_left =
             ((f32::from(window.viewport_size().width) - settings_width) / 2.).max(0.);
