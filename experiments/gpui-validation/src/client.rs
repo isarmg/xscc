@@ -1,6 +1,7 @@
 mod bitrate_controls;
 mod media_controls;
 mod resolution_controls;
+mod toolbar_controls;
 mod window_chrome;
 
 use crate::{
@@ -17,7 +18,6 @@ use gpui::{
 use librustdesk::{
     gpui_host,
     gpui_management::{self, Command, Status},
-    gpui_session::TargetFps,
 };
 use std::{
     sync::{Arc, Mutex, mpsc},
@@ -46,6 +46,7 @@ struct ManagementPanel {
     manual_refresh_pending: bool,
     action_revision: u64,
     sidebar_visible: bool,
+    toolbar_menu: Option<toolbar_controls::ToolbarMenu>,
     statistics: Statistics,
     status_error: Option<String>,
     action_pending: bool,
@@ -165,6 +166,7 @@ impl ManagementPanel {
             return;
         }
         self.sidebar_visible = false;
+        self.toolbar_menu = None;
         self.video
             .update(cx, |video, cx| video.connect(device_id, window, cx));
     }
@@ -1066,34 +1068,8 @@ impl ManagementPanel {
                     .flex_shrink_0()
                     .when(fullscreen, |row| row.flex_wrap())
                     .gap_2()
-                    .children(
-                        [
-                            ("session-fps-30", TargetFps::Fps30),
-                            ("session-fps-60", TargetFps::Fps60),
-                            ("session-fps-90", TargetFps::Fps90),
-                            ("session-fps-120", TargetFps::Fps120),
-                        ]
-                        .into_iter()
-                        .map(|(id, target)| {
-                            ui::button(
-                                id,
-                                &format!("{} FPS", target.value()),
-                                state.target_fps == target,
-                                state.connected,
-                                palette,
-                            )
-                            .map(compact)
-                            .flex_shrink_0()
-                            .on_click(cx.listener(
-                                move |view, _, _, cx| {
-                                    if view.video_state.connected {
-                                        view.video
-                                            .update(cx, |video, cx| video.request_fps(target, cx));
-                                    }
-                                },
-                            ))
-                        }),
-                    )
+                    .child(self.render_fps_dropdown(window, cx))
+                    .child(self.render_resolution_dropdown(window, cx))
                     .child(
                         ui::button(
                             "session-statistics",
@@ -1446,6 +1422,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         manual_refresh_pending: false,
                         action_revision: 0,
                         sidebar_visible: false,
+                        toolbar_menu: None,
                         statistics: Statistics::Compact,
                         status_error: None,
                         action_pending: false,

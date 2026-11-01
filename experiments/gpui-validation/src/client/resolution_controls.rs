@@ -1,4 +1,4 @@
-use super::ManagementPanel;
+use super::{ManagementPanel, toolbar_controls::ToolbarMenu};
 use crate::{dashboard as ui, remote_video::MediaRequest, text_field::TextField, theme};
 use gpui::{
     App, Context, Entity, EntityInputHandler, Focusable, KeyDownEvent, Window, div, prelude::*, px,
@@ -36,7 +36,7 @@ fn controller_resolution(window: &Window, cx: &App) -> Option<(i32, i32)> {
 }
 
 impl ManagementPanel {
-    fn resolution_edit_enabled(&self) -> bool {
+    pub(super) fn resolution_edit_enabled(&self) -> bool {
         let state = &self.video_state;
         state.connected
             && !state.switching_monitor
@@ -158,7 +158,16 @@ impl ManagementPanel {
                     .focus_handle(cx)
                     .is_focused(window))
         {
+            let enabled = self.resolution_edit_enabled();
             self.apply_custom_resolution(cx);
+            if enabled
+                && self.resolution.error.is_none()
+                && self.toolbar_menu == Some(ToolbarMenu::Resolution)
+            {
+                self.toolbar_menu = None;
+                self.video.read(cx).focus_handle(cx).focus(window, cx);
+                cx.notify();
+            }
             cx.stop_propagation();
         }
     }
@@ -281,41 +290,47 @@ impl ManagementPanel {
                                 )),
                             ),
                     )
-                    .when(self.resolution.custom, |section| {
-                        section.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .on_key_down(cx.listener(Self::resolution_key_down))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(self.resolution.width.clone()),
-                                )
-                                .child("×")
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(self.resolution.height.clone()),
-                                )
-                                .child(
-                                    ui::button(
-                                        "session-resolution-apply",
-                                        "应用",
-                                        false,
-                                        enabled,
-                                        palette,
+                    .when(
+                        self.resolution.custom
+                            && self.toolbar_menu != Some(ToolbarMenu::Resolution),
+                        |section| {
+                            section.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .on_key_down(cx.listener(Self::resolution_key_down))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(self.resolution.width.clone()),
                                     )
-                                    .flex_shrink_0()
-                                    .on_click(cx.listener(
-                                        |view, _, _, cx| view.apply_custom_resolution(cx),
-                                    )),
-                                ),
-                        )
-                    })
+                                    .child("×")
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .child(self.resolution.height.clone()),
+                                    )
+                                    .child(
+                                        ui::button(
+                                            "session-resolution-apply",
+                                            "应用",
+                                            false,
+                                            enabled,
+                                            palette,
+                                        )
+                                        .flex_shrink_0()
+                                        .on_click(
+                                            cx.listener(|view, _, _, cx| {
+                                                view.apply_custom_resolution(cx)
+                                            }),
+                                        ),
+                                    ),
+                            )
+                        },
+                    )
                     .when_some(self.resolution.error.clone(), |section, error| {
                         section.child(
                             div()
@@ -409,5 +424,170 @@ impl ManagementPanel {
                         )
                     }),
             )
+    }
+}
+
+impl ManagementPanel {
+    pub(super) fn render_resolution_dropdown(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let palette = theme::palette(window.appearance());
+        let enabled = self.resolution_edit_enabled();
+        let current = self.video_state.media_controls.current_resolution;
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(
+                [
+                    ("1K · 1920×1080", 1920, 1080),
+                    ("2K · 2560×1440", 2560, 1440),
+                    ("4K · 3840×2160", 3840, 2160),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (label, width, height))| {
+                    ui::button(
+                        ("session-resolution-option", index),
+                        label,
+                        !self.resolution.custom
+                            && current
+                                .is_some_and(|mode| mode.width == width && mode.height == height),
+                        enabled,
+                        palette,
+                    )
+                    .w_full()
+                    .min_h(px(32.))
+                    .h(px(32.))
+                    .py_0()
+                    .justify_start()
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        if view.resolution_edit_enabled() {
+                            view.resolution.custom = false;
+                            view.apply_resolution_dimensions(width, height, cx);
+                            if view.resolution.error.is_none() {
+                                view.toolbar_menu = None;
+                                view.video.read(cx).focus_handle(cx).focus(window, cx);
+                            }
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                }),
+            )
+            .child(
+                ui::button(
+                    "session-resolution-option-controller",
+                    "控制端分辨率",
+                    false,
+                    enabled && controller_resolution(window, cx).is_some(),
+                    palette,
+                )
+                .w_full()
+                .min_h(px(32.))
+                .h(px(32.))
+                .py_0()
+                .justify_start()
+                .on_click(cx.listener(|view, _, window, cx| {
+                    if view.resolution_edit_enabled()
+                        && let Some((width, height)) = controller_resolution(window, cx)
+                    {
+                        view.resolution.custom = false;
+                        view.apply_resolution_dimensions(width, height, cx);
+                        if view.resolution.error.is_none() {
+                            view.toolbar_menu = None;
+                            view.video.read(cx).focus_handle(cx).focus(window, cx);
+                        }
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                })),
+            )
+            .child(
+                ui::button(
+                    "session-resolution-option-custom",
+                    "自定义分辨率",
+                    self.resolution.custom,
+                    enabled,
+                    palette,
+                )
+                .w_full()
+                .min_h(px(32.))
+                .h(px(32.))
+                .py_0()
+                .justify_start()
+                .on_click(cx.listener(|view, _, window, cx| {
+                    if view.resolution_edit_enabled() {
+                        view.begin_custom_resolution(window, cx);
+                        view.resolution
+                            .width
+                            .read(cx)
+                            .focus_handle(cx)
+                            .focus(window, cx);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                })),
+            )
+            .when(self.resolution.custom, |menu| {
+                menu.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .py_2()
+                        .on_key_down(cx.listener(Self::resolution_key_down))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.resolution.width.clone()),
+                        )
+                        .child("×")
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.resolution.height.clone()),
+                        )
+                        .child(
+                            ui::button(
+                                "session-resolution-menu-apply",
+                                "应用",
+                                false,
+                                enabled,
+                                palette,
+                            )
+                            .flex_shrink_0()
+                            .on_click(cx.listener(
+                                |view, _, window, cx| {
+                                    if view.resolution_edit_enabled()
+                                        && !view.resolution.width.read(cx).is_composing()
+                                        && !view.resolution.height.read(cx).is_composing()
+                                    {
+                                        view.apply_custom_resolution(cx);
+                                        if view.resolution.error.is_none() {
+                                            view.toolbar_menu = None;
+                                            view.video.read(cx).focus_handle(cx).focus(window, cx);
+                                        }
+                                    }
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                },
+                            )),
+                        ),
+                )
+            })
+            .when_some(self.resolution.error.clone(), |menu, error| {
+                menu.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(palette.danger))
+                        .child(error),
+                )
+            });
+        self.render_toolbar_dropdown(ToolbarMenu::Resolution, content, window, cx)
     }
 }
