@@ -391,6 +391,11 @@ impl ManagementPanel {
                     "本机服务不可用"
                 })
         };
+        let connection_text = if configured && !self.host {
+            format!("管理连接 {}", if online { "已连接" } else { status_text })
+        } else {
+            status_text.into()
+        };
         div()
             .flex()
             .items_center()
@@ -459,9 +464,52 @@ impl ManagementPanel {
                     })
                     .when(!cfg!(target_os = "windows"), |actions| actions.flex_wrap())
                     .gap_2()
+                    .when(configured && !self.host, |actions| {
+                        let peers = self
+                            .status
+                            .as_ref()
+                            .map(|status| status.peers.as_slice())
+                            .unwrap_or_default();
+                        let online_count = if online {
+                            peers.iter().filter(|peer| peer.online).count().to_string()
+                        } else {
+                            "—".into()
+                        };
+                        actions.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .flex_shrink_0()
+                                .gap_4()
+                                .text_size(px(12.))
+                                .line_height(px(18.))
+                                .children(
+                                    [
+                                        ("授权设备", peers.len().to_string()),
+                                        ("当前在线", online_count),
+                                    ]
+                                    .into_iter()
+                                    .map(|(label, value)| {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .flex_shrink_0()
+                                            .gap_1()
+                                            .child(
+                                                div().text_color(rgb(palette.muted)).child(label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child(value),
+                                            )
+                                    }),
+                                ),
+                        )
+                    })
                     .child(
                         ui::badge(
-                            status_text,
+                            &connection_text,
                             if online {
                                 palette.success
                             } else {
@@ -684,11 +732,6 @@ impl Render for ManagementPanel {
             && !self.video_state.connecting
             && !self.video_state.has_session
             && !self.action_pending;
-        let online_count = if current_peers {
-            peers.iter().filter(|peer| peer.online).count().to_string()
-        } else {
-            "—".into()
-        };
         let panel = div().id("management-panel").size_full().overflow_y_scroll()
             .flex().flex_col().gap_5().p_4()
             .bg(rgb(palette.page)).text_color(rgb(palette.text))
@@ -703,30 +746,36 @@ impl Render for ManagementPanel {
             .when(configured && self.status.as_ref().is_some_and(|status| status.role.is_some()) && !correct_role, |root| root.child(
                 ui::card(palette).text_color(rgb(palette.danger))
                     .child("此实例角色与当前应用不匹配。请在管理端创建对应角色的实例，再解绑并重新绑定。")))
-            .when(configured && !self.video_state.has_session, |root| root.child(
-                ui::card(palette).p_4().gap_2()
-                    .child(div().flex().items_center().flex_wrap().gap_5()
-                        .children([
-                            (if self.host { "授权控制端" } else { "授权设备" }, peers.len().to_string()),
-                            ("当前在线", online_count),
-                            ("管理连接", if current_peers { "已连接" } else { "待连接" }.into()),
-                        ].into_iter().map(|(label, value)| {
-                            div().flex().items_center().gap_2()
-                                .child(div().text_color(rgb(palette.muted)).child(label))
-                                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(value))
+            .when(configured && !self.video_state.has_session && (self.host || self.show_login), |root| {
+                let status = self.status.as_ref();
+                root.child(ui::card(palette).p_4().gap_2()
+                    .when(self.host, |card| {
+                        let online_count = if current_peers {
+                            peers.iter().filter(|peer| peer.online).count().to_string()
+                        } else {
+                            "—".into()
+                        };
+                        card.child(div().flex().items_center().flex_wrap().gap_5()
+                            .children([
+                                ("授权控制端", peers.len().to_string()),
+                                ("当前在线", online_count),
+                                ("管理连接", if current_peers { "已连接" } else { "待连接" }.into()),
+                            ].into_iter().map(|(label, value)| {
+                                div().flex().items_center().gap_2()
+                                    .child(div().text_color(rgb(palette.muted)).child(label))
+                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(value))
+                            })))
+                    })
+                    .child(div().flex().items_center().flex_wrap().gap_3()
+                        .text_size(px(12.)).text_color(rgb(palette.muted))
+                        .child("当前管理实例")
+                        .when_some(status.and_then(|status| status.server.as_ref()), |row, server| {
+                            row.child(div().child(server.clone()))
+                        })
+                        .when_some(status.and_then(|status| status.binding.as_ref()), |row, binding| {
+                            row.child(div().child(format!("实例编号：{}", binding.device_id)))
                         })))
-                    .when(self.host || self.show_login, |card| {
-                        let status = self.status.as_ref();
-                        card.child(div().flex().items_center().flex_wrap().gap_3()
-                            .text_size(px(12.)).text_color(rgb(palette.muted))
-                            .child("当前管理实例")
-                            .when_some(status.and_then(|status| status.server.as_ref()), |row, server| {
-                                row.child(div().child(server.clone()))
-                            })
-                            .when_some(status.and_then(|status| status.binding.as_ref()), |row, binding| {
-                                row.child(div().child(format!("实例编号：{}", binding.device_id)))
-                            }))
-                    })))
+            })
             .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
             .when(self.host && self.initialized, |root| root.child(self.render_addresses(palette, cx)))
             .child(div().flex().items_center().justify_between().gap_2()
