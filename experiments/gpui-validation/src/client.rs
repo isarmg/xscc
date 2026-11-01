@@ -1078,7 +1078,6 @@ impl ManagementPanel {
                     .flex_shrink_0()
                     .when(fullscreen, |row| row.flex_wrap())
                     .gap_2()
-                    .child(self.render_fps_dropdown(window, cx))
                     .child(self.render_resolution_dropdown(window, cx))
                     .child(self.render_refresh_dropdown(window, cx))
                     .child(self.render_bitrate_dropdown(window, cx))
@@ -1383,7 +1382,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                             {
                                 window.toggle_fullscreen();
                             }
-                            view.sync_bitrate_editor(state, window, cx);
+                            view.sync_bitrate_editor(state, cx);
                             view.video_state = state.clone();
                             cx.notify();
                         },

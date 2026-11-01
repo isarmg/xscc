@@ -290,7 +290,7 @@ impl RemoteVideo {
         self.extent = (0, 0);
         self.origin = (0, 0);
         self.video.invalidate();
-        self.notice = "已断开连接。".into();
+        self.notice.clear();
     }
 
     fn consume_updates(&mut self) -> bool {

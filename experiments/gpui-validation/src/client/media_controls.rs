@@ -1,7 +1,6 @@
 use super::{ManagementPanel, toolbar_controls::ToolbarMenu};
 use crate::{dashboard as ui, remote_video::MediaRequest, theme};
 use gpui::{Context, Window, div, prelude::*, px, rgb};
-use librustdesk::gpui_session::BitrateMode;
 
 impl ManagementPanel {
     pub(super) fn render_bitrate_dropdown(
@@ -10,40 +9,7 @@ impl ManagementPanel {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let palette = theme::palette(window.appearance());
-        let controls = &self.video_state.media_controls;
-        let current = match controls.bitrate_mode {
-            BitrateMode::Auto => "自动".into(),
-            BitrateMode::LimitKbps(kbps) => format!("{} Mbps", kbps as f64 / 1000.),
-        };
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(format!("码率上限 · {current}")),
-            )
-            .when(controls.bitrate_supported, |menu| {
-                menu.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.muted))
-                        .child(format!(
-                            "主机允许最高 {} Mbps",
-                            controls.max_bitrate_kbps as f64 / 1000.
-                        )),
-                )
-            })
-            .when(!controls.bitrate_supported, |menu| {
-                menu.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.muted))
-                        .child("主机不支持码率上限调节，请升级被控端。"),
-                )
-            })
-            .child(self.render_bitrate_editor(palette, cx));
+        let content = self.render_bitrate_editor(palette, cx);
         self.render_toolbar_dropdown(ToolbarMenu::Bitrate, content, window, cx)
     }
 
