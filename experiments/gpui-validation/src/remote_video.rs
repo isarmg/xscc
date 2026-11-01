@@ -181,12 +181,6 @@ impl RemoteVideo {
         cx.notify();
     }
 
-    pub fn request_fps(&mut self, target: TargetFps, cx: &mut Context<Self>) {
-        self.set_target_fps(target);
-        self.publish(cx);
-        cx.notify();
-    }
-
     pub fn switch_monitor(&mut self, index: usize, cx: &mut Context<Self>) {
         if !self.connected
             || self.switching_monitor

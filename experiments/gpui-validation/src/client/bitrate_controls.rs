@@ -1,3 +1,7 @@
+#[allow(
+    dead_code,
+    reason = "The shared module also contains the mobile input parser."
+)]
 #[path = "../../../shared/bitrate_controls.rs"]
 mod bitrate;
 

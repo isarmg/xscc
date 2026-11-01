@@ -281,13 +281,11 @@ impl ManagementPanel {
                             }
                             changed |= self.status.as_ref() != Some(&status)
                                 || self.status_error.is_some();
-                            if !self.host {
-                                self.show_login = binding_panel_open(
-                                    self.show_login,
-                                    self.status.as_ref().map(|status| status.configured),
-                                    status.configured,
-                                );
-                            }
+                            self.show_login = binding_panel_open(
+                                self.show_login,
+                                self.status.as_ref().map(|status| status.configured),
+                                status.configured,
+                            );
                             self.status = Some(status);
                             self.status_error = None;
                         }
@@ -313,13 +311,11 @@ impl ManagementPanel {
                                 "已解绑。"
                             }
                             .into();
-                            if !self.host {
-                                self.show_login = binding_panel_open(
-                                    self.show_login,
-                                    self.status.as_ref().map(|status| status.configured),
-                                    status.configured,
-                                );
-                            }
+                            self.show_login = binding_panel_open(
+                                self.show_login,
+                                self.status.as_ref().map(|status| status.configured),
+                                status.configured,
+                            );
                             self.status = Some(status);
                             self.status_error = None;
                         }
@@ -391,7 +387,7 @@ impl ManagementPanel {
                     "本机服务不可用"
                 })
         };
-        let connection_text = if configured && !self.host {
+        let connection_text = if configured {
             format!("管理连接 {}", if online { "已连接" } else { status_text })
         } else {
             status_text.into()
@@ -464,7 +460,7 @@ impl ManagementPanel {
                     })
                     .when(!cfg!(target_os = "windows"), |actions| actions.flex_wrap())
                     .gap_2()
-                    .when(configured && !self.host, |actions| {
+                    .when(configured, |actions| {
                         let peers = self
                             .status
                             .as_ref()
@@ -485,7 +481,14 @@ impl ManagementPanel {
                                 .line_height(px(18.))
                                 .children(
                                     [
-                                        ("授权设备", peers.len().to_string()),
+                                        (
+                                            if self.host {
+                                                "授权控制端"
+                                            } else {
+                                                "授权设备"
+                                            },
+                                            peers.len().to_string(),
+                                        ),
                                         ("当前在线", online_count),
                                     ]
                                     .into_iter()
@@ -521,32 +524,30 @@ impl ManagementPanel {
                         .py_0()
                         .when(cfg!(target_os = "windows"), |badge| badge.bg(gpui::rgba(0))),
                     )
-                    .when(!configured || !self.host, |row| {
-                        row.child(
-                            header_button(
-                                "login-menu",
-                                if configured {
-                                    if self.show_login {
-                                        "收起实例信息"
-                                    } else {
-                                        "实例信息"
-                                    }
-                                } else if self.show_login {
-                                    "收起绑定"
+                    .child(
+                        header_button(
+                            "login-menu",
+                            if configured {
+                                if self.show_login {
+                                    "收起实例信息"
                                 } else {
-                                    "绑定实例"
-                                },
-                                true,
-                                self.initialized,
-                            )
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                if view.initialized {
-                                    view.show_login = !view.show_login;
-                                    cx.notify();
+                                    "实例信息"
                                 }
-                            })),
+                            } else if self.show_login {
+                                "收起绑定"
+                            } else {
+                                "绑定实例"
+                            },
+                            true,
+                            self.initialized,
                         )
-                    })
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if view.initialized {
+                                view.show_login = !view.show_login;
+                                cx.notify();
+                            }
+                        })),
+                    )
                     .child(
                         header_button(
                             "refresh",
@@ -746,26 +747,9 @@ impl Render for ManagementPanel {
             .when(configured && self.status.as_ref().is_some_and(|status| status.role.is_some()) && !correct_role, |root| root.child(
                 ui::card(palette).text_color(rgb(palette.danger))
                     .child("此实例角色与当前应用不匹配。请在管理端创建对应角色的实例，再解绑并重新绑定。")))
-            .when(configured && !self.video_state.has_session && (self.host || self.show_login), |root| {
+            .when(configured && !self.video_state.has_session && self.show_login, |root| {
                 let status = self.status.as_ref();
                 root.child(ui::card(palette).p_4().gap_2()
-                    .when(self.host, |card| {
-                        let online_count = if current_peers {
-                            peers.iter().filter(|peer| peer.online).count().to_string()
-                        } else {
-                            "—".into()
-                        };
-                        card.child(div().flex().items_center().flex_wrap().gap_5()
-                            .children([
-                                ("授权控制端", peers.len().to_string()),
-                                ("当前在线", online_count),
-                                ("管理连接", if current_peers { "已连接" } else { "待连接" }.into()),
-                            ].into_iter().map(|(label, value)| {
-                                div().flex().items_center().gap_2()
-                                    .child(div().text_color(rgb(palette.muted)).child(label))
-                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(value))
-                            })))
-                    })
                     .child(div().flex().items_center().flex_wrap().gap_3()
                         .text_size(px(12.)).text_color(rgb(palette.muted))
                         .child("当前管理实例")
