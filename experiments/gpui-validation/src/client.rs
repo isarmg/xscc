@@ -11,7 +11,7 @@ use crate::{
 use gpui::{
     App, AppContext, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement,
     KeyDownEvent, Render, StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions, div, point, prelude::*, px, rgb, size,
+    WindowControlArea, WindowOptions, deferred, div, point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -885,6 +885,7 @@ impl Render for ManagementMenu {
             }
         });
         let palette = theme::palette(window.appearance());
+        let fullscreen = window.is_fullscreen();
         div()
             .id("management-menu")
             .w_full()
@@ -893,7 +894,7 @@ impl Render for ManagementMenu {
                 menu.relative()
                     .occlude()
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                    .when(expanded, |menu| {
+                    .when(fullscreen && expanded, |menu| {
                         menu.p_3()
                             .max_h(px((f32::from(window.viewport_size().height) - 24.).max(1.)))
                             .overflow_y_scroll()
@@ -906,20 +907,39 @@ impl Render for ManagementMenu {
             })
             .child(content)
             .when(remote_visible && expanded, |menu| {
-                menu.child(
-                    div()
-                        .mt_3()
-                        .h(px(
-                            (f32::from(window.viewport_size().height) * 0.55).min(420.)
-                        ))
-                        .w_full()
-                        .flex_shrink_0()
-                        .child(
-                            self.management
-                                .clone()
-                                .cached(StyleRefinement::default().size_full()),
-                        ),
-                )
+                let panel = div()
+                    .h(px(
+                        (f32::from(window.viewport_size().height) * 0.55).min(420.)
+                    ))
+                    .w_full()
+                    .flex_shrink_0()
+                    .child(
+                        self.management
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    );
+                if fullscreen {
+                    menu.child(panel.mt_3())
+                } else {
+                    menu.child(deferred(
+                        div()
+                            .absolute()
+                            .top_full()
+                            .left_3()
+                            .w(px((f32::from(window.viewport_size().width) - 24.)
+                                .min(680.)
+                                .max(1.)))
+                            .p_3()
+                            .occlude()
+                            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                            .child(theme::surface(
+                                rgb(palette.panel),
+                                Some(rgb(palette.border)),
+                                theme::PANEL_EXTENT,
+                            ))
+                            .child(panel),
+                    ))
+                }
             })
     }
 }
@@ -927,6 +947,18 @@ impl Render for ManagementMenu {
 impl ManagementPanel {
     fn render_session_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let palette = theme::palette(window.appearance());
+        let fullscreen = window.is_fullscreen();
+        let compact = |button: gpui::Stateful<gpui::Div>| {
+            button.when(!fullscreen, |button| {
+                button
+                    .min_h(px(28.))
+                    .h(px(28.))
+                    .py_0()
+                    .px_2()
+                    .text_size(px(12.))
+                    .line_height(px(18.))
+            })
+        };
         let toggle = ui::button(
             "session-settings-toggle",
             if self.sidebar_visible {
@@ -938,14 +970,23 @@ impl ManagementPanel {
             true,
             palette,
         )
-        .w_full()
+        .map(compact)
+        .flex_shrink_0()
+        .when(fullscreen, |button| button.w_full())
         .on_click(cx.listener(|view, _, _, cx| {
             view.sidebar_visible = !view.sidebar_visible;
             cx.stop_propagation();
             cx.notify();
         }));
-        let toolbar = div().flex().flex_col().gap_3().child(toggle);
-        if !self.sidebar_visible {
+        let toolbar = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .when(!fullscreen, |toolbar| {
+                toolbar.flex_row().items_center().gap_2()
+            })
+            .child(toggle);
+        if fullscreen && !self.sidebar_visible {
             return toolbar;
         }
         let state = &self.video_state;
@@ -958,7 +999,7 @@ impl ManagementPanel {
             format!("{} · {summary}", state.notice)
         };
         toolbar
-            .when(cfg!(target_os = "windows"), |toolbar| {
+            .when(fullscreen && cfg!(target_os = "windows"), |toolbar| {
                 toolbar.child(
                     div()
                         .flex()
@@ -972,47 +1013,56 @@ impl ManagementPanel {
                         ),
                 )
             })
-            .child(div().flex().items_center().flex_wrap().gap_2().children(
-                state.monitors.iter().map(|monitor| {
-                    let index = monitor.index;
-                    let selected = state.current_monitor == index;
-                    let enabled = state.connected
-                        && !state.switching_monitor
-                        && state.pending_media.is_none()
-                        && monitor.available;
-                    ui::button(
-                        ("session-monitor", index),
-                        &format!(
-                            "屏幕 {} · {} · {}×{}{}",
-                            index + 1,
-                            monitor.name,
-                            monitor.width,
-                            monitor.height,
-                            if monitor.available {
-                                ""
-                            } else {
-                                " · 不可用"
-                            }
-                        ),
-                        selected,
-                        enabled,
-                        palette,
-                    )
-                    .max_w_full()
-                    .truncate()
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        if enabled {
-                            view.video
-                                .update(cx, |video, cx| video.switch_monitor(index, cx));
-                        }
-                    }))
-                }),
-            ))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .flex_wrap()
+                    .flex_shrink_0()
+                    .when(fullscreen, |row| row.flex_wrap())
+                    .gap_2()
+                    .children(state.monitors.iter().map(|monitor| {
+                        let index = monitor.index;
+                        let selected = state.current_monitor == index;
+                        let enabled = state.connected
+                            && !state.switching_monitor
+                            && state.pending_media.is_none()
+                            && monitor.available;
+                        ui::button(
+                            ("session-monitor", index),
+                            &format!(
+                                "屏幕 {} · {} · {}×{}{}",
+                                index + 1,
+                                monitor.name,
+                                monitor.width,
+                                monitor.height,
+                                if monitor.available {
+                                    ""
+                                } else {
+                                    " · 不可用"
+                                }
+                            ),
+                            selected,
+                            enabled,
+                            palette,
+                        )
+                        .map(compact)
+                        .max_w_full()
+                        .when(!fullscreen, |button| button.max_w(px(280.)).flex_shrink_0())
+                        .truncate()
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            if enabled {
+                                view.video
+                                    .update(cx, |video, cx| video.switch_monitor(index, cx));
+                            }
+                        }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_shrink_0()
+                    .when(fullscreen, |row| row.flex_wrap())
                     .gap_2()
                     .children(
                         [
@@ -1030,6 +1080,7 @@ impl ManagementPanel {
                                 state.connected,
                                 palette,
                             )
+                            .map(compact)
                             .flex_shrink_0()
                             .on_click(cx.listener(
                                 move |view, _, _, cx| {
@@ -1049,6 +1100,7 @@ impl ManagementPanel {
                             true,
                             palette,
                         )
+                        .map(compact)
                         .flex_shrink_0()
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.statistics = view.statistics.next();
@@ -1067,6 +1119,7 @@ impl ManagementPanel {
                             state.connected,
                             palette,
                         )
+                        .map(compact)
                         .flex_shrink_0()
                         .on_click(cx.listener(|view, _, window, cx| {
                             if view.video_state.connected {
@@ -1089,19 +1142,55 @@ impl ManagementPanel {
                             palette,
                         )
                         .text_color(rgb(palette.danger))
+                        .map(compact)
                         .flex_shrink_0()
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.video.update(cx, |video, cx| video.disconnect(cx));
                         })),
                     ),
             )
-            .child(
-                div()
+            .map(|toolbar| {
+                let statistics = div()
                     .id("session-statistics-text")
                     .text_size(px(12.))
                     .text_color(rgb(palette.muted))
-                    .child(status),
-            )
+                    .when(!fullscreen, |text| text.line_height(px(16.)).truncate())
+                    .child(status);
+                if fullscreen {
+                    toolbar.child(statistics)
+                } else {
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .h(px(32.))
+                                .px_3()
+                                .when(cfg!(target_os = "windows"), |row| {
+                                    row.child(window_chrome::traffic_lights(false)).child(
+                                        div()
+                                            .w(px(32.))
+                                            .h_full()
+                                            .flex_shrink_0()
+                                            .window_control_area(WindowControlArea::Drag),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .id("session-menu-actions")
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_x_scroll()
+                                        .whitespace_nowrap()
+                                        .child(toolbar),
+                                ),
+                        )
+                        .child(div().px_3().child(statistics))
+                }
+            })
     }
 }
 
@@ -1175,7 +1264,9 @@ impl Render for Client {
             .on_key_down(cx.listener(Self::key_down))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
-            .when(!remote_visible, |root| root.child(self.menu.clone()))
+            .when(!remote_visible || !window.is_fullscreen(), |root| {
+                root.child(self.menu.clone())
+            })
             .child(
                 div()
                     .relative()
@@ -1202,14 +1293,16 @@ impl Render for Client {
                                 .min_w(px(0.0))
                                 .child(self.video.clone()),
                         )
-                        .child(
-                            div()
-                                .absolute()
-                                .top_3()
-                                .left(px(settings_left))
-                                .w(px(settings_width))
-                                .child(self.menu.clone()),
-                        )
+                        .when(window.is_fullscreen(), |root| {
+                            root.child(
+                                div()
+                                    .absolute()
+                                    .top_3()
+                                    .left(px(settings_left))
+                                    .w(px(settings_width))
+                                    .child(self.menu.clone()),
+                            )
+                        })
                     }),
             )
     }
