@@ -43,25 +43,25 @@ impl ManagementPanel {
         let (id, label, width, enabled) = match menu {
             ToolbarMenu::Resolution => (
                 "session-resolution-dropdown",
-                "分辨率  ▾".into(),
+                "分辨率  ▾".to_owned(),
                 360_f32,
                 self.resolution_edit_enabled(),
             ),
             ToolbarMenu::RefreshRate => (
                 "session-refresh-dropdown",
-                "刷新率  ▾".into(),
+                "刷新率  ▾".to_owned(),
                 168_f32,
                 self.video_state.connected,
             ),
             ToolbarMenu::Bitrate => (
                 "session-bitrate-dropdown",
-                "码率  ▾".into(),
+                "码率  ▾".to_owned(),
                 440_f32,
                 self.video_state.connected,
             ),
             ToolbarMenu::VirtualDisplays => (
                 "session-virtual-displays-dropdown",
-                "虚拟显示器  ▾".into(),
+                "虚拟显示器  ▾".to_owned(),
                 360_f32,
                 self.video_state.connected,
             ),
