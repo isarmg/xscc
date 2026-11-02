@@ -119,7 +119,7 @@ pub struct VideoStreamManager {
     /// Codec constraints derived from services that are actually running.
     runtime_codec_constraints: RwLock<Option<StreamCodecConstraints>>,
     native_video_locks: NativeVideoLocks,
-    codec_change: tokio::sync::Mutex<()>,
+    codec_change: Arc<tokio::sync::Mutex<()>>,
     /// Mode switching lock to prevent concurrent switch requests
     switching: AtomicBool,
     /// Current mode switch transaction ID (set while switching=true)
@@ -140,7 +140,7 @@ impl VideoStreamManager {
             config_store: RwLock::new(None),
             runtime_codec_constraints: RwLock::new(None),
             native_video_locks: Arc::new(parking_lot::Mutex::new(HashMap::new())),
-            codec_change: tokio::sync::Mutex::new(()),
+            codec_change: Arc::new(tokio::sync::Mutex::new(())),
             switching: AtomicBool::new(false),
             transition_id: RwLock::new(None),
         })
@@ -345,6 +345,14 @@ impl VideoStreamManager {
         self: &Arc<Self>,
         new_mode: StreamMode,
     ) -> Result<ModeSwitchTransaction> {
+        if self.is_switching() {
+            return Ok(ModeSwitchTransaction {
+                accepted: false,
+                switching: true,
+                transition_id: self.current_transition_id().await,
+            });
+        }
+        let mode_change = self.codec_change.clone().lock_owned().await;
         if new_mode == StreamMode::Mjpeg && !self.codec_constraints().await.allow_mjpeg {
             return Err(crate::error::AppError::BadRequest(
                 "MJPEG is unavailable while a native XSCC video session owns the encoder".into(),
@@ -365,7 +373,9 @@ impl VideoStreamManager {
             });
         }
 
-        // Acquire switching lock - prevent concurrent switch requests
+        // Reserve the transaction before admitting it, so cancellation while
+        // waiting for the ID lock cannot leave switching set without a task.
+        let mut active_transition = self.transition_id.write().await;
         if self
             .switching
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -375,28 +385,29 @@ impl VideoStreamManager {
             return Ok(ModeSwitchTransaction {
                 accepted: false,
                 switching: true,
-                transition_id: self.transition_id.read().await.clone(),
+                transition_id: active_transition.clone(),
             });
         }
 
         let transition_id = Uuid::new_v4().to_string();
-        *self.transition_id.write().await = Some(transition_id.clone());
-
-        // Publish transaction start event
-        let from_mode_str = self.mode_to_string(&current_mode).await;
-        let to_mode_str = self.mode_to_string(&new_mode).await;
-        self.publish_event(SystemEvent::StreamModeSwitching {
-            transition_id: transition_id.clone(),
-            to_mode: to_mode_str,
-            from_mode: from_mode_str,
-        })
-        .await;
+        *active_transition = Some(transition_id.clone());
+        drop(active_transition);
 
         // Perform the switch asynchronously so the HTTP handler can return
         // immediately and clients can reliably wait for WebSocket events.
         let manager = Arc::clone(self);
         let transition_id_for_task = transition_id.clone();
         tokio::spawn(async move {
+            let _mode_change = mode_change;
+            let from_mode_str = manager.mode_to_string(&current_mode).await;
+            let to_mode_str = manager.mode_to_string(&new_mode).await;
+            manager
+                .publish_event(SystemEvent::StreamModeSwitching {
+                    transition_id: transition_id_for_task.clone(),
+                    to_mode: to_mode_str,
+                    from_mode: from_mode_str,
+                })
+                .await;
             let result = manager
                 .do_switch_mode(current_mode, new_mode, transition_id_for_task.clone())
                 .await;
@@ -685,6 +696,7 @@ impl VideoStreamManager {
 
     /// Stop streaming
     pub async fn clear_video_source(&self) -> Result<()> {
+        let _change = self.codec_change.lock().await;
         self.webrtc_streamer
             .close_all_sessions_and_release_device()
             .await?;
@@ -693,6 +705,7 @@ impl VideoStreamManager {
 
     /// Stop streaming
     pub async fn stop(&self) -> Result<()> {
+        let _change = self.codec_change.lock().await;
         let mode = self.mode.read().await.clone();
 
         match mode {
@@ -995,6 +1008,72 @@ fn codec_to_string(codec: crate::video::codec::VideoCodecType) -> String {
 mod tests {
     use super::*;
     use crate::video::codec::VideoCodecType;
+    use std::{future::Future, task::Poll, time::Duration};
+
+    #[tokio::test]
+    async fn dropped_mode_request_does_not_wedge_all_later_switches() {
+        let manager = VideoStreamManager::with_webrtc_streamer(
+            Streamer::new(),
+            crate::webrtc::WebRtcStreamer::new(),
+        );
+        let held_transition = manager.transition_id.read().await;
+        let mut request = Box::pin(manager.switch_mode_transaction(StreamMode::WebRTC));
+        std::future::poll_fn(|cx| {
+            assert!(matches!(request.as_mut().poll(cx), Poll::Pending));
+            Poll::Ready(())
+        })
+        .await;
+        drop(request);
+        drop(held_transition);
+        let retry = manager
+            .switch_mode_transaction(StreamMode::WebRTC)
+            .await
+            .unwrap();
+        assert!(
+            retry.accepted,
+            "a dropped earlier request permanently leaves later mode requests busy: {retry:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_an_accepted_mode_switch_to_finish() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = crate::db::DatabasePool::new(&directory.path().join("instance.db"))
+            .await
+            .unwrap();
+        database.init_schema().await.unwrap();
+        let config = ConfigStore::new(database.clone_pool());
+        config.load().await.unwrap();
+        let manager = VideoStreamManager::with_webrtc_streamer(
+            Streamer::new(),
+            crate::webrtc::WebRtcStreamer::new(),
+        );
+        manager.set_config_store(config).await;
+        let blocked_events = manager.events.write().await;
+        assert!(
+            manager
+                .switch_mode_transaction(StreamMode::WebRTC)
+                .await
+                .unwrap()
+                .accepted
+        );
+        let mut stop = Box::pin(manager.stop());
+        std::future::poll_fn(|context| {
+            assert!(
+                matches!(stop.as_mut().poll(context), Poll::Pending),
+                "stop returned while an accepted mode task could still reopen capture"
+            );
+            Poll::Ready(())
+        })
+        .await;
+        drop(blocked_events);
+        tokio::time::timeout(Duration::from_secs(2), stop)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!manager.is_switching());
+        assert!(manager.current_transition_id().await.is_none());
+    }
 
     #[tokio::test]
     async fn unconfigured_instance_never_auto_selects_another_capture_device() {
