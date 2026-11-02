@@ -703,7 +703,14 @@ fn run_encoder(
             bail!(e);
         }
     }
-    let bitrate_limit = VIDEO_QOS.lock().unwrap().bitrate_limit();
+    let bitrate_limit = {
+        let qos = VIDEO_QOS.lock().unwrap();
+        #[cfg(feature = "gpui-host")]
+        let limit = qos.bitrate_limit_for_connections(&subscriber_ids);
+        #[cfg(not(feature = "gpui-host"))]
+        let limit = qos.bitrate_limit();
+        limit
+    };
     apply_bitrate_limit(&mut encoder, sp, bitrate_limit)?;
     VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
     VIDEO_QOS
@@ -1517,6 +1524,15 @@ fn apply_bitrate_limit(
     }
     if let Err(error) = encoder.set_bitrate_limit(limit) {
         // A driver may reject a valid target. Restore Auto rather than restarting forever.
+        #[cfg(feature = "gpui-host")]
+        {
+            let ids = service.subscriber_ids();
+            VIDEO_QOS
+                .lock()
+                .unwrap()
+                .clear_bitrate_limits_for_connections(&ids);
+        }
+        #[cfg(not(feature = "gpui-host"))]
         VIDEO_QOS.lock().unwrap().clear_bitrate_limits();
         let mut misc = Misc::new();
         misc.set_option(OptionMessage {
@@ -1565,6 +1581,10 @@ fn check_qos(
         }
         #[cfg(not(feature = "gpui-host"))]
         let requested_fps = qos.streaming_encoder_fps();
+        #[cfg(feature = "gpui-host")]
+        let bitrate_limit = qos.bitrate_limit_for_connections(&subscriber_ids);
+        #[cfg(not(feature = "gpui-host"))]
+        let bitrate_limit = qos.bitrate_limit();
         if second_instant.elapsed() > Duration::from_secs(1) {
             *second_instant = Instant::now();
             qos.update_display_data(name, *send_counter);
@@ -1575,7 +1595,7 @@ fn check_qos(
             qos.ratio(),
             qos.in_vbr_state(),
             qos.latest_quality().is_custom(),
-            qos.bitrate_limit(),
+            bitrate_limit,
         )
     };
     apply_bitrate_limit(encoder, service, bitrate_limit)?;

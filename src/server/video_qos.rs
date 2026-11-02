@@ -430,6 +430,22 @@ impl VideoQoS {
             .min()
     }
 
+    #[cfg(any(feature = "gpui-host", test))]
+    pub fn bitrate_limit_for_connections(&self, ids: &[i32]) -> Option<u32> {
+        ids.iter()
+            .filter_map(|id| self.users.get(id)?.bitrate_limit)
+            .min()
+    }
+
+    #[cfg(any(feature = "gpui-host", test))]
+    pub fn clear_bitrate_limits_for_connections(&mut self, ids: &[i32]) {
+        for id in ids {
+            if let Some(user) = self.users.get_mut(id) {
+                user.bitrate_limit = None;
+            }
+        }
+    }
+
     // Get current bitrate ratio with bounds checking
     pub fn ratio(&mut self) -> f32 {
         if self.ratio < BR_MIN_HIGH_RESOLUTION || self.ratio > BR_MAX {
@@ -1064,6 +1080,41 @@ mod tests {
 #[cfg(test)]
 mod bitrate_limit_tests {
     use super::*;
+
+    #[test]
+    fn bitrate_limits_only_combine_viewers_sharing_the_encoded_stream() {
+        let mut qos = VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.on_connection_open(2);
+        qos.user_bitrate_limit(1, Some(8_000));
+        qos.user_bitrate_limit(2, Some(500));
+
+        assert_eq!(qos.bitrate_limit_for_connections(&[1]), Some(8_000));
+        assert_eq!(qos.bitrate_limit_for_connections(&[2]), Some(500));
+        assert_eq!(qos.bitrate_limit_for_connections(&[1, 2]), Some(500));
+        assert_eq!(qos.bitrate_limit_for_connections(&[]), None);
+        assert_eq!(qos.bitrate_limit_for_connections(&[99]), None);
+
+        qos.user_bitrate_limit(2, None);
+        assert_eq!(qos.bitrate_limit_for_connections(&[1]), Some(8_000));
+        assert_eq!(qos.bitrate_limit_for_connections(&[2]), None);
+        qos.on_connection_close(1);
+        assert_eq!(qos.bitrate_limit_for_connections(&[1, 2]), None);
+    }
+
+    #[test]
+    fn rejected_bitrate_limit_only_resets_viewers_of_the_affected_stream() {
+        let mut qos = VideoQoS::default();
+        for (id, limit) in [(1, 8_000), (2, 500), (3, 2_000)] {
+            qos.on_connection_open(id);
+            qos.user_bitrate_limit(id, Some(limit));
+        }
+
+        qos.clear_bitrate_limits_for_connections(&[1, 3, 99]);
+        assert_eq!(qos.bitrate_limit_for_connections(&[1, 3]), None);
+        assert_eq!(qos.bitrate_limit_for_connections(&[2]), Some(500));
+        assert_eq!(qos.bitrate_limit(), Some(500));
+    }
 
     #[test]
     fn bitrate_limit_is_the_lowest_live_viewer_limit_and_auto_releases_it() {
