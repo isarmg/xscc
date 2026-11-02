@@ -37,7 +37,8 @@ impl Error for ParseError {
 }
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_string())
+        #[allow(deprecated)]
+        f.write_str(self.description())
     }
 }
 
@@ -145,4 +146,18 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     flush(&mut tokens, buffer, unicode);
 
     Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_error_display_describes_the_invalid_input() {
+        let error = tokenize("{+SHIFT").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Unmatched open bracket ({). No matching close (})"
+        );
+    }
 }
