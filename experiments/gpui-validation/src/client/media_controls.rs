@@ -23,7 +23,7 @@ impl ManagementPanel {
         let controls = &state.media_controls;
         let busy = state.switching_monitor || state.pending_media.is_some();
         let idle = state.connected && !busy;
-        let content = div()
+        div()
             .flex()
             .flex_col()
             .gap_2()
@@ -106,7 +106,6 @@ impl ManagementPanel {
                     }
                     cx.stop_propagation();
                 }))
-            }));
-        content
+            }))
     }
 }
