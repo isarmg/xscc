@@ -220,6 +220,7 @@ impl ManagementPanel {
         let palette = theme::palette(window.appearance());
         let state = &self.video_state;
         let content = div()
+            .id("session-display-list")
             .flex()
             .flex_col()
             .gap_1()
