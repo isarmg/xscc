@@ -1,10 +1,8 @@
-use super::{ACCENT, ChromeAction, Div, MUTED, Panel, RAISED, SessionChrome, TEXT};
-use crate::text_field::TextField;
+use super::{ACCENT, ChromeAction, Div, MUTED, MediaMenu, Panel, RAISED, SessionChrome, TEXT};
 use gpui::{
-    AppContext, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable, HitboxBehavior,
-    KeyDownEvent, KeyUpEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Stateful, TouchEvent, TouchId, TouchPhase, Window, canvas, div, fill, point, prelude::*,
-    px, rgb, size,
+    Bounds, Context, DispatchPhase, FocusHandle, HitboxBehavior, KeyDownEvent, KeyUpEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Stateful, TouchEvent,
+    TouchId, TouchPhase, Window, canvas, div, fill, point, prelude::*, px, rgb, size,
 };
 
 #[path = "../../../shared/bitrate_controls.rs"]
@@ -46,7 +44,6 @@ impl Draft {
 }
 
 pub(super) struct BitrateEditor {
-    input: Entity<TextField>,
     focus: FocusHandle,
     draft: Draft,
     error: String,
@@ -55,7 +52,6 @@ pub(super) struct BitrateEditor {
 impl BitrateEditor {
     pub(super) fn new(cx: &mut Context<SessionChrome>) -> Self {
         Self {
-            input: cx.new(|cx| TextField::new("精确上限，例如 8.125", false, cx)),
             focus: cx.focus_handle(),
             draft: Draft::default(),
             error: String::new(),
@@ -72,9 +68,10 @@ impl SessionChrome {
         (self.model.connected
             && self.model.bitrate_supported
             && self.model.pending_monitor.is_none()
-            && self.model.panel == Panel::Display)
-            .then(|| BitrateRange::for_host(self.model.max_bitrate_kbps))
-            .flatten()
+            && self.model.panel == Panel::Display
+            && self.media_menu == Some(MediaMenu::Bitrate))
+        .then(|| BitrateRange::for_host(self.model.max_bitrate_kbps))
+        .flatten()
     }
 
     pub(crate) fn cancel_bitrate(&mut self, cx: &mut Context<Self>) {
@@ -99,47 +96,12 @@ impl SessionChrome {
         cx.notify();
     }
 
-    fn apply_bitrate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(range) = self.bitrate_range() else {
-            return;
-        };
-        let input = self.bitrate.input.read(cx);
-        if input.is_composing() {
-            self.bitrate.error = "请先完成输入法组字，再应用。".into();
-        } else {
-            match range.parse_mbps(input.value()) {
-                Ok(value) => {
-                    self.bitrate.draft.cancel();
-                    self.commit_bitrate(value, cx);
-                    window.dismiss_virtual_keyboard();
-                }
-                Err(error) => self.bitrate.error = error.to_string(),
-            }
-        }
-        cx.notify();
-    }
-
     pub(super) fn bitrate_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .bitrate
-            .input
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
-        {
-            if event.keystroke.key == "enter" && !self.bitrate.input.read(cx).is_composing() {
-                if !event.is_held {
-                    self.apply_bitrate(window, cx);
-                }
-                cx.stop_propagation();
-            }
-            return;
-        }
         if !self.bitrate.focus.is_focused(window) {
             return;
         }
@@ -149,7 +111,8 @@ impl SessionChrome {
                 .draft
                 .preview
                 .or(self.model.bitrate_limit_kbps)
-                .unwrap_or(range.min_kbps());
+                .unwrap_or(8_000)
+                .clamp(range.min_kbps(), range.max_kbps());
             match event.keystroke.key.as_str() {
                 "left" | "down" => self.bitrate.draft.preview = Some(range.step(value, false)),
                 "right" | "up" => self.bitrate.draft.preview = Some(range.step(value, true)),
@@ -172,14 +135,7 @@ impl SessionChrome {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.bitrate.focus.is_focused(window)
-            || self
-                .bitrate
-                .input
-                .read(cx)
-                .focus_handle(cx)
-                .is_focused(window)
-        {
+        if self.bitrate.focus.is_focused(window) {
             cx.stop_propagation();
         }
     }
@@ -261,7 +217,8 @@ impl SessionChrome {
             .draft
             .preview
             .or(self.model.bitrate_limit_kbps)
-            .unwrap_or(range.min_kbps());
+            .unwrap_or(8_000)
+            .clamp(range.min_kbps(), range.max_kbps());
         let fraction = range.fraction(value) as f32;
         let available = range.fraction(range.max_kbps()) as f32;
         let owner = cx.entity_id();
@@ -400,76 +357,33 @@ impl SessionChrome {
             )
     }
 
+    pub(super) fn bitrate_label(&self) -> String {
+        let range = BitrateRange::for_host(self.model.max_bitrate_kbps);
+        let value = self
+            .bitrate
+            .draft
+            .preview
+            .or(self.model.bitrate_limit_kbps)
+            .unwrap_or(8_000);
+        range
+            .map(|range| {
+                format!(
+                    "码率 · {} Mbps",
+                    format_mbps(value.clamp(range.min_kbps(), range.max_kbps()))
+                )
+            })
+            .unwrap_or_else(|| "码率".into())
+    }
+
     pub(super) fn bitrate_controls(&self, cx: &mut Context<Self>) -> Div {
-        if !self.model.bitrate_supported {
-            return div()
-                .text_size(px(12.))
-                .text_color(rgb(MUTED))
-                .child("远端未提供码率上限控制。");
-        }
         let ready = self.model.connected
             && self.model.bitrate_supported
             && self.model.pending_monitor.is_none();
-        let confirmed = self
-            .model
-            .bitrate_limit_kbps
-            .map(|value| format!("{} Mbps", format_mbps(value)))
-            .unwrap_or("自动（无手动上限）".into());
-        let mut body = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .child(format!("主机已确认：{confirmed}")),
-            )
-            .child(self.button(
-                cx,
-                "session-bitrate-auto",
-                "自动／解除上限",
-                self.model.bitrate_limit_kbps.is_none(),
-                ready,
-                ChromeAction::Bitrate(None),
-            ));
+        let mut body = div().flex().flex_col().gap_2();
         if let Some(range) = BitrateRange::for_host(self.model.max_bitrate_kbps) {
-            body = body.child(self.bitrate_slider(range, ready, cx))
-                .child(slider_ticks())
-                .when_some(self.bitrate.draft.preview, |body,value|body.child(div().text_size(px(13.)).text_color(rgb(ACCENT)).child(format!("本地预览：{} Mbps；松手或按 Enter 提交",format_mbps(value)))))
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(format!("主机允许 1–{} Mbps；滑块每段步长依次为 1／10／30／100 Mbps，右侧灰区不可用。",format_mbps(range.max_kbps()))))
-                .child(div().text_size(px(12.)).child("精确上限（Mbps，最多 3 位小数）"));
-            if ready {
-                body = body.child(self.bitrate.input.clone()).child(
-                    div()
-                        .id("session-bitrate-apply")
-                        .min_h(px(48.))
-                        .px_3()
-                        .rounded(px(14.))
-                        .bg(rgb(ACCENT))
-                        .text_color(rgb(crate::theme::LIGHT.on_accent))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child("应用精确上限")
-                        .on_click(
-                            cx.listener(|view, _, window, cx| view.apply_bitrate(window, cx)),
-                        ),
-                );
-            } else {
-                body = body.child(
-                    div()
-                        .min_h(px(48.))
-                        .text_color(rgb(MUTED))
-                        .child("连接或切屏完成后可调节"),
-                );
-            }
-        } else {
-            body = body.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child("主机未提供 1 Mbps 以上的手动上限调节。"),
-            );
+            body = body
+                .child(self.bitrate_slider(range, ready, cx))
+                .child(slider_ticks());
         }
         body.when(!self.bitrate.error.is_empty(), |body| {
             body.child(
@@ -479,12 +393,6 @@ impl SessionChrome {
                     .child(self.bitrate.error.clone()),
             )
         })
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(rgb(MUTED))
-                .child("调节的是码率上限；画面与网络需要较低码率时仍会自适应降低。"),
-        )
     }
 }
 
@@ -527,9 +435,10 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     #[gpui_test_support::test]
-    fn local_input_and_slider_only_emit_on_explicit_confirmation(cx: &mut TestAppContext) {
+    fn slider_only_emits_on_release_and_cancellation_discards_preview(cx: &mut TestAppContext) {
         let (editor, cx) = cx.add_window_view(|_, cx| {
             let mut editor = SessionChrome::new(cx);
+            editor.media_menu = Some(MediaMenu::Bitrate);
             editor.model = ChromeModel {
                 connected: true,
                 bitrate_supported: true,
@@ -552,20 +461,6 @@ mod tests {
                 events.borrow_mut().push(*event)
             })
         });
-        cx.update(|window, cx| {
-            let focus = editor.read(cx).bitrate.input.read(cx).focus_handle(cx);
-            window.focus(&focus, cx);
-        });
-        cx.run_until_parked();
-        cx.simulate_input("12.345");
-        assert_eq!(
-            cx.update(|_, cx| editor.read(cx).bitrate.input.read(cx).value().to_owned()),
-            "12.345"
-        );
-        assert!(emitted.borrow().is_empty());
-        cx.simulate_keystrokes("enter");
-        assert_eq!(*emitted.borrow(), vec![ChromeAction::Bitrate(Some(12_345))]);
-
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(424.), px(48.)));
         let pointer = Pointer::Touch(TouchId(7));
         let position = point(px(312.), px(24.));
@@ -576,7 +471,7 @@ mod tests {
                 })
             });
         }
-        assert_eq!(emitted.borrow().len(), 1);
+        assert!(emitted.borrow().is_empty());
         for phase in [TouchPhase::Ended, TouchPhase::Ended] {
             cx.update(|window, cx| {
                 editor.update(cx, |editor, cx| {
@@ -586,10 +481,7 @@ mod tests {
         }
         assert_eq!(
             *emitted.borrow(),
-            vec![
-                ChromeAction::Bitrate(Some(12_345)),
-                ChromeAction::Bitrate(Some(300_000))
-            ]
+            vec![ChromeAction::Bitrate(Some(300_000))]
         );
         for phase in [
             TouchPhase::Started,
@@ -602,6 +494,6 @@ mod tests {
                 })
             });
         }
-        assert_eq!(emitted.borrow().len(), 2);
+        assert_eq!(emitted.borrow().len(), 1);
     }
 }

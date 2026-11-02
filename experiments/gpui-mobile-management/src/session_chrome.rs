@@ -5,6 +5,7 @@ use gpui::{
 };
 
 mod bitrate;
+mod resolution;
 
 const PAGE: u32 = crate::theme::LIGHT.page;
 const SURFACE: u32 = crate::theme::LIGHT.panel;
@@ -80,9 +81,19 @@ pub enum ChromeAction {
     ArmRightClick,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MediaMenu {
+    FrameRate,
+    Resolution,
+    Bitrate,
+    VirtualDisplays,
+}
+
 pub struct SessionChrome {
     model: ChromeModel,
     bitrate: bitrate::BitrateEditor,
+    resolution: resolution::ResolutionEditor,
+    media_menu: Option<MediaMenu>,
 }
 
 impl EventEmitter<ChromeAction> for SessionChrome {}
@@ -92,6 +103,8 @@ impl SessionChrome {
         Self {
             model: ChromeModel::default(),
             bitrate: bitrate::BitrateEditor::new(cx),
+            resolution: resolution::ResolutionEditor::new(cx),
+            media_menu: None,
         }
     }
 
@@ -111,6 +124,9 @@ impl SessionChrome {
             || self.model.layout != model.layout
         {
             self.bitrate.cancel();
+        }
+        if model.panel != Panel::Display || !model.connected {
+            self.media_menu = None;
         }
         self.model = model;
         cx.notify();
@@ -149,7 +165,11 @@ impl SessionChrome {
                     .cursor_pointer()
                     .hover(|style| style.opacity(0.85))
                     .active(|style| style.opacity(0.65))
-                    .on_click(cx.listener(move |_, _, _, cx| {
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        if matches!(action, ChromeAction::Fps(_)) {
+                            view.media_menu = None;
+                            cx.notify();
+                        }
                         cx.emit(action);
                         cx.stop_propagation();
                     }))
@@ -353,7 +373,6 @@ impl SessionChrome {
             && model.has_frame
             && model.can_control
             && model.pending_monitor.is_none();
-        let stream_ready = model.connected && model.pending_monitor.is_none();
         let mode = div()
             .flex()
             .gap_2()
@@ -379,20 +398,6 @@ impl SessionChrome {
                 )
                 .flex_1(),
             );
-        let mut rates = div().flex().flex_wrap().gap_2();
-        for fps in [30, 60, 90, 120] {
-            rates = rates.child(
-                self.button(
-                    cx,
-                    format!("session-fps-{fps}"),
-                    &fps.to_string(),
-                    model.target_fps == Some(fps),
-                    stream_ready,
-                    ChromeAction::Fps(fps),
-                )
-                .flex_1(),
-            );
-        }
         let mut body =
             div()
                 .flex()
@@ -464,58 +469,110 @@ impl SessionChrome {
                     .child(error.clone()),
             );
         }
-        body.child(section("目标帧率"))
-            .child(rates)
-            .child(section("屏幕"))
-            .child(self.screen_list(cx))
+        body
     }
 
-    fn media_settings(&self, cx: &mut Context<Self>) -> Div {
+    fn media_menu(
+        &self,
+        menu: MediaMenu,
+        label: &str,
+        enabled: bool,
+        content: Div,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let open = self.media_menu == Some(menu);
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .id(match menu {
+                        MediaMenu::FrameRate => "session-fps-menu",
+                        MediaMenu::Resolution => "session-resolution-menu",
+                        MediaMenu::Bitrate => "session-bitrate-menu",
+                        MediaMenu::VirtualDisplays => "session-virtual-displays-menu",
+                    })
+                    .min_h(px(48.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .rounded(px(14.))
+                    .bg(rgb(if open { ACCENT } else { RAISED }))
+                    .text_color(rgb(if open {
+                        crate::theme::LIGHT.on_accent
+                    } else {
+                        TEXT
+                    }))
+                    .opacity(if enabled { 1. } else { 0.42 })
+                    .child(label.to_owned())
+                    .child(if open { "▴" } else { "▾" })
+                    .when(enabled, |button| {
+                        button
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.bitrate.cancel();
+                                view.media_menu = (view.media_menu != Some(menu)).then_some(menu);
+                                window.dismiss_virtual_keyboard();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }))
+                    }),
+            )
+            .when(open, |menu| menu.child(content))
+    }
+
+    fn media_settings(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let model = &self.model;
         let ready = model.connected && model.pending_monitor.is_none();
-        let mut body = div().flex().flex_col().gap_3().child(section("码率上限"));
-        body = body.child(self.bitrate_controls(cx));
-        body = body.child(section("分辨率与刷新率"));
-        if let Some((width, height, refresh_rate)) = model.current_resolution {
-            body = body.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(
-                if refresh_rate == 0 {
-                    format!("当前 {width}×{height}")
-                } else {
-                    format!("当前 {width}×{height} @{refresh_rate} Hz")
-                },
-            ));
-        }
-        if model.resolutions.is_empty() {
-            body = body.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child("远端未提供可选分辨率。"),
+        let mut rates = div().flex().flex_col().gap_1();
+        for fps in [30, 60, 90, 120] {
+            rates = rates.child(
+                self.button(
+                    cx,
+                    format!("session-fps-{fps}"),
+                    &format!("{fps} FPS"),
+                    model.target_fps == Some(fps),
+                    ready,
+                    ChromeAction::Fps(fps),
+                )
+                .w_full(),
             );
-        } else {
-            let mut modes = div().flex().flex_wrap().gap_2();
-            for &(width, height, refresh_rate) in &model.resolutions {
-                modes = modes.child(
-                    self.button(
-                        cx,
-                        format!("session-resolution-{width}-{height}-{refresh_rate}"),
-                        &if refresh_rate == 0 {
-                            format!("{width}×{height}")
-                        } else {
-                            format!("{width}×{height} @{refresh_rate} Hz")
-                        },
-                        model.current_resolution == Some((width, height, refresh_rate)),
-                        ready && model.can_change_resolution,
-                        ChromeAction::Resolution(width, height, refresh_rate),
-                    )
-                    .flex_1(),
-                );
-            }
-            body = body.child(modes);
         }
-        body = body.child(section("虚拟显示器"));
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                self.media_menu(
+                    MediaMenu::FrameRate,
+                    &model
+                        .target_fps
+                        .map(|fps| format!("帧率上限 · {fps} FPS"))
+                        .unwrap_or_else(|| "帧率上限".into()),
+                    ready,
+                    rates,
+                    cx,
+                ),
+            )
+            .child(self.media_menu(
+                MediaMenu::Resolution,
+                "分辨率",
+                self.resolution_enabled(),
+                self.resolution_controls(window, cx),
+                cx,
+            ))
+            .child(self.media_menu(
+                MediaMenu::Bitrate,
+                &self.bitrate_label(),
+                ready && model.bitrate_supported,
+                self.bitrate_controls(cx),
+                cx,
+            ));
+        let mut virtual_displays = div().flex().flex_col().gap_2();
         if model.virtual_display_supported {
-            body = body
+            virtual_displays = virtual_displays
                 .child(
                     self.button(
                         cx,
@@ -541,7 +598,7 @@ impl SessionChrome {
                         }),
                 );
             for &id in &model.virtual_display_ids {
-                body = body.child(
+                virtual_displays = virtual_displays.child(
                     self.button(
                         cx,
                         format!("session-virtual-remove-{id}"),
@@ -558,17 +615,24 @@ impl SessionChrome {
                 );
             }
         } else {
-            body = body.child(
+            virtual_displays = virtual_displays.child(
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(MUTED))
                     .child("远端未提供虚拟显示器控制。"),
             );
         }
+        body = body.child(self.media_menu(
+            MediaMenu::VirtualDisplays,
+            "虚拟显示器",
+            ready && model.virtual_display_supported,
+            virtual_displays,
+            cx,
+        ));
         body
     }
 
-    fn panel(&self, area: Rect, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn panel(&self, area: Rect, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let title = match self.model.panel {
             Panel::Operations => "操作",
             Panel::Display => "显示",
@@ -584,7 +648,7 @@ impl SessionChrome {
                 .gap_3()
                 .child(section("远程屏幕"))
                 .child(self.screen_list(cx))
-                .child(self.media_settings(cx));
+                .child(self.media_settings(window, cx));
             if !self.model.quality.is_empty() {
                 body = body.child(section("连接状态")).child(
                     div()
@@ -713,12 +777,13 @@ impl SessionChrome {
 }
 
 impl Render for SessionChrome {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut chrome = div()
             .relative()
             .size_full()
             .text_color(rgb(TEXT))
             .on_key_down(cx.listener(Self::bitrate_key_down))
+            .on_key_down(cx.listener(Self::resolution_key_down))
             .on_key_up(cx.listener(Self::bitrate_key_up));
         if !self.model.has_frame {
             let status = if self.model.connecting {
@@ -753,7 +818,7 @@ impl Render for SessionChrome {
         }
         chrome = chrome.child(self.floating_mouse_buttons());
         if let Some(panel) = self.model.layout.panel {
-            chrome = chrome.child(self.panel(panel, cx));
+            chrome = chrome.child(self.panel(panel, window, cx));
         }
         chrome.child(self.rail(cx))
     }

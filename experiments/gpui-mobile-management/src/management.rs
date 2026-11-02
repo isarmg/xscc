@@ -13,6 +13,7 @@ use xscc_native_management::{
 pub enum Command {
     Enroll { server: String, code: String },
     Resume,
+    Refresh,
     Unbind,
     ForgetLocal,
 }
@@ -149,6 +150,7 @@ pub async fn run(
                         manager.enroll(&server, &code, Vec::new()).await
                     }
                     Command::Resume if active => manager.resume().await,
+                    Command::Refresh if active => Ok(()),
                     Command::Unbind if active => manager.unbind().await,
                     Command::ForgetLocal if active => manager.forget_local_binding().await,
                     _ => {
@@ -307,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn latest_background_state_rejects_queued_user_operation() {
-        for command in [Command::Resume, Command::ForgetLocal] {
+        for command in [Command::Resume, Command::Refresh, Command::ForgetLocal] {
             let temporary = tempfile::tempdir().unwrap();
             let (commands, receiver) = mpsc::channel(1);
             let (lifecycle, phases) = watch::channel(true);

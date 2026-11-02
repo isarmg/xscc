@@ -12,8 +12,8 @@ use crate::{
 };
 use gpui::{
     App, AppContext, Bounds, Context, Entity, EntityInputHandler, Focusable, IntoElement,
-    KeyDownEvent, Render, StyleRefinement, Subscription, TitlebarOptions, Window, WindowBounds,
-    WindowControlArea, WindowOptions, div, point, prelude::*, px, rgb, size,
+    KeyDownEvent, MouseButton, Render, StyleRefinement, Subscription, TitlebarOptions, Window,
+    WindowBounds, WindowControlArea, WindowOptions, div, point, prelude::*, px, rgb, size,
 };
 use librustdesk::{
     gpui_host,
@@ -334,32 +334,28 @@ impl ManagementPanel {
     fn render_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         let palette = theme::palette(window.appearance());
         let header_button = |id: &'static str, label: &str, primary, enabled| {
-            let button = if cfg!(target_os = "windows") {
-                div()
-                    .id(id)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(rgb(if primary {
-                        palette.accent
-                    } else {
-                        palette.text
-                    }))
-                    .opacity(if enabled { 1. } else { 0.45 })
-                    .child(label.to_owned())
-                    .when(enabled, |button| {
-                        button
-                            .cursor_pointer()
-                            .hover(|style| style.opacity(0.85))
-                            .active(|style| style.opacity(0.65))
-                            .focusable()
-                            .tab_index(0)
-                            .focus(|style| style.opacity(0.75))
-                    })
-            } else {
-                ui::button(id, label, primary, enabled, palette)
-            };
+            let button = div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(if primary {
+                    palette.accent
+                } else {
+                    palette.text
+                }))
+                .opacity(if enabled { 1. } else { 0.45 })
+                .child(label.to_owned())
+                .when(enabled, |button| {
+                    button
+                        .cursor_pointer()
+                        .hover(|style| style.opacity(0.85))
+                        .active(|style| style.opacity(0.65))
+                        .focusable()
+                        .tab_index(0)
+                        .focus(|style| style.opacity(0.75))
+                });
             button
                 .min_h(px(24.))
                 .h(px(24.))
@@ -397,68 +393,32 @@ impl ManagementPanel {
             .items_center()
             .justify_between()
             .gap_2()
-            .when(cfg!(target_os = "windows"), |row| row.h(px(32.)).px_3())
-            .when(!cfg!(target_os = "windows"), |row| row.flex_wrap().pb_1())
+            .h(px(32.))
+            .px_3()
             .line_height(px(18.))
-            .when(!cfg!(target_os = "windows"), |row| {
-                row.border_b_1().border_color(rgb(palette.border))
-            })
-            .when(cfg!(target_os = "windows"), |row| {
-                row.child(window_chrome::traffic_lights(window.is_fullscreen()))
-            })
-            .when(!cfg!(target_os = "windows"), |row| {
-                row.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .size(px(24.))
-                                .rounded_md()
-                                .bg(rgb(palette.accent))
-                                .text_color(rgb(palette.on_accent))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_size(px(14.))
-                                .child("X"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(16.))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child(if self.host {
-                                    "XSCC 被控端"
-                                } else {
-                                    "XSCC 控制端"
-                                }),
-                        ),
-                )
-            })
-            .when(cfg!(target_os = "windows"), |row| {
-                row.child(
-                    div()
-                        .flex_1()
-                        .min_w(px(16.))
-                        .h_full()
-                        .window_control_area(WindowControlArea::Drag),
-                )
-            })
+            .child(window_chrome::traffic_lights(window.is_fullscreen()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(16.))
+                    .h_full()
+                    .window_control_area(WindowControlArea::Drag)
+                    .when(!cfg!(target_os = "windows"), |region| {
+                        region.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            window.start_window_move();
+                            cx.stop_propagation();
+                        })
+                    }),
+            )
             .child(
                 div()
                     .id("window-titlebar-actions")
                     .flex()
                     .items_center()
-                    .when(cfg!(target_os = "windows"), |actions| {
-                        actions
-                            .min_w_0()
-                            .overflow_x_scroll()
-                            .whitespace_nowrap()
-                            .occlude()
-                    })
-                    .when(!cfg!(target_os = "windows"), |actions| actions.flex_wrap())
+                    .min_w_0()
+                    .overflow_x_scroll()
+                    .whitespace_nowrap()
+                    .occlude()
                     .gap_2()
                     .when(configured, |actions| {
                         let peers = self
@@ -522,7 +482,7 @@ impl ManagementPanel {
                         )
                         .h(px(24.))
                         .py_0()
-                        .when(cfg!(target_os = "windows"), |badge| badge.bg(gpui::rgba(0))),
+                        .bg(gpui::rgba(0)),
                     )
                     .child(
                         header_button(
@@ -997,7 +957,7 @@ impl ManagementPanel {
             format!("{} · {summary}", state.notice)
         };
         toolbar
-            .when(fullscreen && cfg!(target_os = "windows"), |toolbar| {
+            .when(fullscreen, |toolbar| {
                 toolbar.child(
                     div()
                         .flex()
@@ -1007,7 +967,13 @@ impl ManagementPanel {
                             div()
                                 .flex_1()
                                 .h_full()
-                                .window_control_area(WindowControlArea::Drag),
+                                .window_control_area(WindowControlArea::Drag)
+                                .when(!cfg!(target_os = "windows"), |region| {
+                                    region.on_mouse_down(MouseButton::Left, |_, window, cx| {
+                                        window.start_window_move();
+                                        cx.stop_propagation();
+                                    })
+                                }),
                         ),
                 )
             })
@@ -1143,15 +1109,23 @@ impl ManagementPanel {
                                 .gap_2()
                                 .h(px(32.))
                                 .px_3()
-                                .when(cfg!(target_os = "windows"), |row| {
-                                    row.child(window_chrome::traffic_lights(false)).child(
-                                        div()
-                                            .w(px(32.))
-                                            .h_full()
-                                            .flex_shrink_0()
-                                            .window_control_area(WindowControlArea::Drag),
-                                    )
-                                })
+                                .child(window_chrome::traffic_lights(false))
+                                .child(
+                                    div()
+                                        .w(px(32.))
+                                        .h_full()
+                                        .flex_shrink_0()
+                                        .window_control_area(WindowControlArea::Drag)
+                                        .when(!cfg!(target_os = "windows"), |region| {
+                                            region.on_mouse_down(
+                                                MouseButton::Left,
+                                                |_, window, cx| {
+                                                    window.start_window_move();
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                        }),
+                                )
                                 .child(
                                     div()
                                         .id("session-menu-actions")
@@ -1226,12 +1200,10 @@ impl Render for Client {
         let remote_visible =
             !self.host && (management.video_state.connecting || management.video_state.has_session);
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
-            .when(!remote_visible && !cfg!(target_os = "windows"), |root| {
-                root.gap_1().px_6().py_1()
-            })
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .font_family(self.font.clone())
@@ -1247,9 +1219,7 @@ impl Render for Client {
                     .flex()
                     .flex_1()
                     .min_h(px(0.0))
-                    .when(!remote_visible && cfg!(target_os = "windows"), |row| {
-                        row.px_6().pt_1().pb_1()
-                    })
+                    .when(!remote_visible, |row| row.px_6().pt_1().pb_1())
                     .when(!remote_visible, |row| {
                         row.child(
                             div().h_full().flex_shrink_0().w_full().child(
@@ -1278,6 +1248,17 @@ impl Render for Client {
                             )
                         })
                     }),
+            )
+            .when(
+                cfg!(target_os = "linux")
+                    && window.is_resizable()
+                    && !window.is_fullscreen()
+                    && !window.is_maximized()
+                    && matches!(
+                        window.window_decorations(),
+                        gpui::Decorations::Client { .. }
+                    ),
+                |root| root.child(window_chrome::resize_handles()),
             )
     }
 }
@@ -1321,8 +1302,13 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(minimum[0]), px(minimum[1]))),
                 is_resizable: true,
+                app_owns_titlebar_drag: cfg!(target_os = "macos"),
+                window_decorations: cfg!(target_os = "linux")
+                    .then_some(gpui::WindowDecorations::Client),
                 titlebar: Some(TitlebarOptions {
-                    appears_transparent: cfg!(target_os = "windows"),
+                    appears_transparent: true,
+                    traffic_light_position: cfg!(target_os = "macos")
+                        .then_some(point(px(16.), px(9.))),
                     title: Some(
                         if host {
                             "XSCC 被控端 beta"
