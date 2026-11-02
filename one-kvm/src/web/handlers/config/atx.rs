@@ -15,14 +15,20 @@ pub async fn get_atx_config(State(state): State<Arc<AppState>>) -> Json<AtxConfi
 
 pub async fn update_atx_config(
     State(state): State<Arc<AppState>>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<AtxConfigUpdate>,
 ) -> Result<Json<AtxConfig>> {
+    let guard = try_apply_lock(&state.config_apply_locks.atx, "atx")?;
+    super::transaction::require_current_grant(&grant)?;
+    super::transaction::complete_device_update(guard, apply_atx_update(state, req)).await
+}
+
+async fn apply_atx_update(state: Arc<AppState>, req: AtxConfigUpdate) -> Result<Json<AtxConfig>> {
     let current_config = state.config.get();
     let old_atx_config = current_config.atx.clone();
 
     req.validate_with_current(&old_atx_config)?;
 
-    let _apply_guard = try_apply_lock(&state.config_apply_locks.atx, "atx")?;
     let mut merged_atx_config = old_atx_config.clone();
     req.apply_to(&mut merged_atx_config);
     validate_windows_atx_backends(&merged_atx_config)?;
@@ -32,7 +38,7 @@ pub async fn update_atx_config(
     candidate.atx = merged_atx_config;
     candidate.enforce_invariants();
     let new_atx_config = candidate.atx.clone();
-    let _reservation = state.config.reserve_resources(&candidate)?;
+    let mut reservation = state.config.reserve_resources(&candidate)?;
 
     let result = async {
         apply_atx_config(&state, &old_atx_config, &new_atx_config).await?;
@@ -52,6 +58,15 @@ pub async fn update_atx_config(
         }
         .await;
         if let Err(rollback) = rollback {
+            let controller = state.atx.write().await.take();
+            if let Some(controller) = controller {
+                if let Err(cleanup) = controller.shutdown().await {
+                    tracing::error!(%cleanup, "Failed to disable ATX after rollback failure");
+                }
+            }
+            if let Some(reservation) = reservation.as_mut() {
+                reservation.quarantine();
+            }
             return Err(AppError::Config(format!(
                 "{error}; ATX rollback failed: {rollback}"
             )));

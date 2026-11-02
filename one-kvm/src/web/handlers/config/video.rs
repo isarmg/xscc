@@ -14,6 +14,7 @@ pub async fn get_video_config(State(state): State<Arc<AppState>>) -> Json<VideoC
 
 pub async fn update_video_config(
     State(state): State<Arc<AppState>>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(mut req): Json<VideoConfigUpdate>,
 ) -> Result<Json<VideoConfig>> {
     let selected_path = req
@@ -40,13 +41,21 @@ pub async fn update_video_config(
     }
     req.validate()?;
 
-    let _apply_guard = try_apply_lock(&state.config_apply_locks.video, "video")?;
+    let guard = try_apply_lock(&state.config_apply_locks.video, "video")?;
+    super::transaction::require_current_grant(&grant)?;
+    super::transaction::complete_device_update(guard, apply_video_update(state, req)).await
+}
+
+async fn apply_video_update(
+    state: Arc<AppState>,
+    req: VideoConfigUpdate,
+) -> Result<Json<VideoConfig>> {
     let current = state.config.get();
     let old_video_config = current.video.clone();
     let mut candidate = (*current).clone();
     req.apply_to(&mut candidate.video);
     let new_video_config = candidate.video.clone();
-    let _reservation = state.config.reserve_resources(&candidate)?;
+    let mut reservation = state.config.reserve_resources(&candidate)?;
 
     let result = async {
         apply_video_config(
@@ -78,6 +87,12 @@ pub async fn update_video_config(
         }
         .await;
         if let Err(rollback) = rollback {
+            if let Err(cleanup) = state.stream_manager.clear_video_source().await {
+                tracing::error!(%cleanup, "Failed to disable video after rollback failure");
+            }
+            if let Some(reservation) = reservation.as_mut() {
+                reservation.quarantine();
+            }
             return Err(AppError::Config(format!(
                 "{error}; video rollback failed: {rollback}"
             )));

@@ -36,9 +36,10 @@ impl UacConfigUpdate {
 
 pub async fn update_uac_config(
     State(state): State<UsbApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(request): Json<UacConfigUpdate>,
 ) -> Result<Json<UacConfig>> {
-    let config = update_usb_config(&state, move |staged| {
+    let config = update_usb_config(&state, &grant, move |staged| {
         request.apply_to(&mut staged.uac)?;
         Ok(None)
     })

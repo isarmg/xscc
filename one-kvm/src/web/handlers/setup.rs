@@ -88,7 +88,34 @@ impl SetupRequest {
 
 pub async fn setup_init(
     State(state): State<Arc<AppState>>,
-    Json(mut req): Json<SetupRequest>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
+    Json(req): Json<SetupRequest>,
+) -> Result<Json<LoginResponse>> {
+    let guard = crate::runtime::try_apply_lock(&state.config_apply_locks.otg, "setup")?;
+    let mut guards = Vec::new();
+    for (lock, domain) in [
+        (&state.config_apply_locks.video, "video"),
+        (&state.config_apply_locks.stream, "stream"),
+        (&state.config_apply_locks.audio, "audio"),
+        (&state.config_apply_locks.atx, "atx"),
+        (&state.config_apply_locks.rustdesk, "rustdesk"),
+        (&state.config_apply_locks.vnc, "vnc"),
+        (&state.config_apply_locks.rtsp, "rtsp"),
+        (&state.config_apply_locks.watchdog, "watchdog"),
+    ] {
+        guards.push(crate::runtime::try_apply_lock(lock, domain)?);
+    }
+    super::config::transaction::require_current_grant(&grant)?;
+    super::config::transaction::complete_device_update(guard, async move {
+        let _guards = guards;
+        initialize_instance(state, req).await
+    })
+    .await
+}
+
+async fn initialize_instance(
+    state: Arc<AppState>,
+    mut req: SetupRequest,
 ) -> Result<Json<LoginResponse>> {
     // Check if already initialized
     if state.config.is_initialized() {

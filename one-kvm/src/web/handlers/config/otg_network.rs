@@ -14,10 +14,12 @@ pub async fn get_otg_network_config(State(state): State<UsbApiState>) -> Json<Ot
 
 pub async fn update_otg_network_config(
     State(state): State<UsbApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(request): Json<OtgNetworkConfigUpdate>,
 ) -> Result<Json<OtgNetworkConfig>> {
     let response = update_otg_config_inner(
         &state,
+        &grant,
         OtgConfigUpdate {
             network: Some(request),
             ..Default::default()

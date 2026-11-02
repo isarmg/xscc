@@ -1,4 +1,5 @@
 pub(crate) mod apply;
+pub(crate) mod transaction;
 mod types;
 pub(crate) use types::AudioConfigUpdate;
 

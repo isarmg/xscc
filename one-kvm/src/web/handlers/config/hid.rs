@@ -13,10 +13,11 @@ pub async fn get_hid_config(State(state): State<UsbApiState>) -> Json<HidConfig>
 
 pub async fn update_hid_config(
     State(state): State<UsbApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<HidConfigUpdate>,
 ) -> Result<Json<HidConfig>> {
     let reset = req.bluetooth_reset_pairing.unwrap_or(false);
-    let config = update_usb_config_with_reset(&state, reset, move |staged| {
+    let config = update_usb_config_with_reset(&state, &grant, reset, move |staged| {
         stage_hid_config_update(&mut staged.hid, &req)
     })
     .await?;

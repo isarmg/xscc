@@ -13,10 +13,12 @@ pub async fn get_msd_config(State(state): State<UsbApiState>) -> Json<MsdConfig>
 
 pub async fn update_msd_config(
     State(state): State<UsbApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<MsdConfigUpdate>,
 ) -> Result<Json<MsdConfig>> {
     let response = update_otg_config_inner(
         &state,
+        &grant,
         OtgConfigUpdate {
             msd: Some(req),
             ..Default::default()

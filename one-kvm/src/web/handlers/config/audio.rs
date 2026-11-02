@@ -14,6 +14,7 @@ pub async fn get_audio_config(State(state): State<Arc<AppState>>) -> Json<AudioC
 
 pub async fn update_audio_config(
     State(state): State<Arc<AppState>>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<AudioConfigUpdate>,
 ) -> Result<Json<AudioConfig>> {
     req.validate()?;
@@ -21,13 +22,21 @@ pub async fn update_audio_config(
         crate::web::handlers::audio_api::validate_audio_device(&state, device).await?;
     }
 
-    let _apply_guard = try_apply_lock(&state.config_apply_locks.audio, "audio")?;
+    let guard = try_apply_lock(&state.config_apply_locks.audio, "audio")?;
+    super::transaction::require_current_grant(&grant)?;
+    super::transaction::complete_device_update(guard, apply_audio_update(state, req)).await
+}
+
+async fn apply_audio_update(
+    state: Arc<AppState>,
+    req: AudioConfigUpdate,
+) -> Result<Json<AudioConfig>> {
     let current = state.config.get();
     let old_audio_config = current.audio.clone();
     let mut candidate = (*current).clone();
     req.apply_to(&mut candidate.audio);
     let new_audio_config = candidate.audio.clone();
-    let _reservation = state.config.reserve_resources(&candidate)?;
+    let mut reservation = state.config.reserve_resources(&candidate)?;
 
     let result = async {
         apply_audio_config(&state, &old_audio_config, &new_audio_config).await?;
@@ -44,6 +53,15 @@ pub async fn update_audio_config(
         }
         .await;
         if let Err(rollback) = rollback {
+            if let Err(cleanup) = state.audio.set_enabled(false).await {
+                tracing::error!(%cleanup, "Failed to disable audio after rollback failure");
+            }
+            if let Err(cleanup) = state.stream_manager.set_webrtc_audio_enabled(false).await {
+                tracing::error!(%cleanup, "Failed to disable WebRTC audio after rollback failure");
+            }
+            if let Some(reservation) = reservation.as_mut() {
+                reservation.quarantine();
+            }
             return Err(AppError::Config(format!(
                 "{error}; audio rollback failed: {rollback}"
             )));

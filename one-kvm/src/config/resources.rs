@@ -42,6 +42,7 @@ pub(crate) struct ResourceLease {
     registry: Arc<ResourceRegistry>,
     instance: String,
     current: Mutex<BTreeSet<Resource>>,
+    retained: Mutex<BTreeSet<Resource>>,
 }
 
 /// Keeps candidate resources reserved until persistence or hardware apply ends.
@@ -71,6 +72,7 @@ impl ResourceRegistry {
             registry: self.clone(),
             instance,
             current: Mutex::new(BTreeSet::new()),
+            retained: Mutex::new(BTreeSet::new()),
         }))
     }
 }
@@ -95,6 +97,16 @@ impl ResourceLease {
             .claims
             .lock()
             .expect("resource registry lock poisoned");
+        if !self
+            .retained
+            .lock()
+            .expect("resource quarantine lock poisoned")
+            .is_empty()
+        {
+            return Err(AppError::ServiceUnavailable(
+                "Device cleanup failed; stop this One-KVM instance before reconfiguring it".into(),
+            ));
+        }
         for requested in &resources {
             if let Some((_, (owner, _))) = claims.resources.iter().find(|(claimed, (owner, _))| {
                 owner != &self.instance && claimed.conflicts(requested)
@@ -120,6 +132,30 @@ impl ResourceLease {
 }
 
 impl ResourceReservation {
+    /// Failed cleanup cannot make a possibly active device available to another
+    /// instance. Keep its claims until this instance is stopped and dropped.
+    pub(crate) fn quarantine(&mut self) {
+        let Some(resources) = self.resources.take() else {
+            return;
+        };
+        let mut claims = self
+            .lease
+            .registry
+            .claims
+            .lock()
+            .expect("resource registry lock poisoned");
+        let mut retained = self
+            .lease
+            .retained
+            .lock()
+            .expect("resource quarantine lock poisoned");
+        for resource in resources {
+            if !retained.insert(resource.clone()) {
+                release(&mut claims, &BTreeSet::from([resource]));
+            }
+        }
+    }
+
     pub(crate) fn commit(mut self) {
         let resources = self
             .resources
@@ -167,6 +203,12 @@ impl Drop for ResourceLease {
             self.current
                 .get_mut()
                 .expect("resource lease lock poisoned"),
+        );
+        release(
+            &mut claims,
+            self.retained
+                .get_mut()
+                .expect("resource quarantine lock poisoned"),
         );
         claims.instances.remove(&self.instance);
     }
@@ -327,6 +369,35 @@ fn config_resources(config: &AppConfig) -> BTreeSet<Resource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_cleanup_keeps_candidate_devices_reserved_until_the_instance_is_dropped() {
+        let registry = Arc::new(ResourceRegistry::default());
+        let a = registry.register("a".into()).unwrap();
+        let b = registry.register("b".into()).unwrap();
+        let mut config = AppConfig::default();
+        config.enforce_invariants();
+        config.video.device = Some("camera-a".into());
+        a.reserve(&config).unwrap().commit();
+        config.video.device = Some("camera-b".into());
+        {
+            let mut failed = a.reserve(&config).unwrap();
+            let mut duplicate = a.reserve(&config).unwrap();
+            failed.quarantine();
+            duplicate.quarantine();
+        }
+        assert!(matches!(b.reserve(&config), Err(AppError::Conflict(_))));
+        config.video.device = Some("camera-a".into());
+        assert!(matches!(b.reserve(&config), Err(AppError::Conflict(_))));
+        assert!(matches!(
+            a.reserve(&config),
+            Err(AppError::ServiceUnavailable(_))
+        ));
+        drop(a);
+        b.reserve(&config).unwrap().commit();
+        config.video.device = Some("camera-b".into());
+        b.reserve(&config).unwrap().commit();
+    }
 
     #[test]
     fn exclusive_devices_are_released_on_replace_and_failed_apply() {

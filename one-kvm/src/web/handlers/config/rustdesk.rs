@@ -29,7 +29,7 @@ async fn persist_and_apply(
     validate_candidate(state, &new_config)?;
     let mut candidate = state.config.get().as_ref().clone();
     candidate.rustdesk = new_config.clone();
-    let _reservation = state.config.reserve_resources(&candidate)?;
+    let mut reservation = state.config.reserve_resources(&candidate)?;
     let old_runtime = state.coordinator.runtime_config().await.rustdesk;
     let result = async {
         state
@@ -72,6 +72,26 @@ async fn persist_and_apply(
         }
         .await;
         if let Err(rollback) = rollback {
+            let mut stopped = new_config.clone();
+            stopped.enabled = false;
+            if let Err(cleanup) = state
+                .coordinator
+                .apply_rustdesk(
+                    &old_runtime,
+                    &stopped,
+                    ConfigApplyOptions {
+                        force: true,
+                        runtime_only: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                tracing::error!(%cleanup, "Failed to disable native listener after rollback failure");
+            }
+            if let Some(reservation) = reservation.as_mut() {
+                reservation.quarantine();
+            }
             return Err(AppError::Config(format!(
                 "{error}; native listener rollback failed: {rollback}"
             )));
@@ -168,41 +188,56 @@ pub async fn get_rustdesk_status(
 
 pub async fn update_rustdesk_config(
     State(state): State<RemoteAccessApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<RustDeskConfigUpdate>,
 ) -> Result<Json<RustDeskConfigResponse>> {
     validate_managed_update(&req)?;
     req.validate()?;
 
-    let _apply_guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
+    let guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
     let old_config = state.config.get().rustdesk.clone();
     let mut merged_config = old_config.clone();
     req.apply_to(&mut merged_config);
     req.validate_merged(&merged_config)?;
 
-    let new_config = persist_and_apply(&state, old_config, merged_config).await?;
+    super::transaction::require_current_grant(&grant)?;
+    let new_config = super::transaction::complete_device_update(guard, async move {
+        persist_and_apply(&state, old_config, merged_config).await
+    })
+    .await?;
 
     Ok(Json(RustDeskConfigResponse::from(&new_config)))
 }
 
 pub async fn regenerate_device_id(
     State(state): State<RemoteAccessApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
 ) -> Result<Json<RustDeskConfigResponse>> {
-    let _apply_guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
+    let guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
     let old_config = state.config.get().rustdesk.clone();
     let mut regenerated = old_config.clone();
     regenerated.device_id = RustDeskConfig::generate_device_id();
-    let new_config = persist_and_apply(&state, old_config, regenerated).await?;
+    super::transaction::require_current_grant(&grant)?;
+    let new_config = super::transaction::complete_device_update(guard, async move {
+        persist_and_apply(&state, old_config, regenerated).await
+    })
+    .await?;
     Ok(Json(RustDeskConfigResponse::from(&new_config)))
 }
 
 pub async fn regenerate_device_password(
     State(state): State<RemoteAccessApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
 ) -> Result<Json<RustDeskConfigResponse>> {
-    let _apply_guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
+    let guard = try_apply_lock(&state.rustdesk_apply_lock, "rustdesk")?;
     let old_config = state.config.get().rustdesk.clone();
     let mut regenerated = old_config.clone();
     regenerated.device_password = RustDeskConfig::generate_password();
-    let new_config = persist_and_apply(&state, old_config, regenerated).await?;
+    super::transaction::require_current_grant(&grant)?;
+    let new_config = super::transaction::complete_device_update(guard, async move {
+        persist_and_apply(&state, old_config, regenerated).await
+    })
+    .await?;
     Ok(Json(RustDeskConfigResponse::from(&new_config)))
 }
 

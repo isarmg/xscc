@@ -26,23 +26,39 @@ pub(super) fn stage_hid_config_update(
     Ok(requested_descriptor)
 }
 
-pub(super) async fn update_usb_config<F>(state: &UsbApiState, stage_update: F) -> Result<AppConfig>
+pub(super) async fn update_usb_config<F>(
+    state: &UsbApiState,
+    grant: &crate::management::AccessGrant,
+    stage_update: F,
+) -> Result<AppConfig>
 where
-    F: FnOnce(&mut AppConfig) -> Result<Option<Ch9329DescriptorConfig>>,
+    F: FnOnce(&mut AppConfig) -> Result<Option<Ch9329DescriptorConfig>> + Send + 'static,
 {
-    update_usb_config_with_reset(state, false, stage_update).await
+    update_usb_config_with_reset(state, grant, false, stage_update).await
 }
 
 pub(super) async fn update_usb_config_with_reset<F>(
     state: &UsbApiState,
+    grant: &crate::management::AccessGrant,
     reset: bool,
     stage_update: F,
 ) -> Result<AppConfig>
 where
+    F: FnOnce(&mut AppConfig) -> Result<Option<Ch9329DescriptorConfig>> + Send + 'static,
+{
+    let guard = try_apply_lock(&state.apply_lock, "otg")?;
+    super::transaction::require_current_grant(grant)?;
+    let state = state.clone();
+    super::transaction::complete_device_update(guard, async move {
+        apply_usb_update(&state, reset, stage_update).await
+    })
+    .await
+}
+
+async fn apply_usb_update<F>(state: &UsbApiState, reset: bool, stage_update: F) -> Result<AppConfig>
+where
     F: FnOnce(&mut AppConfig) -> Result<Option<Ch9329DescriptorConfig>>,
 {
-    let _guard = try_apply_lock(&state.apply_lock, "otg")?;
-
     let old_config = state.config.get();
     let mut staged_config = old_config.as_ref().clone();
     let requested_ch9329_descriptor = stage_update(&mut staged_config)?;
@@ -75,7 +91,7 @@ where
     if reset {
         return Err(AppError::BadRequest("Bluetooth HID requires Linux".into()));
     }
-    let _resource_reservation = state.config.reserve_resources(&staged_config)?;
+    let mut resource_reservation = state.config.reserve_resources(&staged_config)?;
     #[cfg(target_os = "linux")]
     if reset {
         use one_kvm_bluetooth_hid::{
@@ -159,9 +175,15 @@ where
             .apply_config(&old_config, &staged_config)
             .await
         {
-            return Err(
-                rollback_after_failure(state, &staged_config, &old_config, error, false).await,
-            );
+            return Err(rollback_after_failure(
+                state,
+                &staged_config,
+                &old_config,
+                error,
+                false,
+                resource_reservation.as_mut(),
+            )
+            .await);
         }
 
         #[cfg(target_os = "linux")]
@@ -172,12 +194,23 @@ where
             )
         {
             // Even identical device selections must rebuild with no pinned peer.
-            state
+            if let Err(error) = state
                 .hid
                 .reload(crate::hid::HidBackendType::Bluetooth {
                     config: staged_config.hid.bluetooth.clone(),
                 })
-                .await?;
+                .await
+            {
+                return Err(rollback_after_failure(
+                    state,
+                    &staged_config,
+                    &old_config,
+                    error,
+                    false,
+                    resource_reservation.as_mut(),
+                )
+                .await);
+            }
         }
 
         let descriptor_was_applied = if let Some(ref descriptor) = requested_ch9329_descriptor {
@@ -194,6 +227,7 @@ where
                             &old_config,
                             error,
                             true,
+                            resource_reservation.as_mut(),
                         )
                         .await);
                     }
@@ -224,6 +258,7 @@ where
                     "Failed to persist USB configuration after apply: {error}"
                 )),
                 descriptor_was_applied,
+                resource_reservation.as_mut(),
             )
             .await);
         }
@@ -242,6 +277,7 @@ async fn rollback_after_failure(
     old_config: &AppConfig,
     primary_error: AppError,
     restore_descriptor: bool,
+    reservation: Option<&mut crate::config::ResourceReservation>,
 ) -> AppError {
     let mut rollback_errors = Vec::new();
 
@@ -262,6 +298,26 @@ async fn rollback_after_failure(
         }
     }
 
+    if !rollback_errors.is_empty() {
+        let mut disabled = failed_config.clone();
+        disabled.hid.backend = HidBackend::None;
+        disabled.msd.enabled = false;
+        disabled.otg_network.enabled = false;
+        disabled.uac.enabled = false;
+        if let Err(error) = state
+            .coordinator
+            .apply_config(failed_config, &disabled)
+            .await
+        {
+            rollback_errors.push(format!("USB disable failed: {error}"));
+        }
+        if let Err(error) = state.hid.shutdown().await {
+            rollback_errors.push(format!("HID shutdown failed: {error}"));
+        }
+        if let Some(reservation) = reservation {
+            reservation.quarantine();
+        }
+    }
     if rollback_errors.is_empty() {
         return primary_error;
     }

@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::events::EventBus;
-use crate::state::AppState;
+use crate::{events::EventBus, state::AppState};
 
 pub(super) struct RuntimeSupervisor {
     tasks: Vec<JoinHandle<()>>,
@@ -19,6 +18,26 @@ impl RuntimeSupervisor {
     }
 
     pub(super) async fn shutdown(&mut self, state: &Arc<AppState>) {
+        state.remote_access.shutdown().await;
+        if let Err(error) = state.webrtc.close_all_sessions_and_release_device().await {
+            tracing::warn!(%error, "Failed to release WebRTC video before draining updates");
+        }
+        // Accepted updates retain these guards after the HTTP request ends.
+        // Drain them before final cleanup so none can reopen a cleaned-up device.
+        let mut updates = Vec::new();
+        for lock in [
+            &state.config_apply_locks.otg,
+            &state.config_apply_locks.video,
+            &state.config_apply_locks.stream,
+            &state.config_apply_locks.audio,
+            &state.config_apply_locks.atx,
+            &state.config_apply_locks.rustdesk,
+            &state.config_apply_locks.vnc,
+            &state.config_apply_locks.rtsp,
+            &state.config_apply_locks.watchdog,
+        ] {
+            updates.push(lock.clone().lock_owned().await);
+        }
         for task in self.tasks.drain(..) {
             task.abort();
         }
@@ -162,6 +181,9 @@ async fn cleanup(state: &Arc<AppState>) {
     tracing::info!("Extensions stopped");
 
     state.remote_access.shutdown().await;
+    if let Err(error) = state.webrtc.close_all_sessions_and_release_device().await {
+        tracing::warn!(%error, "Failed to release WebRTC video during shutdown");
+    }
 
     if let Err(error) = state.stream_manager.stop().await {
         tracing::warn!("Failed to stop streamer: {}", error);

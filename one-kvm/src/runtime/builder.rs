@@ -284,10 +284,10 @@ impl ApplicationRuntime {
     }
 
     pub async fn shutdown(&mut self) {
-        self.supervisor.shutdown(&self.state).await;
         if let Err(error) = self.state.managed.shutdown().await {
             tracing::error!(%error, "Managed KVM shutdown failed");
         }
+        self.supervisor.shutdown(&self.state).await;
     }
 }
 

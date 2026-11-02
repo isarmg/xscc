@@ -65,11 +65,13 @@ pub struct SelectAudioDeviceRequest {
 /// Select audio device
 pub async fn select_audio_device(
     State(state): State<Arc<AppState>>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(req): Json<SelectAudioDeviceRequest>,
 ) -> Result<Json<LoginResponse>> {
     let device = validate_audio_device(&state, &req.device).await?;
     let _ = super::config::update_audio_config(
         State(state),
+        axum::Extension(grant),
         Json(super::config::AudioConfigUpdate {
             enabled: None,
             device: Some(device.clone()),

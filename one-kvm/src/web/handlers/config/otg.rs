@@ -21,13 +21,17 @@ pub struct OtgConfigResponse {
 
 pub async fn update_otg_config(
     State(state): State<UsbApiState>,
+    axum::Extension(grant): axum::Extension<crate::management::AccessGrant>,
     Json(request): Json<OtgConfigUpdate>,
 ) -> Result<Json<OtgConfigResponse>> {
-    update_otg_config_inner(&state, request).await.map(Json)
+    update_otg_config_inner(&state, &grant, request)
+        .await
+        .map(Json)
 }
 
 pub(super) async fn update_otg_config_inner(
     state: &UsbApiState,
+    grant: &crate::management::AccessGrant,
     request: OtgConfigUpdate,
 ) -> Result<OtgConfigResponse> {
     let reset = request
@@ -35,7 +39,7 @@ pub(super) async fn update_otg_config_inner(
         .as_ref()
         .and_then(|h| h.bluetooth_reset_pairing)
         .unwrap_or(false);
-    let staged_config = update_usb_config_with_reset(state, reset, move |staged| {
+    let staged_config = update_usb_config_with_reset(state, grant, reset, move |staged| {
         let requested_ch9329_descriptor = match request.hid.as_ref() {
             Some(update) => stage_hid_config_update(&mut staged.hid, update)?,
             None => None,
