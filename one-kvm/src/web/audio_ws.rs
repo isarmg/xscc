@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
+use super::send_while_authorized;
 use crate::audio::OpusFrame;
 use crate::state::AppState;
 
@@ -52,11 +53,13 @@ async fn handle_audio_socket(
         Some(rx) => rx,
         None => {
             warn!("Audio not streaming, rejecting WebSocket connection");
-            let _ = sender
-                .send(Message::Text(
+            let _ = send_while_authorized(
+                &grant,
+                sender.send(Message::Text(
                     r#"{"error": "Audio not streaming"}"#.to_string().into(),
-                ))
-                .await;
+                )),
+            )
+            .await;
             return;
         }
     };
@@ -86,7 +89,7 @@ async fn handle_audio_socket(
 
                 if !grant.is_valid() { break; }
                 let binary = encode_audio_packet(&frame, stream_start);
-                if sender.send(Message::Binary(binary.into())).await.is_err() {
+                if !send_while_authorized(&grant, sender.send(Message::Binary(binary.into()))).await {
                     debug!("Failed to send audio frame, client disconnected");
                     break;
                 }
@@ -100,7 +103,7 @@ async fn handle_audio_socket(
                         break;
                     }
                     Some(Ok(Message::Ping(data))) => {
-                        if sender.send(Message::Pong(data)).await.is_err() {
+                        if !send_while_authorized(&grant, sender.send(Message::Pong(data))).await {
                             break;
                         }
                     }
@@ -120,7 +123,7 @@ async fn handle_audio_socket(
             }
 
             _ = ping_interval.tick() => {
-                if sender.send(Message::Ping(vec![].into())).await.is_err() {
+                if !send_while_authorized(&grant, sender.send(Message::Ping(vec![].into()))).await {
                     warn!("Failed to send ping, disconnecting");
                     break;
                 }
@@ -129,7 +132,7 @@ async fn handle_audio_socket(
     }
 
     if !closed {
-        let _ = sender.send(Message::Close(None)).await;
+        let _ = send_while_authorized(&grant, sender.send(Message::Close(None))).await;
     }
 
     info!("Audio WebSocket client disconnected");

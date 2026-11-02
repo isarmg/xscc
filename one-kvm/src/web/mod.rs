@@ -15,4 +15,5 @@ pub use routes::create_router;
 pub use static_files::StaticAssets;
 #[cfg(unix)]
 pub use uac_ws::uac_audio_ws_handler;
+pub(crate) use ws::send_while_authorized;
 pub use ws::ws_handler;

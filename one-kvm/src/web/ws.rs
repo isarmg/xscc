@@ -7,12 +7,47 @@ use axum::{
 };
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::{fmt::Display, future::Future, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, info, warn};
 
 use crate::events::SystemEvent;
 use crate::state::AppState;
+
+const EVENT_QUEUE_CAPACITY: usize = 256;
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) async fn send_while_authorized<E: Display>(
+    grant: &crate::management::AccessGrant,
+    send: impl Future<Output = Result<(), E>>,
+) -> bool {
+    send_until_cancelled(send, grant.cancelled()).await
+}
+
+async fn send_until_cancelled<E: Display>(
+    send: impl Future<Output = Result<(), E>>,
+    cancelled: impl Future<Output = ()>,
+) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancelled => false,
+        result = tokio::time::timeout(SEND_TIMEOUT, send) => match result {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                debug!("WebSocket send failed: {error}");
+                false
+            }
+            Err(_) => {
+                warn!("WebSocket send exceeded its deadline; disconnecting slow client");
+                false
+            }
+        },
+    }
+}
+
+fn event_channel() -> (mpsc::Sender<BusMessage>, mpsc::Receiver<BusMessage>) {
+    mpsc::channel(EVENT_QUEUE_CAPACITY)
+}
 
 enum BusMessage {
     Event(SystemEvent),
@@ -57,9 +92,9 @@ fn rebuild_event_tasks(
     state: &Arc<AppState>,
     topics: &[String],
     replay_stream_state: bool,
-    event_tx: &mpsc::UnboundedSender<BusMessage>,
+    event_tx: &mpsc::Sender<BusMessage>,
     event_tasks: &mut Vec<JoinHandle<()>>,
-) {
+) -> bool {
     for task in event_tasks.drain(..) {
         task.abort();
     }
@@ -70,8 +105,8 @@ fn rebuild_event_tasks(
     for topic in topics {
         if replay_stream_state && is_stream_state_topic(&topic) && !stream_state_snapshot_added {
             if let Some(snapshot) = state.events.latest_video_stream_state() {
-                if event_tx.send(BusMessage::Event(snapshot)).is_err() {
-                    return;
+                if event_tx.try_send(BusMessage::Event(snapshot)).is_err() {
+                    return false;
                 }
             }
             stream_state_snapshot_added = true;
@@ -83,7 +118,7 @@ fn rebuild_event_tasks(
             let event_tx = event_tx.clone();
             event_tasks.push(tokio::spawn(async move {
                 let snapshot = state.get_device_info().await;
-                if event_tx.send(BusMessage::Event(snapshot)).is_err() {
+                if event_tx.send(BusMessage::Event(snapshot)).await.is_err() {
                     return;
                 }
 
@@ -92,8 +127,9 @@ fn rebuild_event_tasks(
                         break;
                     }
 
-                    if let Some(snapshot) = rx.borrow().clone() {
-                        if event_tx.send(BusMessage::Event(snapshot)).is_err() {
+                    let snapshot = rx.borrow().clone();
+                    if let Some(snapshot) = snapshot {
+                        if event_tx.send(BusMessage::Event(snapshot)).await.is_err() {
                             break;
                         }
                     }
@@ -117,7 +153,7 @@ fn rebuild_event_tasks(
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if event_tx.send(BusMessage::Event(event)).is_err() {
+                        if event_tx.send(BusMessage::Event(event)).await.is_err() {
                             break;
                         }
                     }
@@ -127,6 +163,7 @@ fn rebuild_event_tasks(
                                 topic: topic_name.clone(),
                                 count,
                             })
+                            .await
                             .is_err()
                         {
                             break;
@@ -137,6 +174,7 @@ fn rebuild_event_tasks(
             }
         }));
     }
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,7 +204,7 @@ async fn handle_socket(
     grant: crate::management::AccessGrant,
 ) {
     let (mut sender, mut receiver) = socket.split();
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let (event_tx, mut event_rx) = event_channel();
     let mut event_tasks: Vec<JoinHandle<()>> = Vec::new();
 
     let mut subscribed_topics: Vec<String> = vec![];
@@ -192,13 +230,16 @@ async fn handle_socket(
                             let has_stream_state = normalize_topics(&subscribed_topics)
                                 .iter()
                                 .any(|topic| is_stream_state_topic(topic));
-                            rebuild_event_tasks(
+                            if !rebuild_event_tasks(
                                 &state,
                                 &subscribed_topics,
                                 !had_stream_state && has_stream_state,
                                 &event_tx,
                                 &mut event_tasks,
-                            );
+                            ) {
+                                warn!("WebSocket event queue is full; disconnecting slow client");
+                                break;
+                            }
                         }
                     }
                     Some(Ok(Message::Ping(_))) => {
@@ -223,7 +264,7 @@ async fn handle_socket(
                 match event {
                     Some(BusMessage::Event(event)) => {
                         if let Ok(json) = serialize_event(&event) {
-                            if sender.send(Message::Text(json.into())).await.is_err() {
+                            if !send_while_authorized(&grant, sender.send(Message::Text(json.into()))).await {
                                 warn!("Failed to send event to client, disconnecting");
                                 break;
                             }
@@ -238,7 +279,9 @@ async fn handle_socket(
                             message: format!("Lagged by {} events", count),
                         };
                         if let Ok(json) = serialize_event(&error_event) {
-                            let _ = sender.send(Message::Text(json.into())).await;
+                            if !send_while_authorized(&grant, sender.send(Message::Text(json.into()))).await {
+                                break;
+                            }
                         }
                     }
                     None => {
@@ -249,7 +292,7 @@ async fn handle_socket(
             }
 
             _ = heartbeat_interval.tick() => {
-                if sender.send(Message::Ping(vec![].into())).await.is_err() {
+                if !send_while_authorized(&grant, sender.send(Message::Ping(vec![].into()))).await {
                     warn!("Failed to send ping, disconnecting");
                     break;
                 }
@@ -296,6 +339,80 @@ fn serialize_event(event: &SystemEvent) -> Result<String, serde_json::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stalled_websocket_send_is_cancelled_without_blocking_cleanup() {
+        use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+
+        let (server_io, client_io) = tokio::io::duplex(64);
+        let mut server = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;
+        let mut client = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
+        let message = tokio_tungstenite::tungstenite::Message::Text("ready".into());
+        assert!(send_until_cancelled(server.send(message.clone()), std::future::pending()).await);
+        assert_eq!(client.next().await.unwrap().unwrap(), message);
+
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
+        let message = tokio_tungstenite::tungstenite::Message::Binary(vec![0; 1024 * 1024].into());
+        let blocked = send_until_cancelled(server.send(message), async {
+            cancelled.await.unwrap();
+        });
+        tokio::pin!(blocked);
+        assert!(futures::poll!(&mut blocked).is_pending());
+        cancel.send(()).unwrap();
+        assert!(!tokio::time::timeout(Duration::from_secs(1), blocked)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn stalled_websocket_send_has_a_finite_deadline() {
+        use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+
+        let (server_io, _client_io) = tokio::io::duplex(64);
+        let mut server = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;
+        let message = tokio_tungstenite::tungstenite::Message::Binary(vec![0; 1024 * 1024].into());
+        let blocked = send_until_cancelled(server.send(message), std::future::pending());
+        tokio::pin!(blocked);
+        assert!(futures::poll!(&mut blocked).is_pending());
+        assert!(
+            !tokio::time::timeout(SEND_TIMEOUT + Duration::from_secs(1), blocked)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_events_backpressure_producers_and_release_them_on_disconnect() {
+        let (sender, mut receiver) = event_channel();
+        for number in 0..EVENT_QUEUE_CAPACITY {
+            sender
+                .send(BusMessage::Lagged {
+                    topic: "stream.*".into(),
+                    count: number as u64,
+                })
+                .await
+                .unwrap();
+        }
+        let blocked = sender.send(BusMessage::Lagged {
+            topic: "stream.*".into(),
+            count: EVENT_QUEUE_CAPACITY as u64,
+        });
+        tokio::pin!(blocked);
+        assert!(futures::poll!(&mut blocked).is_pending());
+        let Some(BusMessage::Lagged { count, .. }) = receiver.recv().await else {
+            panic!("expected oldest event");
+        };
+        assert_eq!(count, 0);
+        assert!(blocked.await.is_ok());
+        let next = sender.send(BusMessage::Lagged {
+            topic: "stream.*".into(),
+            count: 999,
+        });
+        tokio::pin!(next);
+        assert!(futures::poll!(&mut next).is_pending());
+        drop(receiver);
+        assert!(next.await.is_err());
+    }
 
     #[test]
     fn test_normalize_topics_dedupes_and_sorts() {

@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 use super::datachannel::{parse_hid_message, HidChannelEvent};
 use crate::state::AppState;
 use crate::utils::LogThrottler;
+use crate::web::send_while_authorized;
 
 const RESP_OK: u8 = 0x00;
 const RESP_ERR_HID_UNAVAILABLE: u8 = 0x01;
@@ -44,10 +45,11 @@ async fn handle_hid_socket(
         vec![RESP_ERR_HID_UNAVAILABLE]
     };
 
-    if sender
-        .send(Message::Binary(initial_response.into()))
-        .await
-        .is_err()
+    if !send_while_authorized(
+        &grant,
+        sender.send(Message::Binary(initial_response.into())),
+    )
+    .await
     {
         error!("Failed to send initial HID status");
         return;
@@ -66,9 +68,14 @@ async fn handle_hid_socket(
                     if log_throttler.should_log("hid_unavailable") {
                         warn!("HID controller not available, ignoring message");
                     }
-                    let _ = sender
-                        .send(Message::Binary(vec![RESP_ERR_HID_UNAVAILABLE].into()))
-                        .await;
+                    if !send_while_authorized(
+                        &grant,
+                        sender.send(Message::Binary(vec![RESP_ERR_HID_UNAVAILABLE].into())),
+                    )
+                    .await
+                    {
+                        break;
+                    }
                     continue;
                 }
 
@@ -85,12 +92,19 @@ async fn handle_hid_socket(
                         text.len()
                     );
                 }
-                let _ = sender
-                    .send(Message::Binary(vec![RESP_ERR_INVALID_MESSAGE].into()))
-                    .await;
+                if !send_while_authorized(
+                    &grant,
+                    sender.send(Message::Binary(vec![RESP_ERR_INVALID_MESSAGE].into())),
+                )
+                .await
+                {
+                    break;
+                }
             }
             Ok(Message::Ping(data)) => {
-                let _ = sender.send(Message::Pong(data)).await;
+                if !send_while_authorized(&grant, sender.send(Message::Pong(data))).await {
+                    break;
+                }
             }
             Ok(Message::Close(_)) => {
                 info!("WebSocket HID connection closed by client");

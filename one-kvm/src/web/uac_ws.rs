@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use tracing::{debug, info, warn};
 
+use super::send_while_authorized;
 use crate::audio::uac::{
     parse_audio_packet, UacAudioPacket, UacOpusDecoder, UacPlaybackState, UacSession,
 };
@@ -42,7 +43,7 @@ async fn handle_uac_audio(
         Ok(decoder) => decoder,
         Err(error) => {
             warn!("Unable to initialize UAC Opus decoder: {error}");
-            let _ = socket.send(Message::Close(None)).await;
+            let _ = send_while_authorized(&grant, socket.send(Message::Close(None))).await;
             return;
         }
     };
@@ -50,11 +51,7 @@ async fn handle_uac_audio(
     info!("UAC microphone WebSocket connected");
 
     let mut playback_state = session.state();
-    if socket
-        .send(playback_state_message(playback_state))
-        .await
-        .is_err()
-    {
+    if !send_while_authorized(&grant, socket.send(playback_state_message(playback_state))).await {
         return;
     }
 
@@ -115,10 +112,11 @@ async fn handle_uac_audio(
                 }
 
                 if current_state != playback_state
-                    && socket
-                        .send(playback_state_message(current_state))
-                        .await
-                        .is_err()
+                    && !send_while_authorized(
+                        &grant,
+                        socket.send(playback_state_message(current_state)),
+                    )
+                    .await
                 {
                     break;
                 }
