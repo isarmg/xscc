@@ -215,7 +215,7 @@ block = "0.1"
 [workspace]
 resolver = "3"
 members = ["vendor/hwcodec", "experiments/gpui-validation", "experiments/gpui-mobile-management", "crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vendor/gpui", "vendor/rust-pulsectl"]
+exclude = ["vendor/gpui", "vendor/rust-pulsectl", "one-kvm"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone

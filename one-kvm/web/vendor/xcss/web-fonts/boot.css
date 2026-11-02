@@ -1,0 +1,7 @@
+/* Inline in HTML before any stylesheet or application script can load. */
+html[data-xcss-fonts="pending"] { background: #fff !important; }
+html[data-xcss-fonts="pending"][data-theme="dark"] { background: #151a1d !important; }
+html[data-xcss-fonts="pending"] body { visibility: hidden !important; }
+@media (prefers-color-scheme: dark) {
+  html[data-xcss-fonts="pending"]:not([data-theme="light"]) { background: #151a1d !important; }
+}

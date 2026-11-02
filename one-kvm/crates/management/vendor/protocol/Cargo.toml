@@ -1,0 +1,19 @@
+[package]
+name = "xscs-protocol"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+schemars = { version = "1.2.3", features = ["uuid1"] }
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+uuid = { version = "1.27.0", features = ["serde", "v4"] }
+
+[lints.rust]
+unsafe_code = "forbid"

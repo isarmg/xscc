@@ -1,0 +1,12 @@
+/* Ordinary account route content shares product panel geometry and typography. */
+html .xcss-header-actions .xcss-account-entry,
+html .xcss-header-actions .xcss-account-entry:hover { text-decoration: none; }
+.xcss-account-form { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 12px; }
+.xcss-account-fields { display: grid; grid-template-columns: max-content minmax(0, 28rem); align-items: center; min-width: 0; gap: 12px 16px; }
+.xcss-account-form .xcss-form-field { display: contents; }
+.xcss-account-form .xcss-input { min-width: 0; }
+.xcss-account-form > :is(.xcss-error, .xcss-actions) { min-width: 0; }
+.xcss-account-form > .xcss-actions { justify-content: flex-start; margin: 0; }
+@media (max-width: 48rem) {
+  .xcss-account-fields { grid-template-columns: minmax(0, 1fr); }
+}

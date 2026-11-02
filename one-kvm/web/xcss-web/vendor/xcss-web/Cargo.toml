@@ -1,0 +1,52 @@
+[package]
+name = "xcss-web"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Browser CSR runtime, components and administrator HTTP contracts"
+
+[workspace]
+exclude = ["vendor/xcss-web-core", "vendor/xcss-web-macro"]
+
+[dependencies]
+xcss-web-core = { path = "vendor/xcss-web-core", default-features = false, features = ["csr"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+js-sys = "=0.3.106"
+gloo-events = "0.2"
+gloo-timers = { version = "0.3", features = ["futures"] }
+futures = "0.3"
+console_error_panic_hook = "0.1"
+send_wrapper = "0.6"
+web-sys = { version = "=0.3.106", features = [
+  "AbortController", "AbortSignal", "BeforeUnloadEvent", "Blob", "BlobPropertyBag",
+  "Clipboard", "Crypto", "CssStyleDeclaration", "CustomEvent", "CustomEventInit",
+  "DataTransfer", "Document", "DocumentFragment", "DomException", "DomMatrix", "DomMatrixReadOnly", "DomRect", "DomRectList",
+  "DomTokenList", "DragEvent", "Element", "Event", "EventSource",
+  "EventTarget", "File", "FileList", "FocusEvent", "FontFace",
+  "FontFaceSet", "FormData", "Headers", "History", "HtmlAudioElement",
+  "HtmlButtonElement", "HtmlCollection", "HtmlDialogElement", "HtmlElement", "HtmlFormElement",
+  "HtmlImageElement", "HtmlInputElement", "HtmlMediaElement", "HtmlOptionElement", "HtmlOptionsCollection",
+  "HtmlSelectElement", "HtmlTemplateElement", "HtmlTextAreaElement", "HtmlVideoElement", "InputEvent",
+  "KeyboardEvent", "Location", "MediaQueryList", "MediaQueryListEvent", "MediaStream",
+  "MediaStreamTrack", "MessageEvent", "MouseEvent", "MutationObserver", "MutationObserverInit",
+  "Navigator", "Node", "NodeList", "PageTransitionEvent", "Performance", "PointerEvent",
+  "ProgressEvent", "ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamReadResult", "Request",
+  "RequestCache", "RequestCredentials", "RequestInit", "RequestMode", "RequestRedirect",
+  "ResizeObserver", "Response", "RtcConfiguration", "RtcIceGatheringState", "RtcIceServer", "RtcPeerConnection",
+  "RtcPeerConnectionState", "RtcRtpTransceiver", "RtcRtpTransceiverDirection", "RtcRtpTransceiverInit", "RtcSdpType",
+  "RtcSessionDescription", "RtcSessionDescriptionInit", "RtcTrackEvent", "ScrollBehavior", "ScrollToOptions",
+  "Storage", "SubmitEvent", "SvgAnimatedRect", "SvgElement", "SvgGraphicsElement", "SvgMatrix", "SvgRect", "SvgsvgElement", "Text", "TransitionEvent", "Url", "UrlSearchParams",
+  "ValidityState", "Window", "XmlHttpRequest", "XmlHttpRequestEventTarget", "XmlHttpRequestUpload",
+  "console",
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[features]
+default = ["csr"]
+csr = ["xcss-web-core/csr"]

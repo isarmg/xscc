@@ -1,6 +1,10 @@
 # XSCC
 
-XSCC 使用 **GPUI 作为唯一产品界面**，复用本仓库的 Rust 原生管理、加密传输、编解码、屏幕捕获与输入核心。桌面控制端和被控端是分别构建、分别绑定身份的应用；Android、iOS / iPadOS 只提供控制端。
+XSCC 的原生控制端和被控端使用 **GPUI 界面**，复用本仓库的 Rust 原生管理、加密传输、编解码、屏幕捕获与输入核心。桌面控制端和被控端是分别构建、分别绑定身份的应用；Android、iOS / iPadOS 只提供控制端。
+
+## One-KVM Web 被控服务
+
+[one-kvm/](one-kvm/README.md) 是同仓库维护的独立裸机 Web KVM 宿主，支持 Linux 和 Windows。一个宿主可绑定多个 XSCS 被控实例，分别设置视频、键鼠及音频等设备。它保留独立 Cargo 锁文件和构建入口；浏览器界面不替代以下 GPUI 原生应用。部署与实例绑定见 [操作说明](one-kvm/docs/managed-kvm-operations.md)。
 
 ## 产品入口
 

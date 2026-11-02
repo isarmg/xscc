@@ -1,0 +1,12 @@
+.xcss-log-date-controls > .xcss-date-range { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+.xcss-date-range-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 0; min-width: 0; padding: 0; border: 0; background: transparent; }
+.xcss-date-range-endpoint, .xcss-date-range-part { display: inline-flex; align-items: center; min-width: 0; }
+.xcss-date-range-number { width: 2.5ch; min-width: 0; min-height: 36px; padding: 0; border: 0; border-bottom: 1px dashed currentColor; border-radius: 0; text-align: center; font: inherit; font-variant-numeric: tabular-nums; color: inherit; background: transparent; box-sizing: content-box; }
+.xcss-date-range-number[size="4"] { width: 4.5ch; }
+.xcss-date-range .xcss-date-range-number:focus, .xcss-date-range .xcss-date-range-number:focus-visible { outline: 0; box-shadow: none; border-bottom-color: var(--xcss-focus, currentColor); border-bottom-width: 2px; }
+.xcss-date-range .xcss-date-range-number[aria-invalid="true"] { color: var(--xcss-text-danger, #b91c1c); border-bottom-color: currentColor; }
+.xcss-date-range-separator { color: var(--xcss-text-primary, inherit); padding-inline: .15ch; }
+.xcss-date-range-endpoint > .xcss-date-range-separator { padding-inline: .4ch; }
+.xcss-date-range-error { margin: 4px 0 0; font-size: .875em; }
+.xcss-date-range-error { color: var(--xcss-text-danger, #b91c1c); }
+@media (forced-colors: active) { .xcss-date-range .xcss-date-range-number:focus-visible { border-bottom-color: Highlight; } .xcss-date-range .xcss-date-range-number[aria-invalid="true"] { color: LinkText; text-decoration-line: underline; text-decoration-style: double; } }

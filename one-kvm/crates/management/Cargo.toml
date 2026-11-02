@@ -1,0 +1,42 @@
+[package]
+name = "one-kvm-management"
+version = "0.2.8"
+edition = "2024"
+rust-version = "1.99"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+members = ["vendor/client", "vendor/native", "vendor/protocol"]
+resolver = "3"
+
+[dependencies]
+async-trait = "0.1.92"
+hex = "0.4.3"
+log = "0.4"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.0"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+tokio = { version = "~1.53.2", features = ["rt", "sync", "time", "macros"] }
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
+zeroize = "1.9.1"
+xscc = { path = "vendor/client" }
+xscc-native-management = { path = "vendor/native" }
+
+[dev-dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+tower = { version = "0.5.3", features = ["util"] }
+futures-util = "0.3.34"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

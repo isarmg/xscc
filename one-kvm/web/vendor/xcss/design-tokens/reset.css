@@ -1,0 +1,43 @@
+/*
+ * 显式作用域的最小 reset。消费者必须在应用根节点添加 data-xcss-scope，
+ * 因而引入本文件不会改变同一页面上不属于 Xcss 应用的内容。
+ */
+[data-xcss-scope],
+[data-xcss-scope] *,
+[data-xcss-scope] *::before,
+[data-xcss-scope] *::after {
+  box-sizing: border-box;
+}
+
+[data-xcss-scope] {
+  min-width: 320px;
+  min-height: 100%;
+  font-family: var(--xcss-font-ui, ui-monospace, monospace);
+  font-size: var(--xcss-font-size-body, 1rem);
+  line-height: var(--xcss-line-height-body, 1.5);
+  overflow-wrap: anywhere;
+  text-size-adjust: 100%;
+}
+
+[data-xcss-scope] :where(button, input, select, textarea) {
+  font: inherit;
+  line-height: inherit;
+}
+
+[data-xcss-scope] button:not(:disabled) {
+  cursor: pointer;
+}
+
+[data-xcss-scope] button:disabled {
+  cursor: not-allowed;
+}
+
+[data-xcss-scope] :where(h1, h2, h3) {
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+
+[data-xcss-scope] [hidden] {
+  display: none !important;
+}

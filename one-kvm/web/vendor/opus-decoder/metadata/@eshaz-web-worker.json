@@ -1,0 +1,87 @@
+{
+  "bugs": {
+    "url": "https://github.com/eshaz/web-worker/issues"
+  },
+  "dist": {
+    "shasum": "506ec07ab811c15a12799725a0d8b82289e3d937",
+    "tarball": "https://registry.npmjs.org/@eshaz/web-worker/-/web-worker-1.2.2.tgz",
+    "fileCount": 8,
+    "integrity": "sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==",
+    "signatures": [
+      {
+        "sig": "MEUCIAvA4EIxg9JM0Av9aGr9YbRFApwTWTvupqyYdEtW9PQwAiEAiM+9abHGCWuUzGSvz1G/kCdZNsBq5cnxxaYU577ptSw=",
+        "keyid": "SHA256:jl3bwswu80PjjokCgh0o2w5c2U4LhQAE57gj9cz1kzA"
+      }
+    ],
+    "unpackedSize": 30716
+  },
+  "main": "./cjs/node.js",
+  "name": "@eshaz/web-worker",
+  "babel": {
+    "plugins": [
+      "@babel/plugin-syntax-dynamic-import",
+      "babel-plugin-commonjs-lite"
+    ]
+  },
+  "types": "index.d.ts",
+  "authors": [],
+  "browser": "./cjs/browser.js",
+  "gitHead": "8d1e4bbf49f283fe59fdda20f633286148770696",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "eslint '*.js' test && node --experimental-modules ./node_modules/.bin/ava",
+    "prepare": "babel node.js browser.js -d cjs"
+  },
+  "_npmUser": {
+    "name": "eshaz",
+    "email": "ethanshalsall@gmail.com"
+  },
+  "homepage": "https://github.com/eshaz/web-worker",
+  "keywords": [
+    "worker",
+    "worker_threads",
+    "webworker",
+    "web worker",
+    "web-worker",
+    "threads"
+  ],
+  "repository": {
+    "url": "git+https://github.com/eshaz/web-worker.git",
+    "type": "git"
+  },
+  "_npmVersion": "9.6.7",
+  "description": "Consistent Web Workers in browser and Node.",
+  "directories": {},
+  "maintainers": [
+    {
+      "name": "eshaz",
+      "email": "ethanshalsall@gmail.com"
+    }
+  ],
+  "_nodeVersion": "18.17.1",
+  "eslintConfig": {
+    "rules": {
+      "no-console": 0
+    },
+    "extends": "developit"
+  },
+  "_hasShrinkwrap": false,
+  "devDependencies": {
+    "ava": "^2.4.0",
+    "eslint": "^6.8.0",
+    "@babel/cli": "^7.7.7",
+    "@babel/core": "^7.7.7",
+    "@babel/preset-env": "^7.7.7",
+    "eslint-plugin-compat": "^4.1.4",
+    "eslint-config-developit": "^1.1.1",
+    "babel-plugin-commonjs-lite": "gist:3e38560d5bed35da1fd708d635e4acb3",
+    "@babel/plugin-syntax-dynamic-import": "^7.7.4",
+    "@babel/plugin-transform-modules-commonjs": "^7.7.5"
+  },
+  "_npmOperationalInternal": {
+    "tmp": "tmp/web-worker_1.2.2_1701017600992_0.1000840114228172",
+    "host": "s3://npm-registry-packages"
+  },
+  "_id": "@eshaz/web-worker@1.2.2",
+  "version": "1.2.2"
+}

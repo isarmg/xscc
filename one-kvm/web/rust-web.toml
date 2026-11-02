@@ -1,0 +1,26 @@
+[web]
+kind = "spa"
+entry = "src/main-xcss-web.js"
+dist = "web/dist"
+base = "/"
+relative_urls = true
+
+[web.proxies]
+"/api" = "http://127.0.0.1:8080"
+
+[aliases]
+"@xcss/web/" = "vendor/xcss/"
+"opus-decoder" = "vendor/opus-decoder/package/index.js"
+"@wasm-audio-decoders/common" = "vendor/opus-decoder/dependencies/common/index.js"
+"simple-yenc" = "vendor/opus-decoder/dependencies/simple-yenc/dist/esm.js"
+"@eshaz/web-worker" = "vendor/opus-decoder/dependencies/web-worker/browser.js"
+
+[web.copies]
+"assets/LICENSE-xcss-web-core-MIT.txt" = "xcss-web/vendor/xcss-web/vendor/xcss-web-core/LICENSE"
+"assets/LICENSE-xcss-web-macro-MIT.txt" = "xcss-web/vendor/xcss-web/vendor/xcss-web-macro/LICENSE"
+"assets/LICENSE-xcss-Apache-2.0.txt" = "vendor/xcss/LICENSE"
+"assets/LICENSE-opus-MIT.txt" = "vendor/opus-decoder/LICENSE-MIT-opus.txt"
+"assets/COPYING-libopus.txt" = "vendor/opus-decoder/COPYING-libopus"
+"assets/LICENSE-yenc-MIT.txt" = "vendor/opus-decoder/dependencies/simple-yenc/LICENSE"
+"assets/LICENSE-audio-worker-Apache-2.0.txt" = "vendor/opus-decoder/dependencies/web-worker/LICENSE"
+"assets/COPYING-puff.txt" = "vendor/opus-decoder/dependencies/common/src/puff/puff.h"

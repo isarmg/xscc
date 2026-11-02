@@ -1,0 +1,28 @@
+{
+  "base_revision": "a055fdf5ce4bdf6cb943284813e42ba864c74b9d",
+  "files": {
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "admin-ui/account-settings.css": "1ba2b5d155d1e1a50bae42d3e0c29cb7122421fdd69f3c2b5e10df36768e825f",
+    "admin-ui/content-blocks.css": "c21ed82d2582f582c37082603090b430f56eb31698d711b11750e74cadec3415",
+    "admin-ui/date-range.css": "442dee1c153f7dd077f9f8438f79b833f70eaf8b6be317673f1a3843c3824023",
+    "admin-ui/select.css": "40a87d3a88d7fec725979101d7c8b71a3a90f5623414943924fee7077607f9b0",
+    "admin-ui/styles.css": "0aa93838d672c36c4a1721a451a4f42457850efa4b6236d7a0b6d7858b1b2d86",
+    "design-tokens/accessibility.css": "042f0ef590b299af111c06dd8852b50b973622b151665240ae5d94276e768056",
+    "design-tokens/reset.css": "20dd1eefeaffe05f2e86c69fd6cf4738b2b12fc863840c60c85afa5bcabb0761",
+    "design-tokens/tokens.css": "9b0340899ab099b11af696c026b19282fc84da4ef89474aba8847e3b80902426",
+    "design-tokens/tokens.dark.css": "92f4715938f5937ccb6c214b812b15ff8e3e8aa9b00d42bdca748ff82dd0790e",
+    "web-fonts/CJK-LICENSE.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902",
+    "web-fonts/MapleMonoFull-Bold.woff2": "282ad3ebc7409f93806e8235449d31670af1d1420ade7d76a97a5a4dd23b928b",
+    "web-fonts/MapleMonoFull-Regular.woff2": "1255571e3ad6f2bcc1b897a52d70fdefd09ed40d3ccef4435f6d0be808919a7b",
+    "web-fonts/NORMAL-LICENSE.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902",
+    "web-fonts/OFL.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902",
+    "web-fonts/boot.css": "3d521c2e7758885abe60b6051a25d59124a41006888e63eda35a0e04fa1cb25f",
+    "web-fonts/fonts.css": "4ee14527b462cac8558947f9a3d90565e6803685a4d17ee47a55e31e059a7005",
+    "web-fonts/provenance.json": "8ea5ab63116fa0f54f5cf170a8cebb98632d23d1f2786f80719f4004ad627071"
+  },
+  "format": 1,
+  "origin": "https://github.com/isarmg/xcss",
+  "package": "@xcss/web",
+  "source_directory": "web",
+  "version": "2.0.0"
+}

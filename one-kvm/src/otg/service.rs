@@ -1,0 +1,767 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::sync::{Mutex, RwLock};
+use tracing::{debug, info, warn};
+use typeshare::typeshare;
+
+use super::bridge::NetworkBridgeRuntime;
+use super::manager::{wait_for_hid_devices, GadgetDescriptor, OtgGadgetManager};
+use super::msd::{MsdFunction, MsdInquiryStrings, MsdLunConfig};
+use crate::config::{
+    HidBackend, HidConfig, MsdConfig, OtgDescriptorConfig, OtgHidFunctions, OtgNetworkConfig,
+    UacConfig,
+};
+use crate::error::{AppError, Result};
+
+#[derive(Debug, Clone, Default)]
+pub struct HidDevicePaths {
+    pub keyboard: Option<PathBuf>,
+    pub mouse_relative: Option<PathBuf>,
+    pub mouse_absolute: Option<PathBuf>,
+    pub consumer: Option<PathBuf>,
+    pub udc: Option<String>,
+    pub keyboard_leds_enabled: bool,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OtgRuntimeHealth {
+    #[default]
+    Healthy,
+    Applying,
+    Degraded,
+}
+
+#[typeshare]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OtgNetworkStatus {
+    pub health: OtgRuntimeHealth,
+    pub error: Option<String>,
+}
+
+impl HidDevicePaths {
+    pub fn existing_paths(&self) -> Vec<PathBuf> {
+        [
+            &self.keyboard,
+            &self.mouse_relative,
+            &self.mouse_absolute,
+            &self.consumer,
+        ]
+        .into_iter()
+        .filter_map(|p| p.as_ref().cloned())
+        .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OtgDesiredState {
+    pub udc: Option<String>,
+    pub descriptor: GadgetDescriptor,
+    pub hid_functions: Option<OtgHidFunctions>,
+    pub keyboard_leds: bool,
+    pub msd_enabled: bool,
+    pub msd_lun_capacity: u8,
+    pub msd_inquiry_strings: MsdInquiryStrings,
+    pub network: OtgNetworkConfig,
+    pub uac: UacConfig,
+}
+
+impl Default for OtgDesiredState {
+    fn default() -> Self {
+        Self {
+            udc: None,
+            descriptor: GadgetDescriptor::default(),
+            hid_functions: None,
+            keyboard_leds: false,
+            msd_enabled: false,
+            msd_lun_capacity: 1,
+            msd_inquiry_strings: MsdInquiryStrings::default(),
+            network: OtgNetworkConfig::default(),
+            uac: UacConfig::default(),
+        }
+    }
+}
+
+impl OtgDesiredState {
+    pub(crate) fn from_config(
+        hid: &HidConfig,
+        msd: &MsdConfig,
+        network: &OtgNetworkConfig,
+        uac: &UacConfig,
+    ) -> Result<Self> {
+        network.validate()?;
+        uac.validate()?;
+        msd.validate()?;
+        let hid_functions = if hid.backend == HidBackend::Otg {
+            let functions = hid.constrained_otg_functions();
+            Some(functions)
+        } else {
+            None
+        };
+
+        hid.validate_otg_functions()?;
+        let needs_udc = hid_functions.is_some() || msd.enabled || network.enabled || uac.enabled;
+        let udc = if needs_udc {
+            hid.otg_udc
+                .as_ref()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .or_else(OtgGadgetManager::find_udc)
+        } else {
+            None
+        };
+        Ok(Self {
+            udc,
+            descriptor: GadgetDescriptor::from(&hid.otg_descriptor),
+            hid_functions,
+            keyboard_leds: hid.effective_otg_keyboard_leds(),
+            msd_enabled: msd.enabled,
+            msd_lun_capacity: 1,
+            msd_inquiry_strings: MsdInquiryStrings::from(msd),
+            network: network.clone(),
+            uac: if uac.enabled {
+                uac.clone()
+            } else {
+                UacConfig::default()
+            },
+        })
+    }
+
+    #[inline]
+    pub fn hid_enabled(&self) -> bool {
+        self.hid_functions.is_some()
+    }
+
+    #[inline]
+    pub fn network_enabled(&self) -> bool {
+        self.network.enabled
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OtgServiceState {
+    pub health: OtgRuntimeHealth,
+    pub gadget_active: bool,
+    pub hid_enabled: bool,
+    pub msd_enabled: bool,
+    pub msd_lun_capacity: u8,
+    pub msd_inquiry_strings: MsdInquiryStrings,
+    pub network: OtgNetworkConfig,
+    pub uac: UacConfig,
+    pub configured_udc: Option<String>,
+    pub hid_paths: Option<HidDevicePaths>,
+    pub hid_functions: Option<OtgHidFunctions>,
+    pub keyboard_leds_enabled: bool,
+    pub descriptor: Option<GadgetDescriptor>,
+    pub error: Option<String>,
+}
+
+impl Default for OtgServiceState {
+    fn default() -> Self {
+        Self {
+            health: OtgRuntimeHealth::Healthy,
+            gadget_active: false,
+            hid_enabled: false,
+            msd_enabled: false,
+            msd_lun_capacity: 1,
+            msd_inquiry_strings: MsdInquiryStrings::default(),
+            network: OtgNetworkConfig::default(),
+            uac: UacConfig::default(),
+            configured_udc: None,
+            hid_paths: None,
+            hid_functions: None,
+            keyboard_leds_enabled: false,
+            descriptor: None,
+            error: None,
+        }
+    }
+}
+
+pub struct OtgService {
+    manager: Mutex<Option<OtgGadgetManager>>,
+    state: RwLock<OtgServiceState>,
+    msd_function: RwLock<Option<MsdFunction>>,
+    network_bridge: Mutex<Option<NetworkBridgeRuntime>>,
+    desired: RwLock<OtgDesiredState>,
+    recovery_checked: AtomicBool,
+}
+
+impl OtgService {
+    pub fn new() -> Self {
+        Self {
+            manager: Mutex::new(None),
+            state: RwLock::new(OtgServiceState::default()),
+            msd_function: RwLock::new(None),
+            network_bridge: Mutex::new(None),
+            desired: RwLock::new(OtgDesiredState::default()),
+            recovery_checked: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_available() -> bool {
+        OtgGadgetManager::is_available() && OtgGadgetManager::find_udc().is_some()
+    }
+
+    pub async fn gadget_path(&self) -> Option<PathBuf> {
+        let manager = self.manager.lock().await;
+        manager.as_ref().map(|m| m.gadget_path().clone())
+    }
+
+    pub async fn hid_device_paths(&self) -> Option<HidDevicePaths> {
+        self.state.read().await.hid_paths.clone()
+    }
+
+    pub async fn msd_function(&self) -> Option<MsdFunction> {
+        self.msd_function.read().await.clone()
+    }
+
+    pub async fn msd_lun_capacity(&self) -> u8 {
+        self.desired.read().await.msd_lun_capacity
+    }
+
+    pub async fn configure_msd_lun(&self, lun: u8, config: &MsdLunConfig) -> Result<()> {
+        // Keep the manager locked across a possible UDC rebind so an OTG
+        // reconcile cannot replace the gadget halfway through the media-type
+        // transition.
+        let manager = self.manager.lock().await;
+        let gadget_path = manager
+            .as_ref()
+            .map(|value| value.gadget_path().clone())
+            .ok_or_else(|| AppError::Internal("OTG gadget is not active".to_string()))?;
+        let function = self
+            .msd_function
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| AppError::Internal("MSD function is not active".to_string()))?;
+
+        function
+            .configure_lun_async(&gadget_path, lun, config)
+            .await
+    }
+
+    pub async fn network_status(&self) -> OtgNetworkStatus {
+        let state = self.state.read().await;
+        OtgNetworkStatus {
+            health: state.health,
+            error: state.error.clone(),
+        }
+    }
+
+    pub async fn apply_config(
+        &self,
+        hid: &HidConfig,
+        msd: &MsdConfig,
+        network: &OtgNetworkConfig,
+        uac: &UacConfig,
+    ) -> Result<()> {
+        let previous = self.desired.read().await.clone();
+        let desired = self
+            .desired_from_config_preserving_runtime(hid, msd, network, uac)
+            .await?;
+        // An instance with no gadget must not recover another instance's bridge.
+        let needs_gadget = desired.hid_enabled()
+            || desired.msd_enabled
+            || desired.network_enabled()
+            || desired.uac.enabled;
+        if needs_gadget && !self.recovery_checked.load(Ordering::SeqCst) {
+            if let Err(error) = NetworkBridgeRuntime::recover_stale_transaction() {
+                let message = format!("Failed to recover stale OTG network transaction: {error}");
+                self.mark_degraded(message.clone()).await;
+                return Err(AppError::Config(message));
+            }
+            self.recovery_checked.store(true, Ordering::SeqCst);
+        }
+        {
+            let mut state = self.state.write().await;
+            state.health = OtgRuntimeHealth::Applying;
+            state.error = None;
+        }
+        if let Err(error) = self.apply_desired_state(desired).await {
+            warn!("OTG apply failed, restoring previous desired state: {error}");
+            self.mark_degraded(error.to_string()).await;
+            return match self.apply_desired_state(previous).await {
+                Ok(()) => {
+                    self.mark_healthy().await;
+                    Err(error)
+                }
+                Err(rollback_error) => {
+                    let message = format!("{error}; OTG runtime rollback failed: {rollback_error}");
+                    self.mark_degraded(message.clone()).await;
+                    Err(AppError::Config(message))
+                }
+            };
+        }
+        self.mark_healthy().await;
+        Ok(())
+    }
+
+    pub async fn mark_degraded(&self, error: String) {
+        let mut state = self.state.write().await;
+        state.health = OtgRuntimeHealth::Degraded;
+        state.error = Some(error);
+    }
+
+    async fn mark_healthy(&self) {
+        let mut state = self.state.write().await;
+        state.health = OtgRuntimeHealth::Healthy;
+        state.error = None;
+    }
+
+    async fn desired_from_config_preserving_runtime(
+        &self,
+        hid: &HidConfig,
+        msd: &MsdConfig,
+        network: &OtgNetworkConfig,
+        uac: &UacConfig,
+    ) -> Result<OtgDesiredState> {
+        let mut desired = OtgDesiredState::from_config(hid, msd, network, uac)?;
+        desired.msd_lun_capacity = self.desired.read().await.msd_lun_capacity;
+        Ok(desired)
+    }
+
+    pub async fn set_msd_lun_capacity(&self, capacity: u8) -> Result<()> {
+        if capacity != 1 && capacity != 8 {
+            return Err(AppError::BadRequest(format!(
+                "MSD LUN capacity must be 1 or 8, got {capacity}"
+            )));
+        }
+
+        let mut desired = self.desired.read().await.clone();
+        if !desired.msd_enabled {
+            return Err(AppError::Internal(
+                "MSD is not enabled in the OTG gadget".to_string(),
+            ));
+        }
+        desired.msd_lun_capacity = capacity;
+        self.apply_desired_state(desired).await
+    }
+
+    pub(crate) async fn apply_desired_state(&self, desired: OtgDesiredState) -> Result<()> {
+        {
+            let mut current = self.desired.write().await;
+            *current = desired;
+        }
+
+        self.reconcile_gadget().await
+    }
+
+    async fn reconcile_gadget(&self) -> Result<()> {
+        let desired = self.desired.read().await.clone();
+
+        debug!(
+            "Reconciling OTG gadget: HID={}, MSD={}, NET={}, UAC={}, UDC={:?}",
+            desired.hid_enabled(),
+            desired.msd_enabled,
+            desired.network_enabled(),
+            desired.uac.enabled,
+            desired.udc
+        );
+
+        {
+            let state = self.state.read().await;
+            if state.health != OtgRuntimeHealth::Degraded
+                && state.gadget_active
+                && state.hid_enabled == desired.hid_enabled()
+                && state.msd_enabled == desired.msd_enabled
+                && state.msd_lun_capacity == desired.msd_lun_capacity
+                && state.msd_inquiry_strings == desired.msd_inquiry_strings
+                && state.network == desired.network
+                && state.uac == desired.uac
+                && state.configured_udc == desired.udc
+                && state.hid_functions == desired.hid_functions
+                && state.keyboard_leds_enabled == desired.keyboard_leds
+                && state.descriptor.as_ref() == Some(&desired.descriptor)
+            {
+                debug!("OTG gadget already matches desired state");
+                return Ok(());
+            }
+        }
+
+        let network_runtime = { self.network_bridge.lock().await.as_ref().cloned() };
+        if let Some(runtime) = network_runtime {
+            debug!("Restoring network before OTG gadget reconcile");
+            tokio::task::spawn_blocking(move || runtime.deactivate())
+                .await
+                .map_err(|e| AppError::Internal(format!("Bridge cleanup task failed: {e}")))??;
+            self.network_bridge.lock().await.take();
+        }
+
+        {
+            let mut manager = self.manager.lock().await;
+            if let Some(m) = manager.as_mut() {
+                debug!("Cleaning up existing gadget before OTG reconcile");
+                m.cleanup().map_err(|e| {
+                    AppError::Internal(format!("Failed to clean up existing OTG gadget: {e}"))
+                })?;
+            }
+            manager.take();
+        }
+
+        *self.msd_function.write().await = None;
+
+        {
+            let mut state = self.state.write().await;
+            state.gadget_active = false;
+            state.hid_enabled = false;
+            state.msd_enabled = false;
+            state.msd_lun_capacity = 1;
+            state.msd_inquiry_strings = MsdInquiryStrings::default();
+            state.network = OtgNetworkConfig::default();
+            state.uac = UacConfig::default();
+            state.configured_udc = None;
+            state.hid_paths = None;
+            state.hid_functions = None;
+            state.keyboard_leds_enabled = false;
+            state.descriptor = None;
+            state.error = None;
+        }
+
+        if !desired.hid_enabled()
+            && !desired.msd_enabled
+            && !desired.network_enabled()
+            && !desired.uac.enabled
+        {
+            info!("OTG desired state is empty, gadget removed");
+            return Ok(());
+        }
+
+        if let Err(e) = super::configfs::ensure_libcomposite_loaded() {
+            warn!("Failed to ensure libcomposite is available: {}", e);
+        }
+
+        if !OtgGadgetManager::is_available() {
+            let error = "OTG not available: ConfigFS not mounted".to_string();
+            self.state.write().await.error = Some(error.clone());
+            return Err(AppError::Internal(error));
+        }
+
+        let udc = desired.udc.clone().ok_or_else(|| {
+            let error = "OTG not available: no UDC found".to_string();
+            AppError::Internal(error)
+        })?;
+
+        let mut manager = OtgGadgetManager::with_descriptor(
+            super::configfs::DEFAULT_GADGET_NAME,
+            desired.descriptor.clone(),
+        );
+
+        let mut hid_paths = None;
+        // Add UAC BEFORE HID so the isochronous endpoint gets a
+        // lower hardware endpoint number.  DWC3 seems to have
+        // trouble with isochronous transfers on higher-numbered
+        // endpoints when they follow interrupt endpoints.
+        let _uac_func = if desired.uac.enabled {
+            Some(
+                manager
+                    .add_uac(desired.uac.sample_rate, desired.uac.channels)
+                    .map_err(|e| AppError::Internal(format!("Failed to add UAC function: {e}")))?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(hid_functions) = desired.hid_functions.clone() {
+            let mut paths = HidDevicePaths {
+                udc: Some(udc.clone()),
+                keyboard_leds_enabled: desired.keyboard_leds,
+                ..Default::default()
+            };
+
+            if hid_functions.keyboard {
+                match manager.add_keyboard(desired.keyboard_leds) {
+                    Ok(kb) => paths.keyboard = Some(kb),
+                    Err(e) => {
+                        let error = format!("Failed to add keyboard HID function: {}", e);
+                        self.state.write().await.error = Some(error.clone());
+                        return Err(AppError::Internal(error));
+                    }
+                }
+            }
+
+            if hid_functions.mouse_relative {
+                match manager.add_mouse_relative() {
+                    Ok(rel) => paths.mouse_relative = Some(rel),
+                    Err(e) => {
+                        let error = format!("Failed to add relative mouse HID function: {}", e);
+                        self.state.write().await.error = Some(error.clone());
+                        return Err(AppError::Internal(error));
+                    }
+                }
+            }
+
+            if hid_functions.mouse_absolute {
+                match manager.add_mouse_absolute() {
+                    Ok(abs) => paths.mouse_absolute = Some(abs),
+                    Err(e) => {
+                        let error = format!("Failed to add absolute mouse HID function: {}", e);
+                        self.state.write().await.error = Some(error.clone());
+                        return Err(AppError::Internal(error));
+                    }
+                }
+            }
+
+            if hid_functions.consumer {
+                match manager.add_consumer_control() {
+                    Ok(consumer) => paths.consumer = Some(consumer),
+                    Err(e) => {
+                        let error = format!("Failed to add consumer HID function: {}", e);
+                        self.state.write().await.error = Some(error.clone());
+                        return Err(AppError::Internal(error));
+                    }
+                }
+            }
+
+            hid_paths = Some(paths);
+            debug!("HID functions added to gadget");
+        }
+
+        let msd_func = if desired.msd_enabled {
+            match manager.add_msd(
+                desired.msd_lun_capacity,
+                desired.msd_inquiry_strings.clone(),
+            ) {
+                Ok(func) => {
+                    debug!("MSD function added to gadget");
+                    Some(func)
+                }
+                Err(e) => {
+                    let error = format!("Failed to add MSD function: {}", e);
+                    self.state.write().await.error = Some(error.clone());
+                    return Err(AppError::Internal(error));
+                }
+            }
+        } else {
+            None
+        };
+
+        let network_func = if desired.network_enabled() {
+            Some(manager.add_network(&desired.network).map_err(|e| {
+                AppError::Internal(format!("Failed to add OTG network function: {e}"))
+            })?)
+        } else {
+            None
+        };
+
+        if let Err(e) = manager.setup() {
+            let error = format!("Failed to setup gadget: {}", e);
+            self.state.write().await.error = Some(error.clone());
+            return Err(cleanup_manager_or_combine(&mut manager, error));
+        }
+
+        if let Err(e) = manager.bind(&udc) {
+            let error = format!("Failed to bind gadget to UDC {}: {}", udc, e);
+            self.state.write().await.error = Some(error.clone());
+            return Err(cleanup_manager_or_combine(&mut manager, error));
+        }
+
+        let network_usb_interface = match network_func.as_ref() {
+            Some(function) => match function.interface_name(manager.gadget_path()) {
+                Ok(interface) => Some(interface),
+                Err(error) => {
+                    let message = format!("Failed to resolve OTG network interface: {error}");
+                    self.state.write().await.error = Some(message.clone());
+                    return Err(cleanup_manager_or_combine(&mut manager, message));
+                }
+            },
+            None => None,
+        };
+        let network_runtime = if let Some(ref usb_interface) = network_usb_interface {
+            let requested = desired.network.bridge_interface.clone();
+            let usb_interface = usb_interface.clone();
+            let activation = tokio::task::spawn_blocking(move || {
+                NetworkBridgeRuntime::activate(&requested, &usb_interface)
+            })
+            .await;
+            match activation {
+                Err(error) => {
+                    let message = format!("Bridge activation task failed: {error}");
+                    self.state.write().await.error = Some(message.clone());
+                    return Err(cleanup_manager_or_combine(&mut manager, message));
+                }
+                Ok(Ok(runtime)) => Some(runtime),
+                Ok(Err(error)) => {
+                    let message = format!("Failed to activate OTG network bridge: {error}");
+                    self.state.write().await.error = Some(message.clone());
+                    return Err(cleanup_manager_or_combine(&mut manager, message));
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(ref paths) = hid_paths {
+            let device_paths = paths.existing_paths();
+            if !device_paths.is_empty() && !wait_for_hid_devices(&device_paths, 2000).await {
+                warn!("HID devices did not appear after gadget setup");
+            }
+        }
+
+        *self.manager.lock().await = Some(manager);
+        *self.msd_function.write().await = msd_func;
+        *self.network_bridge.lock().await = network_runtime.clone();
+
+        {
+            let mut state = self.state.write().await;
+            state.gadget_active = true;
+            state.hid_enabled = desired.hid_enabled();
+            state.msd_enabled = desired.msd_enabled;
+            state.msd_lun_capacity = desired.msd_lun_capacity;
+            state.msd_inquiry_strings = desired.msd_inquiry_strings.clone();
+            state.network = desired.network.clone();
+            state.uac = desired.uac.clone();
+            state.configured_udc = Some(udc);
+            state.hid_paths = hid_paths;
+            state.hid_functions = desired.hid_functions;
+            state.keyboard_leds_enabled = desired.keyboard_leds;
+            state.descriptor = Some(desired.descriptor);
+            state.error = None;
+        }
+
+        info!("OTG gadget reconciled successfully");
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        info!("Shutting down OTG service");
+
+        {
+            let mut desired = self.desired.write().await;
+            *desired = OtgDesiredState::default();
+        }
+
+        let network_runtime = { self.network_bridge.lock().await.as_ref().cloned() };
+        if let Some(runtime) = network_runtime {
+            tokio::task::spawn_blocking(move || runtime.deactivate())
+                .await
+                .map_err(|e| AppError::Internal(format!("Bridge cleanup task failed: {e}")))??;
+            self.network_bridge.lock().await.take();
+        }
+
+        let mut manager = self.manager.lock().await;
+        if let Some(m) = manager.as_mut() {
+            m.cleanup().map_err(|e| {
+                AppError::Internal(format!("Failed to clean up gadget during shutdown: {e}"))
+            })?;
+        }
+        manager.take();
+
+        *self.msd_function.write().await = None;
+        {
+            let mut state = self.state.write().await;
+            *state = OtgServiceState::default();
+        }
+
+        info!("OTG service shutdown complete");
+        Ok(())
+    }
+}
+
+fn cleanup_manager_or_combine(manager: &mut OtgGadgetManager, primary: String) -> AppError {
+    match manager.cleanup() {
+        Ok(()) => AppError::Internal(primary),
+        Err(cleanup_error) => AppError::Config(format!(
+            "{primary}; gadget rollback failed: {cleanup_error}"
+        )),
+    }
+}
+
+impl Default for OtgService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<&OtgDescriptorConfig> for GadgetDescriptor {
+    fn from(config: &OtgDescriptorConfig) -> Self {
+        Self {
+            vendor_id: config.vendor_id,
+            product_id: config.product_id,
+            device_version: super::configfs::DEFAULT_USB_BCD_DEVICE,
+            manufacturer: config.manufacturer.clone(),
+            product: config.product.clone(),
+            serial_number: config
+                .serial_number
+                .clone()
+                .unwrap_or_else(|| "0123456789".to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_new_and_availability_probe() {
+        let _service = OtgService::new();
+        let _ = OtgService::is_available();
+    }
+
+    #[tokio::test]
+    async fn service_starts_with_single_lun_capacity() {
+        let service = OtgService::new();
+        assert_eq!(service.desired.read().await.msd_lun_capacity, 1);
+        assert_eq!(service.state.read().await.msd_lun_capacity, 1);
+    }
+
+    #[tokio::test]
+    async fn config_updates_preserve_runtime_lun_capacity() {
+        let service = OtgService::new();
+        service.desired.write().await.msd_lun_capacity = 8;
+
+        let desired = service
+            .desired_from_config_preserving_runtime(
+                &HidConfig::default(),
+                &MsdConfig::default(),
+                &OtgNetworkConfig::default(),
+                &UacConfig::default(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(desired.msd_lun_capacity, 8);
+    }
+
+    #[test]
+    fn lun_capacity_participates_in_desired_state_equality() {
+        let single = OtgDesiredState::default();
+        let mut multi = single.clone();
+        multi.msd_lun_capacity = 8;
+        assert_ne!(single, multi);
+    }
+
+    #[test]
+    fn inquiry_strings_participate_in_desired_state_equality() {
+        let original = OtgDesiredState::default();
+        let mut changed = original.clone();
+        changed.msd_inquiry_strings.flash = "Custom Flash".to_string();
+        assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn onecloud_full_composite_is_not_rejected_before_configfs() {
+        let hid = HidConfig {
+            backend: HidBackend::Otg,
+            otg_udc: Some("c9040000.usb".to_string()),
+            ..HidConfig::default()
+        };
+        let msd = MsdConfig {
+            enabled: true,
+            ..MsdConfig::default()
+        };
+        let network = OtgNetworkConfig {
+            enabled: true,
+            ..OtgNetworkConfig::default()
+        };
+
+        let desired =
+            OtgDesiredState::from_config(&hid, &msd, &network, &UacConfig::default()).unwrap();
+
+        assert_eq!(desired.udc.as_deref(), Some("c9040000.usb"));
+        assert_eq!(desired.hid_functions, Some(OtgHidFunctions::full()));
+        assert!(desired.msd_enabled);
+        assert!(desired.network_enabled());
+    }
+}

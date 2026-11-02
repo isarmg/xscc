@@ -1,0 +1,2773 @@
+{
+  "sha": "8f2428c1cd96b54dab74836c8471ff75fe35cbee",
+  "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/8f2428c1cd96b54dab74836c8471ff75fe35cbee",
+  "tree": [
+    {
+      "path": ".gitattributes",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cbe7d5aeb6cfeb60599fa7bd26affa1ab4b86a11",
+      "size": 305,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/cbe7d5aeb6cfeb60599fa7bd26affa1ab4b86a11"
+    },
+    {
+      "path": ".github",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "4b05bef66397662244302f400cbc2d7c48fb6a50",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/4b05bef66397662244302f400cbc2d7c48fb6a50"
+    },
+    {
+      "path": ".github/FUNDING.yml",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2231e71079a062ff5b420fbd95172411b25488d3",
+      "size": 14,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2231e71079a062ff5b420fbd95172411b25488d3"
+    },
+    {
+      "path": ".gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "154c367c4be35bf2b23ce93bf78b0df94d943b32",
+      "size": 119,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/154c367c4be35bf2b23ce93bf78b0df94d943b32"
+    },
+    {
+      "path": ".gitmodules",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "02a8fad295ddc50ba0c33c85f4cb10694aedacb6",
+      "size": 562,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/02a8fad295ddc50ba0c33c85f4cb10694aedacb6"
+    },
+    {
+      "path": ".prettierignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e351c846d0b76e10020b1cdae4f4d1224c7a192",
+      "size": 68,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4e351c846d0b76e10020b1cdae4f4d1224c7a192"
+    },
+    {
+      "path": "Makefile",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "349a1f243eff5d6a2718e055569c6554f6a6cd6d",
+      "size": 21738,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/349a1f243eff5d6a2718e055569c6554f6a6cd6d"
+    },
+    {
+      "path": "README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "449154fd11e815b64d56915ec5e602f3f544f7e4",
+      "size": 7683,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/449154fd11e815b64d56915ec5e602f3f544f7e4"
+    },
+    {
+      "path": "build.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9ecbe4b727a813e9b9ae5871f18dff0f297d2678",
+      "size": 6551,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9ecbe4b727a813e9b9ae5871f18dff0f297d2678"
+    },
+    {
+      "path": "decoder-npm-install.sh",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "df0c4dad2d5a8997e2ac54fc67b621861b936c23",
+      "size": 76,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/df0c4dad2d5a8997e2ac54fc67b621861b936c23"
+    },
+    {
+      "path": "demo",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "d4b6548a2d5da8137c395fefc918c378748ebdcb",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/d4b6548a2d5da8137c395fefc918c378748ebdcb"
+    },
+    {
+      "path": "demo/flac-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "46484f0ffa2628a8cf46ba8909d4f983da2eee34",
+      "size": 177459,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/46484f0ffa2628a8cf46ba8909d4f983da2eee34"
+    },
+    {
+      "path": "demo/flac-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f0fd28b7d6b93001a79761e8e6bb7bee5015e08",
+      "size": 68805,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3f0fd28b7d6b93001a79761e8e6bb7bee5015e08"
+    },
+    {
+      "path": "demo/flac-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c7ed99cfea62915e6bec511f0f23062bee2baa8a",
+      "size": 63939,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c7ed99cfea62915e6bec511f0f23062bee2baa8a"
+    },
+    {
+      "path": "demo/index.html",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4215e3da3d21912326d2764be196a8f20fdfff65",
+      "size": 46527,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4215e3da3d21912326d2764be196a8f20fdfff65"
+    },
+    {
+      "path": "demo/mpg123-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ee972dba9b708f7a4ce612a4b4c596660ec2625",
+      "size": 96931,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1ee972dba9b708f7a4ce612a4b4c596660ec2625"
+    },
+    {
+      "path": "demo/mpg123-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bed952cea06928df714d363935efcf1919f15365",
+      "size": 78895,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bed952cea06928df714d363935efcf1919f15365"
+    },
+    {
+      "path": "demo/mpg123-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bb22cafc42b57319cf622b1a8f18dd38db7be4ea",
+      "size": 16055,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bb22cafc42b57319cf622b1a8f18dd38db7be4ea"
+    },
+    {
+      "path": "demo/ogg-opus-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a6cc2bf4a80f8330fcf433ef47d95c72fb4248fd",
+      "size": 117095,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a6cc2bf4a80f8330fcf433ef47d95c72fb4248fd"
+    },
+    {
+      "path": "demo/ogg-opus-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3c6f0d33870cd76c262b4c0e6a559cd413af754a",
+      "size": 355446,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3c6f0d33870cd76c262b4c0e6a559cd413af754a"
+    },
+    {
+      "path": "demo/ogg-opus-decoder.opus-ml.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ba6fc7e6dc88c37055c4abf4210a37d0e4bad7f3",
+      "size": 4095145,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ba6fc7e6dc88c37055c4abf4210a37d0e4bad7f3"
+    },
+    {
+      "path": "demo/ogg-opus-decoder.opus-ml.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a9f32b196b210d0f3e21c907eca49ee61fbd819c",
+      "size": 5585077,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a9f32b196b210d0f3e21c907eca49ee61fbd819c"
+    },
+    {
+      "path": "demo/ogg-vorbis-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fa574b1dbb139ddbcb026cd7e54d31371e8dceb",
+      "size": 208826,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7fa574b1dbb139ddbcb026cd7e54d31371e8dceb"
+    },
+    {
+      "path": "demo/ogg-vorbis-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66ce256331f1cab74d0df7ca2029a2d6dbe727af",
+      "size": 101730,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/66ce256331f1cab74d0df7ca2029a2d6dbe727af"
+    },
+    {
+      "path": "demo/ogg-vorbis-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "df6ec28b2e1ebd03e92ebea5ae9adbe8f9148eca",
+      "size": 63104,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/df6ec28b2e1ebd03e92ebea5ae9adbe8f9148eca"
+    },
+    {
+      "path": "demo/opus-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "589dc989a4a9560d19551bb5d579c112172a6355",
+      "size": 103995,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/589dc989a4a9560d19551bb5d579c112172a6355"
+    },
+    {
+      "path": "demo/opus-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "43f4be46725f3cf03d4b72fc457154145b97eb7c",
+      "size": 87592,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/43f4be46725f3cf03d4b72fc457154145b97eb7c"
+    },
+    {
+      "path": "demo/opus-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "193665bbad246810c43e34321b8f1bde5bf1c247",
+      "size": 15374,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/193665bbad246810c43e34321b8f1bde5bf1c247"
+    },
+    {
+      "path": "demo/opus-ml-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b9b91bfdb62466b1ca11740f39c18195a5dcdb2",
+      "size": 4119939,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8b9b91bfdb62466b1ca11740f39c18195a5dcdb2"
+    },
+    {
+      "path": "demo/opus-ml-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0ec4ecb8c45b5ea351627c18199cd1167aadba1",
+      "size": 4102032,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c0ec4ecb8c45b5ea351627c18199cd1167aadba1"
+    },
+    {
+      "path": "demo/opus-ml-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60e9606be7d40213babf90cf1b93ad2ce4e49496",
+      "size": 27367,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/60e9606be7d40213babf90cf1b93ad2ce4e49496"
+    },
+    {
+      "path": "demo/opus_osce_female_ref_12kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b37c522faaa5b0c84f083ba0c15e27235b9849a",
+      "size": 31087,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3b37c522faaa5b0c84f083ba0c15e27235b9849a"
+    },
+    {
+      "path": "demo/opus_osce_female_ref_5kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1f475bee5136f2a8cf62d844910fe601b479a99",
+      "size": 17910,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e1f475bee5136f2a8cf62d844910fe601b479a99"
+    },
+    {
+      "path": "demo/opus_osce_female_ref_6kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a76cc63d15d4ca949f010186d9e0a1903d303ceb",
+      "size": 18221,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a76cc63d15d4ca949f010186d9e0a1903d303ceb"
+    },
+    {
+      "path": "demo/opus_osce_female_ref_9kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3cf5bc541c678b1d486e8c525c9f9e2f42bf2bff",
+      "size": 23623,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3cf5bc541c678b1d486e8c525c9f9e2f42bf2bff"
+    },
+    {
+      "path": "demo/opus_osce_male_ref_12kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91e48eec7a238ea8e7f4f94b5f27848f5887d84e",
+      "size": 30537,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91e48eec7a238ea8e7f4f94b5f27848f5887d84e"
+    },
+    {
+      "path": "demo/opus_osce_male_ref_5kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f361e5d8315a8c87fa4bcecfe2d6159ff5d8a3a7",
+      "size": 17501,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f361e5d8315a8c87fa4bcecfe2d6159ff5d8a3a7"
+    },
+    {
+      "path": "demo/opus_osce_male_ref_6kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d636617ef43439bdd97abcafad9025d96ece698c",
+      "size": 17821,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d636617ef43439bdd97abcafad9025d96ece698c"
+    },
+    {
+      "path": "demo/opus_osce_male_ref_9kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09a151b453a343c9f80c4ec3d1d061ed66c0eb68",
+      "size": 23240,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/09a151b453a343c9f80c4ec3d1d061ed66c0eb68"
+    },
+    {
+      "path": "docs",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "1d03387f682b2b7ae090a1d7ffdbf6862f63f0f3",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/1d03387f682b2b7ae090a1d7ffdbf6862f63f0f3"
+    },
+    {
+      "path": "docs/CODE_OF_CONDUCT.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a0826c7805b02ffd8cd9a0691e3cc1c707e06ad3",
+      "size": 5483,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a0826c7805b02ffd8cd9a0691e3cc1c707e06ad3"
+    },
+    {
+      "path": "docs/CONTRIBUTING.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c5f977a13fd596545136d663e71a7d51b550c3c8",
+      "size": 720,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c5f977a13fd596545136d663e71a7d51b550c3c8"
+    },
+    {
+      "path": "modules",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "3d08fda2e73cc119b073c065f393603cca5a9985",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/3d08fda2e73cc119b073c065f393603cca5a9985"
+    },
+    {
+      "path": "modules/flac",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "1507800de4b70e21be71f38caa0d9079d0bc6e45"
+    },
+    {
+      "path": "modules/mpg123",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "08247b317163175e62035893af3ff9e71a5dfefd"
+    },
+    {
+      "path": "modules/ogg",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "3069cc2bb44160982cdb21b2b8f0660c76b17572"
+    },
+    {
+      "path": "modules/opus",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
+    },
+    {
+      "path": "modules/opus-ml",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
+    },
+    {
+      "path": "modules/vorbis",
+      "mode": "160000",
+      "type": "commit",
+      "sha": "84c023699cdf023a32fa4ded32019f194afcdad0"
+    },
+    {
+      "path": "package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c44e47cda2c2752b268f56c99b512e3e60079889",
+      "size": 269770,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c44e47cda2c2752b268f56c99b512e3e60079889"
+    },
+    {
+      "path": "package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9e04c91c30a81d3ceda4f75de1f313038ddc21ff",
+      "size": 1638,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9e04c91c30a81d3ceda4f75de1f313038ddc21ff"
+    },
+    {
+      "path": "src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "17123ddc839aa999508c64280686b66d0870320a",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/17123ddc839aa999508c64280686b66d0870320a"
+    },
+    {
+      "path": "src/common",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "51b33dd49ff8e25d2185f5573f9ff7fc32815204",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/51b33dd49ff8e25d2185f5573f9ff7fc32815204"
+    },
+    {
+      "path": "src/common/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e8453deaf5038f52802fb9bec1c52d7a86d4061a",
+      "size": 263,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e8453deaf5038f52802fb9bec1c52d7a86d4061a"
+    },
+    {
+      "path": "src/common/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "72e561f9b91ba25d1919bb681be486794985222e",
+      "size": 1055,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/72e561f9b91ba25d1919bb681be486794985222e"
+    },
+    {
+      "path": "src/common/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "cdd0de57f5df494011c1a62ab84fdc2fc7ff2283",
+      "size": 839,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/cdd0de57f5df494011c1a62ab84fdc2fc7ff2283"
+    },
+    {
+      "path": "src/common/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "a60723f0dc6dc1f85aa8836dbb44bae714250492",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/a60723f0dc6dc1f85aa8836dbb44bae714250492"
+    },
+    {
+      "path": "src/common/src/WASMAudioDecoderCommon.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d7dd397973bce2a70d1245cf649bf71a41ab647e",
+      "size": 9172,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d7dd397973bce2a70d1245cf649bf71a41ab647e"
+    },
+    {
+      "path": "src/common/src/WASMAudioDecoderWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "97ea3f066b93752b98e00804f3428e84a3ebdacc",
+      "size": 4235,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/97ea3f066b93752b98e00804f3428e84a3ebdacc"
+    },
+    {
+      "path": "src/common/src/puff",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "5dff7bb99ddb2fcb9c651a3a9743be75aa684c16",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/5dff7bb99ddb2fcb9c651a3a9743be75aa684c16"
+    },
+    {
+      "path": "src/common/src/puff/README",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "74b184cdbf8606b664b0279c25b25c0c3a014361",
+      "size": 3257,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/74b184cdbf8606b664b0279c25b25c0c3a014361"
+    },
+    {
+      "path": "src/common/src/puff/build_puff.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7115d32ef4b9b334aa0f0f5f34d2bef21174833b",
+      "size": 976,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7115d32ef4b9b334aa0f0f5f34d2bef21174833b"
+    },
+    {
+      "path": "src/common/src/puff/puff.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4e9bc7b991dae03cb3d47f3a330bd971542c7688",
+      "size": 38493,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4e9bc7b991dae03cb3d47f3a330bd971542c7688"
+    },
+    {
+      "path": "src/common/src/puff/puff.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e23a2454316cfa0c05e5e01cd6e1d548b4f2d44e",
+      "size": 1415,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e23a2454316cfa0c05e5e01cd6e1d548b4f2d44e"
+    },
+    {
+      "path": "src/common/src/utilities.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "183314fcb98bba1f1914b7e1d6953ef018286e21",
+      "size": 106,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/183314fcb98bba1f1914b7e1d6953ef018286e21"
+    },
+    {
+      "path": "src/common/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dbc8272140022773dde32250a0169ddc50f45f3a",
+      "size": 145,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dbc8272140022773dde32250a0169ddc50f45f3a"
+    },
+    {
+      "path": "src/flac",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "66debeea6e7f093d67e50012e11e465c5ea8f4d2",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/66debeea6e7f093d67e50012e11e465c5ea8f4d2"
+    },
+    {
+      "path": "src/flac/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "394d4d73bade97ce470c5e3e639aa8f74bc56054",
+      "size": 13321,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/394d4d73bade97ce470c5e3e639aa8f74bc56054"
+    },
+    {
+      "path": "src/flac/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "dc8cfafd2b47a8b8bf82ed80be611c5516318786",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/dc8cfafd2b47a8b8bf82ed80be611c5516318786"
+    },
+    {
+      "path": "src/flac/dist/flac-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "46484f0ffa2628a8cf46ba8909d4f983da2eee34",
+      "size": 177459,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/46484f0ffa2628a8cf46ba8909d4f983da2eee34"
+    },
+    {
+      "path": "src/flac/dist/flac-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3f0fd28b7d6b93001a79761e8e6bb7bee5015e08",
+      "size": 68805,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3f0fd28b7d6b93001a79761e8e6bb7bee5015e08"
+    },
+    {
+      "path": "src/flac/dist/flac-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c7ed99cfea62915e6bec511f0f23062bee2baa8a",
+      "size": 63939,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c7ed99cfea62915e6bec511f0f23062bee2baa8a"
+    },
+    {
+      "path": "src/flac/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d40e016d128cde3fed64883b91e82c2793cd6db1",
+      "size": 321,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d40e016d128cde3fed64883b91e82c2793cd6db1"
+    },
+    {
+      "path": "src/flac/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f75be39b9a8811a29473cdef4d363dd3b866a813",
+      "size": 1901,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f75be39b9a8811a29473cdef4d363dd3b866a813"
+    },
+    {
+      "path": "src/flac/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9ef7ef985605785e74b4ab3eae9a50a99132562b",
+      "size": 1281,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9ef7ef985605785e74b4ab3eae9a50a99132562b"
+    },
+    {
+      "path": "src/flac/rollup.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2371b44335bcf96793cdbcc7c4599855e7f9cd3",
+      "size": 167,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a2371b44335bcf96793cdbcc7c4599855e7f9cd3"
+    },
+    {
+      "path": "src/flac/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "fc3f361c1818f783de921f47e458e404310c77d2",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/fc3f361c1818f783de921f47e458e404310c77d2"
+    },
+    {
+      "path": "src/flac/src/EmscriptenWasm.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "00a7025f36b1c7e5a4ea75d109f20023ece8712b",
+      "size": 41660,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/00a7025f36b1c7e5a4ea75d109f20023ece8712b"
+    },
+    {
+      "path": "src/flac/src/FLACDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b739ac708083986bb37f0e7c8f6dfb93d2ad6cd5",
+      "size": 8346,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/b739ac708083986bb37f0e7c8f6dfb93d2ad6cd5"
+    },
+    {
+      "path": "src/flac/src/FLACDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ba3f5e9b2c1484f3a435b798c3a9988a8a017a83",
+      "size": 669,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ba3f5e9b2c1484f3a435b798c3a9988a8a017a83"
+    },
+    {
+      "path": "src/flac/src/emscripten-post.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "187758808bc251ba064209eca190d53934d45afd",
+      "size": 279,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/187758808bc251ba064209eca190d53934d45afd"
+    },
+    {
+      "path": "src/flac/src/emscripten-pre.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8999b37d2b4a871936c34343206b9f4c3b0c9a3f",
+      "size": 13,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8999b37d2b4a871936c34343206b9f4c3b0c9a3f"
+    },
+    {
+      "path": "src/flac/src/flac_decoder.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2cf69dd41226635433781b2bac86785a1ee2d45",
+      "size": 5894,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a2cf69dd41226635433781b2bac86785a1ee2d45"
+    },
+    {
+      "path": "src/flac/src/flac_decoder.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9044b104bb37fb0422d8fd5939b539b6cd609be2",
+      "size": 1437,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9044b104bb37fb0422d8fd5939b539b6cd609be2"
+    },
+    {
+      "path": "src/flac/terser.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0505ab486a82b04db91ff7b3201e01f8f66d0180",
+      "size": 961,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0505ab486a82b04db91ff7b3201e01f8f66d0180"
+    },
+    {
+      "path": "src/flac/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e09943cca74e0fe9b3dc178740a887bdba991be9",
+      "size": 963,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e09943cca74e0fe9b3dc178740a887bdba991be9"
+    },
+    {
+      "path": "src/mpg123-decoder",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "bf2926d367a6bf37ba1610a40d1d34729434062d",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/bf2926d367a6bf37ba1610a40d1d34729434062d"
+    },
+    {
+      "path": "src/mpg123-decoder/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "161eceefc5bdfdbf87b8d8e24fb3f654ad1c73fa",
+      "size": 11560,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/161eceefc5bdfdbf87b8d8e24fb3f654ad1c73fa"
+    },
+    {
+      "path": "src/mpg123-decoder/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "59b38b16863574a854900d85a8ae8886a76652de",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/59b38b16863574a854900d85a8ae8886a76652de"
+    },
+    {
+      "path": "src/mpg123-decoder/dist/mpg123-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ee972dba9b708f7a4ce612a4b4c596660ec2625",
+      "size": 96931,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1ee972dba9b708f7a4ce612a4b4c596660ec2625"
+    },
+    {
+      "path": "src/mpg123-decoder/dist/mpg123-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bed952cea06928df714d363935efcf1919f15365",
+      "size": 78895,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bed952cea06928df714d363935efcf1919f15365"
+    },
+    {
+      "path": "src/mpg123-decoder/dist/mpg123-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bb22cafc42b57319cf622b1a8f18dd38db7be4ea",
+      "size": 16055,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bb22cafc42b57319cf622b1a8f18dd38db7be4ea"
+    },
+    {
+      "path": "src/mpg123-decoder/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b05df9d1d5fec3e71131ae81f20b1c8aa9a2858",
+      "size": 321,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3b05df9d1d5fec3e71131ae81f20b1c8aa9a2858"
+    },
+    {
+      "path": "src/mpg123-decoder/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d250debb83256af940e5739b5141bfb3c6b31e37",
+      "size": 1537,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d250debb83256af940e5739b5141bfb3c6b31e37"
+    },
+    {
+      "path": "src/mpg123-decoder/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f4ee1bf8b2fe9397890eb770b5ff5a8e149ff3b6",
+      "size": 1293,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f4ee1bf8b2fe9397890eb770b5ff5a8e149ff3b6"
+    },
+    {
+      "path": "src/mpg123-decoder/rollup.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "164d7d45637a030d60e3c3bd5a87469ce678f4dd",
+      "size": 169,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/164d7d45637a030d60e3c3bd5a87469ce678f4dd"
+    },
+    {
+      "path": "src/mpg123-decoder/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "4c234842215b99a966213154de8b0996ff2450de",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/4c234842215b99a966213154de8b0996ff2450de"
+    },
+    {
+      "path": "src/mpg123-decoder/src/EmscriptenWasm.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6b517aba7819cd061ec1b4ddfdaf3df4854695a0",
+      "size": 76326,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6b517aba7819cd061ec1b4ddfdaf3df4854695a0"
+    },
+    {
+      "path": "src/mpg123-decoder/src/MPEGDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1441507ae9363239cb8515207aa9435a6b44cd24",
+      "size": 5303,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1441507ae9363239cb8515207aa9435a6b44cd24"
+    },
+    {
+      "path": "src/mpg123-decoder/src/MPEGDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ebacd33b6e5920b74f76a789860ed7a84e5689af",
+      "size": 585,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ebacd33b6e5920b74f76a789860ed7a84e5689af"
+    },
+    {
+      "path": "src/mpg123-decoder/src/emscripten-post.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dca1e2a8347f5d82e3f6c322dea79ede7e1a0e38",
+      "size": 380,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dca1e2a8347f5d82e3f6c322dea79ede7e1a0e38"
+    },
+    {
+      "path": "src/mpg123-decoder/src/emscripten-pre.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8999b37d2b4a871936c34343206b9f4c3b0c9a3f",
+      "size": 13,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8999b37d2b4a871936c34343206b9f4c3b0c9a3f"
+    },
+    {
+      "path": "src/mpg123-decoder/src/mpeg_frame_decoder.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "67f7e92771e563da3fe3d75d16be47d15d3bcbcc",
+      "size": 2470,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/67f7e92771e563da3fe3d75d16be47d15d3bcbcc"
+    },
+    {
+      "path": "src/mpg123-decoder/src/mpeg_frame_decoder.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9bdee64f794adc3e0133356d877c4d887430ae8f",
+      "size": 2045,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9bdee64f794adc3e0133356d877c4d887430ae8f"
+    },
+    {
+      "path": "src/mpg123-decoder/terser.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de3145b7076bdd616c3e6bd1cf4098e0172b3493",
+      "size": 972,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/de3145b7076bdd616c3e6bd1cf4098e0172b3493"
+    },
+    {
+      "path": "src/mpg123-decoder/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5b101c974e6b520982702d78b1fccd58444af552",
+      "size": 944,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/5b101c974e6b520982702d78b1fccd58444af552"
+    },
+    {
+      "path": "src/ogg-opus-decoder",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f5393d9994002cbe0bc900b31c92ffb3f4e52a90",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/f5393d9994002cbe0bc900b31c92ffb3f4e52a90"
+    },
+    {
+      "path": "src/ogg-opus-decoder/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b81e19047fcf38a4ff00ceb39cbbe2364ce8e8a7",
+      "size": 15476,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/b81e19047fcf38a4ff00ceb39cbbe2364ce8e8a7"
+    },
+    {
+      "path": "src/ogg-opus-decoder/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "27848dd30596f335d792988a23378272bf9f76ff",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/27848dd30596f335d792988a23378272bf9f76ff"
+    },
+    {
+      "path": "src/ogg-opus-decoder/dist/ogg-opus-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a6cc2bf4a80f8330fcf433ef47d95c72fb4248fd",
+      "size": 117095,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a6cc2bf4a80f8330fcf433ef47d95c72fb4248fd"
+    },
+    {
+      "path": "src/ogg-opus-decoder/dist/ogg-opus-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3c6f0d33870cd76c262b4c0e6a559cd413af754a",
+      "size": 355446,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3c6f0d33870cd76c262b4c0e6a559cd413af754a"
+    },
+    {
+      "path": "src/ogg-opus-decoder/dist/ogg-opus-decoder.opus-ml.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ba6fc7e6dc88c37055c4abf4210a37d0e4bad7f3",
+      "size": 4095145,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ba6fc7e6dc88c37055c4abf4210a37d0e4bad7f3"
+    },
+    {
+      "path": "src/ogg-opus-decoder/dist/ogg-opus-decoder.opus-ml.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a9f32b196b210d0f3e21c907eca49ee61fbd819c",
+      "size": 5585077,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a9f32b196b210d0f3e21c907eca49ee61fbd819c"
+    },
+    {
+      "path": "src/ogg-opus-decoder/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e8e0c6d564972d858ef19ae9892338cac3c35dd5",
+      "size": 351,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e8e0c6d564972d858ef19ae9892338cac3c35dd5"
+    },
+    {
+      "path": "src/ogg-opus-decoder/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f9555ca604f755eb7676804164ed9640a5d61c59",
+      "size": 63578,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f9555ca604f755eb7676804164ed9640a5d61c59"
+    },
+    {
+      "path": "src/ogg-opus-decoder/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1d9d3735d36cc7e001f2816005cb417d79c6cdd",
+      "size": 1926,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a1d9d3735d36cc7e001f2816005cb417d79c6cdd"
+    },
+    {
+      "path": "src/ogg-opus-decoder/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "41bc502c512ab2432fbfb5696b2d3ea3f8bbddaa",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/41bc502c512ab2432fbfb5696b2d3ea3f8bbddaa"
+    },
+    {
+      "path": "src/ogg-opus-decoder/src/OggOpusDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "730fad3fa20e43701903437241f3bdee366bd1d0",
+      "size": 6453,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/730fad3fa20e43701903437241f3bdee366bd1d0"
+    },
+    {
+      "path": "src/ogg-opus-decoder/src/OggOpusDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "56a1b3e052ad7249c2a0ed0c889afebd5ef265b7",
+      "size": 363,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/56a1b3e052ad7249c2a0ed0c889afebd5ef265b7"
+    },
+    {
+      "path": "src/ogg-opus-decoder/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b5bfc32a2c8df3d5092f62ff1bfc100ff7200751",
+      "size": 1153,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/b5bfc32a2c8df3d5092f62ff1bfc100ff7200751"
+    },
+    {
+      "path": "src/ogg-opus-decoder/webpack.config.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ef3c4d91a5e1820e9f304159367402f0e1f092ef",
+      "size": 1458,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ef3c4d91a5e1820e9f304159367402f0e1f092ef"
+    },
+    {
+      "path": "src/ogg-vorbis",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "189d2d24e7bc75d2a333fe2f76dd0f0c45da649a",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/189d2d24e7bc75d2a333fe2f76dd0f0c45da649a"
+    },
+    {
+      "path": "src/ogg-vorbis/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a2d325a72b16b2d444753094e3b123bf6dd58e6f",
+      "size": 13536,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a2d325a72b16b2d444753094e3b123bf6dd58e6f"
+    },
+    {
+      "path": "src/ogg-vorbis/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "cafc01b59cb6d1948515c39d5ac0a432f240b02e",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/cafc01b59cb6d1948515c39d5ac0a432f240b02e"
+    },
+    {
+      "path": "src/ogg-vorbis/dist/ogg-vorbis-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fa574b1dbb139ddbcb026cd7e54d31371e8dceb",
+      "size": 208826,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7fa574b1dbb139ddbcb026cd7e54d31371e8dceb"
+    },
+    {
+      "path": "src/ogg-vorbis/dist/ogg-vorbis-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "66ce256331f1cab74d0df7ca2029a2d6dbe727af",
+      "size": 101730,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/66ce256331f1cab74d0df7ca2029a2d6dbe727af"
+    },
+    {
+      "path": "src/ogg-vorbis/dist/ogg-vorbis-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "df6ec28b2e1ebd03e92ebea5ae9adbe8f9148eca",
+      "size": 63104,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/df6ec28b2e1ebd03e92ebea5ae9adbe8f9148eca"
+    },
+    {
+      "path": "src/ogg-vorbis/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3226d7d03d8a2b6dc5e7d0160c3efadfb9cae400",
+      "size": 371,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3226d7d03d8a2b6dc5e7d0160c3efadfb9cae400"
+    },
+    {
+      "path": "src/ogg-vorbis/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4407be08a92f91e1cafe000ab7f0f453d873d294",
+      "size": 1915,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4407be08a92f91e1cafe000ab7f0f453d873d294"
+    },
+    {
+      "path": "src/ogg-vorbis/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "67574985d6750fdb2d7daf0a2f2b3ff7cfea9724",
+      "size": 1343,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/67574985d6750fdb2d7daf0a2f2b3ff7cfea9724"
+    },
+    {
+      "path": "src/ogg-vorbis/rollup.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6a656b4326f01fc412c80bcb71d03db06abb87cf",
+      "size": 173,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6a656b4326f01fc412c80bcb71d03db06abb87cf"
+    },
+    {
+      "path": "src/ogg-vorbis/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "da7eb731cedbef903c8a5c30ac3db8780611363d",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/da7eb731cedbef903c8a5c30ac3db8780611363d"
+    },
+    {
+      "path": "src/ogg-vorbis/src/EmscriptenWasm.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7a20eeb89d004cce5d91d42c29d6275946444525",
+      "size": 73228,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7a20eeb89d004cce5d91d42c29d6275946444525"
+    },
+    {
+      "path": "src/ogg-vorbis/src/OggVorbisDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ab9ee8418a61d102fa3d88c22bc4076e2a686f1",
+      "size": 7862,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8ab9ee8418a61d102fa3d88c22bc4076e2a686f1"
+    },
+    {
+      "path": "src/ogg-vorbis/src/OggVorbisDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "088799254a31f61625eb41b8c6bd8fe925b7d7e5",
+      "size": 864,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/088799254a31f61625eb41b8c6bd8fe925b7d7e5"
+    },
+    {
+      "path": "src/ogg-vorbis/src/emscripten-post.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "177eed6a0ab182fea06ddf824ffeaabc53685537",
+      "size": 345,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/177eed6a0ab182fea06ddf824ffeaabc53685537"
+    },
+    {
+      "path": "src/ogg-vorbis/src/emscripten-pre.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8999b37d2b4a871936c34343206b9f4c3b0c9a3f",
+      "size": 13,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8999b37d2b4a871936c34343206b9f4c3b0c9a3f"
+    },
+    {
+      "path": "src/ogg-vorbis/src/vorbis_decoder.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f97f67267f9f35a6ab2fc64fe32a2cfdb3219120",
+      "size": 4961,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f97f67267f9f35a6ab2fc64fe32a2cfdb3219120"
+    },
+    {
+      "path": "src/ogg-vorbis/src/vorbis_decoder.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9444bf0171c9f40b8d8aac4a9a6ab94faefb1d9e",
+      "size": 1392,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9444bf0171c9f40b8d8aac4a9a6ab94faefb1d9e"
+    },
+    {
+      "path": "src/ogg-vorbis/terser.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6151a47870aa4edb17a1459c13fbb114dfa26a42",
+      "size": 1059,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6151a47870aa4edb17a1459c13fbb114dfa26a42"
+    },
+    {
+      "path": "src/ogg-vorbis/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3af80923eae8564eb0a934fd98b9c2b73e2c5ac9",
+      "size": 1056,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3af80923eae8564eb0a934fd98b9c2b73e2c5ac9"
+    },
+    {
+      "path": "src/opus-decoder",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "55c1dc19d2749fdecaa686488a9a3a55427ff081",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/55c1dc19d2749fdecaa686488a9a3a55427ff081"
+    },
+    {
+      "path": "src/opus-decoder/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8f03bae39985184891903844ae0a71d53273cb48",
+      "size": 11842,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8f03bae39985184891903844ae0a71d53273cb48"
+    },
+    {
+      "path": "src/opus-decoder/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "375c057d9390fe3879a369f68eb4fb89ef59cb6f",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/375c057d9390fe3879a369f68eb4fb89ef59cb6f"
+    },
+    {
+      "path": "src/opus-decoder/dist/opus-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "589dc989a4a9560d19551bb5d579c112172a6355",
+      "size": 103995,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/589dc989a4a9560d19551bb5d579c112172a6355"
+    },
+    {
+      "path": "src/opus-decoder/dist/opus-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "43f4be46725f3cf03d4b72fc457154145b97eb7c",
+      "size": 87592,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/43f4be46725f3cf03d4b72fc457154145b97eb7c"
+    },
+    {
+      "path": "src/opus-decoder/dist/opus-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "193665bbad246810c43e34321b8f1bde5bf1c247",
+      "size": 15374,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/193665bbad246810c43e34321b8f1bde5bf1c247"
+    },
+    {
+      "path": "src/opus-decoder/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e6325bac216819196a7e69465d81256fc5a30816",
+      "size": 321,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e6325bac216819196a7e69465d81256fc5a30816"
+    },
+    {
+      "path": "src/opus-decoder/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "85888855fc580969f84d8be60899e3ffa289d5a6",
+      "size": 1535,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/85888855fc580969f84d8be60899e3ffa289d5a6"
+    },
+    {
+      "path": "src/opus-decoder/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "de2be4f8cf893a3c003f058c26475f01937f6221",
+      "size": 1256,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/de2be4f8cf893a3c003f058c26475f01937f6221"
+    },
+    {
+      "path": "src/opus-decoder/rollup.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9836101c0501de7a5e6e1a708e9eec8a247f466b",
+      "size": 167,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9836101c0501de7a5e6e1a708e9eec8a247f466b"
+    },
+    {
+      "path": "src/opus-decoder/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "f4d5817a5821dcaea5e64b4645b76949c110b5f3",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/f4d5817a5821dcaea5e64b4645b76949c110b5f3"
+    },
+    {
+      "path": "src/opus-decoder/src/EmscriptenWasm.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bda493cc37db50c3d591d7378c862b6d9b8e471d",
+      "size": 82091,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bda493cc37db50c3d591d7378c862b6d9b8e471d"
+    },
+    {
+      "path": "src/opus-decoder/src/OpusDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "41da7501e42b78bb27d116b6f5d48618603627e8",
+      "size": 6587,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/41da7501e42b78bb27d116b6f5d48618603627e8"
+    },
+    {
+      "path": "src/opus-decoder/src/OpusDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6dd2fd3a25b8ad9995a8c9df66af34f470d683ba",
+      "size": 508,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6dd2fd3a25b8ad9995a8c9df66af34f470d683ba"
+    },
+    {
+      "path": "src/opus-decoder/src/emscripten-post.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0f122bb8fd44a15516537b04caeaf4807f8fb4b6",
+      "size": 377,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0f122bb8fd44a15516537b04caeaf4807f8fb4b6"
+    },
+    {
+      "path": "src/opus-decoder/src/emscripten-pre.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8999b37d2b4a871936c34343206b9f4c3b0c9a3f",
+      "size": 13,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8999b37d2b4a871936c34343206b9f4c3b0c9a3f"
+    },
+    {
+      "path": "src/opus-decoder/src/opus_frame_decoder.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e3557cc7174d25955ac8cabef3614201c918aff7",
+      "size": 6609,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e3557cc7174d25955ac8cabef3614201c918aff7"
+    },
+    {
+      "path": "src/opus-decoder/src/opus_frame_decoder.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2d63d3c677365d6684d34421c3efa8760716c3c6",
+      "size": 661,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2d63d3c677365d6684d34421c3efa8760716c3c6"
+    },
+    {
+      "path": "src/opus-decoder/terser.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "424a7c39ef589174e0c1651cc59eb0e2452db1de",
+      "size": 927,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/424a7c39ef589174e0c1651cc59eb0e2452db1de"
+    },
+    {
+      "path": "src/opus-decoder/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "105dfee380692f8fa5366556f788511ef1bd9628",
+      "size": 1947,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/105dfee380692f8fa5366556f788511ef1bd9628"
+    },
+    {
+      "path": "src/opus-ml",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "7b5c0f84571aef6e3a66a0f2e14845eb3f4ea2e7",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/7b5c0f84571aef6e3a66a0f2e14845eb3f4ea2e7"
+    },
+    {
+      "path": "src/opus-ml/README.md",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7a71c94bd8a29f37916c03759db5b7e643a03836",
+      "size": 13819,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7a71c94bd8a29f37916c03759db5b7e643a03836"
+    },
+    {
+      "path": "src/opus-ml/dist",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "54f62f87e5e920e2bb8baf30031e9188afeea123",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/54f62f87e5e920e2bb8baf30031e9188afeea123"
+    },
+    {
+      "path": "src/opus-ml/dist/opus-ml-decoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8b9b91bfdb62466b1ca11740f39c18195a5dcdb2",
+      "size": 4119939,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8b9b91bfdb62466b1ca11740f39c18195a5dcdb2"
+    },
+    {
+      "path": "src/opus-ml/dist/opus-ml-decoder.min.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c0ec4ecb8c45b5ea351627c18199cd1167aadba1",
+      "size": 4102032,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c0ec4ecb8c45b5ea351627c18199cd1167aadba1"
+    },
+    {
+      "path": "src/opus-ml/dist/opus-ml-decoder.min.js.map",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "60e9606be7d40213babf90cf1b93ad2ce4e49496",
+      "size": 27367,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/60e9606be7d40213babf90cf1b93ad2ce4e49496"
+    },
+    {
+      "path": "src/opus-ml/index.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f9b3adaf010f368e7093b3d5eb6edf7751e15111",
+      "size": 341,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f9b3adaf010f368e7093b3d5eb6edf7751e15111"
+    },
+    {
+      "path": "src/opus-ml/opus_enable_osce.patch",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2c75f93cabb78b68cffea0d4b58a648b748ff90b",
+      "size": 849,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2c75f93cabb78b68cffea0d4b58a648b748ff90b"
+    },
+    {
+      "path": "src/opus-ml/package-lock.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "383b189b575f5f932c34eaf2a3f4e18cb0ebc07e",
+      "size": 1565,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/383b189b575f5f932c34eaf2a3f4e18cb0ebc07e"
+    },
+    {
+      "path": "src/opus-ml/package.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aebc201845953c0933bc391f8386444e5bea4924",
+      "size": 1344,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/aebc201845953c0933bc391f8386444e5bea4924"
+    },
+    {
+      "path": "src/opus-ml/rollup.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5f5f7e19c1c3c5fc24f6afd6e160a98261e00472",
+      "size": 162,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/5f5f7e19c1c3c5fc24f6afd6e160a98261e00472"
+    },
+    {
+      "path": "src/opus-ml/src",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "bdadee290eba206ba488565c9dc3745588ef34a5",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/bdadee290eba206ba488565c9dc3745588ef34a5"
+    },
+    {
+      "path": "src/opus-ml/src/EmscriptenWasm.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "64fbb6650d64f6ea810179cc3f1e61853de10483",
+      "size": 4097609,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/64fbb6650d64f6ea810179cc3f1e61853de10483"
+    },
+    {
+      "path": "src/opus-ml/src/OpusMLDecoder.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d93c8840743549e389fc175002a294ffff56a2cb",
+      "size": 6928,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d93c8840743549e389fc175002a294ffff56a2cb"
+    },
+    {
+      "path": "src/opus-ml/src/OpusMLDecoderWebWorker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "05a71a094de5c7eeb032c971937f5e8080b8d0ed",
+      "size": 511,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/05a71a094de5c7eeb032c971937f5e8080b8d0ed"
+    },
+    {
+      "path": "src/opus-ml/src/emscripten-post.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "37917a4742b09b7ca12ed8c7d0d7ea25cdbaba89",
+      "size": 395,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/37917a4742b09b7ca12ed8c7d0d7ea25cdbaba89"
+    },
+    {
+      "path": "src/opus-ml/src/emscripten-pre.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8999b37d2b4a871936c34343206b9f4c3b0c9a3f",
+      "size": 13,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8999b37d2b4a871936c34343206b9f4c3b0c9a3f"
+    },
+    {
+      "path": "src/opus-ml/src/opus_ml_frame_decoder.c",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4974cbc97c773d2640e82a70b416c8cab74c0ec6",
+      "size": 6728,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4974cbc97c773d2640e82a70b416c8cab74c0ec6"
+    },
+    {
+      "path": "src/opus-ml/src/opus_ml_frame_decoder.h",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d202d3dacf1df5b648a7682751624d049575e898",
+      "size": 694,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d202d3dacf1df5b648a7682751624d049575e898"
+    },
+    {
+      "path": "src/opus-ml/terser.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a243040500ccb2f608291acad95016dea69b11c8",
+      "size": 934,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a243040500ccb2f608291acad95016dea69b11c8"
+    },
+    {
+      "path": "src/opus-ml/types.d.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b200f70aac179cf3ce033dc2d026ec8f9a9b65c2",
+      "size": 2200,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/b200f70aac179cf3ce033dc2d026ec8f9a9b65c2"
+    },
+    {
+      "path": "test",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "89432da1827d665c4feeb9e10ac8576c906742ad",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/89432da1827d665c4feeb9e10ac8576c906742ad"
+    },
+    {
+      "path": "test/actual",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "9f3b5fce9cc4ec9b6d90b50ee0722816e326f492",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/9f3b5fce9cc4ec9b6d90b50ee0722816e326f492"
+    },
+    {
+      "path": "test/actual/.gitignore",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "86d0cb2726c6c7c179b99520c452dd1b68e7a813",
+      "size": 70,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/86d0cb2726c6c7c179b99520c452dd1b68e7a813"
+    },
+    {
+      "path": "test/data",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "eb2cdbebb815e231b217dc9d0b2eb017ff508866",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/eb2cdbebb815e231b217dc9d0b2eb017ff508866"
+    },
+    {
+      "path": "test/data/44100.mono.cbr.mp3",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4bd1b36489737ad12f6a16e68a6481abd79e3ec9",
+      "size": 25703,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4bd1b36489737ad12f6a16e68a6481abd79e3ec9"
+    },
+    {
+      "path": "test/data/44100.stereo.cbr.mp3",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "222b1c9cdec0908ca484c377cc4507b2585248db",
+      "size": 25703,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/222b1c9cdec0908ca484c377cc4507b2585248db"
+    },
+    {
+      "path": "test/data/flac.8.flac",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "995fc3fffade2b0631b485297a72d3f49a7959ba",
+      "size": 783888,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/995fc3fffade2b0631b485297a72d3f49a7959ba"
+    },
+    {
+      "path": "test/data/flac.8.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8e10b3e20c8d62f2c0b9eeba5e102f02bcfef620",
+      "size": 619117,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8e10b3e20c8d62f2c0b9eeba5e102f02bcfef620"
+    },
+    {
+      "path": "test/data/flac.96000.flac",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e360966b345709c658270e48ae0abd6f9484077f",
+      "size": 20694717,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e360966b345709c658270e48ae0abd6f9484077f"
+    },
+    {
+      "path": "test/data/flac.96000.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc12a5aea40a0e3a8c8062372e030449dbe2e89d",
+      "size": 9711080,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dc12a5aea40a0e3a8c8062372e030449dbe2e89d"
+    },
+    {
+      "path": "test/data/flac.flac",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "05e98bab9c7163b9b63c971f3827c949ef901d66",
+      "size": 6978642,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/05e98bab9c7163b9b63c971f3827c949ef901d66"
+    },
+    {
+      "path": "test/data/flac.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "24fad0fd21fe78758fb4803058d09c3d3c188b2e",
+      "size": 8245101,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/24fad0fd21fe78758fb4803058d09c3d3c188b2e"
+    },
+    {
+      "path": "test/data/mpeg.cbr.errors.mp3",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8ef5aa95d8ced049f47762f4af3d30cebcf1d9aa",
+      "size": 1270013,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8ef5aa95d8ced049f47762f4af3d30cebcf1d9aa"
+    },
+    {
+      "path": "test/data/mpeg.cbr.mp3",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c6d3fa18cb1217383d68051fb6aecfb0a401d49b",
+      "size": 1270013,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c6d3fa18cb1217383d68051fb6aecfb0a401d49b"
+    },
+    {
+      "path": "test/data/ogg.errors.opus",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a8c66d95a69a4e62eb812181da926a0cc2ae4967",
+      "size": 915316,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a8c66d95a69a4e62eb812181da926a0cc2ae4967"
+    },
+    {
+      "path": "test/data/ogg.opus",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "340fab781e48113e29ce3d2dcc3beb97a494fd5e",
+      "size": 915316,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/340fab781e48113e29ce3d2dcc3beb97a494fd5e"
+    },
+    {
+      "path": "test/data/ogg.opus.255.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91f88729bacac6d552329d8908d6e68f885cf556",
+      "size": 14585379,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91f88729bacac6d552329d8908d6e68f885cf556"
+    },
+    {
+      "path": "test/data/ogg.opus.255.source.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ec664cd0711666a65484abe63efdba85de28438f",
+      "size": 381989,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ec664cd0711666a65484abe63efdba85de28438f"
+    },
+    {
+      "path": "test/data/ogg.opus.32.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fb00d026f8d8e50cbd6828fbd622e9a1fe6dd19e",
+      "size": 1837265,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/fb00d026f8d8e50cbd6828fbd622e9a1fe6dd19e"
+    },
+    {
+      "path": "test/data/ogg.opus.64.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ef78ed4be14e7f3bacf4b07e600fc77823358175",
+      "size": 3674643,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ef78ed4be14e7f3bacf4b07e600fc77823358175"
+    },
+    {
+      "path": "test/data/ogg.opus.flush.1.opus",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ae49d2e611e16275db5b86c739b4586190bd48c7",
+      "size": 12081,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ae49d2e611e16275db5b86c739b4586190bd48c7"
+    },
+    {
+      "path": "test/data/ogg.opus.flush.2.opus",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "25c5119685cd2d61c371809db9b97618a9f559ff",
+      "size": 20340,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/25c5119685cd2d61c371809db9b97618a9f559ff"
+    },
+    {
+      "path": "test/data/ogg.opus.flush.3.opus",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1f8edd9afd326794305c91c12e505fe39cf360be",
+      "size": 18787,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1f8edd9afd326794305c91c12e505fe39cf360be"
+    },
+    {
+      "path": "test/data/ogg.opus.surround",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "22830f0a4ea03326ae6d667ae4d0444959f5b10e",
+      "size": 717871,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/22830f0a4ea03326ae6d667ae4d0444959f5b10e"
+    },
+    {
+      "path": "test/data/ogg.vorbis",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "08cd4c2e5c03300a57dc0a7c29c6bd6044843267",
+      "size": 1707303,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/08cd4c2e5c03300a57dc0a7c29c6bd6044843267"
+    },
+    {
+      "path": "test/data/ogg.vorbis.255.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9cd6381d9bc3d481906804b2cb0b5726d8d1786b",
+      "size": 1943488,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9cd6381d9bc3d481906804b2cb0b5726d8d1786b"
+    },
+    {
+      "path": "test/data/ogg.vorbis.32.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "29f6abcb278ddf1076b6599eb1a37c6049f75437",
+      "size": 1556898,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/29f6abcb278ddf1076b6599eb1a37c6049f75437"
+    },
+    {
+      "path": "test/data/ogg.vorbis.64.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2530e20e63bb053020daf11b567e3fec5e6ddfef",
+      "size": 3107850,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2530e20e63bb053020daf11b567e3fec5e6ddfef"
+    },
+    {
+      "path": "test/data/ogg.vorbis.8.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9abb280987e663aaf56279fbd269be00341e93d6",
+      "size": 153747,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9abb280987e663aaf56279fbd269be00341e93d6"
+    },
+    {
+      "path": "test/data/ogg.vorbis.96000.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9d03493612a4d418388070f7f38afd6f667d69c4",
+      "size": 911264,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9d03493612a4d418388070f7f38afd6f667d69c4"
+    },
+    {
+      "path": "test/data/ogg.vorbis.chained2.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5ef7f2cb5ffd59232ba6c50ffa7fd66449d2f78f",
+      "size": 3538944,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/5ef7f2cb5ffd59232ba6c50ffa7fd66449d2f78f"
+    },
+    {
+      "path": "test/data/ogg.vorbis.fishead.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79e2618451c419106639e4b38b0591c361e62021",
+      "size": 725908,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79e2618451c419106639e4b38b0591c361e62021"
+    },
+    {
+      "path": "test/data/ogg.vorbis.invalid.mode.count.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "837a7bea2091c4511fc368ff7e8ade43d4da7ec5",
+      "size": 2857,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/837a7bea2091c4511fc368ff7e8ade43d4da7ec5"
+    },
+    {
+      "path": "test/data/ogg.vorbis.large.comment.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ff6d223273786ded3ce4d989c1f96ab696565381",
+      "size": 982883,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ff6d223273786ded3ce4d989c1f96ab696565381"
+    },
+    {
+      "path": "test/data/ogg.vorbis.packets.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e5151b61985fe5feb5172ab0eeb2fa941c7648ab",
+      "size": 104352,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e5151b61985fe5feb5172ab0eeb2fa941c7648ab"
+    },
+    {
+      "path": "test/data/opus_osce_female_ref_12kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3b37c522faaa5b0c84f083ba0c15e27235b9849a",
+      "size": 31087,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3b37c522faaa5b0c84f083ba0c15e27235b9849a"
+    },
+    {
+      "path": "test/data/opus_osce_female_ref_5kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e1f475bee5136f2a8cf62d844910fe601b479a99",
+      "size": 17910,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e1f475bee5136f2a8cf62d844910fe601b479a99"
+    },
+    {
+      "path": "test/data/opus_osce_female_ref_6kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a76cc63d15d4ca949f010186d9e0a1903d303ceb",
+      "size": 18221,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a76cc63d15d4ca949f010186d9e0a1903d303ceb"
+    },
+    {
+      "path": "test/data/opus_osce_female_ref_9kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3cf5bc541c678b1d486e8c525c9f9e2f42bf2bff",
+      "size": 23623,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3cf5bc541c678b1d486e8c525c9f9e2f42bf2bff"
+    },
+    {
+      "path": "test/data/opus_osce_male_ref_12kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91e48eec7a238ea8e7f4f94b5f27848f5887d84e",
+      "size": 30537,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91e48eec7a238ea8e7f4f94b5f27848f5887d84e"
+    },
+    {
+      "path": "test/data/opus_osce_male_ref_5kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f361e5d8315a8c87fa4bcecfe2d6159ff5d8a3a7",
+      "size": 17501,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f361e5d8315a8c87fa4bcecfe2d6159ff5d8a3a7"
+    },
+    {
+      "path": "test/data/opus_osce_male_ref_6kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d636617ef43439bdd97abcafad9025d96ece698c",
+      "size": 17821,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d636617ef43439bdd97abcafad9025d96ece698c"
+    },
+    {
+      "path": "test/data/opus_osce_male_ref_9kbs.ogg",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "09a151b453a343c9f80c4ec3d1d061ed66c0eb68",
+      "size": 23240,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/09a151b453a343c9f80c4ec3d1d061ed66c0eb68"
+    },
+    {
+      "path": "test/data/parallel.1.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "002d19900f2110b4a484ef47f723d159ce8ec83d",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/002d19900f2110b4a484ef47f723d159ce8ec83d"
+    },
+    {
+      "path": "test/data/parallel.2.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "032206f195776673c19181f6d3922e95929e1b2d",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/032206f195776673c19181f6d3922e95929e1b2d"
+    },
+    {
+      "path": "test/data/parallel.3.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "f946a3374ef8d13e7296347d07325af5d9c8702f",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f946a3374ef8d13e7296347d07325af5d9c8702f"
+    },
+    {
+      "path": "test/data/parallel.4.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "91f42ed4256207876eae5d7412bcd75237de57a7",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91f42ed4256207876eae5d7412bcd75237de57a7"
+    },
+    {
+      "path": "test/data/sequential.1.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "002d19900f2110b4a484ef47f723d159ce8ec83d",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/002d19900f2110b4a484ef47f723d159ce8ec83d"
+    },
+    {
+      "path": "test/data/sequential.2.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "032206f195776673c19181f6d3922e95929e1b2d",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/032206f195776673c19181f6d3922e95929e1b2d"
+    },
+    {
+      "path": "test/data/sequential.3.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "f946a3374ef8d13e7296347d07325af5d9c8702f",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f946a3374ef8d13e7296347d07325af5d9c8702f"
+    },
+    {
+      "path": "test/data/sequential.4.mp3",
+      "mode": "100755",
+      "type": "blob",
+      "sha": "91f42ed4256207876eae5d7412bcd75237de57a7",
+      "size": 6269,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91f42ed4256207876eae5d7412bcd75237de57a7"
+    },
+    {
+      "path": "test/expected",
+      "mode": "040000",
+      "type": "tree",
+      "sha": "edf6fca32a3d0000da5e20bc233a7317597429a5",
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/trees/edf6fca32a3d0000da5e20bc233a7317597429a5"
+    },
+    {
+      "path": "test/expected/44100.gaps.mono.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9364b3a1683cd82dfc8158c6aa33bf320176a505",
+      "size": 95958,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9364b3a1683cd82dfc8158c6aa33bf320176a505"
+    },
+    {
+      "path": "test/expected/44100.gaps.stereo.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "688ababdfa2c348ed738fe2749edd7762237cb0e",
+      "size": 96030,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/688ababdfa2c348ed738fe2749edd7762237cb0e"
+    },
+    {
+      "path": "test/expected/44100.nogaps.mono.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "91a7640f8816265889686d6f3107d9ac6476a0cb",
+      "size": 95750,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/91a7640f8816265889686d6f3107d9ac6476a0cb"
+    },
+    {
+      "path": "test/expected/44100.nogaps.stereo.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f67e61cff254c43d29b8d9aa7a0dcdd849949427",
+      "size": 95713,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f67e61cff254c43d29b8d9aa7a0dcdd849949427"
+    },
+    {
+      "path": "test/expected/flac.8.flac.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "aaac056789a204df9447b5e1f7ac90d6835ce465",
+      "size": 442129,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/aaac056789a204df9447b5e1f7ac90d6835ce465"
+    },
+    {
+      "path": "test/expected/flac.8.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fba897cc2f32e67385e11e218fbca9bc1a7d8bb5",
+      "size": 371363,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/fba897cc2f32e67385e11e218fbca9bc1a7d8bb5"
+    },
+    {
+      "path": "test/expected/flac.96000.flac.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a6e69226cec43ed8611df6973d022e1ad86c11ef",
+      "size": 21489338,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a6e69226cec43ed8611df6973d022e1ad86c11ef"
+    },
+    {
+      "path": "test/expected/flac.96000.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a1f5b6fd3da660e79551c7b6612a7e2c1450dc63",
+      "size": 21466960,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a1f5b6fd3da660e79551c7b6612a7e2c1450dc63"
+    },
+    {
+      "path": "test/expected/flac.flac.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6d3209b86022eca4525fcbffa3635d8e7805cc2d",
+      "size": 12752061,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6d3209b86022eca4525fcbffa3635d8e7805cc2d"
+    },
+    {
+      "path": "test/expected/flac.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f15a325bd3b9d62e93534b2c77552c0cf197bff7",
+      "size": 12748553,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f15a325bd3b9d62e93534b2c77552c0cf197bff7"
+    },
+    {
+      "path": "test/expected/frames.mpeg.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "621a06ffbf1ff56442e5d9e2fb49cf29711050e8",
+      "size": 12729730,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/621a06ffbf1ff56442e5d9e2fb49cf29711050e8"
+    },
+    {
+      "path": "test/expected/frames.mpeg.cbr.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "621a06ffbf1ff56442e5d9e2fb49cf29711050e8",
+      "size": 12729730,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/621a06ffbf1ff56442e5d9e2fb49cf29711050e8"
+    },
+    {
+      "path": "test/expected/mpeg.cbr.errors.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8babbefae956a616a66092ea79351fd55fefa33f",
+      "size": 12714087,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8babbefae956a616a66092ea79351fd55fefa33f"
+    },
+    {
+      "path": "test/expected/mpeg.cbr.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "feeeebb159f05013d12661a10e838cea8d145220",
+      "size": 12729701,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/feeeebb159f05013d12661a10e838cea8d145220"
+    },
+    {
+      "path": "test/expected/mpeg.cbr.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "feeeebb159f05013d12661a10e838cea8d145220",
+      "size": 12729701,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/feeeebb159f05013d12661a10e838cea8d145220"
+    },
+    {
+      "path": "test/expected/ogg.errors.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0cb0ceb7710eca505ae9cf5277d5081d47461642",
+      "size": 13885854,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0cb0ceb7710eca505ae9cf5277d5081d47461642"
+    },
+    {
+      "path": "test/expected/ogg.opus.12000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "98b0b8c433fb47f467e7f67347665414a25712cc",
+      "size": 3484421,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/98b0b8c433fb47f467e7f67347665414a25712cc"
+    },
+    {
+      "path": "test/expected/ogg.opus.16000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "040ded849809f50f533d40f39e1eaa3803494c22",
+      "size": 4643289,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/040ded849809f50f533d40f39e1eaa3803494c22"
+    },
+    {
+      "path": "test/expected/ogg.opus.24000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "28a711c60c84efb1c90a32aea22e740df8c3d9d3",
+      "size": 6960782,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/28a711c60c84efb1c90a32aea22e740df8c3d9d3"
+    },
+    {
+      "path": "test/expected/ogg.opus.255.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9e1ac51ad4f5653d293efe803d38f18dfdf239f1",
+      "size": 1552723,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9e1ac51ad4f5653d293efe803d38f18dfdf239f1"
+    },
+    {
+      "path": "test/expected/ogg.opus.32.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3bfbadef2be2e8cdebf8e5e15cb0bd61a90bed08",
+      "size": 1298891,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/3bfbadef2be2e8cdebf8e5e15cb0bd61a90bed08"
+    },
+    {
+      "path": "test/expected/ogg.opus.48000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f97391087c1a1292690d89fa91a103369dece4f3",
+      "size": 13889021,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f97391087c1a1292690d89fa91a103369dece4f3"
+    },
+    {
+      "path": "test/expected/ogg.opus.64.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "48e3a7d3d3b84e28b1f9ea9b10a5f61efc59d759",
+      "size": 1334229,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/48e3a7d3d3b84e28b1f9ea9b10a5f61efc59d759"
+    },
+    {
+      "path": "test/expected/ogg.opus.8000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0761f866e96e7512034777edda6a0aa154a0924b",
+      "size": 2324204,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0761f866e96e7512034777edda6a0aa154a0924b"
+    },
+    {
+      "path": "test/expected/ogg.opus.flush.1.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6f1c318958ec7761f24b577a72e6e14a7e093a3e",
+      "size": 102390,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6f1c318958ec7761f24b577a72e6e14a7e093a3e"
+    },
+    {
+      "path": "test/expected/ogg.opus.flush.2.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c6bbb5d32f66e72cfb4510e6afb389717f7e2ba9",
+      "size": 62597,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c6bbb5d32f66e72cfb4510e6afb389717f7e2ba9"
+    },
+    {
+      "path": "test/expected/ogg.opus.flush.3.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "19bedfc792c7f16557a12f26e2f1604639fafe96",
+      "size": 87656,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/19bedfc792c7f16557a12f26e2f1604639fafe96"
+    },
+    {
+      "path": "test/expected/ogg.opus.surround.downmix.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0e707d17ab96c78a680a98e55d0b5643945c677b",
+      "size": 3330223,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0e707d17ab96c78a680a98e55d0b5643945c677b"
+    },
+    {
+      "path": "test/expected/ogg.opus.surround.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "11d6ca2fd2c545358fc7b56adb789470da61eb30",
+      "size": 7895316,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/11d6ca2fd2c545358fc7b56adb789470da61eb30"
+    },
+    {
+      "path": "test/expected/ogg.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f97391087c1a1292690d89fa91a103369dece4f3",
+      "size": 13889021,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f97391087c1a1292690d89fa91a103369dece4f3"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.255.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "abb5946d87c9fad72bcd9ece2ca99ef2cc4b022e",
+      "size": 279732,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/abb5946d87c9fad72bcd9ece2ca99ef2cc4b022e"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.32.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "36c2131f7f1d47198cb2eab8fe1a48492bdae2ed",
+      "size": 1296900,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/36c2131f7f1d47198cb2eab8fe1a48492bdae2ed"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.64.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7fc66d96fecd9989bbd7e6dd728f1e58ebcb0fd0",
+      "size": 1332406,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7fc66d96fecd9989bbd7e6dd728f1e58ebcb0fd0"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.8.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4664f362462f4b73d43a843a3a2ab53d5d0216db",
+      "size": 827027,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4664f362462f4b73d43a843a3a2ab53d5d0216db"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.96000.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8f2dcf0c4b2274aacfe8182d43d58adb369bf6c0",
+      "size": 21476747,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/8f2dcf0c4b2274aacfe8182d43d58adb369bf6c0"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.chained2.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "787cc859a3870b6cdde7a024e036fab15241f7d5",
+      "size": 32121575,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/787cc859a3870b6cdde7a024e036fab15241f7d5"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.fishead.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dbc0c7687931f72bc28e1dcd8977e0882def6427",
+      "size": 12768074,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dbc0c7687931f72bc28e1dcd8977e0882def6427"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.invalid.mode.count.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "77c16ea50f4bcfe23504867a58fe9cd305d803ce",
+      "size": 753,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/77c16ea50f4bcfe23504867a58fe9cd305d803ce"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.large.comment.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "0f58b6665a52d6c662247cd83e2aa97696b195d9",
+      "size": 4412635,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/0f58b6665a52d6c662247cd83e2aa97696b195d9"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.packets.ogg.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "307ccda40a3518691d0c888062c756f3f0421916",
+      "size": 295494,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/307ccda40a3518691d0c888062c756f3f0421916"
+    },
+    {
+      "path": "test/expected/ogg.vorbis.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d6d45e8b46c6e9d5c919ad9b8df69cef4022353c",
+      "size": 12768632,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d6d45e8b46c6e9d5c919ad9b8df69cef4022353c"
+    },
+    {
+      "path": "test/expected/opus.12000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "818e4734a1042393ad9cfbceb76252772e86f023",
+      "size": 3484414,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/818e4734a1042393ad9cfbceb76252772e86f023"
+    },
+    {
+      "path": "test/expected/opus.16000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c95a9bd880f404ec59236f240f7ccf95ece5ba82",
+      "size": 4643282,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c95a9bd880f404ec59236f240f7ccf95ece5ba82"
+    },
+    {
+      "path": "test/expected/opus.24000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f527e702c1ba8f0ebf17df6f4c269444906285c3",
+      "size": 6960771,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f527e702c1ba8f0ebf17df6f4c269444906285c3"
+    },
+    {
+      "path": "test/expected/opus.255.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "244f372bce8aba70c30bb1b9a34f485769acdb95",
+      "size": 1553446,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/244f372bce8aba70c30bb1b9a34f485769acdb95"
+    },
+    {
+      "path": "test/expected/opus.32.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a0de25490ef0a22aabbc2e2b8c406405ead59cc3",
+      "size": 1299176,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a0de25490ef0a22aabbc2e2b8c406405ead59cc3"
+    },
+    {
+      "path": "test/expected/opus.48000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1791f62720f2d082786600115f8eb477edcc9bc6",
+      "size": 13889035,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1791f62720f2d082786600115f8eb477edcc9bc6"
+    },
+    {
+      "path": "test/expected/opus.64.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9736777a035ae6f4a924de80437681338efa44f7",
+      "size": 1334494,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9736777a035ae6f4a924de80437681338efa44f7"
+    },
+    {
+      "path": "test/expected/opus.8000.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2872492ffc6bc2e4c18203db288b18255a35d8e4",
+      "size": 2324194,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2872492ffc6bc2e4c18203db288b18255a35d8e4"
+    },
+    {
+      "path": "test/expected/opus.errors.opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "197eefc154f40b513fa047842a749c37da3fffe6",
+      "size": 13885980,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/197eefc154f40b513fa047842a749c37da3fffe6"
+    },
+    {
+      "path": "test/expected/opus.surround.downmix.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c671f5f586cdf9220e50ae2c0e5f59e837e6d384",
+      "size": 3329031,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c671f5f586cdf9220e50ae2c0e5f59e837e6d384"
+    },
+    {
+      "path": "test/expected/opus.surround.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4c4811fcdf02e06c5210808faa4ad1d5a39e8f03",
+      "size": 7895318,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/4c4811fcdf02e06c5210808faa4ad1d5a39e8f03"
+    },
+    {
+      "path": "test/expected/opus.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1791f62720f2d082786600115f8eb477edcc9bc6",
+      "size": 13889035,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1791f62720f2d082786600115f8eb477edcc9bc6"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c983504c0aa6e783290c8caa4bf7f56033fd21db",
+      "size": 1451104,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/c983504c0aa6e783290c8caa4bf7f56033fd21db"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a54edaa8d767816c65306320a7129532ece2facb",
+      "size": 1430764,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a54edaa8d767816c65306320a7129532ece2facb"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_12kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fa55752b4ef9a8a864b4f214c0a6808a960ed7e6",
+      "size": 1444053,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/fa55752b4ef9a8a864b4f214c0a6808a960ed7e6"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "685024247fc03225be62a3cb207fc83aeae39bd8",
+      "size": 1474052,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/685024247fc03225be62a3cb207fc83aeae39bd8"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "59a7565cbc68387a462aae113c34eabfa9f839da",
+      "size": 1425284,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/59a7565cbc68387a462aae113c34eabfa9f839da"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_5kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "63ddc18499037b7c86e9bafde5fc925acd1e8437",
+      "size": 1532401,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/63ddc18499037b7c86e9bafde5fc925acd1e8437"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "96fa530b0a0dfa85dcd874fe034b6241894ecbc9",
+      "size": 1454707,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/96fa530b0a0dfa85dcd874fe034b6241894ecbc9"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1fd176bda15830b92e8e312c619e5936a2118bd7",
+      "size": 1412642,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1fd176bda15830b92e8e312c619e5936a2118bd7"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_6kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "902d4853f65c0c7eb13d5ca1526d6c678851e92c",
+      "size": 1519087,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/902d4853f65c0c7eb13d5ca1526d6c678851e92c"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a3b30dfa5ef4c07e53ec888219f83790b5f940d7",
+      "size": 1448727,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/a3b30dfa5ef4c07e53ec888219f83790b5f940d7"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ad215c3fd3f673daf4f13ee071a7efa5e287e617",
+      "size": 1420110,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ad215c3fd3f673daf4f13ee071a7efa5e287e617"
+    },
+    {
+      "path": "test/expected/opus_osce_female_ref_9kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7bc8d9b1f981c4bf0ea7a49c9832ad1f3072b3bf",
+      "size": 1458697,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7bc8d9b1f981c4bf0ea7a49c9832ad1f3072b3bf"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1c0a883dc250a6da987ffab9f82d23cdf0167fcd",
+      "size": 1411574,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1c0a883dc250a6da987ffab9f82d23cdf0167fcd"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7a4c7f173b7434f9624c8a5d7e548d86de1ea8d6",
+      "size": 1396981,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/7a4c7f173b7434f9624c8a5d7e548d86de1ea8d6"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_12kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9deaa5db8cac67244c56a22583257382f6008f91",
+      "size": 1410421,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/9deaa5db8cac67244c56a22583257382f6008f91"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "75fb6a8fd327f389c5edd171788f814e628ad2c2",
+      "size": 1433879,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/75fb6a8fd327f389c5edd171788f814e628ad2c2"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "df8bd044aa5dde887fb644d6dabc7673750c13c1",
+      "size": 1392829,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/df8bd044aa5dde887fb644d6dabc7673750c13c1"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_5kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "563e4d5e294ffb0c52cbfb2c593fe5736a2acf63",
+      "size": 1490930,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/563e4d5e294ffb0c52cbfb2c593fe5736a2acf63"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e8589f55c15f01e204c5df9d1ff74031e7c7a3f8",
+      "size": 1417422,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/e8589f55c15f01e204c5df9d1ff74031e7c7a3f8"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "bb5acddc6e9df414e2d5eb1739b0140db1c15c83",
+      "size": 1386517,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/bb5acddc6e9df414e2d5eb1739b0140db1c15c83"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_6kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2225346f13e28ffcccc60fa9780fb9a1493be550",
+      "size": 1481386,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/2225346f13e28ffcccc60fa9780fb9a1493be550"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "79da0df292294375cdbf8c628096042f1392815a",
+      "size": 1433884,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/79da0df292294375cdbf8c628096042f1392815a"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "783e1caa411eddc95b25d3d81a0a76fc42ea2295",
+      "size": 1392835,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/783e1caa411eddc95b25d3d81a0a76fc42ea2295"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "6c10d6d794654adf8e29dd36e336970fa983e35e",
+      "size": 1491040,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/6c10d6d794654adf8e29dd36e336970fa983e35e"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.ogg.lace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1f3c3210ab2cdb72e96adddf02c6ca37c987af9f",
+      "size": 1411675,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/1f3c3210ab2cdb72e96adddf02c6ca37c987af9f"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.ogg.nolace.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b46714f9d017d6a8546ab004c542cca4e5aea9a3",
+      "size": 1389029,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/b46714f9d017d6a8546ab004c542cca4e5aea9a3"
+    },
+    {
+      "path": "test/expected/opus_osce_male_ref_9kbs.ogg.none.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ff71efb195ac3a6d0d40ba68275e56616403556f",
+      "size": 1425812,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/ff71efb195ac3a6d0d40ba68275e56616403556f"
+    },
+    {
+      "path": "test/expected/parallel.1.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc56513468a96baff2fe979451c7e1793b1f6359",
+      "size": 27167,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dc56513468a96baff2fe979451c7e1793b1f6359"
+    },
+    {
+      "path": "test/expected/parallel.1.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc56513468a96baff2fe979451c7e1793b1f6359",
+      "size": 27167,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dc56513468a96baff2fe979451c7e1793b1f6359"
+    },
+    {
+      "path": "test/expected/parallel.2.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d99ee58a8003295776d6646b6ba27b1d88227d8b",
+      "size": 30022,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d99ee58a8003295776d6646b6ba27b1d88227d8b"
+    },
+    {
+      "path": "test/expected/parallel.2.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d99ee58a8003295776d6646b6ba27b1d88227d8b",
+      "size": 30022,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d99ee58a8003295776d6646b6ba27b1d88227d8b"
+    },
+    {
+      "path": "test/expected/parallel.3.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "205e7a4ef5eba6f7a075122c572427a882fad115",
+      "size": 27408,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/205e7a4ef5eba6f7a075122c572427a882fad115"
+    },
+    {
+      "path": "test/expected/parallel.3.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "205e7a4ef5eba6f7a075122c572427a882fad115",
+      "size": 27408,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/205e7a4ef5eba6f7a075122c572427a882fad115"
+    },
+    {
+      "path": "test/expected/parallel.4.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "12850bfbb2aa58fbeefd57a3367484f983eed139",
+      "size": 27849,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/12850bfbb2aa58fbeefd57a3367484f983eed139"
+    },
+    {
+      "path": "test/expected/parallel.4.mp3.worker.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "12850bfbb2aa58fbeefd57a3367484f983eed139",
+      "size": 27849,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/12850bfbb2aa58fbeefd57a3367484f983eed139"
+    },
+    {
+      "path": "test/expected/sequential.1.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dc56513468a96baff2fe979451c7e1793b1f6359",
+      "size": 27167,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/dc56513468a96baff2fe979451c7e1793b1f6359"
+    },
+    {
+      "path": "test/expected/sequential.2.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "d99ee58a8003295776d6646b6ba27b1d88227d8b",
+      "size": 30022,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/d99ee58a8003295776d6646b6ba27b1d88227d8b"
+    },
+    {
+      "path": "test/expected/sequential.3.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "205e7a4ef5eba6f7a075122c572427a882fad115",
+      "size": 27408,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/205e7a4ef5eba6f7a075122c572427a882fad115"
+    },
+    {
+      "path": "test/expected/sequential.4.mp3.wav.gz",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "12850bfbb2aa58fbeefd57a3367484f983eed139",
+      "size": 27849,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/12850bfbb2aa58fbeefd57a3367484f983eed139"
+    },
+    {
+      "path": "test/nested-worker.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "346a58a96adfb40943e187e5238c5ff699fcabe1",
+      "size": 1616,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/346a58a96adfb40943e187e5238c5ff699fcabe1"
+    },
+    {
+      "path": "test/utilities.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "609e1ca259289b83745b64d5ae436c24ae30d28c",
+      "size": 10562,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/609e1ca259289b83745b64d5ae436c24ae30d28c"
+    },
+    {
+      "path": "test/wasm-audio-decoders.test.js",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f01d50464546992b28f59782ac512e7b31f14404",
+      "size": 113182,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/f01d50464546992b28f59782ac512e7b31f14404"
+    },
+    {
+      "path": "test/wasm-audio-decoders.ts",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "457f6ab7ed447c36fd044dc4fa9c79496749513b",
+      "size": 5069,
+      "url": "https://api.github.com/repos/eshaz/wasm-audio-decoders/git/blobs/457f6ab7ed447c36fd044dc4fa9c79496749513b"
+    }
+  ],
+  "truncated": false
+}

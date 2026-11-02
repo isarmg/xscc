@@ -1,0 +1,23 @@
+extend = { path = "../cargo-make/main.toml" }
+
+[tasks.test]
+clear = true
+dependencies = [
+  "test-each-feature",
+  "test-xcss_web_macro-example",
+  "doc-xcss_web_macro-example",
+]
+
+[tasks.test-xcss_web_macro-example]
+description = "Tests the xcss_web_macro/example to check if macro handles doc comments correctly"
+command = "cargo"
+args = ["test", "--doc"]
+cwd = "example"
+install_crate = false
+
+[tasks.doc-xcss_web_macro-example]
+description = "Docs the xcss_web_macro/example to check if macro handles doc comments correctly"
+command = "cargo"
+args = ["doc"]
+cwd = "example"
+install_crate = false

@@ -1,0 +1,58 @@
+{
+  "upstream": "https://github.com/subframe7536/maple-font",
+  "source_commit": "c08fda97fef73d68c1755219852150770f6e6578",
+  "source_version": "v7.9-43-gc08fda97",
+  "assets": {
+    "MapleMonoFull-Regular.woff2": "1255571e3ad6f2bcc1b897a52d70fdefd09ed40d3ccef4435f6d0be808919a7b",
+    "MapleMonoFull-Bold.woff2": "282ad3ebc7409f93806e8235449d31670af1d1420ade7d76a97a5a4dd23b928b",
+    "fonts.css": "4ee14527b462cac8558947f9a3d90565e6803685a4d17ee47a55e31e059a7005",
+    "boot.css": "3d521c2e7758885abe60b6051a25d59124a41006888e63eda35a0e04fa1cb25f",
+    "OFL.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902",
+    "CJK-LICENSE.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902",
+    "NORMAL-LICENSE.txt": "eb2d28d2e565a0757e3d64e34ebb452e75a0cad87c0ab3faf4e08ba7596de902"
+  },
+  "cjk": {
+    "upstream": "https://github.com/subframe7536/maple-font/releases/tag/v7.9",
+    "archive": "MapleMonoNL-CN-unhinted.zip",
+    "sha256": "80bf6db8920b2999d900e08f9e5031f7686baeb72dbdb80891f2c1ae9cec606f",
+    "fonttools": "4.60.1",
+    "brotli": "1.1.0",
+    "additional_codepoints": 21296,
+    "weights": [
+      400,
+      700
+    ]
+  },
+  "latin": {
+    "variant": "Normal NL",
+    "style": "upright",
+    "handwriting": false,
+    "release": "v7.9",
+    "url": "https://github.com/subframe7536/maple-font/releases/download/v7.9/MapleMonoNormalNL-Woff2.zip",
+    "sha256": "6fd6c8668657d4b55f108a115e59fa7a081757f29f599ebfc30a8558b85725bf"
+  },
+  "distribution": {
+    "mode": "complete-fonts",
+    "weights": [
+      400,
+      700
+    ],
+    "unicode_shards": false,
+    "faces": {
+      "Regular": {
+        "codepoints": 22731,
+        "bytes": 5344288
+      },
+      "Bold": {
+        "codepoints": 22731,
+        "bytes": 5457180
+      }
+    },
+    "fonttools": "4.60.1",
+    "brotli": "1.1.0"
+  },
+  "source_assets": {
+    "MapleMonoNormalNL-Regular.woff2": "3aa0ddc85204abbd765ab231e61c40d123b0b5bde103dc3987ee6f2168898260",
+    "MapleMonoNormalNL-Bold.woff2": "f920a19a0cecff19b1f2c0171a1c0618131e9b23825fb0f3c01076270d40f7c6"
+  }
+}

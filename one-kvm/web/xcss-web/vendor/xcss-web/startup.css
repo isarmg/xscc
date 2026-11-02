@@ -1,0 +1,17 @@
+/* A resource failure must be readable without the application fonts or WASM. */
+html[data-xcss-startup="failed"] body { visibility: visible !important; }
+html[data-xcss-startup="failed"] body > :not(#xcss-startup-error) { display: none !important; }
+#xcss-startup-error {
+  box-sizing: border-box;
+  max-width: 42rem;
+  margin: 4rem auto;
+  padding: 2rem;
+  background: Canvas;
+  color: CanvasText;
+  line-height: 1.6;
+}
+#xcss-startup-error, #xcss-startup-error * { font-family: system-ui, sans-serif !important; }
+#xcss-startup-error h1 { font-size: 1.5rem; }
+#xcss-startup-error button { padding: .5rem 1rem; cursor: pointer; }
+#xcss-startup-error button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+@media (max-width: 40rem) { #xcss-startup-error { margin: 1rem; padding: 1rem; } }

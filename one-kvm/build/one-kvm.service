@@ -1,0 +1,18 @@
+[Unit]
+Description=XSCC One-KVM Web host
+Documentation=https://github.com/isarmg/xscc/tree/main/one-kvm
+After=network-online.target bluetooth.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Example for older Intel GPUs:
+# Environment=LIBVA_DRIVER_NAME=i965
+UMask=0077
+ExecStart=/usr/bin/one-kvm --data-dir /etc/one-kvm
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

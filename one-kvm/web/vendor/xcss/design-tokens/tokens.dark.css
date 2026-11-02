@@ -1,0 +1,18 @@
+:root[data-theme="dark"] {
+  --xcss-bg-page: #09090b;
+  --xcss-bg-panel: #18181b;
+  --xcss-text-primary: #fafafa;
+  --xcss-text-danger: #f87171;
+  --xcss-text-link: #60a5fa;
+}
+
+/* Native documents follow the system preference unless the application has selected a theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --xcss-bg-page: #09090b;
+    --xcss-bg-panel: #18181b;
+    --xcss-text-primary: #fafafa;
+    --xcss-text-danger: #f87171;
+    --xcss-text-link: #60a5fa;
+  }
+}

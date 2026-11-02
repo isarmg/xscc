@@ -1,0 +1,64 @@
+{
+  "bugs": {
+    "url": "https://github.com/eshaz/wasm-audio-decoders/issues"
+  },
+  "dist": {
+    "shasum": "3210cdd77893a51fbb205f15dc0e56293e2074b5",
+    "tarball": "https://registry.npmjs.org/@wasm-audio-decoders/common/-/common-9.0.7.tgz",
+    "fileCount": 10,
+    "integrity": "sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==",
+    "signatures": [
+      {
+        "sig": "MEUCIQCwQFI03TrJ3cYDFEVd27c1KoALW/bk+d9na0VwBl1vuAIgHKNA4GXwqc2AZf98/82mG/UEFnR8SQbImhdxbY+IUPU=",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 58903
+  },
+  "main": "index.js",
+  "name": "@wasm-audio-decoders/common",
+  "type": "module",
+  "types": "types.d.ts",
+  "author": {
+    "name": "Ethan Halsall",
+    "email": "ethanhalsall@pm.me"
+  },
+  "module": "index.js",
+  "exports": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  },
+  "gitHead": "e4f7eef8cda48719a884023582d8efc5b8d76f6c",
+  "license": "MIT",
+  "_npmUser": {
+    "name": "eshaz",
+    "email": "ethanshalsall@gmail.com"
+  },
+  "homepage": "https://github.com/eshaz/wasm-audio-decoders/tree/master/src/common",
+  "repository": {
+    "url": "git+https://github.com/eshaz/wasm-audio-decoders.git",
+    "type": "git"
+  },
+  "_npmVersion": "11.3.0",
+  "description": "Web Assembly Audio Decoders Common",
+  "directories": {},
+  "maintainers": [
+    {
+      "name": "eshaz",
+      "email": "ethanshalsall@gmail.com"
+    }
+  ],
+  "sideEffects": false,
+  "_nodeVersion": "22.15.0",
+  "dependencies": {
+    "simple-yenc": "^1.0.4",
+    "@eshaz/web-worker": "1.2.2"
+  },
+  "_hasShrinkwrap": false,
+  "_npmOperationalInternal": {
+    "tmp": "tmp/common_9.0.7_1746897521624_0.9440904095837805",
+    "host": "s3://npm-registry-packages-npm-production"
+  },
+  "_id": "@wasm-audio-decoders/common@9.0.7",
+  "version": "9.0.7"
+}

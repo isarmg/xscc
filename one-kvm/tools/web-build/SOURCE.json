@@ -1,0 +1,28 @@
+{
+  "base_revision": "0c8b63cb3a43cbef7ab9929f587c587661e4678c",
+  "files": {
+    ".gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
+    "Cargo.lock": "efe6deb71c86eea112679213e4b7e42278bb73965fb58f70d6cae8ccc9bf2d00",
+    "Cargo.toml": "58c3975a0d8283b8b04f536d69899f18b0aa4819275941fef41da9651f9d34e9",
+    "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "README.md": "0280da4a64838764944fc85d5c59d3574368a83e71144c3b37c110c29760db46",
+    "src/assets.rs": "79b7897873e6628aaa70b252bc08bac82cddebd983c248f43112ccfb3bb70916",
+    "src/dev.rs": "6759e07eb8df0b62ab9f2ec8901df06adf062cc040aa8c25b29ef47b5924a42e",
+    "src/graph.rs": "d7bb4daa1bfba59cb2e9b754053f833d9b9621562aa4ed9ce98695586ae5dbc7",
+    "src/inventory.rs": "7f4bdde1a3e72f0d7a6ed5a636f625f7f4d5dc27f20b3a48322fc12ab1f1ce05",
+    "src/javascript.rs": "30a3c285458cef09a05eb37616e57a9c7844f5d9c631ed5b784f868e6ade9149",
+    "src/lib.rs": "43b8e4975c783d320b8469f9ecae844b3d6dc49b596f945affc02d8815f34db1",
+    "src/main.rs": "1c395da7bd400597d50700a6e190872108546622a8fd7e469e4f697f73bf44f6",
+    "src/server_build.rs": "7d46fde5020757af5249dfe7cea1fc3af052eebf10e658ec940daadf714c5ee6",
+    "test-preview.mjs": "846e34ae37e7739170512edd444bfc9fe7eef200d4f99656d1b57bf4791417d1",
+    "tests/fixtures/public-urls.css": "5b5846e364d34ced1b9b925b1e7ac26cce942cd630fa4259e5f202db51c3fe93"
+  },
+  "format": 1,
+  "origin": "https://github.com/isarmg/xcss",
+  "package": "xcss-web-build",
+  "source_directory": "tools/web-build",
+  "version": "1.0.0",
+  "local_changes": [
+    "XSCC One-KVM fork: keep SPA HTML resource URLs relative when relative_urls is enabled so one WASM distribution serves multiple instance prefixes."
+  ]
+}

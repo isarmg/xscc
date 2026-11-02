@@ -1,0 +1,36 @@
+Third-Party Code Attribution
+=============================
+
+The source files in this directory contain code derived from the RustDesk
+project (https://github.com/rustdesk/rustdesk). They implement parts of the
+RustDesk peer/rendezvous protocol (the "hbbs / hbbr" wire protocol, NaCl
+cryptographic handshake and related helpers), as also indicated by comments
+such as "RustDesk-compatible" and "RustDesk wire format" within the files.
+
+Upstream work:
+  RustDesk - https://github.com/rustdesk/rustdesk
+  Copyright (C) the RustDesk contributors
+  Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only)
+
+Modifications:
+  These files were ported, restructured, extended and otherwise modified for
+  One-KVM. Per sections 4 and 5 of the AGPL-3.0, the modified files carry
+  prominent notices stating that they were changed and the date of the
+  change, and they remain licensed under AGPL-3.0-only.
+
+The complete license text can be found in the LICENSE file at the repository
+root and at: https://www.gnu.org/licenses/agpl-3.0.en.html
+
+The original upstream One-KVM source is available at
+https://github.com/mofeng-git/One-KVM (see the release tags).
+The XSCC changes below are part of this modified source tree; upstream
+release tags do not contain them.
+
+2026-10-26 XSCC managed-host changes:
+  Added the XSCC KX1 split-key transport prelude and instance/epoch-bound
+  session proofs in managed.rs, updated peer protobuf fields, connected
+  management lease revocation to native connection shutdown, and made
+  frame decoding cancellation-safe. Native video sessions reserve the shared
+  encoder only while active. Original RustDesk and One-KVM attribution and
+  AGPL-3.0-only licensing remain applicable. Reused XSCC protocol/client
+  sources and their exact origin records are in crates/management.

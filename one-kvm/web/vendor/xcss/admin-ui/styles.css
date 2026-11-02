@@ -1,0 +1,79 @@
+@import "./content-blocks.css";
+@import "./date-range.css";
+@import "./account-settings.css";
+@import "./select.css";
+
+:where(button,input,select,textarea) { font: inherit; }
+:where(button,[href],input,select,textarea,[tabindex]):focus-visible { outline: 3px solid var(--xcss-focus,#2563eb); outline-offset: 3px; }
+:root :is(input,select,textarea,[role=combobox]):focus { outline: 0; }
+.xcss-button,.xcss-input { min-height: 44px; border: 1px solid currentColor; border-radius: 0; padding: .5rem .8rem; color: inherit; background: var(--xcss-bg-panel,#fff); }
+.xcss-button { cursor: pointer; touch-action: manipulation; }
+.xcss-button:disabled { opacity: .6; cursor: not-allowed; }
+.xcss-danger,.xcss-error { color: var(--xcss-text-danger,#b91c1c); }
+.xcss-input { width: 100%; box-sizing: border-box; }
+.xcss-form-field { display: grid; gap: .4rem; margin-block: 1rem; }
+.xcss-dialog { width: min(36rem,calc(100% - 3rem)); max-height: calc(100dvh - 3rem); overflow: auto; padding: 1.5rem; border: 1px solid currentColor; border-radius: 0; color: var(--xcss-text-primary,#18181b); background: var(--xcss-bg-panel,#fff); }
+.xcss-dialog::backdrop { background: rgb(0 0 0 / .6); }
+.xcss-dialog-heading,.xcss-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.xcss-dialog-heading h2 { margin: 0; }
+.xcss-actions { justify-content: flex-end; margin-top: 1.5rem; }
+.xcss-table-scroll { max-width: 100%; overflow: auto; }
+.xcss-table { width: 100%; border-collapse: collapse; }
+.xcss-table :is(th,td) { padding: .7rem; text-align: left; border-bottom: 1px solid currentColor; }
+.xcss-table .xcss-actions { justify-content: flex-start; margin-top: 0; }
+.xcss-table .xcss-actions > .xcss-button { display: inline-flex; align-items: center; justify-content: flex-start; min-width: 44px; padding-inline: 0; text-align: left; }
+.xcss-instance-link, .xcss-instance-link:visited { color: inherit; text-decoration: none; }
+.xcss-instance-link:hover, .xcss-instance-link:focus-visible { text-decoration: underline; }
+.xcss-status { display: inline-block; padding: .15rem .5rem; border: 1px solid currentColor; border-radius: 1rem; }
+.xcss-error,.xcss-empty,.xcss-loading { padding: 1rem; overflow-wrap: anywhere; }
+.xcss-error { border: 1px solid currentColor; border-radius: 0; }
+.xcss-request-id { font-size: .85rem; overflow-wrap: anywhere; }
+.xcss-request-id code { font-family: var(--xcss-font-mono,monospace); user-select: all; }
+.xcss-toast-stack { margin: 1rem; display: grid; gap: .5rem; min-width: 0; }
+.xcss-toast { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid currentColor; border-radius: 0; background: var(--xcss-bg-panel,#fff); overflow-wrap: anywhere; }
+.xcss-admin-shell,.xcss-auth-shell { min-height: 100dvh; color: var(--xcss-text-primary,#18181b); background: var(--xcss-bg-page,#fafafa); font-family: var(--xcss-font-ui,monospace); line-height: var(--xcss-line-height-body,1.5); }
+.xcss-application-boot { display: grid; place-items: center; min-height: 100dvh; color: var(--xcss-text-primary,#18181b); background: var(--xcss-bg-page,#fafafa); }
+.xcss-application-boot::after { content: ""; width: 1.25rem; height: 1.25rem; border: .15rem solid currentColor; border-inline-end-color: transparent; border-radius: 50%; animation: xcss-application-boot-spin .8s linear infinite; }
+@keyframes xcss-application-boot-spin { to { transform: rotate(360deg); } }
+.xcss-auth-shell { display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
+.xcss-auth-card { width: min(28rem,100%); padding: 1.5rem; box-sizing: border-box; background: var(--xcss-bg-panel,#fff); border: 1px solid currentColor; border-radius: 0; }
+.xcss-page-header { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; padding: 1rem; border-bottom: 1px solid currentColor; background: var(--xcss-bg-panel,#fff); }
+.xcss-product-identity { display: grid; margin-inline-end: auto; }
+.xcss-shell-layout { display: grid; grid-template-columns: 15rem minmax(0,1fr); }
+.xcss-shell-layout--full { grid-template-columns: minmax(0,1fr); }
+.xcss-navigation { padding: 1rem; border-inline-end: 1px solid currentColor; }
+.xcss-navigation a { display: block; padding: .75rem; color: inherit; border-radius: 0; overflow-wrap: anywhere; }
+.xcss-navigation a[aria-current="page"] { font-weight: bold; text-decoration-thickness: .2em; }
+.xcss-shell-main { padding: var(--xcss-content-spacing,var(--xcss-space-4,16px)); min-width: 0; }
+.xcss-content-stack { display: grid; align-content: start; gap: var(--xcss-content-spacing,var(--xcss-space-4,16px)); min-width: 0; }
+.xcss-content-stack > * { margin-block: 0; }
+.xcss-skip-link { position: absolute; top: -10rem; inset-inline-start: 1rem; z-index: 30; padding: 1rem; background: var(--xcss-bg-panel,#fff); color: inherit; }
+.xcss-skip-link:focus { top: .5rem; }
+.xcss-theme-select { display: flex; align-items: center; gap: .5rem; }
+.xcss-theme-select select { width: auto; }
+@media(max-width: 48rem) { .xcss-shell-layout { grid-template-columns: minmax(0,1fr); } .xcss-navigation { display: flex; flex-wrap: wrap; border-inline-end: 0; border-bottom: 1px solid currentColor; gap: .25rem; } }
+@media(forced-colors:active) { :where(button,[href],input,select,textarea,[tabindex]):focus-visible { outline-color: Highlight; } .xcss-button:disabled { color: GrayText; opacity: 1; } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important;transition-duration:.001ms!important;animation-duration:.001ms!important; } }
+
+.xcss-auth-content { display: grid; justify-items: center; gap: 1rem; width: min(28rem,100%); }
+
+/* Explicit server Mac mini opt-in using the local degree-seven contour fit.
+ * These are corner bounding extents, not circular radii or Apple API values.
+ * The runtime clamps them to half the short side. Only current stable browsers
+ * are supported; these surfaces have no circular-radius compatibility layer. */
+@property --xcss-server-corner-extent { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
+@property --xcss-server-corner-mode { syntax: "*"; inherits: false; initial-value: paint; }
+:root {
+  --xcss-server-corner-control: 27px;
+  --xcss-server-corner-panel: 42px;
+  --xcss-server-corner-notification: 48px;
+  --xcss-server-corner-dialog: 54px;
+  --xcss-server-corner-photo: 31.0568993271%;
+  /* A 216x144 six-row card has its first text box ~2.4px below the edge.
+   * Keep its existing safe horizontal inset while changing only the contour,
+   * without changing the card's size or its row positions. */
+  --xcss-server-corner-text-inset: 26px;
+}
+.xcss-button, .xcss-input, .xcss-navigation a { --xcss-server-corner-extent: var(--xcss-server-corner-control); }
+.xcss-error, .xcss-toast, .xcss-auth-card { --xcss-server-corner-extent: var(--xcss-server-corner-notification); }
+.xcss-dialog { --xcss-server-corner-extent: var(--xcss-server-corner-dialog); }

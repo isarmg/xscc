@@ -1,0 +1,42 @@
+{
+  "format": 1,
+  "packages": [
+    {
+      "name": "opus-decoder",
+      "version": "0.7.11",
+      "tarball": "https://registry.npmjs.org/opus-decoder/-/opus-decoder-0.7.11.tgz",
+      "integrity": "sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==",
+      "archive": "archives/one-kvm-opus-decoder-0.7.11.tgz",
+      "source_directory": "package",
+      "git_revision": "8f2428c1cd96b54dab74836c8471ff75fe35cbee"
+    },
+    {
+      "name": "@wasm-audio-decoders/common",
+      "version": "9.0.7",
+      "tarball": "https://registry.npmjs.org/@wasm-audio-decoders/common/-/common-9.0.7.tgz",
+      "integrity": "sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==",
+      "archive": "archives/one-kvm-opus-common-9.0.7.tgz",
+      "source_directory": "dependencies/common",
+      "git_revision": "e4f7eef8cda48719a884023582d8efc5b8d76f6c"
+    },
+    {
+      "name": "simple-yenc",
+      "version": "1.0.4",
+      "tarball": "https://registry.npmjs.org/simple-yenc/-/simple-yenc-1.0.4.tgz",
+      "integrity": "sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw==",
+      "archive": "archives/one-kvm-simple-yenc-1.0.4.tgz",
+      "source_directory": "dependencies/simple-yenc",
+      "git_revision": "3f87552b39abc2791f1e5331cb444a2726abeb86"
+    },
+    {
+      "name": "@eshaz/web-worker",
+      "version": "1.2.2",
+      "tarball": "https://registry.npmjs.org/@eshaz/web-worker/-/web-worker-1.2.2.tgz",
+      "integrity": "sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==",
+      "archive": "archives/one-kvm-web-worker-1.2.2.tgz",
+      "source_directory": "dependencies/web-worker",
+      "git_revision": "8d1e4bbf49f283fe59fdda20f633286148770696"
+    }
+  ],
+  "libopus_revision": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6"
+}

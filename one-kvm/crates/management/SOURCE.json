@@ -1,0 +1,89 @@
+{
+  "format": 1,
+  "components": [
+    {
+      "component": "client",
+      "repository": "xscc",
+      "git_revision": "5937b05375d29c8a353074e6028290b81929d4f3",
+      "source_directory": "crates/management",
+      "source_worktree_modified": false,
+      "source_files_sha256": {
+        "Cargo.toml": "7c869418abf61b52402769f42015e921cf8460020e10c9f56d97a3258627d281",
+        "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "src/engine.rs": "914258c2b1bca00afdb5b5bcd9821d57213766b48fd546299064763b8192bdd5",
+        "src/host.rs": "5758597ed20840078a2aae1d1443ecf9da3057695069a370cb96b8c2495f4812",
+        "src/lib.rs": "91bb019a496953ffb5d275558441eff23627aea700274bc08cdb01d9231bf9ea",
+        "src/transport.rs": "38be19aa4c2141de52c97532bd223d5fd5d16b1c7f253775cf6b9ee78db5d401",
+        "src/transport_tests.rs": "2c6717e0eb7a80c0e1341ef122bf566b27fe07034cb6369638f712e487d11f33",
+        "tests/embedded.rs": "28d2d46a3d36856aa29635edbca3793684972135718b6f26c2f7d7dcab4c31ca"
+      },
+      "source_archive": "sources/client.original.tar.gz",
+      "source_archive_sha256": "160ccbf8bf45fade95b6be7d0ca938a1696ac1f47d01064028eb51da310cce6c",
+      "product_modifications": {
+        "added": {},
+        "modified": {
+          "Cargo.toml": "8d3ceebe2375c3d1d5857c8fea649f1d55a43aa5c34fa9a8546df25e1dc5cd5e"
+        },
+        "removed": []
+      }
+    },
+    {
+      "component": "native",
+      "repository": "xscc",
+      "git_revision": "5937b05375d29c8a353074e6028290b81929d4f3",
+      "source_directory": "crates/native-management",
+      "source_worktree_modified": true,
+      "source_files_sha256": {
+        "Cargo.toml": "bf713aa083897657ea3ee38163d0432781192f1a181ae0c09608005ece238ffb",
+        "src/binding_store.rs": "cf0523f3d8fd71fb0aa3e1ec65a10066803cbf1441e2618755581e46799da819",
+        "src/enrollment.rs": "bfc4795166848dae1e6bc525307c917e8dde996b23ecb8153ca4100f6ab24078",
+        "src/journal.rs": "61cfdec8ad7987793a5e1f7eac8296ef78e3a50a2bcb6f312e74ee4c8f5a0cc0",
+        "src/lib.rs": "3133d16389525f6c14d0927e3a167c60357764ff479e2f182ec8a94e03ddff27",
+        "src/manager.rs": "f373e1dae3da8fb4bdd583c9dc12096a3f0874b7c4d8772f270410333b50aeb6",
+        "src/private_fs.rs": "d8f93f6a0755dd4bcf769ed30585478a9283a569f9d4c8eb4734d1ed0c002e1d",
+        "src/private_windows.rs": "5ab8584fadc687454ae4b0795414c3a1a898e631e95b3b74644b22dc1ce522b1",
+        "src/session.rs": "8e0bf06b8f67f7ddcf2e678b3450496f3f306171db96cf905952cbc7a13382c5",
+        "tests/mobile_enrollment_input.rs": "9d2def2d11ef334a987851beb740de0d0779bf29c597ea8a1f118edc7fe7545a"
+      },
+      "source_archive": "sources/native.original.tar.gz",
+      "source_archive_sha256": "81195e9e7052e88c45aecf4d3ee0d4eb9e50b7421fbc662525cd783d304c0d8c",
+      "product_modifications": {
+        "added": {
+          "LICENCE": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef"
+        },
+        "modified": {
+          "Cargo.toml": "ef02e24db12bb1b71f7a2370e7d8f7e4ab71b1b88c60ba3ac0db6cc24c00d171",
+          "src/enrollment.rs": "9b1e6f5cd3bfa7cd9a61fb9286c593a9ba22b1b77a01feab3556a6e2252421fd",
+          "src/manager.rs": "5e876eadb8ca0bf0c3de2fa40d4262f24823e0373688f60e5091ef4cc92b0c54"
+        },
+        "removed": [
+          "tests/mobile_enrollment_input.rs"
+        ]
+      }
+    },
+    {
+      "component": "protocol",
+      "repository": "xscs",
+      "git_revision": "c5c4579135b2e3330bac9a9e03f70d3d5e3e0c67",
+      "source_directory": "crates/protocol",
+      "source_worktree_modified": true,
+      "source_files_sha256": {
+        "Cargo.toml": "5fff985641c776739e0f680eae63db39fbb092475b6ff720abd78e315cb9e5a3",
+        "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "src/access.rs": "17a02d3327ec544aa0ba77d67dd9f801fb5776a37e6ad7f8beab18d876089607",
+        "src/lib.rs": "7f3190d559c430a3f9438337c29039f96e9bed850ef8cb00a14e6febaec0af53",
+        "tests/access.rs": "c471f7841038058424129d3b60b44fa16e0e5e4528176fcc01dac3e816f66a36",
+        "tests/rustdesk.rs": "e0d2a02de1fa033c92bfca3b88b2a6d02c8342e342069f6f7335c2a2c3cf077f"
+      },
+      "source_archive": "sources/protocol.original.tar.gz",
+      "source_archive_sha256": "55e774df125fd4029c0f1b51e6d67d787ab3d419a659b2c8d73b40510d479b3a",
+      "product_modifications": {
+        "added": {},
+        "modified": {
+          "Cargo.toml": "1dec2f3039914fb0c754e564dfd55f8f4da7de722e56eaed885e1a495bf674b0"
+        },
+        "removed": []
+      }
+    }
+  ]
+}

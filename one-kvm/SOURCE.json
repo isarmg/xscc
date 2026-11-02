@@ -1,0 +1,8 @@
+{
+  "format": 1,
+  "origin": "https://github.com/isarmg/One-KVM",
+  "revision": "67216384cd90d954c202827b76c8020779691279",
+  "import_path": "one-kvm",
+  "license": "AGPL-3.0-only",
+  "integration": "Source imported into isarmg/xscc; original licenses, upstream notices and nested provenance records retained. Runtime container packaging removed; native Web host extended for independent instances."
+}

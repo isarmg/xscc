@@ -1,0 +1,41 @@
+.xcss-select { display: block; min-width: 0; width: 100%; }
+.xcss-select-native { display: none; --xcss-server-corner-extent: 0px; }
+.xcss-select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  text-align: start; cursor: pointer; min-width: 0;
+  --xcss-server-corner-extent: var(--xcss-server-corner-control, 27px);
+  --xcss-server-corner-mode: clip;
+}
+.xcss-select-trigger:disabled { opacity: .6; cursor: not-allowed; }
+.xcss-select-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xcss-select-trigger .xcss-select-arrow { display: block; flex: none; width: 16px; height: 16px; fill: none; transform-origin: center; }
+.xcss-select-trigger[aria-expanded=true] .xcss-select-arrow { transform: rotate(90deg); }
+.xcss-select-panel {
+  position: fixed; inset: auto; margin: 0; padding: 0; box-sizing: border-box;
+  min-width: 0; max-width: calc(100vw - 16px); overflow: auto; overscroll-behavior: contain;
+  color: var(--xcss-text-primary, #18181b); background: var(--xcss-bg-panel, #fff);
+  border: 1px solid var(--xcss-block-border, currentColor); font: inherit;
+  --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px);
+  --xcss-server-corner-mode: clip;
+  --xcss-server-corner-foreground: 1;
+}
+/* Hidden popovers cannot be measured. Reveal a newly opened panel only once
+ * its shared contour and shadow are painted, including the first frame. */
+.xcss-select-panel:popover-open:not([data-xcss-server-corner-state=clip]):not([data-xcss-server-corner-reason=forced-colors]) { visibility: hidden; }
+.xcss-select-option {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  min-height: 44px; padding: .5rem max(1rem, var(--xcss-server-corner-text-inset, 26px));
+  box-sizing: border-box; cursor: pointer; overflow-wrap: anywhere;
+  --xcss-server-corner-extent: 0px;
+}
+.xcss-select-option[data-active=true] { background: var(--xcss-bg-page, #edf2f7); color: var(--xcss-text-primary, #18181b); }
+.xcss-select-option[aria-selected=true] { font-weight: 700; }
+.xcss-select-option[aria-disabled=true] { opacity: .5; cursor: not-allowed; }
+.xcss-select-group { display: block; padding: .5rem 1.5rem; font-size: .875em; font-weight: 700; color: var(--xcss-block-muted, #64748b); }
+.xcss-select-error { display: block; margin-block-start: .4rem; color: var(--xcss-text-danger, #b91c1c); }
+.xcss-input.xcss-select-list { --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px); --xcss-server-corner-mode: clip; }
+@media (forced-colors: active) {
+  .xcss-select-trigger, .xcss-select-panel { color: ButtonText; background: Canvas; border: 1px solid ButtonText; }
+  .xcss-select-option[data-active=true] { background: Highlight; color: HighlightText; }
+  .xcss-select-option[aria-disabled=true] { color: GrayText; opacity: 1; }
+}

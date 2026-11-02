@@ -79,3 +79,8 @@ flutter/web/
 /third_party/libdrmtap/
 # Local git worktrees
 .worktrees/
+
+# Imported One-KVM source includes tracked images and source archives. Its own
+# .gitignore retains local data, certificates and build-output exclusions.
+!/one-kvm/
+!/one-kvm/**

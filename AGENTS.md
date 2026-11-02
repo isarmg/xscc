@@ -83,6 +83,10 @@ for trust boundaries, review questions and validation commands.
 
 ## Native application boundary
 
+`one-kvm/` is the separately built, bare-metal Web KVM host requested by the
+maintainer. Its Rust/WASM browser frontend is governed by `one-kvm/AGENTS.md`;
+the GPUI-only UI rules below apply to the existing desktop/mobile applications.
+
 * GPUI is the only product frontend. Product builds and CI must not require Flutter, Dart, or Flutter Rust Bridge code generation.
 * The root crate defaults to native GPUI core features on desktop and mobile. Do not add an implicit Flutter fallback for a target platform.
 * Retained Flutter source, bridge inputs and old packagers are historical compatibility material. Do not use them as application entry points or add new product UI there.

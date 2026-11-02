@@ -1,0 +1,309 @@
+/* Default Union content-block appearance, derived from union-rust's Apache-2.0
+ * xcss-design content-card/login/tokens. No fonts, scripts or authentication.
+ * Any other explicit appearance name opts out, without changing behavior. */
+html:not([data-xcss-appearance]), html[data-xcss-appearance="content-blocks"] {
+  color-scheme: light;
+  --xcss-bg-page: #fff;
+  --xcss-bg-panel: #f2f2f2;
+  --xcss-text-primary: #1f1f1f;
+  --xcss-text-link: #444;
+  --xcss-action-primary: #444;
+  --xcss-text-danger: #a73d46;
+  --xcss-focus: #444;
+  --xcss-block-muted: #5f5f5f;
+  --xcss-block-border: #e3e3e3;
+  --xcss-content-spacing: var(--xcss-space-4, 16px);
+  color: var(--xcss-text-primary);
+  background: var(--xcss-bg-page);
+  body { margin: 0; }
+  .xcss-shell-layout--full { grid-template-columns: minmax(0, 1fr); }
+  .xcss-header-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; margin-inline-start: auto; flex-shrink: 0; }
+  .xcss-header-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; min-height: 44px; line-height: 1; }
+  .xcss-admin-shell > .xcss-page-header { flex-wrap: wrap; gap: 8px; padding-block: 5px 6px; }
+  .xcss-header-navigation-slot { flex: 1 1 20rem; min-width: 0; overflow: visible; }
+  .xcss-header-brand-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; width: auto; }
+  .xcss-header-brand-navigation > .xcss-product-identity { display: flex; align-items: center; height: 44px; margin: 0; white-space: nowrap; }
+  .xcss-header-navigation { display: flex; flex: 1 1 18rem; flex-wrap: wrap; align-items: center; gap: 8px 24px; min-width: 0; width: auto; padding: 7px 0; }
+  .xcss-page-header :is(.xcss-header-navigation a, .xcss-header-navigation button, .xcss-header-actions button) {
+    display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+    height: 44px; min-height: 44px; line-height: 1;
+    white-space: nowrap; padding: 0 8px; flex-shrink: 0; color: var(--xcss-text-primary);
+  }
+  .xcss-page-header :is(.xcss-header-navigation a, .xcss-header-navigation button) { justify-content: flex-start; min-width: 44px; height: auto; min-height: 30px; max-width: 100%; padding: 0; line-height: 1; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+  .xcss-admin-shell:has(.xcss-secondary-navigation) > .xcss-page-header { padding-block: 5px 0; }
+  .xcss-admin-shell:has(.xcss-log-date-controls) > .xcss-page-header { padding-block-end: 4px; }
+  .xcss-header-navigation a { text-decoration: none; border-radius: 0; }
+  .xcss-header-actions svg { width: var(--xcss-header-icon-size, 1em); height: var(--xcss-header-icon-size, 1em); }
+  &:not([data-xcss-selection="custom"]) .xcss-header-navigation [aria-current="page"] { background: transparent; box-shadow: none; text-decoration: underline; text-underline-offset: .25em; }
+  &:not([data-xcss-selection="custom"]) :is(.xcss-navigation a[aria-current="page"], .xcss-button[aria-pressed="true"]) { background: transparent; color: var(--xcss-text-primary); box-shadow: none; text-decoration: underline; text-underline-offset: .25em; text-decoration-thickness: 1px; }
+  @media (max-width: 360px) {
+    .xcss-header-actions { gap: 2px; }
+  }
+  &[data-theme="dark"] {
+    color-scheme: dark;
+    --xcss-bg-page: #151a1d;
+    --xcss-bg-panel: #252c31;
+    --xcss-text-primary: #edf2f4;
+    --xcss-text-link: #5fa8c8;
+    --xcss-action-primary: #5fa8c8;
+    --xcss-text-danger: #ff8a92;
+    --xcss-focus: #5fa8c8;
+    --xcss-block-muted: #a4b0b7;
+    --xcss-block-border: #354047;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:not([data-theme="light"]):not([data-theme="dark"]) {
+      color-scheme: dark;
+      --xcss-bg-page: #151a1d;
+      --xcss-bg-panel: #252c31;
+      --xcss-text-primary: #edf2f4;
+      --xcss-text-link: #5fa8c8;
+      --xcss-action-primary: #5fa8c8;
+      --xcss-text-danger: #ff8a92;
+      --xcss-focus: #5fa8c8;
+      --xcss-block-muted: #a4b0b7;
+      --xcss-block-border: #354047;
+    }
+  }
+
+  /* General blocks grow with their content; only six-row cards are fixed ratio. */
+  .xcss-content-panel, .xcss-table-scroll, .xcss-dialog, .xcss-toast {
+    min-width: 0;
+    padding: 1rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--xcss-bg-panel);
+    overflow-wrap: anywhere;
+  }
+  .xcss-table-scroll { margin-block: 1rem; }
+  /* A table inside a panel shares that panel's surface and content edge. */
+  .xcss-content-panel > .xcss-table-scroll {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  /* Native adapters toggle the table; its empty scroll region must follow. */
+  .xcss-table-scroll:has(> .xcss-table.hidden),
+  .xcss-table-scroll:has(> .xcss-table[hidden]) { display: none; }
+  .xcss-table :is(th, td) { border-color: var(--xcss-block-border); font-weight: 400; }
+  .xcss-table tr > :first-child { padding-inline-start: 0; }
+  .xcss-table tr > :last-child { padding-inline-end: 0; }
+  .xcss-page-header, .xcss-navigation { border: 0; background: transparent; }
+  .xcss-navigation a { text-decoration: none; }
+  .xcss-navigation a[aria-current="page"] { background: var(--xcss-bg-panel); color: var(--xcss-text-link); font-weight: 400; }
+  .xcss-shell-main { display: grid; align-content: start; gap: var(--xcss-content-spacing); padding: var(--xcss-content-spacing); padding-block-start: 0; }
+  .xcss-shell-main > * { min-width: 0; }
+  :where(.xcss-shell-main > section, .xcss-shell-main > div, .xcss-content-panel, .xcss-content-stack) {
+    display: grid;
+    align-content: start;
+    gap: var(--xcss-content-spacing);
+    min-width: 0;
+  }
+  .xcss-shell-main > section > *,
+  .xcss-shell-main > div > *,
+  .xcss-content-panel > *,
+  .xcss-content-stack > * {
+    margin-block: 0;
+  }
+  .xcss-button { border: 0; background: transparent; color: var(--xcss-text-link); font-weight: 400; }
+  .xcss-button:hover { text-decoration: underline; }
+  .xcss-content-panel .xcss-actions { justify-content: flex-start; }
+  .xcss-content-panel .xcss-button { min-width: 44px; padding-inline: 0; text-align: left; }
+  .xcss-table .xcss-actions > .xcss-button { display: inline-flex; align-items: center; justify-content: flex-start; min-width: 44px; padding-inline: 0; text-align: left; }
+  .xcss-instance-link, .xcss-instance-link:visited { color: inherit; text-decoration: none; }
+  .xcss-instance-link:hover, .xcss-instance-link:focus-visible { text-decoration: underline; }
+  /* Spacing belongs to the wrapping container so every new row starts flush. */
+  .xcss-content-stack > .xcss-secondary-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px calc(8px + 1.6rem); max-width: 100%; padding: 0; margin-block-end: -5px; }
+  .xcss-secondary-navigation > .xcss-button { flex-shrink: 0; min-width: 44px; min-height: 30px; height: auto; max-width: 100%; padding: 0; line-height: 1; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+  .xcss-log-date-controls { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: start; gap: 8px 16px; min-width: 0; }
+  .xcss-log-date-controls > label { min-width: 0; min-height: 30px; line-height: 30px; }
+  .xcss-log-date-controls > .xcss-actions { grid-column: 2; grid-row: 1; margin: 0; }
+  .xcss-log-date-controls > .xcss-input { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  .xcss-log-date-controls .xcss-button { display: inline-flex; align-items: center; height: 30px; min-height: 30px; padding-block: 0; line-height: 30px; }
+  .xcss-input { border-color: var(--xcss-block-border); background: transparent; }
+  .xcss-status { border: 0; padding-inline: 0; }
+  .xcss-error, .xcss-empty, .xcss-loading { border: 0; border-radius: 0; background: var(--xcss-bg-panel); margin-block: 1rem; }
+  .xcss-content-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 16px; margin-block: 16px; }
+  .xcss-table.xcss-statistics-table { display: block; }
+  .xcss-table.xcss-statistics-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .xcss-table.xcss-statistics-table tbody { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; }
+  .xcss-table.xcss-statistics-table tbody tr { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .xcss-table.xcss-statistics-table tbody :is(th, td) { display: block; padding: 0; border: 0; white-space: nowrap; }
+  @media (max-width: 56rem) { .xcss-table.xcss-statistics-table tbody { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 36rem) { .xcss-table.xcss-statistics-table tbody { grid-template-columns: minmax(0, 1fr); } }
+  .xcss-table-scroll:has(.xcss-content-table) { background: transparent; padding: 0; }
+  .xcss-content-table { display: block; }
+  .xcss-content-table > caption, .xcss-content-table > thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .xcss-content-table > tbody { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 16px; }
+  .xcss-content-table tr {
+    display: grid; grid-template-rows: repeat(6, auto); align-content: start;
+    min-width: 0; min-height: 190px; padding: .6rem 1rem;
+    border-radius: 0; background: var(--xcss-bg-panel);
+  }
+  .xcss-content-table :is(th, td) { padding: .4rem 0; border: 0; min-width: 0; overflow-wrap: anywhere; }
+  .xcss-content-table td[data-label]::before { content: attr(data-label); color: var(--xcss-block-muted); margin-inline-end: 2ch; }
+  .xcss-content-table details :is(dl, dd) { margin-inline: 0; }
+  .xcss-content-card {
+    position: relative;
+    container-type: size;
+    aspect-ratio: 3 / 2;
+    min-width: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: var(--xcss-bg-panel);
+    font-weight: 400;
+  }
+  .xcss-content-card__inner {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-rows: repeat(6, minmax(0, 1fr));
+    padding-inline: calc(5.5556% - 100cqh / 24);
+    font-size: clamp(1rem, calc(100cqh / 12), 1.5rem);
+    line-height: 1.2;
+  }
+  .xcss-content-row { display: flex; align-items: center; gap: 2ch; min-width: 0; }
+  .xcss-content-row > :first-child { color: var(--xcss-block-muted); flex-shrink: 0; }
+  .xcss-content-row > :last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .xcss-content-card :is(h2, h3, p, strong) { margin: 0; font-size: inherit; font-weight: 400; }
+
+  /* The existing semantic labels, inputs and submit handler remain untouched.
+   * Grid places their children in the original six rows, including the error row. */
+  .xcss-auth-shell { padding: 24px; }
+  .xcss-auth-card { width: min(380px, 100%); border: 0; border-radius: 0; }
+  .xcss-login-controls { display: flex; align-items: center; gap: 8px; }
+  .xcss-login-controls > button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; padding: 0 8px; line-height: 1; }
+  .xcss-login-controls svg { width: var(--xcss-header-icon-size, 1em); height: var(--xcss-header-icon-size, 1em); }
+  &[data-theme="light"] :is(.xcss-auth-card, .xcss-login-controls) {
+    --xcss-text-primary: #000;
+    --xcss-text-link: #000;
+    --xcss-action-primary: #000;
+    --xcss-block-muted: #000;
+    color: var(--xcss-text-primary);
+  }
+
+  .xcss-auth-card:has(> form) {
+    position: relative;
+    container-type: size;
+    aspect-ratio: 3 / 2;
+    padding: 0;
+    border-radius: 0;
+  }
+  .xcss-auth-card:has(> form) > .xcss-product-identity,
+  .xcss-auth-card > form > h1 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .xcss-auth-card > form {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(6, minmax(0, 1fr));
+    padding-inline: calc(5.5556% - 100cqh / 24);
+    font-size: calc(100cqh / 12);
+    line-height: 1.2;
+  }
+  .xcss-auth-card .xcss-form-field { display: contents; }
+  .xcss-auth-card .xcss-form-field > span { display: flex; align-items: center; gap: 1ch; color: var(--xcss-block-muted); }
+  .xcss-auth-card .xcss-form-field:has([name="username"]) > span { grid-row: 1; }
+  .xcss-auth-card [name="username"] { grid-row: 2; }
+  .xcss-auth-card .xcss-form-field:has([name="password"]) > span { grid-row: 3; }
+  .xcss-auth-card [name="password"] { grid-row: 4; }
+  .xcss-auth-card .xcss-input {
+    align-self: center;
+    min-height: 0;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    border-radius: 0;
+  }
+  .xcss-auth-card .xcss-input:focus { border-bottom-color: var(--xcss-focus); outline: 0; }
+  .xcss-auth-card .xcss-error {
+    grid-row: 5;
+    align-self: stretch;
+    margin: 0;
+    padding: 0;
+    border-radius: 0;
+    font-size: .65em;
+    overflow: auto;
+  }
+  .xcss-auth-card .xcss-error .xcss-request-id { font-size: inherit; }
+  .xcss-auth-card > form > button {
+    grid-row: 6;
+    justify-self: start;
+    align-self: center;
+    display: flex;
+    align-items: center;
+    gap: 1ch;
+    padding: 0;
+    min-height: 0;
+    height: 100%;
+    border-radius: 0;
+    font-size: inherit;
+  }
+  .xcss-auth-card .xcss-form-field > span::before,
+  .xcss-auth-card > form > button::before {
+    content: "";
+    width: 1em;
+    height: 1em;
+    flex: 0 0 1em;
+    background: currentColor;
+    mask: var(--xcss-block-icon) center / contain no-repeat;
+  }
+  .xcss-auth-card .xcss-form-field:has([name="username"]) > span {
+    --xcss-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Ccircle cx='12' cy='9' r='3'/%3E%3Cpath d='M6 19v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2'/%3E%3C/svg%3E");
+  }
+  .xcss-auth-card .xcss-form-field:has([name="password"]) > span {
+    --xcss-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Crect x='6' y='11' width='12' height='8' rx='1'/%3E%3Cpath d='M8 11V8a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E");
+  }
+  .xcss-auth-card > form > button {
+    --xcss-block-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.4'%3E%3Crect x='1' y='1' width='22' height='22' rx='5'/%3E%3Cpath d='M13 6h5v12h-5M4 12h10m-4-4 4 4-4 4'/%3E%3C/svg%3E");
+  }
+
+  /* Native-ESM pages use the same palette and block surfaces. */
+  .login-card .card-row-label { color: var(--xcss-block-muted); }
+  body > .main { margin: var(--xcss-content-spacing); padding: var(--xcss-content-spacing); border-radius: 0; background: var(--xcss-bg-panel); }
+  .action-dialog { border: 0; border-radius: 0; background: var(--xcss-bg-panel); }
+
+  @media (forced-colors: active) {
+    .xcss-content-card, .xcss-content-panel, .xcss-auth-card, .xcss-table-scroll, .xcss-dialog { border: 1px solid CanvasText; }
+    .xcss-auth-card .xcss-input { border-bottom-color: ButtonText; }
+    :is(button, input, select, a):focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+  }
+
+  .xcss-content-panel, .xcss-table-scroll, .xcss-content-table tr {
+    --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px);
+  }
+  .xcss-toast, .xcss-error, .xcss-empty, .xcss-loading, .xcss-auth-card,
+  .xcss-content-card, .xcss-auth-card:has(> form) {
+    --xcss-server-corner-extent: var(--xcss-server-corner-notification, 48px);
+  }
+  /* Only an active renderer needs the larger corner's minimum text inset. */
+  .xcss-content-card[data-xcss-server-corner-state="clip"] > .xcss-content-card__inner,
+  .xcss-auth-card:is([data-xcss-server-corner-state="clip"], [data-xcss-server-corner-state="paint"]) > form {
+    padding-inline: max(calc(5.5556% - 100cqh / 24), var(--xcss-server-corner-text-inset, 26px));
+  }
+  /* Preserve the first row's baseline at narrow widths: the longer account
+   * label must fit one row after the larger corner's horizontal text inset. */
+  .xcss-auth-card:is([data-xcss-server-corner-state="clip"], [data-xcss-server-corner-state="paint"]) .xcss-form-field > span {
+    font-size: .875em;
+  }
+  body > .main { --xcss-server-corner-extent: var(--xcss-server-corner-panel, 42px); }
+  .xcss-dialog, .action-dialog { --xcss-server-corner-extent: var(--xcss-server-corner-dialog, 54px); }
+  /* Text navigation, underlined login fields and a nested table remain square. */
+  .xcss-header-navigation a, .xcss-content-panel > .xcss-table-scroll,
+  .xcss-auth-card .xcss-input, .xcss-auth-card .xcss-error,
+  .xcss-auth-card > form > button { --xcss-server-corner-extent: 0px; }
+}

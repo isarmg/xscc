@@ -1,0 +1,952 @@
+import { request, uploadRequest, ApiError } from './request'
+import type {
+  CanonicalKey,
+  Ch9329DescriptorState,
+  ComputerUseButton,
+  ComputerUseConfigResponse,
+  ComputerUseConfigUpdate,
+  ComputerUseSessionStatus,
+  ComputerUseSessionSummary,
+  ComputerUseStartRequest,
+} from '@/types/generated'
+import { useHidWebSocket, type HidKeyboardEvent, type HidMouseEvent } from '@/composables/useHidWebSocket'
+import type { StreamSignalReason, StreamState } from '@/types/websocket'
+
+const API_BASE = '/api'
+
+export const authApi = {
+  login: (username: string, password: string) =>
+    request<AuthLoginResponse>(
+      '/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      },
+      { toastOnError: false },
+    ),
+
+  loginTotp: (challengeId: string, code: string) =>
+    request<AuthLoginResponse>(
+      '/auth/login/totp',
+      {
+        method: 'POST',
+        body: JSON.stringify({ challenge_id: challengeId, code }),
+      },
+      { toastOnError: false },
+    ),
+
+  logout: () =>
+    request<{ success: boolean }>('/auth/logout', { method: 'POST' }),
+
+  check: () =>
+    request<{ authenticated: boolean; user?: string }>('/auth/check'),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ success: boolean }>('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  changeUsername: (username: string, currentPassword: string) =>
+    request<{ success: boolean }>('/auth/username', {
+      method: 'POST',
+      body: JSON.stringify({ username, current_password: currentPassword }),
+    }),
+
+  totpStatus: () =>
+    request<TotpStatusResponse>('/auth/totp'),
+
+  beginTotpEnrollment: (currentPassword: string) =>
+    request<TotpEnrollmentResponse>('/auth/totp/enrollment', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword }),
+    }, { toastOnError: false }),
+
+  confirmTotpEnrollment: (enrollmentId: string, code: string) =>
+    request<{ success: boolean }>('/auth/totp/enrollment/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ enrollment_id: enrollmentId, code }),
+    }, { toastOnError: false }),
+
+  disableTotp: (currentPassword: string, code: string) =>
+    request<{ success: boolean }>('/auth/totp/disable', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, code }),
+    }, { toastOnError: false }),
+}
+
+export interface AuthLoginResponse {
+  next: 'authenticated' | 'totp'
+  challenge_id?: string
+  expires_at_unix_ms?: number
+}
+
+export interface TotpStatusResponse {
+  enabled: boolean
+  server_time_unix_ms: number
+}
+
+export interface TotpEnrollmentResponse {
+  enrollment_id: string
+  secret: string
+  otpauth_uri: string
+  expires_at_unix_ms: number
+  server_time_unix_ms: number
+}
+
+export interface NetworkAddress {
+  interface: string
+  ip: string
+}
+
+export interface DeviceInfo {
+  hostname: string
+  cpu_model: string
+  cpu_usage: number
+  memory_total: number
+  memory_used: number
+  network_addresses: NetworkAddress[]
+  serial_ports: string[]
+}
+
+export interface FeatureCapability {
+  available: boolean
+  backends: string[]
+  selected_backend?: string
+  reason?: string
+}
+
+export interface PlatformCapabilities {
+  mode: 'linux' | 'windows'
+  mode_label: string
+  video_capture: FeatureCapability
+  encoder: FeatureCapability
+  hid: FeatureCapability
+  atx: FeatureCapability
+  msd: FeatureCapability
+  otg: FeatureCapability
+  audio: FeatureCapability
+  rustdesk: FeatureCapability
+  vnc: FeatureCapability
+  diagnostics: FeatureCapability
+  extensions: FeatureCapability
+  service_installation: FeatureCapability
+}
+
+export const systemApi = {
+  info: () =>
+    request<{
+      version: string
+      initialized: boolean
+      platform: PlatformCapabilities
+      capabilities: {
+        video: { available: boolean; backend?: string; reason?: string }
+        hid: { available: boolean; backend?: string; reason?: string }
+        msd: { available: boolean; backend?: string; reason?: string }
+        atx: { available: boolean; backend?: string; reason?: string }
+        audio: { available: boolean; backend?: string; reason?: string }
+        rustdesk: { available: boolean; backend?: string; reason?: string }
+        vnc: { available: boolean; backend?: string; reason?: string }
+      }
+      disk_space?: {
+        total: number
+        available: number
+        used: number
+      }
+      device_info?: DeviceInfo
+    }>('/info'),
+
+  health: () => request<{ status: string; version: string }>('/health'),
+
+  setupStatus: () =>
+    request<{ initialized: boolean; needs_setup: boolean; platform: PlatformCapabilities }>('/setup'),
+
+  setup: (data: {
+    username: string
+    password: string
+    video_device?: string
+    video_format?: string
+    video_width?: number
+    video_height?: number
+    video_fps?: number
+    hid_backend?: 'otg' | 'ch9329' | 'bluetooth' | 'none'
+    hid_bluetooth?: { adapter: string; name: string }
+    hid_ch9329_port?: string
+    hid_ch9329_baudrate?: number
+    hid_otg_udc?: string
+    hid_otg_profile?: string
+    hid_otg_keyboard_leds?: boolean
+    msd_enabled?: boolean
+    encoder_backend?: string
+    audio_device?: string
+    ttyd_enabled?: boolean
+    rustdesk_enabled?: boolean
+  }) =>
+    request<{ success: boolean; message?: string }>('/setup/init', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  restart: () =>
+    request<{ success: boolean; message?: string }>('/system/restart', {
+      method: 'POST',
+    }),
+}
+
+export type UpdateChannel = 'stable' | 'beta'
+
+export interface UpdateOverviewResponse {
+  success: boolean
+  current_version: string
+  channel: UpdateChannel
+  latest_version: string
+  upgrade_available: boolean
+  target_version?: string
+  notes_between: Array<{
+    version: string
+    published_at: string
+    notes: string[]
+  }>
+}
+
+export interface UpdateStatusResponse {
+  success: boolean
+  phase: 'idle' | 'checking' | 'downloading' | 'verifying' | 'installing' | 'restarting' | 'success' | 'failed'
+  progress: number
+  current_version: string
+  target_version?: string
+  message?: string
+  last_error?: string
+}
+
+export const updateApi = {
+  overview: (channel: UpdateChannel = 'stable') =>
+    request<UpdateOverviewResponse>(
+      `/update/overview?channel=${encodeURIComponent(channel)}`,
+      {},
+      { toastOnError: false },
+    ),
+
+  upgrade: (payload: { channel?: UpdateChannel; target_version?: string }) =>
+    request<{ success: boolean; message?: string }>('/update/upgrade', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  status: () =>
+    request<UpdateStatusResponse>('/update/status'),
+}
+
+export interface VideoCodecInfo {
+  id: string
+  name: string
+  protocol: 'http' | 'webrtc'
+  hardware: boolean
+  backend: string | null
+  available: boolean
+}
+
+export interface EncoderBackendInfo {
+  id: string
+  name: string
+  is_hardware: boolean
+  supported_formats: string[]
+}
+
+export interface AvailableCodecsResponse {
+  success: boolean
+  backends: EncoderBackendInfo[]
+  codecs: VideoCodecInfo[]
+}
+
+export interface StreamConstraintsResponse {
+  success: boolean
+  allowed_codecs: string[]
+  locked_codec: string | null
+  disallow_mjpeg: boolean
+  sources: {
+    rustdesk: boolean
+    rtsp: boolean
+    vnc: boolean
+  }
+  reason: string
+  current_mode: string
+}
+
+export interface VideoEncoderSelfCheckCodec {
+  id: string
+  name: string
+}
+
+export interface VideoEncoderSelfCheckCell {
+  codec_id: string
+  ok: boolean
+  elapsed_ms?: number | null
+}
+
+export interface VideoEncoderSelfCheckRow {
+  resolution_id: string
+  resolution_label: string
+  width: number
+  height: number
+  cells: VideoEncoderSelfCheckCell[]
+}
+
+export interface VideoEncoderSelfCheckResponse {
+  current_hardware_encoder: string
+  codecs: VideoEncoderSelfCheckCodec[]
+  rows: VideoEncoderSelfCheckRow[]
+}
+
+export const streamApi = {
+  status: () =>
+    request<{
+      state: StreamState
+      reason?: StreamSignalReason | null
+      device: string | null
+      format: string | null
+      resolution: [number, number] | null
+      clients: number
+      target_fps: number
+      fps: number
+    }>('/stream/status'),
+
+  start: () =>
+    request<{ success: boolean }>('/stream/start', { method: 'POST' }),
+
+  stop: () =>
+    request<{ success: boolean }>('/stream/stop', { method: 'POST' }),
+
+  getMjpegUrl: (clientId?: string) => {
+    const base = `${API_BASE}/stream/mjpeg`
+    return clientId ? `${base}?client_id=${clientId}` : base
+  },
+
+  getSnapshotUrl: () => `${API_BASE}/snapshot`,
+
+  getMode: () =>
+    request<{ success: boolean; mode: string; transition_id?: string; switching?: boolean; message?: string }>('/stream/mode'),
+
+  setMode: (mode: string) =>
+    request<{ success: boolean; mode: string; transition_id?: string; switching?: boolean; message?: string }>('/stream/mode', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+
+  getCodecs: () =>
+    request<AvailableCodecsResponse>('/stream/codecs'),
+
+  getConstraints: () =>
+    request<StreamConstraintsResponse>('/stream/constraints'),
+
+  encoderSelfCheck: () =>
+    request<VideoEncoderSelfCheckResponse>('/video/encoder/self-check'),
+
+  setBitratePreset: (bitrate_preset: import('@/types/generated').BitratePreset) =>
+    request<{ success: boolean; message?: string }>('/stream/bitrate', {
+      method: 'POST',
+      body: JSON.stringify({ bitrate_preset }),
+    }),
+}
+
+export interface IceCandidate {
+  candidate: string
+  sdpMid?: string
+  sdpMLineIndex?: number
+  usernameFragment?: string
+}
+
+export interface IceServerConfig {
+  urls: string[]
+  username?: string
+  credential?: string
+}
+
+export const webrtcApi = {
+  createSession: () =>
+    request<{ session_id: string }>('/webrtc/session', { method: 'POST' }),
+
+  offer: (sdp: string, signal?: AbortSignal) =>
+    request<{ sdp: string; session_id: string; ice_candidates: IceCandidate[] }>('/webrtc/offer', {
+      method: 'POST',
+      body: JSON.stringify({ sdp }),
+      signal,
+    }, { toastOnError: false }),
+
+  addIceCandidate: (sessionId: string, candidate: IceCandidate) =>
+    request<{ success: boolean }>('/webrtc/ice', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, candidate }),
+    }),
+
+  status: () =>
+    request<{
+      session_count: number
+      sessions: Array<{ session_id: string; state: string }>
+    }>('/webrtc/status'),
+
+  close: (sessionId: string) =>
+    request<{ success: boolean }>('/webrtc/close', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+
+  getIceServers: () =>
+    request<{ ice_servers: IceServerConfig[]; mdns_mode: string }>('/webrtc/ice-servers'),
+}
+
+const hidWs = useHidWebSocket()
+let hidWsInitialized = false
+
+async function ensureHidConnection() {
+  if (!hidWsInitialized) {
+    hidWsInitialized = true
+    await hidWs.connect()
+  }
+}
+
+function mapButton(button?: 'left' | 'right' | 'middle'): number | undefined {
+  if (!button) return undefined
+  const buttonMap = { left: 0, middle: 1, right: 2 }
+  return buttonMap[button]
+}
+
+export const hidApi = {
+  status: () =>
+    request<{
+      available: boolean
+      backend: string
+      initialized: boolean
+      online: boolean
+      supports_absolute_mouse: boolean
+      keyboard_leds_enabled: boolean
+      led_state: {
+        num_lock: boolean
+        caps_lock: boolean
+        scroll_lock: boolean
+        compose: boolean
+        kana: boolean
+      }
+      screen_resolution: [number, number] | null
+      device: string | null
+      error: string | null
+      error_code: string | null
+    }>('/hid/status'),
+
+  otgSelfCheck: () =>
+    request<{
+      overall_ok: boolean
+      error_count: number
+      warning_count: number
+      hid_backend: string
+      selected_udc: string | null
+      bound_udc: string | null
+      udc_state: string | null
+      udc_speed: string | null
+      available_udcs: string[]
+      other_gadgets: string[]
+      checks: Array<{
+        id: string
+        ok: boolean
+        level: 'info' | 'warn' | 'error'
+        message: string
+        hint?: string
+        path?: string
+      }>
+    }>('/hid/otg/self-check'),
+
+  keyboard: async (type: 'down' | 'up', key: CanonicalKey, modifier?: number) => {
+    await ensureHidConnection()
+    const event: HidKeyboardEvent = {
+      type: type === 'down' ? 'keydown' : 'keyup',
+      key,
+      modifier: (modifier ?? 0) & 0xff,
+    }
+    await hidWs.sendKeyboard(event)
+    return { success: true }
+  },
+
+  mouse: async (data: {
+    type: 'move' | 'move_abs' | 'down' | 'up' | 'scroll'
+    x?: number | null
+    y?: number | null
+    button?: 'left' | 'right' | 'middle' | null
+    scroll?: number | null
+  }) => {
+    await ensureHidConnection()
+    const event: HidMouseEvent = {
+      type: data.type === 'move_abs' ? 'moveabs' : data.type,
+      x: data.x ?? undefined,
+      y: data.y ?? undefined,
+      button: mapButton(data.button ?? undefined),
+      scroll: data.scroll ?? undefined,
+    }
+    await hidWs.sendMouse(event)
+    return { success: true }
+  },
+
+  reset: () =>
+    request<{ success: boolean }>('/hid/reset', { method: 'POST' }),
+
+  ch9329Descriptor: (params?: { port?: string; baudRate?: number }) => {
+    const query = new URLSearchParams()
+    if (params?.port) query.set('port', params.port)
+    if (params?.baudRate) query.set('baud_rate', String(params.baudRate))
+    const suffix = query.toString()
+    return request<Ch9329DescriptorState>(`/hid/ch9329/descriptor${suffix ? `?${suffix}` : ''}`)
+  },
+
+  consumer: async (usage: number) => {
+    await ensureHidConnection()
+    await hidWs.sendConsumer({ usage })
+    return { success: true }
+  },
+
+  connectWebSocket: () => hidWs.connect(),
+  disconnectWebSocket: () => hidWs.disconnect(),
+  isWebSocketConnected: () => hidWs.connected.value,
+}
+
+export type ComputerUseStatus = ComputerUseSessionStatus
+
+export type ComputerUseAction =
+  | { type: 'click'; x: number; y: number; button?: ComputerUseButton }
+  | { type: 'double_click'; x: number; y: number; button?: ComputerUseButton }
+  | { type: 'move'; x: number; y: number }
+  | { type: 'drag'; path: Array<{ x: number; y: number }>; button?: ComputerUseButton }
+  | { type: 'scroll'; x: number; y: number; dx?: number; dy?: number }
+  | { type: 'type'; text: string }
+  | { type: 'keypress'; keys: string[] }
+  | { type: 'wait'; ms: number }
+  | { type: 'screenshot' }
+
+export type ComputerUseConversationMessage =
+  | { role: 'user'; text: string }
+  | { role: 'assistant'; text: string }
+
+export type ComputerUseConfig = ComputerUseConfigResponse
+
+export type ComputerUseSession = ComputerUseSessionSummary
+
+export const computerUseApi = {
+  config: () => request<ComputerUseConfig>('/config/computer-use'),
+
+  updateConfig: (data: ComputerUseConfigUpdate) =>
+    request<ComputerUseConfig>('/config/computer-use', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  session: () => request<ComputerUseSession>('/computer-use/session'),
+
+  start: (data: ComputerUseStartRequest) =>
+    request<ComputerUseSession>('/computer-use/session', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  stop: () =>
+    request<ComputerUseSession>('/computer-use/session/stop', {
+      method: 'POST',
+    }),
+}
+
+export const atxApi = {
+  status: () =>
+    request<{
+      available: boolean
+      backend: string
+      initialized: boolean
+      power_status: 'on' | 'off' | 'unknown'
+      led_supported: boolean
+      hdd_status: 'active' | 'inactive' | 'unknown'
+      hdd_supported: boolean
+    }>('/atx/status'),
+
+  power: (action: 'short' | 'long' | 'reset') =>
+    request<{ success: boolean; message?: string }>('/atx/power', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+}
+
+export interface MsdImage {
+  id: string
+  name: string
+  size: number
+  created_at: string
+}
+
+export interface DriveFile {
+  name: string
+  path: string
+  is_dir: boolean
+  size: number
+}
+
+export type DriveFileAccess = 'available' | 'unsupported' | 'blocked_while_connected' | 'unknown'
+
+export interface DriveInfo {
+  size: number
+  used: number | null
+  free: number | null
+  initialized: boolean
+  file_access: DriveFileAccess
+}
+
+export type DiskMode = 'single' | 'multi'
+export type MountedMediaKind = 'drive' | 'image'
+
+export interface MountedMedia {
+  id: string
+  kind: MountedMediaKind
+  name: string
+  cdrom: boolean
+  read_only: boolean
+  size: number
+}
+
+export const msdApi = {
+  status: () =>
+    request<{
+      available: boolean
+      state: {
+        disk_mode: DiskMode
+        slot_capacity: number
+        mounted_count: number
+        mounted_media: MountedMedia[]
+        drive_info: DriveInfo | null
+        usb_reenumerating: boolean
+      }
+    }>('/msd/status', {}, { toastOnError: false }),
+
+  listImages: () => request<MsdImage[]>('/msd/images', {}, { toastOnError: false }),
+
+  uploadImage: async (file: File, onProgress?: (progress: number) => void) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return uploadRequest<MsdImage>('/msd/images', formData, onProgress, {
+      errorTitleKey: 'msd.operations.uploadImage',
+    })
+  },
+
+  deleteImage: (id: string) =>
+    request<{ success: boolean }>(`/msd/images/${id}`, { method: 'DELETE' }, { errorTitleKey: 'msd.operations.deleteImage' }),
+
+  setDiskMode: (diskMode: DiskMode) =>
+    request<{ success: boolean }>('/msd/disk-mode', {
+      method: 'PUT',
+      body: JSON.stringify({ disk_mode: diskMode }),
+    }, { errorTitleKey: 'msd.operations.changeMode' }),
+
+  mountImage: (id: string, cdrom: boolean, readOnly: boolean) =>
+    request<{ success: boolean }>(`/msd/images/${id}/mount`, {
+      method: 'POST',
+      body: JSON.stringify({ cdrom, read_only: readOnly }),
+    }, { errorTitleKey: 'msd.operations.mountImage' }),
+
+  unmountImage: (id: string) =>
+    request<{ success: boolean }>(`/msd/images/${id}/mount`, { method: 'DELETE' }, { errorTitleKey: 'msd.operations.unmountImage' }),
+
+  mountDrive: () =>
+    request<{ success: boolean }>('/msd/drive/mount', { method: 'POST' }, { errorTitleKey: 'msd.operations.mountDrive' }),
+
+  unmountDrive: () =>
+    request<{ success: boolean }>('/msd/drive/mount', { method: 'DELETE' }, { errorTitleKey: 'msd.operations.unmountDrive' }),
+
+  driveInfo: () =>
+    request<DriveInfo>('/msd/drive', {}, { toastOnError: false }),
+
+  initDrive: (sizeMb?: number) =>
+    request<DriveInfo>(
+      '/msd/drive/init',
+      {
+        method: 'POST',
+        body: JSON.stringify({ size_mb: sizeMb }),
+      },
+      { errorTitleKey: 'msd.operations.initializeDrive' },
+    ),
+
+  deleteDrive: () =>
+    request<{ success: boolean }>('/msd/drive', { method: 'DELETE' }, { errorTitleKey: 'msd.operations.deleteDrive' }),
+
+  listDriveFiles: (path = '/') =>
+    request<DriveFile[]>(
+      `/msd/drive/files?path=${encodeURIComponent(path)}`,
+      {},
+      { toastOnError: false },
+    ),
+
+  uploadDriveFile: async (file: File, targetPath = '/', onProgress?: (progress: number) => void) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return uploadRequest<{ success: boolean; message?: string }>(
+      `/msd/drive/files?path=${encodeURIComponent(targetPath)}`,
+      formData,
+      onProgress,
+      { errorTitleKey: 'msd.operations.uploadDriveFile' },
+    )
+  },
+
+  downloadDriveFile: (path: string) =>
+    `${API_BASE}/msd/drive/files${encodeDrivePath(path)}`,
+
+  deleteDriveFile: (path: string) =>
+    request<{ success: boolean }>(`/msd/drive/files${encodeDrivePath(path)}`, {
+      method: 'DELETE',
+    }, { errorTitleKey: 'msd.operations.deleteDriveFile' }),
+
+  createDirectory: (path: string) =>
+    request<{ success: boolean }>(`/msd/drive/mkdir${encodeDrivePath(path)}`, {
+      method: 'POST',
+    }, { errorTitleKey: 'msd.operations.createDirectory' }),
+
+  downloadFromUrl: (url: string, filename?: string) =>
+    request<{
+      download_id: string
+      url: string
+      filename: string
+      bytes_downloaded: number
+      total_bytes: number | null
+      progress_pct: number | null
+      status: string
+      error_code: string | null
+    }>('/msd/images/download', {
+      method: 'POST',
+      body: JSON.stringify({ url, filename }),
+    }, { errorTitleKey: 'msd.operations.startDownload' }),
+
+  cancelDownload: (downloadId: string) =>
+    request<{ success: boolean }>('/msd/images/download/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ download_id: downloadId }),
+    }, { errorTitleKey: 'msd.operations.cancelDownload' }),
+}
+
+interface SerialDeviceOption {
+  path: string
+  name: string
+}
+
+export type VideoControlMode = 'configurable' | 'source_following'
+export type VideoInputState = 'locked' | 'no_signal' | 'unavailable'
+
+export interface VideoInputStatus {
+  state: VideoInputState
+  format: string | null
+  width: number | null
+  height: number | null
+  fps: number | null
+}
+
+export interface VideoResolution {
+  width: number
+  height: number
+  fps: number[]
+}
+
+export interface VideoFormat {
+  format: string
+  description: string
+  resolutions: VideoResolution[]
+}
+
+export interface VideoDevice {
+  path: string
+  name: string
+  driver: string
+  formats: VideoFormat[]
+  usb_bus: string | null
+  has_signal: boolean
+  control_mode: VideoControlMode
+  input_status: VideoInputStatus
+}
+
+export interface DeviceList {
+  video: VideoDevice[]
+  serial: Array<{ path: string; name: string }>
+  audio: Array<{
+    name: string
+    description: string
+    is_hdmi: boolean
+    usb_bus: string | null
+  }>
+  udc: Array<{ name: string }>
+  extensions: {
+    ttyd_available: boolean
+    rustdesk_available: boolean
+  }
+}
+
+function encodeDrivePath(path: string): string {
+  if (path === '' || path === '/') {
+    return '/'
+  }
+
+  const hasLeadingSlash = path.startsWith('/')
+  const hasTrailingSlash = path.endsWith('/')
+  const encodedSegments = path
+    .split('/')
+    .filter(Boolean)
+    .map(segment => encodeURIComponent(segment))
+    .join('/')
+
+  return `${hasLeadingSlash ? '/' : ''}${encodedSegments}${hasTrailingSlash ? '/' : ''}`
+}
+
+function getSerialDevicePriority(path: string): number {
+  if (/^\/dev\/ttyUSB/i.test(path)) return 0
+  if (/^\/dev\/(ttyS|S)/i.test(path)) return 2
+  return 1
+}
+
+function sortSerialDevices(serialDevices: SerialDeviceOption[]): SerialDeviceOption[] {
+  return [...serialDevices].sort((a, b) => {
+    const priorityDiff = getSerialDevicePriority(a.path) - getSerialDevicePriority(b.path)
+    if (priorityDiff !== 0) return priorityDiff
+    return a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' })
+  })
+}
+
+export const configApi = {
+  listDevices: async () => {
+    const result = await request<DeviceList>('/devices')
+
+    return {
+      ...result,
+      serial: sortSerialDevices(result.serial),
+    }
+  },
+
+  getVideoInputStatus: (device: string) =>
+    request<VideoInputStatus>(
+      `/video/input-status?device=${encodeURIComponent(device)}`,
+      {},
+      { toastOnError: false },
+    ),
+}
+
+export {
+  authConfigApi,
+  videoConfigApi,
+  streamConfigApi,
+  hidConfigApi,
+  msdConfigApi,
+  otgConfigApi,
+  otgNetworkApi,
+  uacApi,
+  atxConfigApi,
+  audioConfigApi,
+  extensionsApi,
+  redfishConfigApi,
+  rustdeskConfigApi,
+  rtspConfigApi,
+  vncConfigApi,
+  webConfigApi,
+  watchdogConfigApi,
+  type RustDeskConfigResponse,
+  type RustDeskStatusResponse,
+  type RustDeskConfigUpdate,
+  type RustDeskPasswordResponse,
+  type RtspConfigResponse,
+  type RedfishConfigResponse,
+  type RedfishConfigUpdate,
+  type RtspConfigUpdate,
+  type RtspStatusResponse,
+  type VncConfigResponse,
+  type VncConfigUpdate,
+  type VncEncoding,
+  type VncStatusResponse,
+  type WebConfig,
+  type WebConfigUpdate,
+} from './config'
+
+export type {
+  AppConfig,
+  AuthConfig,
+  AuthConfigUpdate,
+  VideoConfig,
+  VideoConfigUpdate,
+  StreamConfig,
+  StreamConfigUpdate,
+  HidConfig,
+  HidConfigUpdate,
+  MsdConfig,
+  MsdConfigUpdate,
+  AtxConfig,
+  AtxConfigUpdate,
+  AudioConfig,
+  AudioConfigUpdate,
+  HidBackend,
+  StreamMode,
+  EncoderType,
+  BitratePreset,
+  ComputerUseButton,
+  ComputerUseConfigResponse,
+  ComputerUseConfigUpdate,
+  ComputerUseScreenshot,
+  ComputerUseSessionStatus,
+  ComputerUseSessionSummary,
+  ComputerUseStartRequest,
+} from '@/types/generated'
+
+export const audioApi = {
+  status: () =>
+    request<{
+      enabled: boolean
+      streaming: boolean
+      device: string | null
+      sample_rate: number
+      channels: number
+      quality: string
+      subscriber_count: number
+      frames_encoded: number
+      bytes_output: number
+      error: string | null
+    }>('/audio/status'),
+
+  start: () =>
+    request<{ success: boolean }>('/audio/start', { method: 'POST' }),
+
+  stop: () =>
+    request<{ success: boolean }>('/audio/stop', { method: 'POST' }),
+
+  setQuality: (quality: 'voice' | 'balanced' | 'high') =>
+    request<{ success: boolean }>('/audio/quality', {
+      method: 'POST',
+      body: JSON.stringify({ quality }),
+    }),
+
+  selectDevice: (device: string) =>
+    request<{ success: boolean }>('/audio/device', {
+      method: 'POST',
+      body: JSON.stringify({ device }),
+    }),
+}
+
+export interface UsbDeviceInfo {
+  bus_num: number
+  dev_num: number
+  id_vendor: string
+  id_product: string
+  product?: string
+  manufacturer?: string
+  speed?: string
+  authorized?: boolean
+  video_device?: string
+}
+
+export const usbApi = {
+  listDevices: () =>
+    request<UsbDeviceInfo[]>('/devices/usb'),
+
+  resetDevice: (busNum: number, devNum: number) =>
+    request<{ success: boolean; message: string }>('/devices/usb/reset', {
+      method: 'POST',
+      body: JSON.stringify({ bus_num: busNum, dev_num: devNum }),
+    }),
+}
+
+export { ApiError }

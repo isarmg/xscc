@@ -1,0 +1,25 @@
+:root {
+  --xcss-font-ui: "Sarmg Maple", ui-monospace, monospace;
+  --xcss-font-mono: "Sarmg Maple", ui-monospace, monospace;
+  --xcss-font-size-body: 1rem;
+  --xcss-line-height-body: 1.5;
+  --xcss-blue-500: #3b82f6;
+  --xcss-blue-600: #2563eb;
+  --xcss-gray-50: #fafafa;
+  --xcss-gray-100: #f4f4f5;
+  --xcss-gray-900: #18181b;
+  --xcss-red-600: #dc2626;
+  --xcss-space-1: 4px;
+  --xcss-space-2: 8px;
+  --xcss-space-3: 12px;
+  --xcss-space-4: 16px;
+  --xcss-space-6: 24px;
+  --xcss-space-8: 32px;
+  --xcss-content-spacing: var(--xcss-space-4);
+  --xcss-action-primary: var(--xcss-blue-600);
+  --xcss-text-link: var(--xcss-blue-600);
+  --xcss-bg-page: var(--xcss-gray-50);
+  --xcss-bg-panel: #ffffff;
+  --xcss-text-primary: var(--xcss-gray-900);
+  --xcss-text-danger: var(--xcss-red-600);
+}

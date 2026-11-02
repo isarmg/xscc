@@ -1,0 +1,80 @@
+{
+  "bugs": {
+    "url": "https://github.com/eshaz/wasm-audio-decoders/issues"
+  },
+  "dist": {
+    "shasum": "d8cd87bfc376163982417e8bed72858954065ed8",
+    "tarball": "https://registry.npmjs.org/opus-decoder/-/opus-decoder-0.7.11.tgz",
+    "fileCount": 9,
+    "integrity": "sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==",
+    "signatures": [
+      {
+        "sig": "MEQCIDom1r1OF+tFcJ7nyTyfTPKxkqYGlm14edHBPabZvF07AiAJq8M82aPUx/1HOPLMi9NndwDv0EDbSqlNM/3Xx4fWBg==",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      }
+    ],
+    "unpackedSize": 207440
+  },
+  "main": "./index.js",
+  "name": "opus-decoder",
+  "type": "module",
+  "types": "types.d.ts",
+  "author": {
+    "name": "Ethan Halsall",
+    "email": "ethanhalsall@pm.me"
+  },
+  "exports": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  },
+  "funding": {
+    "url": "https://github.com/sponsors/eshaz",
+    "type": "individual"
+  },
+  "gitHead": "8f2428c1cd96b54dab74836c8471ff75fe35cbee",
+  "license": "MIT",
+  "_npmUser": {
+    "name": "eshaz",
+    "email": "ethanshalsall@gmail.com"
+  },
+  "homepage": "https://github.com/eshaz/wasm-audio-decoders/tree/main/src/opus-decoder",
+  "keywords": [
+    "Opus",
+    "audio",
+    "decoder",
+    "multichannel",
+    "surround",
+    "stream",
+    "streams",
+    "libopus",
+    "Web Assembly",
+    "Wasm",
+    "Web Worker"
+  ],
+  "repository": {
+    "url": "git+https://github.com/eshaz/wasm-audio-decoders.git",
+    "type": "git",
+    "directory": "src/opus-decoder"
+  },
+  "_npmVersion": "11.3.0",
+  "description": "Web Assembly streaming Opus decoder",
+  "directories": {},
+  "maintainers": [
+    {
+      "name": "eshaz",
+      "email": "ethanshalsall@gmail.com"
+    }
+  ],
+  "sideEffects": false,
+  "_nodeVersion": "22.15.0",
+  "dependencies": {
+    "@wasm-audio-decoders/common": "9.0.7"
+  },
+  "_hasShrinkwrap": false,
+  "_npmOperationalInternal": {
+    "tmp": "tmp/opus-decoder_0.7.11_1760920066923_0.976281034023055",
+    "host": "s3://npm-registry-packages-npm-production"
+  },
+  "_id": "opus-decoder@0.7.11",
+  "version": "0.7.11"
+}

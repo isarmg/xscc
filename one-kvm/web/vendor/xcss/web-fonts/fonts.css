@@ -1,0 +1,5 @@
+@import "./boot.css";
+@font-face{font-family:"Sarmg Maple";src:url("./MapleMonoFull-Regular.woff2") format("woff2");font-style:normal;font-weight:400;font-display:block;}
+@font-face{font-family:"Sarmg Maple";src:url("./MapleMonoFull-Bold.woff2") format("woff2");font-style:normal;font-weight:700;font-display:block;}
+:root{--xcss-font-ui:"Sarmg Maple",ui-monospace,monospace;--xcss-font-mono:"Sarmg Maple",ui-monospace,monospace;font-variant-ligatures:none;font-feature-settings:"calt" 0,"liga" 0,"clig" 0,"dlig" 0;font-synthesis:none}
+body,button,input,select,textarea,code,pre,kbd,samp{font-family:var(--xcss-font-ui);font-style:normal;font-variant-ligatures:none;font-feature-settings:"calt" 0,"liga" 0,"clig" 0,"dlig" 0;font-synthesis:none}
