@@ -78,7 +78,7 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 
 ## 2026-11-02：退出清理、真实刷新率及移动端指针
 
-Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请独占的显示变更窗口。视频循环收到同一个生命周期标记后正常退栈，待编码器和捕获器实际析构，后台操作才继续；变更结束后，仍有订阅的视频服务按原有循环重建捕获。等待最多 5 秒，超时保留设备并返回错误。最后一个远程会话退出也使用这条释放确认；新连接登记与清理互斥，等待后重新检查管理授权，避免旧退出任务删除新会话的屏幕。不在连接列表或服务器锁下等待。
+Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请独占的显示变更窗口。视频循环收到同一个生命周期标记后正常退栈，待编码器和捕获器实际析构，后台操作才继续；变更结束后，仍有订阅的视频服务按原有循环重建捕获。等待最多 5 秒，超时保留设备并返回错误。最后一个远程会话退出也使用这条释放确认；新连接登记与清理互斥，等待后重新检查管理授权，避免旧退出任务删除新会话的屏幕。不在连接列表或服务器锁下等待。远程配置的阻塞操作完成后再执行一次无会话检查，覆盖用户在配置期间退出、外层连接任务已取消而阻塞操作仍完成的情况；本机预配置不走这条补清理路径。
 
 移除请求先记录期望数量 0；移除失败不再通过重新启用、重启适配器来回滚。自动无头登录不能覆盖已保存的 0 数量。固定签名 MttVDD 25.7.23 的 XML 模板要求正数量，因此 XML 的 1 不能代表实际仍有屏幕；实际状态使用 PnP/CCD。期望 0 而仍有设备时明确报告移除未完成。本次未改 CCD flags 或驱动安全策略；现场只读确认过虚拟屏的路径、信号及 GDI 当前模式均为 1920×1080@120Hz，物理屏为 60Hz，不能把视频 60FPS 直接当成虚拟屏 60Hz。
 
@@ -92,7 +92,7 @@ Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请
 
 | 文件/模块 | 变更原因及回归范围 |
 | --- | --- |
-| `src/server/connection.rs`、`video_service.rs` 及其 `capture_lifecycle.rs` | Windows 连接登记、最后会话清理、捕获退出和恢复之间的释放屏障；非 Windows 保留原路径。 |
+| `src/server/connection.rs`、`connection/media_controls.rs`、`video_service.rs` 及其 `capture_lifecycle.rs` | Windows 连接登记、最后会话清理、捕获退出和恢复之间的释放屏障；非 Windows 保留原路径。 |
 | `src/virtual_display_manager/mtt_vdd.rs`、`mtt_vdd/configuration.rs` | 所有已识别适配器变更入口持独占屏障；0 数量持久化、失败及自动无头行为修复；其他驱动不接管。 |
 | `libs/base/src/session_protocol.rs`、`src/gpui_session.rs`、`src/client/io_loop.rs`、`src/client/streaming.rs`、`src/server/video_qos.rs`、`libs/scrap/src/common/codec.rs` | 原有 FPS 选项的合法范围及原生目标类型；沿用消息格式、QoS 和解码反馈；旧非流模式偏好范围保留。 |
 | `experiments/gpui-validation/src/client.rs`、`client/toolbar_controls.rs`、`remote_video.rs`、`remote_video/media_controls.rs` | 真实 Hz、显示器下拉及实际模式确认后的目标同步；删除旧手动 FPS 入口。 |

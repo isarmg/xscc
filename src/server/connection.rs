@@ -3985,7 +3985,7 @@ mod raii {
         }
 
         #[cfg(windows)]
-        fn cleanup_last_remote_session() {
+        pub(super) fn cleanup_last_remote_session() {
             if Self::remote_conn_count() != 0 {
                 return;
             }

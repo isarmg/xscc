@@ -304,7 +304,12 @@ impl Connection {
                             }
                         }
                         match config {
-                            Some(config) => virtual_display_manager::configure_displays(&config),
+                            Some(config) => {
+                                let result = virtual_display_manager::configure_displays(&config);
+                                // The connection can close while this blocking operation continues.
+                                super::raii::AuthedConnID::cleanup_last_remote_session();
+                                result
+                            }
                             None => Ok(virtual_display_manager::configuration_state()),
                         }
                     })
