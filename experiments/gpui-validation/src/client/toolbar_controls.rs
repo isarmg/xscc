@@ -272,7 +272,7 @@ impl ManagementPanel {
                     cx.notify();
                 }))
             }));
-        self.render_toolbar_dropdown(ToolbarMenu::Display, content, window, cx)
+        self.render_toolbar_dropdown(ToolbarMenu::Display, div().child(content), window, cx)
     }
 
     pub(super) fn render_fps_dropdown(&self, window: &Window, cx: &mut Context<Self>) -> Div {
