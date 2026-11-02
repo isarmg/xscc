@@ -1188,9 +1188,7 @@ impl Render for Client {
         let palette = theme::palette(window.appearance());
         // Cached views require a definite viewport; panel content scrolls within it.
         let settings_width = if self.management.read(cx).sidebar_visible {
-            (f32::from(window.viewport_size().width) - 24.)
-                .min(680.)
-                .max(1.)
+            (f32::from(window.viewport_size().width) - 24.).clamp(1., 680.)
         } else {
             44.
         };
@@ -1317,7 +1315,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         }
                         .into(),
                     ),
-                    ..Default::default()
                 }),
                 ..Default::default()
             },
