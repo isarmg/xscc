@@ -39,6 +39,20 @@ use std::{
     },
 };
 
+async fn send_ui_message(
+    peer: &mut SessionTransport,
+    message: &Message,
+    on_error: impl FnOnce(String),
+) -> bool {
+    match peer.send(message).await {
+        Ok(()) => true,
+        Err(error) => {
+            on_error(format!("{error:#}"));
+            false
+        }
+    }
+}
+
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
     #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
@@ -422,7 +436,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     return true;
                 }
                 if let Some(msg) = msg {
-                    allow_err!(peer.send(&msg).await);
+                    if !send_ui_message(peer, &msg, |error| {
+                        self.handler.on_establish_connection_error(error);
+                    })
+                    .await
+                    {
+                        return false;
+                    }
                 }
             }
             Data::Message(msg) => {
@@ -459,7 +479,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     },
                     _ => {}
                 }
-                allow_err!(peer.send(&msg).await);
+                if !send_ui_message(peer, &msg, |error| {
+                    self.handler.on_establish_connection_error(error);
+                })
+                .await
+                {
+                    return false;
+                }
             }
             Data::ElevateDirect => {
                 let mut request = ElevationRequest::new();
@@ -468,7 +494,13 @@ impl<T: InvokeUiSession> Remote<T> {
                 misc.set_elevation_request(request);
                 let mut msg = Message::new();
                 msg.set_misc(misc);
-                allow_err!(peer.send(&msg).await);
+                if !send_ui_message(peer, &msg, |error| {
+                    self.handler.on_establish_connection_error(error);
+                })
+                .await
+                {
+                    return false;
+                }
                 self.elevation_requested = true;
             }
             Data::ElevateWithLogon(username, password) => {
@@ -482,7 +514,13 @@ impl<T: InvokeUiSession> Remote<T> {
                 misc.set_elevation_request(request);
                 let mut msg = Message::new();
                 msg.set_misc(misc);
-                allow_err!(peer.send(&msg).await);
+                if !send_ui_message(peer, &msg, |error| {
+                    self.handler.on_establish_connection_error(error);
+                })
+                .await
+                {
+                    return false;
+                }
                 self.elevation_requested = true;
             }
             Data::ResetDecoder(display) => match display {
@@ -504,7 +542,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     sid,
                     ..Default::default()
                 });
-                allow_err!(peer.send(&msg).await);
+                if !send_ui_message(peer, &msg, |error| {
+                    self.handler.on_establish_connection_error(error);
+                })
+                .await
+                {
+                    return false;
+                }
             }
             _ => {}
         }
@@ -1611,6 +1655,91 @@ impl Drop for VideoThread {
     fn drop(&mut self) {
         // since channels are buffered, messages sent before the disconnect will still be properly received.
         *self.discard_queue.write().unwrap() = true;
+    }
+}
+
+#[cfg(test)]
+mod ui_send_tests {
+    use super::*;
+    use hbb_common::{futures, sodiumoxide::crypto::secretbox::Key, tcp::FramedStream, Stream};
+
+    #[derive(Clone, Default)]
+    struct QuietUi;
+    impl InvokeUiSession for QuietUi {
+        fn set_cursor_data(&self, _: CursorData) {}
+        fn set_cursor_id(&self, _: String) {}
+        fn set_cursor_position(&self, _: CursorPosition) {}
+        fn set_display(&self, _: i32, _: i32, _: i32, _: i32, _: bool, _: f64) {}
+        fn switch_display(&self, _: &SwitchDisplay) {}
+        fn set_peer_info(&self, _: &PeerInfo) {}
+        fn set_displays(&self, _: &Vec<DisplayInfo>) {}
+        fn set_platform_additions(&self, _: &str) {}
+        fn on_connected(&self, _: ConnType) {}
+        fn update_privacy_mode(&self) {}
+        fn set_permission(&self, _: &str, _: bool) {}
+        fn close_success(&self) {}
+        fn update_quality_status(&self, _: QualityStatus) {}
+        fn set_connection_type(&self, _: bool, _: bool, _: &str) {}
+        fn set_fingerprint(&self, _: String) {}
+        fn update_block_input_state(&self, _: bool) {}
+        fn adapt_size(&self) {}
+        fn on_rgba(&self, _: usize, _: &mut scrap::ImageRgb) {}
+        fn msgbox(&self, _: &str, _: &str, _: &str, _: &str, _: bool) {}
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        fn clipboard(&self, _: String) {}
+        fn cancel_msgbox(&self, _: &str) {}
+        fn portable_service_running(&self, _: bool) {}
+        fn get_rgba(&self, _: usize) -> *const u8 {
+            std::ptr::null()
+        }
+        fn next_rgba(&self, _: usize) {}
+        #[cfg(feature = "vram")]
+        fn on_texture(&self, _: usize, _: *mut std::ffi::c_void) {}
+        fn set_multiple_windows_session(&self, _: Vec<WindowsSession>) {}
+        fn set_current_display(&self, _: i32) {}
+        #[cfg(feature = "flutter")]
+        fn is_multi_ui_session(&self) -> bool {
+            false
+        }
+        fn handle_screenshot_resp(&self, _: String, _: String) {}
+    }
+
+    #[tokio::test]
+    async fn ui_send_timeout_stops_before_queued_release_and_close() {
+        let (local, _stopped_reader) = tokio::io::duplex(64);
+        let mut stream = Stream::Tcp(FramedStream::from(local, "127.0.0.1:0".parse().unwrap()));
+        stream.set_key(Key([0x43; 32]));
+        #[cfg(feature = "experimental-quic")]
+        let mut peer: SessionTransport = stream.into();
+        #[cfg(not(feature = "experimental-quic"))]
+        let mut peer = stream;
+        peer.set_send_timeout(30);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut remote = Remote::new(Session::<QuietUi>::default(), receiver, sender.clone());
+        let mut message = Message::new();
+        message.set_clipboard(Clipboard {
+            content: vec![0x7b; 1024 * 1024].into(),
+            ..Default::default()
+        });
+        let mut sending = Box::pin(remote.handle_msg_from_ui(Data::Message(message), &mut peer));
+        assert!(futures::poll!(&mut sending).is_pending());
+        let mut release = Message::new();
+        release.set_mouse_event(MouseEvent {
+            mask: base::session_protocol::input::MOUSE_TYPE_UP,
+            ..Default::default()
+        });
+        sender.send(Data::Message(release.clone())).unwrap();
+        sender.send(Data::Close).unwrap();
+        assert!(!timeout(1000, &mut sending).await.unwrap());
+        drop(sending);
+        drop(peer);
+        assert_eq!(remote.receiver.len(), 2);
+        assert!(
+            matches!(remote.receiver.try_recv().unwrap(), Data::Message(message) if message == release)
+        );
+        assert!(matches!(remote.receiver.try_recv().unwrap(), Data::Close));
+        drop(remote);
+        assert!(sender.is_closed());
     }
 }
 
