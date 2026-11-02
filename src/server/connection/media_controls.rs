@@ -321,7 +321,7 @@ impl Connection {
                 .await;
             return;
         }
-        let (mut state, error) = match result {
+        let (mut state, mut error) = match result {
             Ok(state) => (state, None),
             Err(error) => {
                 let mut state = virtual_display_manager::configuration_state();
@@ -331,30 +331,48 @@ impl Connection {
                 (state, Some(format!("{error:#}")))
             }
         };
-        // Publish one fresh screen snapshot before its correlated configuration result.
-        if let Ok(displays) = display_service::try_get_displays() {
-            let displays = display_service::update_sync_displays(&displays);
-            for screen in &mut state.displays {
-                screen.index = displays.iter().position(|display| {
-                    display
-                        .name
-                        .trim_end_matches('\0')
-                        .eq_ignore_ascii_case(screen.name.trim_end_matches('\0'))
-                        && display.online
-                });
+        // Native display handles must be dropped before the async transport send.
+        let snapshot = {
+            match display_service::try_get_displays() {
+                Ok(displays) => {
+                    let displays = display_service::update_sync_displays(&displays);
+                    for screen in &mut state.displays {
+                        screen.index = displays.iter().position(|display| {
+                            display
+                                .name
+                                .trim_end_matches('\0')
+                                .eq_ignore_ascii_case(screen.name.trim_end_matches('\0'))
+                                && display.online
+                        });
+                    }
+                    let mut snapshot = Message::new();
+                    let mut additions = virtual_display_manager::get_platform_additions();
+                    additions.insert(
+                        "virtual_display_configuration".into(),
+                        serde_json::to_value(&state)
+                            .expect("invariant: VDD state contains only serializable fields"),
+                    );
+                    snapshot.set_peer_info(PeerInfo {
+                        displays,
+                        platform_additions: serde_json::Value::Object(additions).to_string(),
+                        ..Default::default()
+                    });
+                    Some(snapshot)
+                }
+                Err(cause) => {
+                    if error.is_none() {
+                        error = Some(format!("刷新可捕获屏幕列表失败，请重新查询：{cause:#}"));
+                    }
+                    hbb_common::throttled_log!(
+                        std::time::Duration::from_secs(30),
+                        warn,
+                        "Refresh displays after virtual configuration failed: {cause:#}"
+                    );
+                    None
+                }
             }
-            let mut snapshot = Message::new();
-            let mut additions = virtual_display_manager::get_platform_additions();
-            additions.insert(
-                "virtual_display_configuration".into(),
-                serde_json::to_value(&state)
-                    .expect("invariant: VDD state contains only serializable fields"),
-            );
-            snapshot.set_peer_info(PeerInfo {
-                displays,
-                platform_additions: serde_json::Value::Object(additions).to_string(),
-                ..Default::default()
-            });
+        };
+        if let Some(snapshot) = snapshot {
             self.send(snapshot).await;
         }
         let result = VirtualDisplayResult {
