@@ -54,6 +54,7 @@ pub(crate) struct WindowState {
     pub active: Cell<bool>,
     pub visible: Cell<bool>,
     pub dirty: Cell<bool>,
+    retry_presentation: Cell<bool>,
     size: Cell<Size<Pixels>>,
     pub scale: Cell<f32>,
     viewport: Cell<Bounds<Pixels>>,
@@ -113,6 +114,7 @@ impl AndroidWindow {
             active: Cell::new(platform.focused.get()),
             visible: Cell::new(platform.resumed.get()),
             dirty: Cell::new(true),
+            retry_presentation: Cell::new(false),
             size: Cell::new(logical),
             scale: Cell::new(scale),
             viewport: Cell::new(Bounds::new(Point::default(), logical)),
@@ -156,7 +158,8 @@ impl WindowState {
         self.dirty.set(false);
         self.request_frame.with(|f| {
             f(RequestFrameOptions {
-                require_presentation: true,
+                // A callback queued during a draw can outlive the dirty state it served.
+                require_presentation: force || self.retry_presentation.get(),
                 force_render: force,
                 ..Default::default()
             })
@@ -191,6 +194,7 @@ impl WindowState {
         self.renderer.borrow_mut().unconfigure_surface();
         self.native.borrow_mut().take();
         self.dirty.set(false);
+        self.retry_presentation.set(false);
     }
     pub fn attach_surface(&self) -> anyhow::Result<()> {
         let platform = self
@@ -221,6 +225,7 @@ impl WindowState {
             &instance,
         )?;
         self.native.replace(Some(native));
+        self.retry_presentation.set(true);
         self.update_geometry();
         self.schedule_frame();
         Ok(())
@@ -484,7 +489,9 @@ impl PlatformWindow for AndroidWindow {
             }
         }
         let presented = renderer.draw(scene);
-        if !presented || renderer.needs_redraw() {
+        let retry = !presented || renderer.needs_redraw();
+        self.0.retry_presentation.set(retry);
+        if retry {
             self.0.schedule_frame();
         }
     }

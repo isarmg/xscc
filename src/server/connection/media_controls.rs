@@ -248,3 +248,139 @@ impl Connection {
         }
     }
 }
+
+#[cfg(windows)]
+impl Connection {
+    pub(super) async fn configure_virtual_displays(
+        &mut self,
+        request: base::message_proto::VirtualDisplayConfig,
+    ) {
+        use base::session_protocol::virtual_display::{
+            VirtualDisplayConfiguration, VirtualDisplayResult, MAX_JSON_BYTES,
+        };
+        if request.request_id == 0 {
+            return;
+        }
+        if !self.media_authority_valid(false) {
+            self.media_control_error("Virtual display", "Session authorization expired".into())
+                .await;
+            return;
+        }
+        let parsed = (|| -> ResultType<Option<VirtualDisplayConfiguration>> {
+            if request.configuration_json.len() > MAX_JSON_BYTES {
+                bail!("Virtual display request exceeds its size bound");
+            }
+            if request.configuration_json.is_empty() {
+                return Ok(None);
+            }
+            let config: VirtualDisplayConfiguration =
+                serde_json::from_str(&request.configuration_json)?;
+            config.validate()?;
+            Ok(Some(config))
+        })();
+        let input = parsed.as_ref().is_ok_and(|config| config.is_some());
+        let result = if !self.media_authority_valid(input) {
+            Err(hbb_common::anyhow::anyhow!(
+                "Virtual display controls require current session authorization and input permission"
+            ))
+        } else {
+            match parsed {
+                Err(error) => Err(error),
+                Ok(config) => {
+                    #[cfg(feature = "managed")]
+                    let permit = self.managed_permit.clone();
+                    #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
+                    let test_lan = self.test_lan;
+                    match tokio::task::spawn_blocking(move || -> ResultType<_> {
+                        #[cfg(feature = "managed")]
+                        {
+                            #[cfg(feature = "test-lan-direct")]
+                            let valid =
+                                test_lan || crate::management::permits_host(permit.as_ref());
+                            #[cfg(not(feature = "test-lan-direct"))]
+                            let valid = crate::management::permits_host(permit.as_ref());
+                            if !valid {
+                                bail!("Session authorization expired");
+                            }
+                        }
+                        match config {
+                            Some(config) => virtual_display_manager::configure_displays(&config),
+                            None => Ok(virtual_display_manager::configuration_state()),
+                        }
+                    })
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(error) => Err(error.into()),
+                    }
+                }
+            }
+        };
+        if !self.media_authority_valid(false) {
+            self.media_control_error("Virtual display", "Session authorization expired".into())
+                .await;
+            return;
+        }
+        let (mut state, error) = match result {
+            Ok(state) => (state, None),
+            Err(error) => {
+                let mut state = virtual_display_manager::configuration_state();
+                if error.to_string().to_ascii_lowercase().contains("restart") {
+                    state.status = "reboot_required".into();
+                }
+                (state, Some(format!("{error:#}")))
+            }
+        };
+        // Publish one fresh screen snapshot before its correlated configuration result.
+        if let Ok(displays) = display_service::try_get_displays() {
+            let displays = display_service::update_sync_displays(&displays);
+            for screen in &mut state.displays {
+                screen.index = displays.iter().position(|display| {
+                    display
+                        .name
+                        .trim_end_matches('\0')
+                        .eq_ignore_ascii_case(screen.name.trim_end_matches('\0'))
+                        && display.online
+                });
+            }
+            let mut snapshot = Message::new();
+            let mut additions = virtual_display_manager::get_platform_additions();
+            additions.insert(
+                "virtual_display_configuration".into(),
+                serde_json::to_value(&state)
+                    .expect("invariant: VDD state contains only serializable fields"),
+            );
+            snapshot.set_peer_info(PeerInfo {
+                displays,
+                platform_additions: serde_json::Value::Object(additions).to_string(),
+                ..Default::default()
+            });
+            self.send(snapshot).await;
+        }
+        let result = VirtualDisplayResult {
+            request_id: request.request_id,
+            state,
+            error,
+        };
+        match serde_json::to_string(&result) {
+            Ok(json) if json.len() <= MAX_JSON_BYTES => {
+                let mut misc = Misc::new();
+                misc.set_virtual_display_result(base::message_proto::VirtualDisplayResult {
+                    request_id: request.request_id,
+                    result_json: json,
+                    ..Default::default()
+                });
+                let mut message = Message::new();
+                message.set_misc(misc);
+                self.send(message).await;
+            }
+            _ => {
+                self.media_control_error(
+                    "Virtual display",
+                    "Virtual display response exceeds its size bound".into(),
+                )
+                .await
+            }
+        }
+    }
+}

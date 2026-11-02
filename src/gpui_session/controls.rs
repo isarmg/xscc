@@ -44,6 +44,7 @@ pub struct MediaControls {
     pub virtual_display_remove_latest_only: bool,
     /// Amyuni exposes only the latest count token, never a physical monitor index.
     pub virtual_display_ids: Vec<u32>,
+    pub virtual_display_configuration: Option<VirtualDisplayState>,
 }
 
 #[derive(Default)]
@@ -132,6 +133,11 @@ impl Controls {
             self.installed = installed.as_bool().ok_or_else(|| {
                 hbb_common::anyhow::anyhow!("Invalid remote installation capability")
             })?;
+        }
+        if let Some(state) = object.get("virtual_display_configuration") {
+            let state: VirtualDisplayState = serde_json::from_value(state.clone())?;
+            if state.protocol_version != 1 { bail!("Unsupported virtual display configuration version"); }
+            self.state.virtual_display_configuration = Some(state);
         }
         self.idd_impl.clear();
         if let Some(implementation) = object.get("idd_impl") {
@@ -378,7 +384,7 @@ impl SessionHandle {
         self.send_media_request(misc)
     }
 
-    fn send_media_request(&self, misc: Misc) -> ResultType<()> {
+    pub(super) fn send_media_request(&self, misc: Misc) -> ResultType<()> {
         let mailbox = &self.session.ui_handler.0;
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
             bail!("Session is not connected");

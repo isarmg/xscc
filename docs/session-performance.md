@@ -1,5 +1,38 @@
 # Native session performance
 
+## 2026-11-02: measured Android/Windows follow-up
+
+A USB-connected Xiaomi 13 running beta.18 used the Qualcomm HEVC hardware decoder.
+With a separate continuously changing Windows fixture painting 61–64 FPS, the
+installed Host requested 60 FPS but produced 30–31 fresh frames/s. Its synchronous
+capture averaged 16–18 ms and combined encode/enqueue averaged 13–14 ms. A retained
+2.5-second Android native trace counted 75 decoded outputs (30 FPS) and 152 GPU
+present submissions (60.8/s). GPU submissions are not physical scanout measurements.
+
+The Windows RAM DXGI path now uses two owned staging textures to overlap GPU
+readback with encoding. It preserves the acquired desktop texture lifetime,
+bounded storage, static first/final-frame delivery, and existing GDI/system-memory/
+VRAM paths. No encoded queue growth, authorization relaxation, or QoS bypass is
+introduced. Numeric per-second metrics separate capture acquire/copy/map and
+encoding/enqueue, with actual backend fields.
+
+Android ordinary clean-frame callbacks no longer force a duplicate presentation.
+Native forced redraw, new surfaces and failed-presentation retries remain. The
+remote session holds the screen awake and restores the previous window flag on
+exit. Decoder timing did not establish a codec stall, so this change leaves
+MediaCodec negotiation and decode timeouts intact.
+
+Changed existing paths are Windows RAM capture in `libs/scrap/src/dxgi/mod.rs`,
+streaming backend diagnostics and per-second Host stage measurements in
+`src/server/video_service.rs` and `src/server/video_service/metrics.rs`,
+Android presentation in `vendor/gpui/crates/gpui_android/src/window.rs` (recorded in
+`vendor/gpui/upstream.json`), and session awake/restore in Android
+`RemoteSessionPresentation.java`. Windows CI runs the exact three readback
+regressions and the versioned virtual-display protocol regression; the Android
+management package increments to beta.19/code19. Device before/after results are
+recorded separately after installing that exact source, not inferred from builds.
+
+
 ## Report and baseline
 
 The reported case is low frame rate during changing content, including a Xiaomi 13

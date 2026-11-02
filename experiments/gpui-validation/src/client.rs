@@ -2,6 +2,7 @@ mod bitrate_controls;
 mod media_controls;
 mod resolution_controls;
 mod toolbar_controls;
+mod virtual_display_controls;
 mod window_chrome;
 
 use crate::{
@@ -28,6 +29,7 @@ use xscc::protocol::InstanceRole;
 enum Reply {
     Status(u64, Result<Status, String>),
     Action(bool, Result<Status, String>),
+    VirtualDisplay(Result<virtual_display_controls::form::State, String>),
 }
 
 struct ManagementPanel {
@@ -57,6 +59,9 @@ struct ManagementPanel {
     video_state: VideoState,
     bitrate: bitrate_controls::BitrateEditor,
     resolution: resolution_controls::ResolutionEditor,
+    virtual_display: virtual_display_controls::form::Editor,
+    local_virtual_display: Option<virtual_display_controls::form::State>,
+    local_virtual_pending: bool,
     _subscriptions: Vec<Subscription>,
     _tasks: Vec<gpui::Task<()>>,
 }
@@ -250,6 +255,16 @@ impl ManagementPanel {
         let mut changed = false;
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
+                Reply::VirtualDisplay(result) => {
+                    self.local_virtual_pending = false;
+                    match result {
+                        Ok(state) => {
+                            self.notice = state.message.clone();
+                            self.local_virtual_display = Some(state);
+                        }
+                        Err(error) => self.notice = error,
+                    }
+                }
                 Reply::Status(revision, result) => {
                     self.status_pending = false;
                     let manual = self.manual_refresh_pending;
@@ -564,6 +579,9 @@ impl ManagementPanel {
                                 cx.notify();
                             })),
                         )
+                    })
+                    .when(self.host && cfg!(windows), |row| {
+                        row.child(self.render_virtual_display_dropdown(window, cx))
                     })
                     .when(self.confirm_unbind, |row| {
                         row.child(
@@ -1350,6 +1368,9 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                                 window.toggle_fullscreen();
                             }
                             view.sync_bitrate_editor(state, cx);
+                            if !state.connected {
+                                view.virtual_display.editing = false;
+                            }
                             view.video_state = state.clone();
                             cx.notify();
                         },
@@ -1412,6 +1433,9 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         video_state,
                         bitrate: bitrate_controls::BitrateEditor::new(cx),
                         resolution: resolution_controls::ResolutionEditor::new(cx),
+                        virtual_display: virtual_display_controls::form::Editor::new(cx),
+                        local_virtual_display: None,
+                        local_virtual_pending: false,
                         _subscriptions: subscriptions,
                         _tasks: vec![update_task, management_task],
                     }
@@ -1491,6 +1515,7 @@ mod tests {
             switching_monitor: false,
             media_controls: Default::default(),
             pending_media: None,
+            virtual_display_pending: false,
             notice: String::new(),
             quality: librustdesk::gpui_session::SessionQuality {
                 received_fps: Some(60),

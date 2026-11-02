@@ -72,6 +72,9 @@ pub fn get_platform_additions() -> serde_json::Map<String, serde_json::Value> {
         return map;
     }
     map.insert("idd_impl".into(), serde_json::json!(IDD_IMPL));
+    if IDD_IMPL == IDD_IMPL_MTT_VDD {
+        map.insert("virtual_display_configuration".into(), serde_json::json!(mtt_vdd::state()));
+    }
     if is_count_based_idd() {
         map.insert(
             "virtual_display_count".into(),
@@ -975,4 +978,17 @@ mod windows {
 
         display_drivers
     }
+}
+
+pub fn configuration_state() -> base::session_protocol::virtual_display::VirtualDisplayState {
+    if IDD_IMPL == IDD_IMPL_MTT_VDD { mtt_vdd::state() }
+    else { base::session_protocol::virtual_display::VirtualDisplayState::default() }
+}
+pub fn prepare_configuration() -> ResultType<base::session_protocol::virtual_display::VirtualDisplayState> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD { bail!("This virtual display backend does not support configuration"); }
+    mtt_vdd::prepare()
+}
+pub fn configure_displays(config: &base::session_protocol::virtual_display::VirtualDisplayConfiguration) -> ResultType<base::session_protocol::virtual_display::VirtualDisplayState> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD { bail!("This virtual display backend does not support configuration"); }
+    mtt_vdd::configure(config)
 }

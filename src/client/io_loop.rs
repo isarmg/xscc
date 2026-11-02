@@ -1135,6 +1135,9 @@ impl<T: InvokeUiSession> Remote<T> {
                         log::info!("update supported encoding:{:?}", e);
                         self.handler.lc.write().unwrap().supported_encoding = e;
                     }
+                    Some(misc::Union::VirtualDisplayResult(result)) => {
+                        self.handler.virtual_display_result(&result);
+                    }
                     Some(misc::Union::FollowCurrentDisplay(d_idx)) => {
                         self.handler.set_current_display(d_idx);
                     }

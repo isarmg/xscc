@@ -3,6 +3,7 @@ pub mod gdi;
 pub use gdi::CapturerGDI;
 pub mod hdr;
 pub mod mag;
+mod readback;
 
 use winapi::{
     shared::{
@@ -48,6 +49,23 @@ enum FrameState {
     Idle,
     Acquired,
     Mapped,
+    StagingMapped(usize, bool),
+}
+
+struct Staging {
+    surface: ComPtr<IDXGISurface>,
+    texture: ComPtr<ID3D11Texture2D>,
+    desc: Option<D3D11_TEXTURE2D_DESC>,
+}
+
+impl Staging {
+    fn new() -> Self {
+        Self {
+            surface: ComPtr(ptr::null_mut()),
+            texture: ComPtr(ptr::null_mut()),
+            desc: None,
+        }
+    }
 }
 
 pub struct Capturer {
@@ -56,9 +74,9 @@ pub struct Capturer {
     context: ComPtr<ID3D11DeviceContext>,
     duplication: ComPtr<IDXGIOutputDuplication>,
     fastlane: bool,
-    surface: ComPtr<IDXGISurface>,
-    staging_texture: ComPtr<ID3D11Texture2D>,
-    staging_desc: Option<D3D11_TEXTURE2D_DESC>,
+    staging: [Staging; 2],
+    pending_readback: readback::Pending,
+    capture_metrics: readback::Metrics,
     texture: ComPtr<ID3D11Texture2D>,
     width: usize,
     height: usize,
@@ -174,9 +192,9 @@ impl Capturer {
             duplication: ComPtr(duplication),
             fastlane: desc.DesktopImageInSystemMemory == TRUE
                 && desc.ModeDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT,
-            surface: ComPtr(ptr::null_mut()),
-            staging_texture: ComPtr(ptr::null_mut()),
-            staging_desc: None,
+            staging: [Staging::new(), Staging::new()],
+            pending_readback: readback::Pending::default(),
+            capture_metrics: readback::Metrics::new(),
             texture: ComPtr(ptr::null_mut()),
             width: display.width() as usize,
             height: display.height() as usize,
@@ -266,6 +284,7 @@ impl Capturer {
         }
         hbb_common::log::error!("HDR tone-map failed, re-duplicating without it: {err}");
         self.hdr = None;
+        self.pending_readback.clear();
         if let Err(release_err) = self.release_frame() {
             hbb_common::log::warn!("DXGI frame cleanup failed while disabling HDR: {release_err}");
         }
@@ -427,17 +446,22 @@ impl Capturer {
     }
 
     pub fn set_gdi(&mut self) -> bool {
+        self.pending_readback.clear();
         self.gdi_capturer = self.display.create_gdi();
         self.is_gdi()
     }
 
     pub fn cancel_gdi(&mut self) {
+        self.pending_readback.clear();
         self.gdi_buffer = Vec::new();
         self.gdi_capturer.take();
     }
 
     #[cfg(feature = "vram")]
     pub fn set_output_texture(&mut self, texture: bool) {
+        if self.output_texture != texture {
+            self.pending_readback.clear();
+        }
         self.output_texture = texture;
     }
 
@@ -447,28 +471,75 @@ impl Capturer {
         }
         let mut frame = ptr::null_mut();
         let mut info = mem::zeroed();
-
-        wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
+        let started = std::time::Instant::now();
+        let acquired =
+            wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame));
+        self.capture_metrics.acquire(started.elapsed());
+        if let Err(err) = acquired {
+            if err.kind() == io::ErrorKind::TimedOut && !self.fastlane {
+                if let Some(slot) = self.pending_readback.drain() {
+                    return self.map_staging(slot);
+                }
+            }
+            return Err(err);
+        }
         self.frame_state = FrameState::Acquired;
         let frame = ComPtr(frame);
 
         if *info.LastPresentTime.QuadPart() == 0 {
+            if !self.fastlane {
+                if let Some(slot) = self.pending_readback.drain() {
+                    return self.map_staging(slot);
+                }
+            }
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
 
-        let mut rect = mem::zeroed();
         if self.fastlane {
+            let mut rect = mem::zeroed();
             wrap_hresult((*self.duplication.0).MapDesktopSurface(&mut rect))?;
             self.frame_state = FrameState::Mapped;
+            Ok((rect.pBits, rect.Pitch))
         } else {
-            self.copy_to_staging(frame.0)?;
-            wrap_hresult((*self.surface.0).Map(&mut rect, DXGI_MAP_READ))?;
-            self.frame_state = FrameState::Mapped;
+            let slot = self.pending_readback.write_slot();
+            let started = std::time::Instant::now();
+            self.copy_to_staging(frame.0, slot)?;
+            self.capture_metrics.copy(started.elapsed());
+            // Copy into the free owned slot while the encoder can consume the previous
+            // GPU readback. The duplication frame is still released at the next acquire.
+            if let Some(previous) = self.pending_readback.peek() {
+                if !same_texture_desc(
+                    self.staging[previous]
+                        .desc
+                        .as_ref()
+                        .expect("invariant: pending staging has a texture"),
+                    self.staging[slot]
+                        .desc
+                        .as_ref()
+                        .expect("invariant: copied staging has a texture"),
+                ) {
+                    self.pending_readback.clear();
+                }
+            }
+            match self.pending_readback.submit(slot) {
+                Some(previous) => self.map_staging(previous),
+                None => Err(io::ErrorKind::WouldBlock.into()),
+            }
         }
+    }
+
+    unsafe fn map_staging(&mut self, slot: usize) -> io::Result<(*const u8, i32)> {
+        let mut rect = mem::zeroed();
+        let started = std::time::Instant::now();
+        let result = wrap_hresult((*self.staging[slot].surface.0).Map(&mut rect, DXGI_MAP_READ));
+        self.capture_metrics.map(started.elapsed());
+        result?;
+        let acquired = self.frame_state == FrameState::Acquired;
+        self.frame_state = FrameState::StagingMapped(slot, acquired);
         Ok((rect.pBits, rect.Pitch))
     }
 
-    unsafe fn copy_to_staging(&mut self, frame: *mut IDXGIResource) -> io::Result<()> {
+    unsafe fn copy_to_staging(&mut self, frame: *mut IDXGIResource, slot: usize) -> io::Result<()> {
         let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
         wrap_hresult((*frame).QueryInterface(
             &IID_ID3D11Texture2D,
@@ -491,8 +562,8 @@ impl Capturer {
         texture_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         texture_desc.MiscFlags = 0;
 
-        if !self
-            .staging_desc
+        if !self.staging[slot]
+            .desc
             .as_ref()
             .map_or(false, |cached| same_texture_desc(cached, &texture_desc))
         {
@@ -515,17 +586,21 @@ impl Capturer {
             if surface.is_null() {
                 return Err(io::ErrorKind::InvalidData.into());
             }
-            self.surface = ComPtr(surface);
-            self.staging_texture = readable;
-            self.staging_desc = Some(texture_desc);
+            self.staging[slot].surface = ComPtr(surface);
+            self.staging[slot].texture = readable;
+            self.staging[slot].desc = Some(texture_desc);
         }
-        // release_frame unmaps the previous read before this copy. Map below waits for this
-        // frame's GPU copy, so reuse cannot return a stale frame or overwrite a mapped read.
-        (*self.context.0).CopyResource(self.staging_texture.0 as *mut _, source as *mut _);
+        (*self.context.0).CopyResource(self.staging[slot].texture.0 as *mut _, source as *mut _);
+        // RAM encoding uses another device. Submit now so the copy runs during
+        // encoding instead of remaining buffered until the next staging map.
+        (*self.context.0).Flush();
         Ok(())
     }
 
     pub fn frame<'a>(&'a mut self, timeout: UINT) -> io::Result<Frame<'a>> {
+        if let Some(sample) = self.capture_metrics.sample() {
+            hbb_common::log::info!(target: "xscc::host_capture_metrics", "host_dxgi_pipeline {sample}");
+        }
         if self.output_texture {
             Ok(Frame::Texture(self.get_texture(timeout)?))
         } else {
@@ -611,7 +686,12 @@ impl Capturer {
             let mut frame = ptr::null_mut();
             let mut info = mem::zeroed();
 
-            wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame))?;
+            let started = std::time::Instant::now();
+            let acquired = wrap_hresult(
+                (*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame),
+            );
+            self.capture_metrics.acquire(started.elapsed());
+            acquired?;
             self.frame_state = FrameState::Acquired;
             let frame = ComPtr(frame);
 
@@ -724,19 +804,21 @@ impl Capturer {
             return Ok(());
         }
         let mut first_error = None;
-        // Unmap before ReleaseFrame invalidates the desktop surface; use the same
-        // order for staging surfaces. Cleanup advances Mapped -> Acquired -> Idle,
-        // while Idle is a no-op. Advance state even on errors to avoid retrying
-        // cleanup, but still attempt ReleaseFrame if unmapping fails.
+        // A timeout can leave an owned readback without an acquired desktop frame.
+        // Only release the duplication frame when this call actually owns one.
         unsafe {
-            if self.frame_state == FrameState::Mapped {
-                let result = if self.fastlane {
-                    wrap_hresult((*self.duplication.0).UnMapDesktopSurface())
-                } else if !self.surface.is_null() {
-                    wrap_hresult((*self.surface.0).Unmap())
+            if let FrameState::StagingMapped(slot, acquired) = self.frame_state {
+                self.frame_state = if acquired {
+                    FrameState::Acquired
                 } else {
-                    Ok(())
+                    FrameState::Idle
                 };
+                if let Err(err) = wrap_hresult((*self.staging[slot].surface.0).Unmap()) {
+                    first_error = Some(err);
+                }
+            }
+            if self.frame_state == FrameState::Mapped {
+                let result = wrap_hresult((*self.duplication.0).UnMapDesktopSurface());
                 self.frame_state = FrameState::Acquired;
                 if let Err(err) = result {
                     first_error = Some(err);

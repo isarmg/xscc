@@ -9,6 +9,8 @@ use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
 #[cfg(all(target_os = "android", feature = "mediacodec"))]
 pub use scrap::android::initialize_android_decoders;
 mod controls;
+mod virtual_display;
+pub use virtual_display::{VirtualDisplayConfiguration, VirtualDisplayMode, VirtualDisplayResult, VirtualDisplayScreen, VirtualDisplayState};
 pub use controls::{BitrateMode, MediaControls, ResolutionMode, VirtualDisplayRequest};
 mod cursor;
 pub use cursor::{log_cursor_render_failure, CursorShape, CursorSnapshot};
@@ -217,6 +219,7 @@ pub enum SessionEvent {
     },
     Monitors(Vec<Monitor>),
     MediaControls(MediaControls),
+    VirtualDisplayResult(VirtualDisplayResult),
     ControlError(String),
     Quality {
         index: usize,
@@ -241,6 +244,7 @@ struct Mailbox {
     quality: Mutex<Option<(usize, SessionQuality)>>,
     cursor: Mutex<cursor::Cursors>,
     controls: RwLock<controls::Controls>,
+    virtual_requests: Mutex<virtual_display::Requests>,
     monitors: RwLock<Monitors>,
     connected: AtomicBool,
     keyboard: AtomicBool,
@@ -259,6 +263,7 @@ impl Default for Mailbox {
             quality: Mutex::new(None),
             cursor: Mutex::new(cursor::Cursors::default()),
             controls: RwLock::new(controls::Controls::default()),
+            virtual_requests: Mutex::new(virtual_display::Requests::default()),
             monitors: RwLock::new(Monitors::default()),
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
@@ -592,6 +597,7 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: 
     // asserted by the UI; the transport resolves again immediately before the handshake.
     crate::management::rpc(Request::Target { device_id }).await?;
     let handler = Handler::default();
+    handler.0.virtual_requests.lock().unwrap().runtime = Some(tokio::runtime::Handle::current());
     handler.event(SessionEvent::Connecting);
     let session = Session {
         ui_handler: handler.clone(),
@@ -660,6 +666,7 @@ pub async fn connect_test_lan_mobile(endpoint: &str, interactive: bool) -> Resul
 async fn connect_test_lan_mode(endpoint: &str, _interactive: bool) -> ResultType<SessionHandle> {
     let endpoint = crate::test_lan::target(endpoint)?;
     let handler = Handler::default();
+    handler.0.virtual_requests.lock().unwrap().runtime = Some(tokio::runtime::Handle::current());
     handler.event(SessionEvent::Connecting);
     let session = Session {
         ui_handler: handler.clone(),
@@ -915,6 +922,9 @@ impl InvokeUiSession for Handler {
             self.event(SessionEvent::ControlError(format!("Invalid display capabilities: {error}")));
         }
         self.publish_media_controls();
+    }
+    fn virtual_display_result(&self, reply: &base::message_proto::VirtualDisplayResult) {
+        self.virtual_display_reply(reply);
     }
     fn media_options(&self, options: &OptionMessage) {
         if let Some(limit) = options.bitrate_limit_kbps {

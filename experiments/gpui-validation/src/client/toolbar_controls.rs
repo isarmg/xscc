@@ -62,9 +62,18 @@ impl ManagementPanel {
             ),
             ToolbarMenu::VirtualDisplays => (
                 "session-virtual-displays-dropdown",
-                "虚拟显示器  ▾".to_owned(),
-                360_f32,
-                self.video_state.connected,
+                if self.host {
+                    "显示设置  ▾"
+                } else {
+                    "虚拟显示器  ▾"
+                }
+                .to_owned(),
+                420_f32,
+                if self.host {
+                    self.initialized
+                } else {
+                    self.video_state.connected
+                },
             ),
         };
         let trigger = ui::button(id, &label, open, enabled, palette)
@@ -80,12 +89,19 @@ impl ManagementPanel {
             .on_click(cx.listener(move |view, _, _, cx| {
                 let enabled = match menu {
                     ToolbarMenu::Resolution => view.resolution_edit_enabled(),
+                    ToolbarMenu::VirtualDisplays if view.host => view.initialized,
                     ToolbarMenu::FrameRate
                     | ToolbarMenu::Bitrate
                     | ToolbarMenu::VirtualDisplays => view.video_state.connected,
                 };
                 if enabled {
                     view.toolbar_menu = Some(menu);
+                    if menu == ToolbarMenu::VirtualDisplays
+                        && view.host
+                        && view.local_virtual_display.is_none()
+                    {
+                        view.query_local_virtual_displays();
+                    }
                     cx.notify();
                 }
                 cx.stop_propagation();

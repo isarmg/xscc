@@ -87,6 +87,10 @@ pub struct Target {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Status {},
+    VirtualDisplays {
+        operation: String,
+        configuration: Option<serde_json::Value>,
+    },
     Enroll {
         server: String,
         authorization_code: String,
@@ -300,6 +304,7 @@ impl NativeManager {
         let result: Result<serde_json::Value> = async {
             Ok(match request {
                 Request::Status {} => serde_json::to_value(self.status()).map_err(storage)?,
+                Request::VirtualDisplays { .. } => return Err(Error::Denied),
                 Request::Target { device_id } => {
                     serde_json::to_value(self.target(device_id)?).map_err(storage)?
                 }
@@ -696,6 +701,25 @@ mod tests {
         root.write("active.json", b"corrupt", false).unwrap();
         assert!(NativeManager::open(root, Arc::new(UnavailableHost)).is_err());
     }
+    #[tokio::test]
+    async fn native_manager_does_not_execute_platform_display_commands() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::create(temporary.path(), "native").unwrap();
+        let manager = NativeManager::open(root, Arc::new(UnavailableHost)).unwrap();
+        let reply = manager
+            .handle(Request::VirtualDisplays {
+                operation: "configure".into(),
+                configuration: None,
+            })
+            .await;
+        assert!(reply.value.is_none());
+        assert_eq!(
+            reply.error.as_deref(),
+            Some("management authorization denied")
+        );
+        assert!(!manager.status().configured);
+    }
+
     #[tokio::test]
     async fn local_forget_removes_only_current_binding_and_preserves_installation() {
         let temporary = tempfile::tempdir().unwrap();

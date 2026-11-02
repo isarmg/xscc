@@ -658,6 +658,25 @@ fn run_encoder(
                 setup_encoder(&c, sp.name(), quality, last_portable_service_running)?
             }
         };
+    #[cfg(feature = "gpui-host")]
+    let (metric_backend, metric_driver) = match &encoder_cfg {
+        EncoderCfg::VPX(_) => (1, 0),
+        EncoderCfg::AOM(_) => (2, 0),
+        #[cfg(feature = "hwcodec")]
+        EncoderCfg::HWRAM(config) => (
+            3,
+            match config.name.as_str() {
+                "h264_nvenc" | "hevc_nvenc" => 1,
+                "h264_amf" | "hevc_amf" => 2,
+                "h264_qsv" | "hevc_qsv" => 3,
+                "h264_vaapi" | "hevc_vaapi" => 5,
+                "h264_videotoolbox" | "hevc_videotoolbox" => 6,
+                _ => 0,
+            },
+        ),
+        #[cfg(feature = "vram")]
+        EncoderCfg::VRAM(config) => (4, config.feature.driver.clone() as u8 + 1),
+    };
     #[cfg(feature = "vram")]
     c.set_output_texture(encoder.input_texture());
     #[cfg(target_os = "android")]
@@ -739,6 +758,7 @@ fn run_encoder(
         if let Some(sample) = stages.sample(Instant::now(), spf) {
             #[cfg(windows)]
             let sample = sample.with_capture_gdi(c.is_gdi());
+            let sample = sample.with_encoder(metric_backend, metric_driver);
             log::info!(target: "xscc::host_video_metrics", "host_video_pipeline {sample}");
         }
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
@@ -812,6 +832,8 @@ fn run_encoder(
                 &mut encode_fail_counter,
                 &mut first_frame,
                 &mut encoder_warmed_up,
+                #[cfg(feature = "gpui-host")]
+                &mut stages,
             )?;
             #[cfg(feature = "gpui-host")]
             stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Replay);
@@ -906,6 +928,8 @@ fn run_encoder(
                             &mut encode_fail_counter,
                             &mut first_frame,
                             &mut encoder_warmed_up,
+                            #[cfg(feature = "gpui-host")]
+                            &mut stages,
                         )?;
                         #[cfg(feature = "gpui-host")]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Fresh);
@@ -957,6 +981,8 @@ fn run_encoder(
                             &mut encode_fail_counter,
                             &mut first_frame,
                             &mut encoder_warmed_up,
+                            #[cfg(feature = "gpui-host")]
+                            &mut stages,
                         )?;
                         #[cfg(feature = "gpui-host")]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Repeat);
@@ -1282,6 +1308,7 @@ fn handle_one_frame(
     encode_fail_counter: &mut usize,
     first_frame: &mut bool,
     encoder_warmed_up: &mut bool,
+    #[cfg(feature = "gpui-host")] stages: &mut metrics::Metrics,
 ) -> ResultType<HashSet<i32>> {
     sp.snapshot(|sps| {
         // so that new sub and old sub share the same encoder after switch
@@ -1295,14 +1322,23 @@ fn handle_one_frame(
     let mut send_conn_ids: HashSet<i32> = Default::default();
     let first = *first_frame;
     *first_frame = false;
-    match encoder.encode_to_message(frame, ms) {
+    #[cfg(feature = "gpui-host")]
+    let encode_started = Instant::now();
+    let encoded = encoder.encode_to_message(frame, ms);
+    #[cfg(feature = "gpui-host")]
+    stages.encode_time(encode_started.elapsed());
+    match encoded {
         Ok(mut vf) => {
             *encode_fail_counter = 0;
             *encoder_warmed_up = true;
             vf.display = display as _;
             let mut msg = Message::new();
             msg.set_video_frame(vf);
+            #[cfg(feature = "gpui-host")]
+            let enqueue_started = Instant::now();
             send_conn_ids = sp.send_video_frame(msg);
+            #[cfg(feature = "gpui-host")]
+            stages.enqueue_time(enqueue_started.elapsed());
         }
         Err(e) => {
             *encode_fail_counter += 1;

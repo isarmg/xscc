@@ -7,6 +7,7 @@ import android.os.Looper;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowManager;
 
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -35,6 +36,7 @@ public final class RemoteSessionPresentation {
         }
         try {
             original = new Snapshot(activity);
+            activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
             WindowInsetsControllerCompat controller = original.controller;
             controller.setSystemBarsBehavior(
@@ -61,6 +63,16 @@ public final class RemoteSessionPresentation {
             Log.w("GPUI", "Cannot restore Activity orientation", error);
         }
         try {
+            if (saved.keepScreenOn) {
+                activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            } else {
+                activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
+        } catch (RuntimeException error) {
+            restored = false;
+            Log.w("GPUI", "Cannot restore screen wake policy", error);
+        }
+        try {
             saved.controller.setSystemBarsBehavior(saved.behavior);
             int hidden = WindowInsetsCompat.Type.systemBars() & ~saved.visibleBars;
             if (hidden != 0) {
@@ -83,6 +95,7 @@ public final class RemoteSessionPresentation {
 
     private static final class Snapshot {
         final int orientation;
+        final boolean keepScreenOn;
         final View decor;
         final int decorFlags;
         final int behavior;
@@ -93,6 +106,7 @@ public final class RemoteSessionPresentation {
         Snapshot(Activity activity) {
             orientation = activity.getRequestedOrientation();
             Window window = activity.getWindow();
+            keepScreenOn = (window.getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
             decor = window.getDecorView();
             decorFlags = decor.getSystemUiVisibility();
             controller = WindowCompat.getInsetsController(window, decor);

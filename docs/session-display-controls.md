@@ -1,5 +1,18 @@
 # 会话码率与完整显示模式
 
+## 2026-11-02：虚拟屏完整配置
+
+新 Host 在会话中公告版本化的虚拟屏配置能力。Windows 被控端顶部的“显示设置”可在连接前查询、准备签名驱动并配置；桌面和移动控制端的虚拟显示器菜单可设置总数量、分辨率、精确 Hz，以及长期保留或最后一个会话正常断开后移除。策略作用于整组 XSCC 虚拟屏。
+
+主机分别回报配置数量、PnP 实际识别数量、活动且可捕获数量、稳定屏幕标识和当前模式。操作带关联 ID，返回实际结果并先刷新屏幕列表；超时表示尚未确认，操作可能仍在 Windows 执行。新增屏幕只在可捕获后自动切换。删除当前屏幕后使用仍可捕获的屏幕。只修改保留策略不清除当前视频。
+
+配置更新及设备变化失败时恢复原 XML、策略、设备启用状态和 CCD 拓扑；若恢复也失败，保留明确原因。不会接管其他应用拥有的驱动，不移除物理屏或最后一块可用屏。系统崩溃/断电后的临时屏恢复不在本次正常断开清理保证内。
+
+数量上限未知，不能把它解释为任意数量必然可用；单次最多增加 32 屏，可分批请求。分辨率与刷新率还受随包签名 MttVDD 25.7.23、Windows、捕获及编解码器限制。固定驱动的 UINT32 中间乘积有已知限制：新增 4K120、8K120 模式可通过该检查，8K144、1080p59.94 会明确报告驱动计算限制；这不代表显卡的物理上限。状态和协议保留 1/10000 Hz 精度，未更改签名驱动或 Windows 安全策略。
+
+回归面：`libs/base/protos/message.proto`、`libs/base/src/session_protocol.rs` 只增加版本化协议；`src/gpui_session.rs`、`controls.rs`、`src/client/io_loop.rs`、`src/ui_session_interface.rs` 只增加能力/请求/结果接线；`src/server/connection.rs` 与其 `media_controls.rs` 执行当前权限检查并确认结果；`src/virtual_display_manager.rs`、`mtt_vdd.rs`、`profile.rs` 接入真实库存、配置和正常退出清理；`crates/native-management/src/manager.rs`、`src/management/mod.rs`、`src/gpui_management.rs` 复用受保护的本地管理通道。桌面 `client.rs`、`client/media_controls.rs`、`client/toolbar_controls.rs`、`remote_video.rs`、`remote_video/media_controls.rs` 与移动 `session_chrome.rs`、`session_view.rs` 仅增加相应编辑器和结果处理。新实现位于各自的虚拟显示器子模块，旧主机保留原添加/移除入口，非 Windows 不显示本地驱动配置入口。
+
+
 码率与显示后端基于 `53c4d39e4`，分段滑杆基于 `ecc1b68f2`；原生候选版本为 `0.1.0-beta.11`，Android versionCode 为 11。
 
 ## 操作与兼容

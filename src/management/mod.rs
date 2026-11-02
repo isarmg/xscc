@@ -210,6 +210,35 @@ pub(crate) async fn shutdown() {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn handle(request: Request) -> Reply {
+    if let Request::VirtualDisplays { operation, configuration } = request {
+        #[cfg(all(windows, feature = "gpui-host"))]
+        {
+            let result = tokio::task::spawn_blocking(move || -> ResultType<serde_json::Value> {
+                let state = match operation.as_str() {
+                    "query" if configuration.is_none() => crate::virtual_display_manager::configuration_state(),
+                    "prepare" if configuration.is_none() => crate::virtual_display_manager::prepare_configuration()?,
+                    "configure" => {
+                        let config: base::session_protocol::virtual_display::VirtualDisplayConfiguration =
+                            serde_json::from_value(configuration.ok_or_else(|| hbb_common::anyhow::anyhow!("Missing virtual display configuration"))?)?;
+                        config.validate()?;
+                        crate::virtual_display_manager::configure_displays(&config)?
+                    }
+                    _ => bail!("Invalid virtual display operation"),
+                };
+                Ok(serde_json::to_value(state)?)
+            }).await;
+            return match result {
+                Ok(Ok(value)) => Reply { value: Some(value), error: None },
+                Ok(Err(error)) => Reply::error(error),
+                Err(error) => Reply::error(error),
+            };
+        }
+        #[cfg(not(all(windows, feature = "gpui-host")))]
+        {
+            let _ = (operation, configuration);
+            return Reply::error("Local virtual display configuration requires an installed Windows host");
+        }
+    }
     match owner() {
         Ok(manager) => manager.handle(request).await,
         Err(error) => Reply::error(error),
@@ -220,7 +249,7 @@ pub(crate) async fn handle(request: Request) -> Reply {
 pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
     let timeout = if matches!(
         &request,
-        Request::Enroll { .. } | Request::Unbind { .. } | Request::Resume {}
+        Request::Enroll { .. } | Request::Unbind { .. } | Request::Resume {} | Request::VirtualDisplays { .. }
     ) {
         50_000
     } else {

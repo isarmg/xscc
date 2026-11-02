@@ -1,5 +1,10 @@
+#[path = "mtt_vdd/configuration.rs"]
+mod configuration;
 #[path = "mtt_vdd/profile.rs"]
 mod profile;
+#[path = "mtt_vdd/topology.rs"]
+mod topology;
+pub(super) use configuration::{configure, prepare, state};
 
 use super::windows;
 use crate::platform::{self, win_device};
@@ -422,18 +427,34 @@ fn problem() -> ResultType<u32> {
 }
 
 pub(super) fn get_monitor_count() -> usize {
-    windows::get_device_names(Some(DEVICE_STRING)).len()
+    match configuration::present_count() {
+        Ok(count) => count,
+        Err(error) => {
+            hbb_common::throttled_log!(
+                Duration::from_secs(30),
+                warn,
+                "Read VDD monitor inventory failed: {error:#}"
+            );
+            // Legacy callers have no error return; mutation paths independently verify ownership
+            // and enumerate the real count again before changing any device.
+            windows::get_device_names(Some(DEVICE_STRING)).len()
+        }
+    }
 }
 
 fn wait_for_count(count: usize) -> ResultType<()> {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(10) {
-        if get_monitor_count() == count {
+        if configuration::present_count()? == count {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    bail!("Windows did not enumerate the requested {count} VDD monitors (actual {}, device problem {})", get_monitor_count(), problem()?);
+    bail!(
+        "Windows did not enumerate the requested {count} VDD monitors (actual {}, device problem {})",
+        get_monitor_count(),
+        problem()?
+    );
 }
 
 fn restore_configuration(
@@ -463,10 +484,27 @@ fn restore_configuration(
 }
 
 fn configure_count(count: u32, requested: &[virtual_display::MonitorMode]) -> ResultType<()> {
+    let modes = requested
+        .iter()
+        .map(|mode| {
+            let units = mode
+                .sync
+                .checked_mul(10000)
+                .ok_or_else(|| anyhow::anyhow!("Requested VDD refresh rate overflow"))?;
+            Mode::new(mode.width, mode.height, units).map_err(anyhow::Error::msg)
+        })
+        .collect::<ResultType<Vec<_>>>()?;
+    configure_count_modes(count, &modes)
+}
+
+fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
+    for mode in requested {
+        mode.validate_driver_arithmetic().map_err(anyhow::Error::msg)?;
+    }
     let bundle = verified_bundle()?;
     let present = device()?.is_some();
     let enabled = present && problem()? != CM_PROB_DISABLED;
-    let previous_count = get_monitor_count();
+    let previous_count = configuration::present_count()?;
     let registered = registered_path()?;
     let folder = owned_folder(&bundle, present)?;
     let path = folder.join("vdd_settings.xml");
@@ -482,13 +520,10 @@ fn configure_count(count: u32, requested: &[virtual_display::MonitorMode]) -> Re
         };
         let profile = Profile::parse(String::from_utf8(source)?).map_err(anyhow::Error::msg)?;
         let mut modes = collect_modes()?;
-        for mode in requested {
-            let refresh = mode
-                .sync
-                .checked_mul(10000)
-                .ok_or_else(|| anyhow::anyhow!("Requested VDD refresh rate overflow"))?;
-            modes.insert(Mode::new(mode.width, mode.height, refresh).map_err(anyhow::Error::msg)?);
-        }
+        // Physical display modes can exceed the pinned virtual driver's arithmetic.
+        // Preserve physical capabilities, but do not newly import unsafe VDD entries.
+        modes.retain(|mode| mode.validate_driver_arithmetic().is_ok());
+        modes.extend(requested.iter().copied());
         Some(profile.render(count, modes).map_err(anyhow::Error::msg)?)
     } else {
         None
@@ -590,16 +625,5 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
 }
 
 pub(super) fn reset_all() -> ResultType<()> {
-    let bundle = bundle_path()?;
-    let folder = bundle.join("config");
-    if registered_path()?.as_deref() != Some(ordinary_path(&folder).as_str()) {
-        return Ok(());
-    }
-    if !folder.join("owner.txt").exists() {
-        return Ok(());
-    }
-    if get_monitor_count() > 0 && windows::get_device_names(None).len() > get_monitor_count() {
-        plug_out_monitor(-1, false)?;
-    }
-    Ok(())
+    configuration::cleanup_session()
 }

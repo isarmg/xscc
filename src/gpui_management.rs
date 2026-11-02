@@ -50,6 +50,38 @@ async fn request_status(request: Request) -> ResultType<Status> {
     )?)
 }
 
+pub use base::session_protocol::virtual_display::{
+    VirtualDisplayConfiguration, VirtualDisplayState,
+};
+
+pub async fn virtual_display_status() -> ResultType<VirtualDisplayState> {
+    virtual_display_rpc("query", None).await
+}
+
+pub async fn prepare_virtual_displays() -> ResultType<VirtualDisplayState> {
+    virtual_display_rpc("prepare", None).await
+}
+
+pub async fn configure_virtual_displays(
+    config: VirtualDisplayConfiguration,
+) -> ResultType<VirtualDisplayState> {
+    config.validate()?;
+    virtual_display_rpc("configure", Some(serde_json::to_value(config)?)).await
+}
+
+async fn virtual_display_rpc(
+    operation: &str,
+    configuration: Option<serde_json::Value>,
+) -> ResultType<VirtualDisplayState> {
+    Ok(serde_json::from_value(
+        crate::management::rpc(Request::VirtualDisplays {
+            operation: operation.into(),
+            configuration,
+        })
+        .await?,
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

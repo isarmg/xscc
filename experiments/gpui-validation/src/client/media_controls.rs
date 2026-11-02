@@ -13,7 +13,7 @@ impl ManagementPanel {
         self.render_toolbar_dropdown(ToolbarMenu::Bitrate, content, window, cx)
     }
 
-    pub(super) fn render_virtual_display_dropdown(
+    pub(super) fn render_legacy_virtual_display_controls(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
@@ -107,6 +107,6 @@ impl ManagementPanel {
                     cx.stop_propagation();
                 }))
             }));
-        self.render_toolbar_dropdown(ToolbarMenu::VirtualDisplays, content, window, cx)
+        content
     }
 }

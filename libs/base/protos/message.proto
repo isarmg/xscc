@@ -393,6 +393,18 @@ message ToggleVirtualDisplay {
   bool on = 2;
 }
 
+// A bounded typed JSON configuration keeps the native/local representation identical.
+// An empty configuration_json queries state without changing the display topology.
+message VirtualDisplayConfig {
+  uint64 request_id = 1;
+  string configuration_json = 2;
+}
+
+message VirtualDisplayResult {
+  uint64 request_id = 1;
+  string result_json = 2;
+}
+
 message TogglePrivacyMode {
   string impl_key = 1;
   bool on = 2;
@@ -645,6 +657,8 @@ message Misc {
     // is rebuilt, and held again, the next time it is shown, before any connection names it
     // by id again, so the shape just selected is always there to give.
     uint64 request_cursor_data = 39;
+    VirtualDisplayConfig virtual_display_config = 40;
+    VirtualDisplayResult virtual_display_result = 41;
   }
 }
 

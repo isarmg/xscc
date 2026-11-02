@@ -2360,6 +2360,10 @@ impl Connection {
                         self.capture_displays(&add, &sub, &set).await;
                     }
                     #[cfg(windows)]
+                    Some(misc::Union::VirtualDisplayConfig(request)) => {
+                        self.configure_virtual_displays(request).await;
+                    }
+                    #[cfg(windows)]
                     Some(misc::Union::ToggleVirtualDisplay(t)) => {
                         self.toggle_virtual_display(t).await;
                     }
@@ -4075,7 +4079,9 @@ mod raii {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 display_service::restore_resolutions();
                 #[cfg(windows)]
-                let _ = virtual_display_manager::reset_all();
+                if let Err(error) = virtual_display_manager::reset_all() {
+                    log::error!("Virtual display session cleanup failed: {error:#}");
+                }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote {
                     wayland::try_close_portal_session();

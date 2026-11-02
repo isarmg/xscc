@@ -176,6 +176,21 @@ jobs:
       - name: Test native session and host regression coverage
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui"
+      - name: Test virtual display protocol and pipelined DXGI readback
+        if: matrix.role == 'host' && !inputs.build_only
+        run: |
+          $protocolTests = & cargo test --locked -p base --lib --target x86_64-pc-windows-msvc session_protocol::virtual_display::tests:: 2>&1
+          $protocolExit = $LASTEXITCODE
+          $protocolTests | Write-Output
+          if ($protocolExit -ne 0 -or ($protocolTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') {
+            throw 'Virtual display protocol regression did not pass'
+          }
+          $readbackTests = & cargo test --locked -p scrap --lib --features capture,hwcodec,vram --target x86_64-pc-windows-msvc dxgi::readback::tests:: 2>&1
+          $readbackExit = $LASTEXITCODE
+          $readbackTests | Write-Output
+          if ($readbackExit -ne 0 -or ($readbackTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
+            throw 'Pipelined DXGI regression did not pass all three tests'
+          }
       - name: Test configurable virtual display mode preservation
         if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"

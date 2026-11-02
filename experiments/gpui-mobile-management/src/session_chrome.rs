@@ -6,6 +6,7 @@ use gpui::{
 
 mod bitrate;
 mod resolution;
+pub(crate) mod virtual_displays;
 
 const PAGE: u32 = crate::theme::LIGHT.page;
 const SURFACE: u32 = crate::theme::LIGHT.panel;
@@ -47,6 +48,8 @@ pub struct ChromeModel {
     pub can_change_resolution: bool,
     pub current_resolution: Option<(i32, i32, u32)>,
     pub resolutions: Vec<(i32, i32, u32)>,
+    pub virtual_display_configuration: Option<virtual_displays::form::State>,
+    pub virtual_display_pending: bool,
     pub virtual_display_supported: bool,
     pub virtual_display_driver: String,
     pub virtual_display_remove_latest_only: bool,
@@ -75,6 +78,8 @@ pub enum ChromeAction {
     Fps(i32),
     Bitrate(Option<u32>),
     Resolution(i32, i32, u32),
+    QueryVirtualDisplays,
+    ConfigureVirtualDisplays(virtual_displays::form::Configuration),
     AddVirtualDisplay,
     RemoveVirtualDisplay(u32),
     Monitor(usize),
@@ -94,6 +99,7 @@ pub struct SessionChrome {
     bitrate: bitrate::BitrateEditor,
     resolution: resolution::ResolutionEditor,
     media_menu: Option<MediaMenu>,
+    virtual_display: virtual_displays::form::Editor,
 }
 
 impl EventEmitter<ChromeAction> for SessionChrome {}
@@ -105,6 +111,7 @@ impl SessionChrome {
             bitrate: bitrate::BitrateEditor::new(cx),
             resolution: resolution::ResolutionEditor::new(cx),
             media_menu: None,
+            virtual_display: virtual_displays::form::Editor::new(cx),
         }
     }
 
@@ -127,6 +134,7 @@ impl SessionChrome {
         }
         if model.panel != Panel::Display || !model.connected {
             self.media_menu = None;
+            self.virtual_display.editing = false;
         }
         self.model = model;
         cx.notify();
@@ -357,6 +365,7 @@ impl SessionChrome {
                     self.model.current_monitor == Some(monitor.index),
                     self.model.connected
                         && self.model.pending_monitor.is_none()
+                        && !self.model.virtual_display_pending
                         && monitor.available,
                     ChromeAction::Monitor(monitor.index),
                 )
@@ -571,7 +580,15 @@ impl SessionChrome {
                 cx,
             ));
         let mut virtual_displays = div().flex().flex_col().gap_2();
-        if model.virtual_display_supported {
+        if model
+            .virtual_display_configuration
+            .as_ref()
+            .is_some_and(|state| state.protocol_version >= 1)
+        {
+            if self.media_menu == Some(MediaMenu::VirtualDisplays) {
+                virtual_displays = self.virtual_display_controls(cx);
+            }
+        } else if model.virtual_display_supported {
             virtual_displays = virtual_displays
                 .child(
                     self.button(
@@ -625,7 +642,7 @@ impl SessionChrome {
         body = body.child(self.media_menu(
             MediaMenu::VirtualDisplays,
             "虚拟显示器",
-            ready && model.virtual_display_supported,
+            model.connected,
             virtual_displays,
             cx,
         ));

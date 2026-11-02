@@ -44,6 +44,8 @@ pub(super) struct Metrics {
     capture: Stage,
     convert: Stage,
     encode_send: Stage,
+    encode: Stage,
+    enqueue: Stage,
     outcomes: [u64; 4],
     encodes: [u64; 3],
 }
@@ -55,6 +57,8 @@ impl Metrics {
             capture: Stage::default(),
             convert: Stage::default(),
             encode_send: Stage::default(),
+            encode: Stage::default(),
+            enqueue: Stage::default(),
             outcomes: [0; 4],
             encodes: [0; 3],
         }
@@ -74,6 +78,14 @@ impl Metrics {
         self.encodes[kind as usize] += 1;
     }
 
+    pub(super) fn encode_time(&mut self, elapsed: Duration) {
+        self.encode.record(elapsed);
+    }
+
+    pub(super) fn enqueue_time(&mut self, elapsed: Duration) {
+        self.enqueue.record(elapsed);
+    }
+
     pub(super) fn sample(&mut self, now: Instant, spf: Duration) -> Option<Sample> {
         let elapsed = now.saturating_duration_since(self.started);
         if elapsed < Duration::from_secs(1) {
@@ -83,6 +95,8 @@ impl Metrics {
             elapsed,
             spf,
             capture_gdi: 2,
+            encoder_backend: 0,
+            encoder_driver: 0,
             values: std::mem::replace(self, Self::new(now)),
         })
     }
@@ -92,10 +106,18 @@ pub(super) struct Sample {
     elapsed: Duration,
     spf: Duration,
     capture_gdi: u8,
+    encoder_backend: u8,
+    encoder_driver: u8,
     values: Metrics,
 }
 
 impl Sample {
+    pub(super) fn with_encoder(mut self, backend: u8, driver: u8) -> Self {
+        self.encoder_backend = backend;
+        self.encoder_driver = driver;
+        self
+    }
+
     #[cfg(any(windows, test))]
     pub(super) fn with_capture_gdi(mut self, gdi: bool) -> Self {
         self.capture_gdi = u8::from(gdi);
@@ -115,13 +137,18 @@ impl fmt::Display for Sample {
             "\"capture_calls\":{},\"frame_count\":{},\"capture_empty\":{},\"capture_would_block\":{},\"capture_failed\":{},",
             "\"capture_avg_ms\":{:.3},\"capture_max_ms\":{:.3},\"convert_calls\":{},\"convert_avg_ms\":{:.3},\"convert_max_ms\":{:.3},",
             "\"encode_calls\":{},\"fresh_encode_calls\":{},\"replay_encode_calls\":{},\"repeat_encode_calls\":{},",
-            "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{}}}"
+            "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{},",
+            "\"encoder_backend\":{},\"encoder_driver\":{},\"encoder_texture\":{},",
+            "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},\"encoded_output_count\":{}}}"
         ), milliseconds(self.elapsed), milliseconds(self.spf),
             values.capture.calls, values.outcomes[0], values.outcomes[1], values.outcomes[2], values.outcomes[3],
             values.capture.average_ms(), milliseconds(values.capture.max), values.convert.calls,
             values.convert.average_ms(), milliseconds(values.convert.max), values.encode_send.calls,
             values.encodes[0], values.encodes[1], values.encodes[2],
-            values.encode_send.average_ms(), milliseconds(values.encode_send.max), self.capture_gdi)
+            values.encode_send.average_ms(), milliseconds(values.encode_send.max), self.capture_gdi,
+            self.encoder_backend, self.encoder_driver, u8::from(self.encoder_backend == 4),
+            values.encode.average_ms(), milliseconds(values.encode.max),
+            values.enqueue.average_ms(), milliseconds(values.enqueue.max), values.enqueue.calls)
     }
 }
 
@@ -166,6 +193,8 @@ mod tests {
             metrics.captured(Duration::from_millis(2), state);
         }
         metrics.converted(Duration::from_millis(3));
+        metrics.encode_time(Duration::from_millis(7));
+        metrics.enqueue_time(Duration::from_millis(1));
         for (elapsed, kind) in [
             (4, EncodeKind::Fresh),
             (8, EncodeKind::Replay),
@@ -183,7 +212,13 @@ mod tests {
         assert_eq!(report.values.encodes, [1, 1, 1]);
         assert_eq!(report.values.encode_send.average_ms(), 8.0);
         assert_eq!(report.values.encode_send.max, Duration::from_millis(12));
+        let report = report.with_encoder(3, 2);
         let line = report.to_string();
+        assert!(line.contains("\"encoder_backend\":3"));
+        assert!(line.contains("\"encoder_driver\":2"));
+        assert!(line.contains("\"encode_avg_ms\":7.000"));
+        assert!(line.contains("\"enqueue_avg_ms\":1.000"));
+        assert!(line.contains("\"encoded_output_count\":1"));
         assert!(line.contains("\"elapsed_ms\":1500.000"));
         assert!(line.contains("\"frame_count\":1"));
         assert!(line.contains("\"encode_calls\":3"));

@@ -1,3 +1,5 @@
+mod virtual_displays;
+
 use crate::{
     display_state::accepts_display_update,
     presentation::VideoPresentation,
@@ -52,6 +54,7 @@ pub struct SessionView {
     monitors: Vec<Monitor>,
     current_monitor: Option<usize>,
     pending_monitor: Option<usize>,
+    pending_virtual: Option<virtual_displays::PendingVirtual>,
     connected: bool,
     rail_expanded: bool,
     panel: Panel,
@@ -197,6 +200,7 @@ impl SessionView {
             monitors: Vec::new(),
             current_monitor: None,
             pending_monitor: None,
+            pending_virtual: None,
             connected: false,
             rail_expanded: true,
             panel: Panel::None,
@@ -246,6 +250,7 @@ impl SessionView {
         self.monitors.clear();
         self.current_monitor = None;
         self.pending_monitor = None;
+        self.pending_virtual = None;
         self.connected = false;
         self.interactive_session = false;
         self.controls_idle.take();
@@ -760,6 +765,9 @@ impl SessionView {
                     self.initialize_pointer();
                     self.notice.clear();
                 }
+                SessionEvent::VirtualDisplayResult(result) => {
+                    self.finish_virtual_display_result(result, window, cx);
+                }
                 SessionEvent::ControlError(error) => {
                     self.notice = error;
                 }
@@ -997,6 +1005,11 @@ impl SessionView {
                 .iter()
                 .map(|mode| (mode.width, mode.height, mode.refresh_rate))
                 .collect(),
+            virtual_display_configuration: media
+                .virtual_display_configuration
+                .as_ref()
+                .map(virtual_displays::project),
+            virtual_display_pending: self.pending_virtual.is_some(),
             virtual_display_supported: media.virtual_display_supported,
             virtual_display_driver: media.virtual_display_driver,
             virtual_display_remove_latest_only: media.virtual_display_remove_latest_only,
@@ -1226,6 +1239,10 @@ impl SessionView {
                     window,
                     cx,
                 );
+            }
+            ChromeAction::QueryVirtualDisplays => self.query_virtual_displays(),
+            ChromeAction::ConfigureVirtualDisplays(configuration) => {
+                self.configure_virtual_displays(configuration, window, cx);
             }
             ChromeAction::AddVirtualDisplay => {
                 self.request_virtual_display(VirtualDisplayRequest::Add, window, cx);

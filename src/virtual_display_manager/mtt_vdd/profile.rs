@@ -27,6 +27,39 @@ impl Mode {
             refresh_units,
         })
     }
+
+    /// The signed, pinned MttVDD 25.7.23 computes both signal products as UINT32
+    /// before division (Driver.cpp CreateTargetMode and dispinfo). This is a
+    /// driver arithmetic boundary, not a limit reported by the physical GPU.
+    pub fn validate_driver_arithmetic(&self) -> Result<()> {
+        let (mut numerator, mut denominator) = (self.refresh_units, 10000);
+        while denominator != 0 {
+            let next = numerator % denominator;
+            numerator = denominator;
+            denominator = next;
+        }
+        let divisor = numerator;
+        let numerator = self.refresh_units / divisor;
+        let denominator = 10000 / divisor;
+        let pixel_product = numerator
+            .checked_mul(self.width)
+            .and_then(|value| value.checked_mul(self.height));
+        let padded_height = self.height.checked_add(4);
+        let monitor_product = padded_height.and_then(|height| {
+            numerator
+                .checked_mul(height)
+                .and_then(|value| value.checked_mul(height))
+        });
+        let monitor_clock =
+            monitor_product.and_then(|value| (value / denominator).checked_add(1000));
+        if pixel_product.is_none() || monitor_clock.is_none() || self.width.checked_add(4).is_none()
+        {
+            return Err(invalid(
+                "固定 MttVDD 25.7.23 驱动的 32 位信号计算会溢出，无法安全添加此模式；这不代表显卡不支持该模式"
+            ).into());
+        }
+        Ok(())
+    }
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -68,6 +101,7 @@ pub(super) struct Profile {
     global_rates: Vec<Range<usize>>,
     explicit_modes: BTreeSet<Mode>,
     pub modes: BTreeSet<Mode>,
+    pub monitor_count: u32,
 }
 
 impl Profile {
@@ -134,6 +168,7 @@ impl Profile {
                 }
             }
         }
+        let monitor_count = number(count)?;
         let count = count.range();
         let resolutions = resolutions.range();
         drop(document);
@@ -144,6 +179,7 @@ impl Profile {
             global_rates,
             explicit_modes,
             modes,
+            monitor_count,
         })
     }
 
@@ -235,6 +271,33 @@ mod tests {
         assert!(Profile::parse(XML.replace("<width>2560</width>", "<width>-1</width>")).is_err());
         assert!(Profile::parse(XML.replace("59.9401", "NaN")).is_err());
         assert!(profile.render(0, []).is_err());
+    }
+
+    #[test]
+    fn pinned_driver_checks_intermediate_products_without_capping_normal_8k() {
+        for (width, height, units) in [
+            (3840, 2160, 1200000),
+            (7680, 4320, 1200000),
+            (640, 480, 599400),
+        ] {
+            Mode::new(width, height, units)
+                .unwrap()
+                .validate_driver_arithmetic()
+                .unwrap();
+        }
+        for (width, height, units) in [
+            (7680, 4320, 1440000),
+            (1920, 1080, 599400),
+            (1, 5000, 2000000),
+        ] {
+            let error = Mode::new(width, height, units)
+                .unwrap()
+                .validate_driver_arithmetic()
+                .unwrap_err();
+            assert!(error.to_string().contains("MttVDD 25.7.23"));
+        }
+        // Read existing profiles without rewriting or rejecting their historical catalog.
+        assert!(Profile::parse(XML.into()).is_ok());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use crate::message_proto::{message, misc, Message};
 
+pub mod virtual_display;
+
 pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
 pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
 pub const LOGIN_MSG_2FA_WRONG: &str = "Wrong 2FA Code";

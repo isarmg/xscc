@@ -34,6 +34,7 @@ pub struct VideoState {
     pub switching_monitor: bool,
     pub media_controls: MediaControls,
     pub pending_media: Option<MediaRequest>,
+    pub virtual_display_pending: bool,
     pub quality: SessionQuality,
     pub notice: String,
 }
@@ -60,6 +61,7 @@ pub struct RemoteVideo {
     switching_monitor: bool,
     media_controls: MediaControls,
     pending_media: Option<media_controls::PendingMedia>,
+    pending_virtual: Option<media_controls::PendingVirtual>,
     quality: SessionQuality,
     notice: String,
     focus: FocusHandle,
@@ -132,6 +134,7 @@ impl RemoteVideo {
             switching_monitor: false,
             media_controls: MediaControls::default(),
             pending_media: None,
+            pending_virtual: None,
             quality: SessionQuality::default(),
             notice: String::new(),
             focus,
@@ -159,6 +162,7 @@ impl RemoteVideo {
             switching_monitor: self.switching_monitor,
             media_controls: self.media_controls.clone(),
             pending_media: self.pending_media.as_ref().map(|pending| pending.request),
+            virtual_display_pending: self.pending_virtual.is_some(),
             quality: self.quality.clone(),
             notice: self.notice.clone(),
         }
@@ -191,6 +195,7 @@ impl RemoteVideo {
         if !self.connected
             || self.switching_monitor
             || self.pending_media.is_some()
+            || self.pending_virtual.is_some()
             || self.current_monitor == index
         {
             return;
@@ -284,6 +289,7 @@ impl RemoteVideo {
         self.switching_monitor = false;
         self.media_controls = MediaControls::default();
         self.pending_media = None;
+        self.pending_virtual = None;
         self.quality = SessionQuality::default();
         self.keyboard_allowed = false;
         self.scroll_remainder = (0.0, 0.0);
@@ -376,6 +382,9 @@ impl RemoteVideo {
                 }
                 SessionEvent::Monitors(monitors) => self.monitors = monitors,
                 SessionEvent::MediaControls(controls) => self.update_media_controls(controls),
+                SessionEvent::VirtualDisplayResult(result) => {
+                    self.finish_virtual_display_result(result)
+                }
                 SessionEvent::ControlError(error) => {
                     self.pending_media = None;
                     self.notice = format!("调节未完成：{error}");

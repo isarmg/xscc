@@ -1,7 +1,8 @@
 use super::RemoteVideo;
 use gpui::Context;
 use librustdesk::gpui_session::{
-    BitrateMode, MediaControls, ResolutionMode, VirtualDisplayRequest,
+    BitrateMode, MediaControls, ResolutionMode, VirtualDisplayConfiguration, VirtualDisplayRequest,
+    VirtualDisplayResult,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +81,11 @@ impl PendingMedia {
 
 impl RemoteVideo {
     pub fn request_media(&mut self, request: MediaRequest, cx: &mut Context<Self>) {
-        if !self.connected || self.switching_monitor || self.pending_media.is_some() {
+        if !self.connected
+            || self.switching_monitor
+            || self.pending_media.is_some()
+            || self.pending_virtual.is_some()
+        {
             return;
         }
         if !request.available(&self.media_controls) {
@@ -126,6 +131,198 @@ impl RemoteVideo {
             self.pending_media = None;
         }
         self.media_controls = controls;
+    }
+}
+
+pub(super) struct PendingVirtual {
+    request_id: u64,
+    configure: bool,
+    invalidate_current: bool,
+    original_ids: Vec<String>,
+    current_name: Option<String>,
+}
+
+impl RemoteVideo {
+    pub fn query_virtual_displays(&mut self, cx: &mut Context<Self>) {
+        self.request_virtual_configuration(None, cx);
+    }
+
+    pub fn configure_virtual_displays(
+        &mut self,
+        configuration: VirtualDisplayConfiguration,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_virtual_configuration(Some(configuration), cx);
+    }
+
+    fn request_virtual_configuration(
+        &mut self,
+        configuration: Option<VirtualDisplayConfiguration>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.connected
+            || self.switching_monitor
+            || self.pending_media.is_some()
+            || self.pending_virtual.is_some()
+        {
+            return;
+        }
+        let configure = configuration.is_some();
+        let invalidate_current = configuration
+            .as_ref()
+            .and_then(|configuration| configuration.modes.first())
+            .is_some_and(|mode| {
+                self.media_controls
+                    .virtual_display_configuration
+                    .as_ref()
+                    .and_then(|state| {
+                        state
+                            .displays
+                            .iter()
+                            .find(|screen| screen.index == Some(self.current_monitor))
+                    })
+                    .is_some_and(|screen| {
+                        (screen.width, screen.height, screen.refresh_rate_units)
+                            != (mode.width, mode.height, mode.refresh_rate_units)
+                    })
+            });
+        if configure {
+            self.release_input();
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        let result = match configuration {
+            Some(configuration) => session.configure_virtual_displays(configuration),
+            None => session.query_virtual_displays(),
+        };
+        match result {
+            Ok(request_id) => {
+                self.pending_virtual = Some(PendingVirtual {
+                    request_id,
+                    configure,
+                    invalidate_current,
+                    original_ids: self
+                        .media_controls
+                        .virtual_display_configuration
+                        .as_ref()
+                        .map(|state| {
+                            state
+                                .displays
+                                .iter()
+                                .map(|screen| screen.id.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    current_name: self
+                        .monitors
+                        .iter()
+                        .find(|monitor| monitor.index == self.current_monitor)
+                        .map(|monitor| monitor.name.clone()),
+                });
+                self.notice = if configure {
+                    "正在应用虚拟显示配置，等待主机实际确认…"
+                } else {
+                    "正在查询虚拟显示器…"
+                }
+                .into();
+            }
+            Err(error) => self.notice = error.to_string(),
+        }
+        self.publish(cx);
+        cx.notify();
+    }
+
+    pub(super) fn finish_virtual_display_result(&mut self, result: VirtualDisplayResult) {
+        if !self
+            .pending_virtual
+            .as_ref()
+            .is_some_and(|pending| pending.request_id == result.request_id)
+        {
+            return;
+        }
+        let Some(pending) = self.pending_virtual.take() else {
+            return;
+        };
+        let failed = result.error.is_some();
+        let applied = result.state.status == "ready"
+            || (result.state.status == "disabled" && result.state.configured_count == 0);
+        self.media_controls.virtual_display_configuration = Some(result.state.clone());
+        self.notice = if let Some(error) = result.error {
+            error
+        } else if applied {
+            if pending.configure {
+                "虚拟显示配置已由主机实际确认。".into()
+            } else {
+                result.state.message.clone()
+            }
+        } else {
+            result.state.message.clone()
+        };
+        if !pending.configure || failed || !applied {
+            return;
+        }
+        let target = result
+            .state
+            .displays
+            .iter()
+            .find(|screen| screen.active && !pending.original_ids.contains(&screen.id))
+            .and_then(|screen| screen.index)
+            .filter(|index| {
+                self.monitors
+                    .iter()
+                    .any(|monitor| monitor.index == *index && monitor.available)
+            })
+            .or_else(|| {
+                pending.current_name.as_ref().and_then(|name| {
+                    self.monitors
+                        .iter()
+                        .find(|monitor| monitor.available && &monitor.name == name)
+                        .map(|monitor| monitor.index)
+                })
+            })
+            .or_else(|| {
+                self.monitors
+                    .iter()
+                    .find(|monitor| monitor.available)
+                    .map(|monitor| monitor.index)
+            });
+        let Some(index) = target.filter(|index| {
+            self.monitors
+                .iter()
+                .any(|monitor| monitor.index == *index && monitor.available)
+        }) else {
+            self.release_input();
+            self.extent = (0, 0);
+            self.video.invalidate();
+            self.notice = "配置已应用，当前没有可捕获的屏幕。".into();
+            return;
+        };
+        if index == self.current_monitor
+            && pending.current_name.as_ref().is_some_and(|name| {
+                self.monitors
+                    .iter()
+                    .any(|monitor| monitor.index == index && &monitor.name == name)
+            })
+        {
+            if pending.invalidate_current {
+                self.extent = (0, 0);
+                self.video.invalidate();
+            }
+            return;
+        }
+        self.release_input();
+        if let Some(session) = &self.session {
+            match session.switch_monitor(index) {
+                Ok(()) => {
+                    self.switching_monitor = true;
+                    self.quality = Default::default();
+                    self.extent = (0, 0);
+                    self.video.invalidate();
+                }
+                Err(error) => self.notice = format!("配置已应用，屏幕切换未完成：{error}"),
+            }
+        }
     }
 }
 
