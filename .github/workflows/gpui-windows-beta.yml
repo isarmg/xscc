@@ -222,7 +222,7 @@ jobs:
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::streaming::tests"
-          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests::target_fps_requires_connected_session_and_sends_only_requested_option"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests"
       - name: Test managed IPC peer authorization
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"

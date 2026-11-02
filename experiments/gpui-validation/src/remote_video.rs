@@ -374,7 +374,23 @@ impl RemoteVideo {
                         self.keyboard_allowed = enabled;
                     }
                 }
-                SessionEvent::Monitors(monitors) => self.monitors = monitors,
+                SessionEvent::Monitors(monitors) => {
+                    if !monitors
+                        .iter()
+                        .any(|monitor| monitor.index == self.current_monitor && monitor.available)
+                    {
+                        self.release_input();
+                        self.extent = (0, 0);
+                        self.quality = SessionQuality::default();
+                        self.video.invalidate();
+                        if !self.switching_monitor {
+                            self.notice = "当前屏幕已离线，请选择可用屏幕。".into();
+                        }
+                    } else if self.notice == "当前屏幕已离线，请选择可用屏幕。" {
+                        self.notice.clear();
+                    }
+                    self.monitors = monitors;
+                }
                 SessionEvent::MediaControls(controls) => self.update_media_controls(controls),
                 SessionEvent::VirtualDisplayResult(result) => {
                     self.finish_virtual_display_result(result)
@@ -461,10 +477,17 @@ impl RemoteVideo {
         }
     }
 
+    fn current_monitor_available(&self) -> bool {
+        self.monitors
+            .iter()
+            .any(|monitor| monitor.index == self.current_monitor && monitor.available)
+    }
+
     fn key(&mut self, key: &gpui::Keystroke, down: bool, cx: &Context<Self>) -> bool {
         if !self.connected
             || !self.keyboard_allowed
             || self.switching_monitor
+            || !self.current_monitor_available()
             || self
                 .pending_media
                 .as_ref()
@@ -526,6 +549,7 @@ impl RemoteVideo {
         if !self.connected
             || !self.keyboard_allowed
             || self.switching_monitor
+            || !self.current_monitor_available()
             || self
                 .pending_media
                 .as_ref()
@@ -575,6 +599,7 @@ impl RemoteVideo {
         if !self.connected
             || !self.keyboard_allowed
             || self.switching_monitor
+            || !self.current_monitor_available()
             || self
                 .pending_media
                 .as_ref()
@@ -713,11 +738,16 @@ impl Drop for RemoteVideo {
 
 impl Render for RemoteVideo {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let monitor_available = self.current_monitor_available();
         let frame = self
             .session
             .as_ref()
             .and_then(SessionHandle::take_frame)
-            .filter(|frame| !self.switching_monitor && frame.display == self.current_monitor);
+            .filter(|frame| {
+                monitor_available
+                    && !self.switching_monitor
+                    && frame.display == self.current_monitor
+            });
         match self.video.update(frame, window) {
             Ok(Some(extent)) => self.extent = extent,
             Ok(None) => {}
@@ -744,7 +774,7 @@ impl Render for RemoteVideo {
         };
         let extent = self.extent;
         let origin = self.origin;
-        let hide_cursor = self.connected && self.keyboard_allowed;
+        let hide_cursor = self.connected && self.keyboard_allowed && monitor_available;
         let bounds = self.bounds.clone();
         let drag_move = cx.listener(|view, event: &MouseMoveEvent, _, cx| {
             if !view.buttons.is_empty()

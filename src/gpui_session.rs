@@ -420,8 +420,25 @@ impl SessionHandle {
         if !mailbox.connected.load(Ordering::Acquire) || mailbox.closed.load(Ordering::Acquire) {
             bail!("Session is not connected");
         }
-        if mailbox.monitors.read().unwrap().pending.is_some() {
-            bail!("Display switch is pending");
+        {
+            let monitors = mailbox.monitors.read().unwrap();
+            if monitors.pending.is_some() {
+                bail!("Display switch is pending");
+            }
+            let release = match &input {
+                InputCommand::Key(event) => {
+                    !event.down && !event.press && (event.has_chr() || event.has_control_key())
+                }
+                InputCommand::Mouse(event) => {
+                    event.mask & base::session_protocol::input::MOUSE_TYPE_MASK
+                        == base::session_protocol::input::MOUSE_TYPE_UP
+                }
+            };
+            if !release && !monitors.list.iter().any(|monitor| {
+                monitor.index == monitors.current && monitor.available
+            }) {
+                bail!("Current display is unavailable");
+            }
         }
         if !mailbox.keyboard.load(Ordering::Acquire) {
             bail!("Remote input permission is disabled");
@@ -747,13 +764,19 @@ impl InvokeUiSession for Handler {
         }
         {
             let monitors = self.0.monitors.read().unwrap();
-            if monitors.pending.is_some() || monitors.current != display {
+            if monitors.pending.is_some()
+                || monitors.current != display
+                || !monitors.list.get(display).is_some_and(|monitor| monitor.available)
+            {
                 return;
             }
         }
         if let Some(frame) = take_frame(display, image, &self.0) {
             let monitors = self.0.monitors.read().unwrap();
-            if monitors.pending.is_some() || monitors.current != display {
+            if monitors.pending.is_some()
+                || monitors.current != display
+                || !monitors.list.get(display).is_some_and(|monitor| monitor.available)
+            {
                 return;
             }
             if self.0.closed.load(Ordering::Acquire) {
@@ -907,6 +930,11 @@ impl InvokeUiSession for Handler {
                     .any(|monitor| monitor.index == pending && monitor.available)
             });
             monitors.list = list.clone();
+            if !monitors.list.iter().any(|monitor| {
+                monitor.index == monitors.current && monitor.available
+            }) {
+                self.0.frame.pop();
+            }
             pending_unavailable
         };
         self.event(SessionEvent::Monitors(list));
@@ -1049,6 +1077,7 @@ mod tests {
         let handle = SessionHandle {
             session: Session::default(),
         };
+        handle.session.ui_handler.set_displays(&vec![DisplayInfo { width: 1, height: 1, online: true, ..Default::default() }]);
         let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255],
             w: 1,
@@ -1119,6 +1148,7 @@ mod tests {
     #[test]
     fn latest_frame_replacement_recycles_and_is_counted() {
         let handler = Handler::default();
+        handler.set_displays(&vec![DisplayInfo { width: 1, height: 1, online: true, ..Default::default() }]);
         let mut image = scrap::ImageRgb {
             raw: vec![1; 4],
             w: 1,
@@ -1372,6 +1402,7 @@ mod tests {
             session: Session::default(),
         };
         let handler = &handle.session.ui_handler;
+        handler.set_displays(&vec![DisplayInfo { width: 1, height: 1, online: true, ..Default::default() }]);
         let updates = handle.updates();
         let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255],
@@ -1446,6 +1477,83 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    fn offline_current_monitor_releases_input_and_allows_switching_to_an_available_display() {
+        use base::session_protocol::input::{
+            MOUSE_BUTTON_LEFT, MOUSE_TYPE_DOWN, MOUSE_TYPE_MOVE, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
+        };
+
+        for remove_all in [false, true] {
+            let handle = SessionHandle { session: Session::default() };
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            *handle.session.sender.write().unwrap() = Some(sender);
+            let handler = &handle.session.ui_handler;
+            handler.0.connected.store(true, Ordering::Release);
+            let online = DisplayInfo { width: 1, height: 1, online: true, ..Default::default() };
+            handler.set_peer_info(&PeerInfo {
+                displays: vec![online.clone(), online.clone()],
+                ..Default::default()
+            });
+            handle.send_input(InputCommand::Key(KeyEvent { down: true, ..Default::default() })).unwrap();
+            assert!(receiver.try_recv().is_ok());
+            let mut image = scrap::ImageRgb {
+                raw: vec![1, 2, 3, 255], w: 1, h: 1, fmt: scrap::ImageFormat::ABGR, align: 1,
+            };
+            handler.on_rgba(0, &mut image);
+            let displays = if remove_all { vec![] } else { vec![DisplayInfo::default(), online.clone()] };
+            handler.set_displays(&displays);
+            assert!(handle.take_frame().is_none());
+            handler.on_rgba(0, &mut image);
+            assert!(handle.take_frame().is_none());
+            handler.on_rgba(0, &mut image);
+            for event in [
+                KeyEvent { down: true, ..Default::default() },
+                KeyEvent { press: true, ..Default::default() },
+            ] {
+                assert!(handle.send_input(InputCommand::Key(event)).is_err());
+            }
+            let mut text = KeyEvent::new();
+            text.set_seq("must not type".into());
+            assert!(handle.send_input(InputCommand::Key(text)).is_err());
+            let mut unicode = KeyEvent::new();
+            unicode.set_unicode(u32::from('a'));
+            assert!(handle.send_input(InputCommand::Key(unicode)).is_err());
+            for kind in [MOUSE_TYPE_MOVE, MOUSE_TYPE_DOWN, MOUSE_TYPE_WHEEL] {
+                assert!(handle.send_input(InputCommand::Mouse(MouseEvent {
+                    mask: kind | (MOUSE_BUTTON_LEFT << 3), ..Default::default()
+                })).is_err());
+            }
+            assert!(receiver.try_recv().is_err());
+            let mut release = KeyEvent::new();
+            release.set_control_key(ControlKey::Control);
+            handle.send_input(InputCommand::Key(release)).unwrap();
+            handle.send_input(InputCommand::Mouse(MouseEvent {
+                mask: MOUSE_TYPE_UP | (MOUSE_BUTTON_LEFT << 3), ..Default::default()
+            })).unwrap();
+            assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if !message.key_event().down));
+            assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if message.mouse_event().mask & 7 == MOUSE_TYPE_UP));
+            assert!(receiver.try_recv().is_err());
+            handler.set_displays(&vec![online.clone(), online]);
+            assert!(handle.take_frame().is_none());
+            handle.send_input(InputCommand::Key(KeyEvent { down: true, ..Default::default() })).unwrap();
+            assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if message.key_event().down));
+            image.raw = vec![5, 6, 7, 255];
+            handler.on_rgba(0, &mut image);
+            assert_eq!(handle.take_frame().unwrap().display, 0);
+            if !remove_all {
+                handler.set_displays(&displays);
+                handle.switch_monitor(1).unwrap();
+                assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if message.misc().switch_display().display == 1));
+                handler.switch_display(&SwitchDisplay { display: 1, width: 1, height: 1, ..Default::default() });
+                handle.send_input(InputCommand::Key(KeyEvent { down: true, ..Default::default() })).unwrap();
+                image.raw = vec![5, 6, 7, 255];
+                handler.on_rgba(1, &mut image);
+                assert_eq!(handle.take_frame().unwrap().display, 1);
+            }
+        }
+    }
+
+    #[test]
     fn typed_input_preserves_key_order_and_rejects_disconnected_input() {
         let handle = SessionHandle {
             session: Session::default(),
@@ -1463,6 +1571,12 @@ mod tests {
             assert!(receiver.try_recv().is_err());
             return;
         }
+        handle.session.ui_handler.set_displays(&vec![DisplayInfo {
+            width: 1,
+            height: 1,
+            online: true,
+            ..Default::default()
+        }]);
         for down in [true, false] {
             handle
                 .send_input(InputCommand::Key(KeyEvent {
