@@ -4,11 +4,12 @@ use gpui::{
     Anchor, AnchoredPositionMode, Context, Div, Focusable, KeyDownEvent, Window, anchored,
     deferred, div, point, prelude::*, px, rgb,
 };
+use librustdesk::gpui_session::TargetFps;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolbarMenu {
     Resolution,
-    RefreshRate,
+    FrameRate,
     Bitrate,
     VirtualDisplays,
 }
@@ -47,9 +48,9 @@ impl ManagementPanel {
                 360_f32,
                 self.resolution_edit_enabled(),
             ),
-            ToolbarMenu::RefreshRate => (
-                "session-refresh-dropdown",
-                "刷新率  ▾".to_owned(),
+            ToolbarMenu::FrameRate => (
+                "session-fps-dropdown",
+                format!("帧率上限 · {} FPS  ▾", self.video_state.target_fps.value()),
                 168_f32,
                 self.video_state.connected,
             ),
@@ -79,7 +80,7 @@ impl ManagementPanel {
             .on_click(cx.listener(move |view, _, _, cx| {
                 let enabled = match menu {
                     ToolbarMenu::Resolution => view.resolution_edit_enabled(),
-                    ToolbarMenu::RefreshRate
+                    ToolbarMenu::FrameRate
                     | ToolbarMenu::Bitrate
                     | ToolbarMenu::VirtualDisplays => view.video_state.connected,
                 };
@@ -146,5 +147,46 @@ impl ManagementPanel {
                     .priority(2),
                 )
             })
+    }
+
+    pub(super) fn render_fps_dropdown(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let palette = theme::palette(window.appearance());
+        let content = div().flex().flex_col().gap_1().children(
+            [
+                TargetFps::Fps30,
+                TargetFps::Fps60,
+                TargetFps::Fps90,
+                TargetFps::Fps120,
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, target)| {
+                ui::button(
+                    ("session-fps-option", index),
+                    &format!("{} FPS", target.value()),
+                    self.video_state.target_fps == target,
+                    self.video_state.connected,
+                    palette,
+                )
+                .w_full()
+                .min_h(px(32.))
+                .h(px(32.))
+                .py_0()
+                .justify_start()
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    if view.video_state.connected && view.video_state.target_fps != target {
+                        view.video
+                            .update(cx, |video, cx| video.request_fps(target, cx));
+                    }
+                    view.toolbar_menu = None;
+                    if view.video_state.connected {
+                        view.video.read(cx).focus_handle(cx).focus(window, cx);
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+            }),
+        );
+        self.render_toolbar_dropdown(ToolbarMenu::FrameRate, content, window, cx)
     }
 }

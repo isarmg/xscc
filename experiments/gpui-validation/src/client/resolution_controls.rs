@@ -61,10 +61,7 @@ impl ManagementPanel {
             self.resolution.error = Some(if mode.refresh_rate == 0 {
                 format!("主机未上报支持 {width}×{height} 的当前刷新率模式。")
             } else {
-                format!(
-                    "主机不支持 {width}×{height} @{} Hz，请先选择兼容的刷新率。",
-                    mode.refresh_rate
-                )
+                format!("主机不支持 {width}×{height} @{} Hz。", mode.refresh_rate)
             });
         } else {
             self.resolution.error = None;
@@ -335,80 +332,5 @@ impl ManagementPanel {
                 )
             });
         self.render_toolbar_dropdown(ToolbarMenu::Resolution, content, window, cx)
-    }
-}
-
-impl ManagementPanel {
-    pub(super) fn render_refresh_dropdown(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let palette = theme::palette(window.appearance());
-        let controls = &self.video_state.media_controls;
-        let current = controls.current_resolution;
-        let enabled = self.resolution_edit_enabled();
-        let mut rates = controls
-            .resolutions
-            .iter()
-            .filter(|mode| {
-                current.is_some_and(|current| {
-                    mode.width == current.width && mode.height == current.height
-                })
-            })
-            .map(|mode| mode.refresh_rate)
-            .filter(|&rate| rate != 0)
-            .collect::<Vec<_>>();
-        rates.sort_unstable();
-        rates.dedup();
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .children(rates.iter().map(|&rate| {
-                ui::button(
-                    ("session-refresh-option", rate as usize),
-                    &format!("{rate} Hz"),
-                    current.is_some_and(|mode| mode.refresh_rate == rate),
-                    enabled,
-                    palette,
-                )
-                .w_full()
-                .min_h(px(32.))
-                .h(px(32.))
-                .py_0()
-                .justify_start()
-                .on_click(cx.listener(move |view, _, window, cx| {
-                    if view.resolution_edit_enabled()
-                        && let Some(current) = view.video_state.media_controls.current_resolution
-                    {
-                        if current.refresh_rate != rate {
-                            view.resolution.error = None;
-                            view.video.update(cx, |video, cx| {
-                                video.request_media(
-                                    MediaRequest::Resolution(ResolutionMode {
-                                        refresh_rate: rate,
-                                        ..current
-                                    }),
-                                    cx,
-                                )
-                            });
-                        }
-                        view.toolbar_menu = None;
-                        view.video.read(cx).focus_handle(cx).focus(window, cx);
-                        cx.notify();
-                    }
-                    cx.stop_propagation();
-                }))
-            }))
-            .when(rates.is_empty(), |menu| {
-                menu.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.muted))
-                        .child("主机未上报当前分辨率可调节的刷新率。"),
-                )
-            });
-        self.render_toolbar_dropdown(ToolbarMenu::RefreshRate, content, window, cx)
     }
 }

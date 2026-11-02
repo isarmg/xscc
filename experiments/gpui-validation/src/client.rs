@@ -1063,7 +1063,7 @@ impl ManagementPanel {
                     .when(fullscreen, |row| row.flex_wrap())
                     .gap_2()
                     .child(self.render_resolution_dropdown(window, cx))
-                    .child(self.render_refresh_dropdown(window, cx))
+                    .child(self.render_fps_dropdown(window, cx))
                     .child(self.render_bitrate_dropdown(window, cx))
                     .child(self.render_virtual_display_dropdown(window, cx))
                     .child(
