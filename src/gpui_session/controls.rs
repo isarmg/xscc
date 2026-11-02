@@ -407,6 +407,72 @@ mod tests {
     use super::*;
 
     #[test]
+    fn same_screen_switch_confirms_hz_without_geometry_change() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let handler = &handle.session.ui_handler;
+        let resolution = |refresh_rate| Resolution {
+            width: 1920,
+            height: 1080,
+            refresh_rate,
+            ..Default::default()
+        };
+        let mut modes = SupportedResolutions {
+            resolutions: vec![resolution(165), resolution(60), resolution(120)],
+            current_resolution: Some(resolution(60)).into(),
+            ..Default::default()
+        };
+        let peer = PeerInfo {
+            platform: "Windows".into(),
+            features: Some(Features {
+                display_controls: true,
+                ..Default::default()
+            })
+            .into(),
+            displays: vec![DisplayInfo {
+                width: 1920,
+                height: 1080,
+                online: true,
+                ..Default::default()
+            }],
+            resolutions: Some(modes.clone()).into(),
+            ..Default::default()
+        };
+        handler.set_peer_info(&peer);
+        let requested = ResolutionMode {
+            width: 1920,
+            height: 1080,
+            refresh_rate: 120,
+        };
+        handle.set_resolution(requested).unwrap();
+        assert!(!handle.media_controls().can_change_resolution);
+        // Partial PeerInfo topology updates cannot confirm a Hz-only change.
+        handler.set_displays(&peer.displays);
+        assert_eq!(
+            handle
+                .media_controls()
+                .current_resolution
+                .unwrap()
+                .refresh_rate,
+            60
+        );
+        modes.current_resolution = Some(resolution(120)).into();
+        handler.switch_display(&SwitchDisplay {
+            display: 0,
+            width: 1920,
+            height: 1080,
+            resolutions: Some(modes).into(),
+            ..Default::default()
+        });
+        let actual = handle.media_controls();
+        assert_eq!(actual.current_resolution, Some(requested));
+        assert!(actual.can_change_resolution);
+    }
+
+    #[test]
     fn media_controls_require_capabilities_and_confirm_remote_changes() {
         let handle = SessionHandle {
             session: Session::default(),

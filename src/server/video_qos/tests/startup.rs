@@ -199,3 +199,30 @@ fn streaming_network_simulation_keeps_fast_start_and_congestion_feedback() {
         }
     }
 }
+
+
+#[test]
+fn separate_display_frame_rates_do_not_inherit_another_displays_cap() {
+    let mut qos = session(60, false);
+    qos.user_streaming_mode(1, true);
+    qos.on_connection_open(2);
+    qos.user_custom_fps(2, 240);
+    qos.user_streaming_mode(2, true);
+    assert_eq!(qos.frame_rates_for_connections(&[1]), (60, Some(60)));
+    assert_eq!(qos.frame_rates_for_connections(&[2]), (240, Some(240)));
+    assert_eq!(qos.frame_rates_for_connections(&[1, 2]), (60, Some(60)));
+    qos.user_auto_adjust_fps(2, 90);
+    assert_eq!(qos.frame_rates_for_connections(&[2]), (90, Some(240)));
+    assert_eq!(qos.frame_rates_for_connections(&[1]), (60, Some(60)));
+}
+
+#[test]
+fn another_displays_legacy_startup_does_not_throttle_streaming_display() {
+    let mut qos = session(240, false);
+    qos.user_streaming_mode(1, true);
+    qos.on_connection_open(2);
+    qos.user_custom_fps(2, 60);
+    assert_eq!(qos.frame_rates_for_connections(&[1]), (240, Some(240)));
+    assert_eq!(qos.frame_rates_for_connections(&[2]), (INIT_FPS, None));
+    assert_eq!(qos.frame_rates_for_connections(&[1, 2]), (INIT_FPS, Some(60)));
+}

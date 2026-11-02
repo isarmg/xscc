@@ -357,12 +357,24 @@ impl Connection {
                         serde_json::to_value(&state)
                             .expect("invariant: VDD state contains only serializable fields"),
                     );
+                    // A Hz-only change does not alter the capture rectangle, so the
+                    // video service may not otherwise publish fresh current modes.
+                    let current_display = displays
+                        .get(self.display_idx)
+                        .filter(|display| input && display.online)
+                        .and_then(|display| {
+                            video_service::make_display_changed_msg(
+                                self.display_idx,
+                                Some(display.clone()),
+                                self.video_source(),
+                            )
+                        });
                     snapshot.set_peer_info(PeerInfo {
                         displays,
                         platform_additions: serde_json::Value::Object(additions).to_string(),
                         ..Default::default()
                     });
-                    Some(snapshot)
+                    Some((snapshot, current_display))
                 }
                 Err(cause) => {
                     if error.is_none() {
@@ -377,8 +389,11 @@ impl Connection {
                 }
             }
         };
-        if let Some(snapshot) = snapshot {
+        if let Some((snapshot, current_display)) = snapshot {
             self.send(snapshot).await;
+            if let Some(current_display) = current_display {
+                self.send(current_display).await;
+            }
         }
         let result = VirtualDisplayResult {
             request_id: request.request_id,

@@ -356,6 +356,32 @@ impl VideoQoS {
         }
     }
 
+    /// (Paced FPS, nominal encoder FPS) for viewers sharing one encoded stream.
+    #[cfg(any(feature = "gpui-host", test))]
+    pub fn frame_rates_for_connections(&self, ids: &[i32]) -> (u32, Option<u32>) {
+        let (mut fps, mut cap, mut nominal) = (MAX_FPS, MAX_FPS, MAX_FPS);
+        let (mut found, mut streaming, mut startup) = (false, false, false);
+        for user in ids.iter().filter_map(|id| self.users.get(id)) {
+            found = true;
+            let user_cap = user.fps_cap();
+            fps = fps.min(user.delay.fps.unwrap_or(INIT_FPS));
+            cap = cap.min(user_cap);
+            nominal = nominal.min(user.streaming_target_fps.unwrap_or(user_cap));
+            streaming |= user.streaming_target_fps.is_some();
+            startup |= user.streaming_target_fps.is_none()
+                && user
+                    .joined_at
+                    .is_some_and(|joined| self.since(joined).as_secs() < 1);
+        }
+        if !found {
+            return (FPS, None);
+        }
+        if startup {
+            fps = fps.min(INIT_FPS);
+        }
+        (fps.clamp(MIN_FPS, cap), streaming.then_some(nominal))
+    }
+
     pub fn streaming_fps(&self) -> Option<u32> {
         self.users
             .values()

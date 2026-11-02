@@ -99,3 +99,14 @@ Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请
 | `experiments/gpui-mobile-management/src/remote_cursor.rs`、`session_view.rs`、`session_chrome.rs` | 可见本地指针、同坐标点击、真实 Hz/显示器菜单及纯黑留空；主页配色不变。 |
 | `packaging/gpui-android/app/src/main/java/org/xscc/gpui/RemoteSessionPresentation.java`、`app/build.gradle` | 会话内临时高刷新率请求及恢复、beta20 包版本；签名、包名和绑定格式不变。 |
 | Windows 工作流及既有 FPS/菜单测试 | 将生命周期释放和任意合法目标 FPS 回归纳入原生构建验证，避免空测试过滤通过。 |
+
+
+## 2026-11-03：Hz 变更通知与不同屏幕的 FPS 隔离
+
+同一虚拟屏只改变 Hz 时，宽高和捕获矩形可能不变，原几何检测不会发出显示模式变更。配置完成后，服务端现在依次发送新拓扑、在线当前屏的既有 `SwitchDisplay`（带即时读取的分辨率/实际 Hz）、操作结果。旧版原生客户端已支持这个消息，无需升级协议；只查询虚拟屏状态不会新增显示切换通知。
+
+GPUI 被控端按当前视频服务真实订阅者计算采集 FPS 与编码器名义 FPS，避免另一块屏幕的 60FPS 会话把 120/240Hz 虚拟屏一同限制为 60。共享同一编码视频流的观看端仍采用其中最低的可持续 FPS；每个观看端的网络、解码反馈和首次连接保护继续生效。不新增缓存、线程或每屏策略状态，也不复制无关观看端数据。非 GPUI host 保留原全局计算路径。
+
+新增既有运行路径范围：`src/server/service.rs` 只增加按需读取该服务订阅 ID 的方法；`video_qos.rs` 只增加借用对应用户数据的帧率投影；`video_service.rs` 在取屏周期、编码器创建与动态检查三处使用该投影。私有 `setup_encoder` 的两个相关调用改传视频服务，以取得真实订阅者；没有为无关调用增加占位参数。读取服务订阅 ID 后释放其锁，再读取 QoS，编码器变更仍在 QoS 锁外。`connection/media_controls.rs` 复用原消息通知实际模式；`gpui_session/controls.rs` 只增加兼容消息回归，没有客户端生产逻辑或包格式变更。
+
+本地 Linux 验证：同屏同尺寸 60→120Hz 消息确认 1 项通过；GPUI host 实际 feature 下启动/QoS 回归 8 项通过，其中包括不同屏幕 60/240FPS 隔离和首次连接保护隔离两项。模拟/消息测试不等于实机 120FPS 验收。原生 Windows/macOS/Linux 的最终构建须包含此服务端修复；已验证 Android/iOS 包可继续使用原协议接收新通知。

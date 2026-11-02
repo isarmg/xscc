@@ -187,6 +187,17 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
         }
     }
 
+    #[cfg(feature = "gpui-host")]
+    pub(super) fn subscriber_ids(&self) -> Vec<i32> {
+        let state = self.0.read().unwrap();
+        state
+            .subscribes
+            .keys()
+            .chain(state.new_subscribes.keys())
+            .copied()
+            .collect()
+    }
+
     #[inline]
     pub fn has_subscribes(&self) -> bool {
         self.0.read().unwrap().has_subscribes()

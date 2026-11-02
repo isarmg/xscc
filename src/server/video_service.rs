@@ -643,13 +643,20 @@ fn run_encoder(
     #[cfg(windows)] dxgi_recovery_state: &Arc<Mutex<DxgiRecoveryState>>,
 ) -> ResultType<()> {
     let display_idx = vs.idx;
+    #[cfg(feature = "gpui-host")]
+    let subscriber_ids = sp.subscriber_ids();
     let mut video_qos = VIDEO_QOS.lock().unwrap();
+    #[cfg(feature = "gpui-host")]
+    let mut spf = Duration::from_secs_f32(
+        1. / video_qos.frame_rates_for_connections(&subscriber_ids).0 as f32,
+    );
+    #[cfg(not(feature = "gpui-host"))]
     let mut spf = video_qos.spf();
     let mut quality = video_qos.ratio();
     drop(video_qos);
     let requested_codec = Encoder::negotiated_codec();
     let (mut encoder, encoder_cfg, codec_format, use_i444) =
-        match setup_encoder(&c, sp.name(), quality, last_portable_service_running) {
+        match setup_encoder(&c, sp, quality, last_portable_service_running) {
             Ok(result) => result,
             Err(err) => {
                 if !allow_software_encoder_fallback(requested_codec) {
@@ -665,7 +672,7 @@ fn run_encoder(
                     codec: VpxVideoCodecId::VP9,
                     keyframe_interval: None,
                 }));
-                setup_encoder(&c, sp.name(), quality, last_portable_service_running)?
+                setup_encoder(&c, sp, quality, last_portable_service_running)?
             }
         };
     #[cfg(feature = "gpui-host")]
@@ -1108,13 +1115,20 @@ impl Drop for Raii {
 
 fn setup_encoder(
     c: &CapturerInfo,
-    name: String,
+    service: &GenericService,
     quality: f32,
     last_portable_service_running: bool,
 ) -> ResultType<(Encoder, EncoderCfg, CodecFormat, bool)> {
+    let name = service.name();
     let encoder_cfg =
         get_encoder_config(&c, name.to_string(), quality, last_portable_service_running)?;
     let use_i444 = Encoder::use_i444(&encoder_cfg);
+    #[cfg(feature = "gpui-host")]
+    let requested_fps = {
+        let ids = service.subscriber_ids();
+        VIDEO_QOS.lock().unwrap().frame_rates_for_connections(&ids).1
+    };
+    #[cfg(not(feature = "gpui-host"))]
     let requested_fps = VIDEO_QOS.lock().unwrap().streaming_encoder_fps();
     #[cfg(all(windows, feature = "vram", feature = "hwcodec"))]
     if matches!(&encoder_cfg, EncoderCfg::VRAM(_)) {
@@ -1535,16 +1549,29 @@ fn check_qos(
     name: &str,
     service: &GenericService,
 ) -> ResultType<()> {
+    #[cfg(feature = "gpui-host")]
+    let subscriber_ids = service.subscriber_ids();
     let (requested_fps, requested_ratio, in_vbr, custom_quality, bitrate_limit) = {
         let mut qos = VIDEO_QOS.lock().unwrap();
-        *spf = qos.spf();
+        #[cfg(feature = "gpui-host")]
+        let (paced_fps, requested_fps) = qos.frame_rates_for_connections(&subscriber_ids);
+        #[cfg(feature = "gpui-host")]
+        {
+            *spf = Duration::from_secs_f32(1. / paced_fps as f32);
+        }
+        #[cfg(not(feature = "gpui-host"))]
+        {
+            *spf = qos.spf();
+        }
+        #[cfg(not(feature = "gpui-host"))]
+        let requested_fps = qos.streaming_encoder_fps();
         if second_instant.elapsed() > Duration::from_secs(1) {
             *second_instant = Instant::now();
             qos.update_display_data(name, *send_counter);
             *send_counter = 0;
         }
         (
-            qos.streaming_encoder_fps(),
+            requested_fps,
             qos.ratio(),
             qos.in_vbr_state(),
             qos.latest_quality().is_custom(),
