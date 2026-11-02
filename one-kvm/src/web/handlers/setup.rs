@@ -40,8 +40,21 @@ pub struct SetupRequest {
     pub hid_otg_keyboard_leds: Option<bool>,
     pub msd_enabled: Option<bool>,
     // Extension settings
+    #[serde(default, deserialize_with = "disabled_ttyd")]
     pub ttyd_enabled: Option<bool>,
     pub rustdesk_enabled: Option<bool>,
+}
+
+fn disabled_ttyd<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<bool>, D::Error> {
+    let enabled = Option::<bool>::deserialize(deserializer)?;
+    if enabled == Some(true) {
+        return Err(serde::de::Error::custom(
+            "Host terminal extensions cannot be enabled by an instance",
+        ));
+    }
+    Ok(enabled)
 }
 
 impl SetupRequest {
@@ -215,19 +228,6 @@ async fn initialize_instance(
         new_config.rustdesk.enabled
     );
 
-    // Start extensions if enabled
-    if new_config.extensions.ttyd.enabled {
-        if let Err(e) = state
-            .extensions
-            .start(crate::extensions::ExtensionId::Ttyd, &new_config.extensions)
-            .await
-        {
-            tracing::warn!("Failed to start ttyd during setup: {}", e);
-        } else {
-            tracing::info!("ttyd started during setup");
-        }
-    }
-
     // Start RustDesk if enabled
     if new_config.rustdesk.enabled {
         let empty_config = crate::rustdesk::config::RustDeskConfig::default();
@@ -304,6 +304,16 @@ mod tests {
 
     fn request(hid: Value) -> SetupRequest {
         serde_json::from_value(hid).unwrap()
+    }
+
+    #[test]
+    fn instance_setup_rejects_host_terminal_enablement() {
+        assert!(serde_json::from_value::<SetupRequest>(json!({ "ttyd_enabled": true })).is_err());
+        assert_eq!(
+            request(json!({ "ttyd_enabled": false })).ttyd_enabled,
+            Some(false)
+        );
+        assert_eq!(request(json!({})).ttyd_enabled, None);
     }
 
     #[test]

@@ -63,6 +63,10 @@ WebSocket修复提交：`348c04f47d3bb73a9c565acfd8fb9e8e1e79b68c`。
 
 两项真实管理器回归均修前失败、修后通过；该模块 5 项通过。必要回归面只有 `one-kvm/src/video/stream_manager.rs` 的模式接纳、原有 codec/native admission 的串行边界以及 stop/clear 的等待。没有新增任务表、flag 或设备缓存；独立调用链审查未发现递归获取同锁。其他视频启动入口未在本修复中形成统一关闭屏障，不能宣称整个视频生命周期已完全封锁。
 
+实例路由已经禁止宿主 terminal/extensions，但 setup 的旧 ttyd_enabled 字段仍允许启动宿主级 shell 扩展进程，绕过同一能力边界。现在在 JSON 边界拒绝 true，保留 false/缺省/null 兼容，并删除 setup 自动启动 ttyd 的路径。新增请求回归在原解析行为下失败、修复后通过。必要回归面只有 `web/handlers/setup.rs`；不声称该问题本身已证明可从外部访问宿主 shell。
+
+第四轮最终宿主快照：593 项完整 all-targets 测试通过，格式检查和普通 Clippy 通过（保留原有 56/85 项告警）。独立复审配置收尾、占用计数、锁序、模式切换和 setup 边界，未发现新增阻塞问题。
+
 跨实例只读复查覆盖 cookie 名称/路径重写、其他实例和 legacy cookie 丢弃、catalog 软链接拒绝、自动设备通配占用、Windows 全局桌面键鼠独占，未找到新的可复现跨实例越权。Windows 每帧显示器枚举尚无实机量测，未据此添加拓扑缓存。
 
 ## 后续轮次
