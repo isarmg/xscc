@@ -1187,7 +1187,7 @@ impl Connection {
                 self::raii::AuthedConnID::new_when_display_idle(id, auth_conn_type, key, sender)
             })
             .await
-            .map_err(|error| anyhow::anyhow!("Display session registration failed: {error}"))
+            .map_err(|error| hbb_common::anyhow::anyhow!("Display session registration failed: {error}"))
             .and_then(|result| result);
             match registered {
                 Ok(connection) => self.authed_conn_id = Some(connection),
@@ -3980,7 +3980,7 @@ mod raii {
             sender: mpsc::UnboundedSender<Data>,
         ) -> ResultType<Self> {
             let _registration = video_service::begin_connection(Duration::from_secs(5))
-                .map_err(|error| anyhow::anyhow!(error))?;
+                .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
             Ok(Self::new(conn_id, conn_type, session_key, sender))
         }
 
