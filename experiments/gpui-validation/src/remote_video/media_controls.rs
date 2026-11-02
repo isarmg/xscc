@@ -1,8 +1,8 @@
 use super::RemoteVideo;
 use gpui::Context;
 use librustdesk::gpui_session::{
-    BitrateMode, MediaControls, ResolutionMode, VirtualDisplayConfiguration, VirtualDisplayRequest,
-    VirtualDisplayResult,
+    BitrateMode, MediaControls, ResolutionMode, TargetFps, VirtualDisplayConfiguration,
+    VirtualDisplayRequest, VirtualDisplayResult,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +131,20 @@ impl RemoteVideo {
             self.pending_media = None;
         }
         self.media_controls = controls;
+        if let Some(target) = self.media_controls.current_resolution.and_then(|mode| {
+            TargetFps::new(
+                mode.refresh_rate
+                    .min(base::session_protocol::MAX_SESSION_FPS),
+            )
+        }) && target != self.target_fps
+            && self.connected
+            && let Some(session) = &self.session
+        {
+            match session.set_target_fps(target) {
+                Ok(()) => self.target_fps = target,
+                Err(error) => self.notice = error.to_string(),
+            }
+        }
     }
 }
 

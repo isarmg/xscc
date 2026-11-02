@@ -582,7 +582,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let custom_fps = self.handler.lc.read().unwrap().custom_fps.clone();
         let custom_fps = custom_fps.lock().unwrap().clone();
         let mut custom_fps = custom_fps.unwrap_or(30);
-        if custom_fps < 5 || custom_fps > 120 {
+        if custom_fps < 1 || custom_fps > base::session_protocol::MAX_SESSION_FPS as usize {
             custom_fps = 30;
         }
         let inactive_threshold = 15;

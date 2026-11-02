@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Display;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -37,6 +38,7 @@ public final class RemoteSessionPresentation {
         try {
             original = new Snapshot(activity);
             activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            requestHighRefreshRate(activity.getWindow());
             activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
             WindowInsetsControllerCompat controller = original.controller;
             controller.setSystemBarsBehavior(
@@ -46,6 +48,32 @@ public final class RemoteSessionPresentation {
         } catch (RuntimeException error) {
             Log.w("GPUI", "Cannot apply remote session presentation", error);
             restore();
+        }
+    }
+
+    private static void requestHighRefreshRate(Window window) {
+        try {
+            Display display = window.getDecorView().getDisplay();
+            if (display == null) {
+                Log.w("GPUI", "Remote session display unavailable; cannot request refresh rate");
+                return;
+            }
+            Display.Mode current = display.getMode();
+            float refreshRate = current.getRefreshRate();
+            for (Display.Mode mode : display.getSupportedModes()) {
+                if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                        && mode.getPhysicalHeight() == current.getPhysicalHeight()
+                        && mode.getRefreshRate() > refreshRate) {
+                    refreshRate = mode.getRefreshRate();
+                }
+            }
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            // A mode ID takes precedence over the rate-only hint.
+            attributes.preferredDisplayModeId = 0;
+            attributes.preferredRefreshRate = refreshRate;
+            window.setAttributes(attributes);
+        } catch (RuntimeException error) {
+            Log.w("GPUI", "Cannot request remote session refresh rate", error);
         }
     }
 
@@ -73,6 +101,16 @@ public final class RemoteSessionPresentation {
             Log.w("GPUI", "Cannot restore screen wake policy", error);
         }
         try {
+            Window window = activity.getWindow();
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            attributes.preferredDisplayModeId = saved.preferredDisplayModeId;
+            attributes.preferredRefreshRate = saved.preferredRefreshRate;
+            window.setAttributes(attributes);
+        } catch (RuntimeException error) {
+            restored = false;
+            Log.w("GPUI", "Cannot restore window refresh preference", error);
+        }
+        try {
             saved.controller.setSystemBarsBehavior(saved.behavior);
             int hidden = WindowInsetsCompat.Type.systemBars() & ~saved.visibleBars;
             if (hidden != 0) {
@@ -96,6 +134,8 @@ public final class RemoteSessionPresentation {
     private static final class Snapshot {
         final int orientation;
         final boolean keepScreenOn;
+        final int preferredDisplayModeId;
+        final float preferredRefreshRate;
         final View decor;
         final int decorFlags;
         final int behavior;
@@ -106,7 +146,10 @@ public final class RemoteSessionPresentation {
         Snapshot(Activity activity) {
             orientation = activity.getRequestedOrientation();
             Window window = activity.getWindow();
-            keepScreenOn = (window.getAttributes().flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            keepScreenOn = (attributes.flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
+            preferredDisplayModeId = attributes.preferredDisplayModeId;
+            preferredRefreshRate = attributes.preferredRefreshRate;
             decor = window.getDecorView();
             decorFlags = decor.getSystemUiVisibility();
             controller = WindowCompat.getInsetsController(window, decor);

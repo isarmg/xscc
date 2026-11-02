@@ -15,6 +15,21 @@ fn policy(folder: &Path) -> ResultType<Option<VirtualDisplayConfiguration>> {
     Ok(Some(config))
 }
 
+pub(super) fn capture_idle_for_change(
+) -> ResultType<crate::server::video_service::CaptureIdleGuard<'static>> {
+    crate::server::video_service::wait_for_capture_idle(Duration::from_secs(5)).map_err(|cause| {
+        anyhow::anyhow!("屏幕捕获未能安全释放，显示设备未更改；请断开远控会话后重试：{cause}")
+    })
+}
+
+pub(super) fn automatic_headless_allowed() -> ResultType<bool> {
+    let state = query()?;
+    if state.status == "external_owned" {
+        bail!("{}", state.message);
+    }
+    Ok(policy(&bundle_path()?.join("config"))?.is_none_or(|config| config.count > 0))
+}
+
 pub(super) fn present_count() -> ResultType<usize> {
     if device()?.is_none() || problem()? == CM_PROB_DISABLED {
         return Ok(0);
@@ -103,6 +118,9 @@ fn query() -> ResultType<VirtualDisplayState> {
     } else if problem != 0 {
         state.status = "error".into();
         state.message = format!("Windows 虚拟显示设备故障，代码 {problem}。");
+    } else if state.configured_count == 0 && state.present_count > 0 {
+        state.status = "error".into();
+        state.message = "虚拟显示器移除尚未完成，请先断开远控会话，再在被控端重试移除。".into();
     } else {
         state.message = "数量与当前模式由 Windows 实际枚举确认；显卡最大虚拟屏数未知。".into();
     }
@@ -127,6 +145,7 @@ pub(crate) fn prepare() -> ResultType<VirtualDisplayState> {
     }
     verified_bundle()?;
     if device()?.is_none() {
+        let _capture_idle = capture_idle_for_change()?;
         configure_count_modes(1, &[])?;
         configure_count_modes(0, &[])?;
     }
@@ -176,9 +195,19 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
                         && screen.refresh_rate_units.abs_diff(mode.refresh_rate_units) <= 1
                 })
         });
-    if config.count == before.configured_count && before.active_count == config.count && modes_match
+    if config.count == before.configured_count
+        && before.active_count == config.count
+        && before.present_count == config.count
+        && modes_match
     {
         write_profile(&policy_path, &serde_json::to_string(config)?)?;
+        return query();
+    }
+    let _capture_idle = capture_idle_for_change()?;
+    if config.count == 0 {
+        // Record the requested removal before PnP notifications can trigger a late login.
+        write_profile(&policy_path, &serde_json::to_string(config)?)?;
+        configure_count_modes(0, &[])?;
         return query();
     }
     let previous_policy = if policy_path.exists() {
@@ -338,16 +367,18 @@ pub(super) fn cleanup_session() -> ResultType<()> {
     if windows::get_device_names(None).len() <= active_virtual {
         return Ok(());
     }
-    configure_count_modes(0, &[])?;
     let folder = bundle_path()?.join("config");
-    if let Some(mut config) = policy(&folder)? {
-        config.count = 0;
-        write_profile(
-            &folder.join("configuration.json"),
-            &serde_json::to_string(&config)?,
-        )?;
-    }
-    Ok(())
+    let mut config = policy(&folder)?.unwrap_or(VirtualDisplayConfiguration {
+        count: 0,
+        modes: Vec::new(),
+        persistent: false,
+    });
+    config.count = 0;
+    write_profile(
+        &folder.join("configuration.json"),
+        &serde_json::to_string(&config)?,
+    )?;
+    configure_count_modes(0, &[])
 }
 
 fn restart_required() -> ResultType<bool> {

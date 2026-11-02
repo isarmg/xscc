@@ -122,20 +122,21 @@ fn mobile_keyboard_permitted(enabled: bool, platform: &str, input: &InputCommand
 
 /// Requested cadence; the host and transport retain their capability and QoS limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TargetFps {
-    Fps30,
-    Fps60,
-    Fps90,
-    Fps120,
-}
+pub struct TargetFps(i32);
 impl TargetFps {
+    pub const FPS_30: Self = Self(30);
+    pub const FPS_60: Self = Self(60);
+    pub const FPS_90: Self = Self(90);
+    pub const FPS_120: Self = Self(120);
+
+    pub fn new(fps: u32) -> Option<Self> {
+        (1..=base::session_protocol::MAX_SESSION_FPS)
+            .contains(&fps)
+            .then_some(Self(fps as i32))
+    }
+
     pub fn value(self) -> i32 {
-        match self {
-            Self::Fps30 => 30,
-            Self::Fps60 => 60,
-            Self::Fps90 => 90,
-            Self::Fps120 => 120,
-        }
+        self.0
     }
 }
 
@@ -1491,7 +1492,7 @@ mod tests {
         };
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         *handle.session.sender.write().unwrap() = Some(sender);
-        assert!(handle.set_target_fps(TargetFps::Fps60).is_err());
+        assert!(handle.set_target_fps(TargetFps::FPS_60).is_err());
         assert!(receiver.try_recv().is_err());
         handle
             .session
@@ -1500,10 +1501,13 @@ mod tests {
             .connected
             .store(true, Ordering::Release);
         for target in [
-            TargetFps::Fps30,
-            TargetFps::Fps60,
-            TargetFps::Fps90,
-            TargetFps::Fps120,
+            TargetFps::FPS_30,
+            TargetFps::FPS_60,
+            TargetFps::FPS_90,
+            TargetFps::FPS_120,
+            TargetFps::new(75).unwrap(),
+            TargetFps::new(144).unwrap(),
+            TargetFps::new(240).unwrap(),
         ] {
             handle.set_target_fps(target).unwrap();
             let Data::Message(message) = receiver.try_recv().unwrap() else {
@@ -1519,13 +1523,15 @@ mod tests {
                 option,
                 OptionMessage {
                     custom_fps: target.value(),
-                    streaming_mode: if target == TargetFps::Fps30 { BoolOption::No } else { BoolOption::Yes }.into(),
+                    streaming_mode: if target == TargetFps::FPS_30 { BoolOption::No } else { BoolOption::Yes }.into(),
                     ..Default::default()
                 }
             );
         }
+        assert!(TargetFps::new(0).is_none());
+        assert!(TargetFps::new(1001).is_none());
         handle.disconnect();
-        assert!(handle.set_target_fps(TargetFps::Fps120).is_err());
+        assert!(handle.set_target_fps(TargetFps::FPS_120).is_err());
     }
     #[tokio::test]
     async fn updates_coalesce_before_waiting_and_wake_on_close() {

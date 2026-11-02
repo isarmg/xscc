@@ -508,6 +508,13 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
     let registered = registered_path()?;
     let folder = owned_folder(&bundle, present)?;
     let path = folder.join("vdd_settings.xml");
+    if count == 0 {
+        // A failed removal must never restart an adapter that is being removed.
+        if enabled {
+            change_device(DICS_DISABLE)?;
+        }
+        return wait_for_count(0);
+    }
     let previous = if path.exists() {
         Some(bounded(&path, 1024 * 1024)?)
     } else {
@@ -594,7 +601,8 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
 
 pub(super) fn plug_in_headless() -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
-    if get_monitor_count() == 0 {
+    if get_monitor_count() == 0 && configuration::automatic_headless_allowed()? {
+        let _capture_idle = configuration::capture_idle_for_change()?;
         configure_count(1, &[])?;
     }
     Ok(())
@@ -602,6 +610,7 @@ pub(super) fn plug_in_headless() -> ResultType<()> {
 
 pub(super) fn plug_in_monitor(modes: &[virtual_display::MonitorMode]) -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
+    let _capture_idle = configuration::capture_idle_for_change()?;
     let count = u32::try_from(get_monitor_count())?
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("VDD monitor count overflow"))?;
@@ -621,6 +630,7 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
     if target == 0 && !force_all && windows::get_device_names(None).len() <= count {
         bail!("The only remaining display cannot be removed");
     }
+    let _capture_idle = configuration::capture_idle_for_change()?;
     configure_count(u32::try_from(target)?, &[])
 }
 

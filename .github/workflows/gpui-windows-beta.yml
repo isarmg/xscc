@@ -213,11 +213,16 @@ jobs:
           if ($limitExit -ne 0 -or ($limitTests | Out-String) -notmatch '(?m)^test result: ok\. [1-9][0-9]* passed;') {
             throw 'Explicit bitrate tests failed or matched no tests'
           }
-      - name: Test video pacing, queue bounds and intentional reconfiguration
+      - name: Test video pacing, capture release, queue bounds and reconfiguration
         if: matrix.role == 'host' && !inputs.build_only
         run: |
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_"
           if ($LASTEXITCODE -ne 0) { throw 'Video regression tests failed' }
+      - name: Test high-refresh session FPS transport and adaptation
+        if: matrix.role == 'controller' && !inputs.build_only
+        run: |
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::streaming::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests::target_fps_requires_connected_session_and_sends_only_requested_option"
       - name: Test managed IPC peer authorization
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"

@@ -41,7 +41,6 @@ pub struct ChromeModel {
     pub panel: Panel,
     pub audio_on: bool,
     pub audio_error: Option<String>,
-    pub target_fps: Option<i32>,
     pub bitrate_supported: bool,
     pub max_bitrate_kbps: u32,
     pub bitrate_limit_kbps: Option<u32>,
@@ -75,7 +74,6 @@ pub enum ChromeAction {
     ToggleMouseButtons,
     ToggleViewOnly,
     ToggleAudio,
-    Fps(i32),
     Bitrate(Option<u32>),
     Resolution(i32, i32, u32),
     QueryVirtualDisplays,
@@ -88,7 +86,8 @@ pub enum ChromeAction {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MediaMenu {
-    FrameRate,
+    Displays,
+    RefreshRate,
     Resolution,
     Bitrate,
     VirtualDisplays,
@@ -174,7 +173,31 @@ impl SessionChrome {
                     .hover(|style| style.opacity(0.85))
                     .active(|style| style.opacity(0.65))
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        if matches!(action, ChromeAction::Fps(_)) {
+                        if let ChromeAction::Resolution(width, height, rate) = action {
+                            if !view.resolution_enabled()
+                                || !refresh_modes(
+                                    view.model.current_resolution,
+                                    &view.model.resolutions,
+                                )
+                                .contains(&(width, height, rate))
+                            {
+                                return;
+                            }
+                            view.media_menu = None;
+                            cx.notify();
+                        }
+                        if let ChromeAction::Monitor(index) = action {
+                            if !view.model.connected
+                                || view.model.pending_monitor.is_some()
+                                || view.model.virtual_display_pending
+                                || !view
+                                    .model
+                                    .monitors
+                                    .iter()
+                                    .any(|monitor| monitor.index == index && monitor.available)
+                            {
+                                return;
+                            }
                             view.media_menu = None;
                             cx.notify();
                         }
@@ -497,7 +520,8 @@ impl SessionChrome {
             .child(
                 div()
                     .id(match menu {
-                        MediaMenu::FrameRate => "session-fps-menu",
+                        MediaMenu::Displays => "session-display-menu",
+                        MediaMenu::RefreshRate => "session-refresh-rate-menu",
                         MediaMenu::Resolution => "session-resolution-menu",
                         MediaMenu::Bitrate => "session-bitrate-menu",
                         MediaMenu::VirtualDisplays => "session-virtual-displays-menu",
@@ -535,16 +559,18 @@ impl SessionChrome {
     fn media_settings(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let model = &self.model;
         let ready = model.connected && model.pending_monitor.is_none();
+        let modes = refresh_modes(model.current_resolution, &model.resolutions);
+        let refresh_enabled = self.resolution_enabled() && !modes.is_empty();
         let mut rates = div().flex().flex_col().gap_1();
-        for fps in [30, 60, 90, 120] {
+        for mode in modes {
             rates = rates.child(
                 self.button(
                     cx,
-                    format!("session-fps-{fps}"),
-                    &format!("{fps} FPS"),
-                    model.target_fps == Some(fps),
-                    ready,
-                    ChromeAction::Fps(fps),
+                    format!("session-refresh-rate-{}", mode.2),
+                    &format!("{} Hz", mode.2),
+                    model.current_resolution == Some(mode),
+                    refresh_enabled,
+                    ChromeAction::Resolution(mode.0, mode.1, mode.2),
                 )
                 .w_full(),
             );
@@ -555,12 +581,13 @@ impl SessionChrome {
             .gap_2()
             .child(
                 self.media_menu(
-                    MediaMenu::FrameRate,
+                    MediaMenu::RefreshRate,
                     &model
-                        .target_fps
-                        .map(|fps| format!("帧率上限 · {fps} FPS"))
-                        .unwrap_or_else(|| "帧率上限".into()),
-                    ready,
+                        .current_resolution
+                        .filter(|mode| mode.2 > 0)
+                        .map(|mode| format!("刷新率 · {} Hz", mode.2))
+                        .unwrap_or_else(|| "刷新率 · 未知".into()),
+                    refresh_enabled,
                     rates,
                     cx,
                 ),
@@ -663,8 +690,33 @@ impl SessionChrome {
                 .flex()
                 .flex_col()
                 .gap_3()
-                .child(section("远程屏幕"))
-                .child(self.screen_list(cx))
+                .child(
+                    self.media_menu(
+                        MediaMenu::Displays,
+                        &self
+                            .model
+                            .monitors
+                            .iter()
+                            .find(|monitor| Some(monitor.index) == self.model.current_monitor)
+                            .map_or_else(
+                                || "显示器".into(),
+                                |monitor| {
+                                    format!(
+                                        "显示器 · 屏幕 {} · {}×{}",
+                                        monitor.index + 1,
+                                        monitor.width,
+                                        monitor.height
+                                    )
+                                },
+                            ),
+                        self.model.connected
+                            && self.model.pending_monitor.is_none()
+                            && !self.model.virtual_display_pending
+                            && self.model.monitors.iter().any(|monitor| monitor.available),
+                        self.screen_list(cx),
+                        cx,
+                    ),
+                )
                 .child(self.media_settings(window, cx));
             if !self.model.quality.is_empty() {
                 body = body.child(section("连接状态")).child(
@@ -972,5 +1024,45 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             ],
             &[(10., 6.), (14., 6.), (14., 12.), (10., 12.), (10., 6.)],
         ],
+    }
+}
+
+fn refresh_modes(
+    current: Option<(i32, i32, u32)>,
+    supported: &[(i32, i32, u32)],
+) -> Vec<(i32, i32, u32)> {
+    let Some((width, height, _)) = current.filter(|mode| mode.2 > 0) else {
+        return Vec::new();
+    };
+    let mut modes: Vec<_> = supported
+        .iter()
+        .copied()
+        .filter(|mode| mode.0 == width && mode.1 == height && mode.2 > 0)
+        .collect();
+    modes.sort_unstable_by_key(|mode| mode.2);
+    modes.dedup();
+    modes
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_menu_uses_only_reported_hz_for_the_current_size_and_requires_known_current_hz() {
+        let modes = [
+            (1920, 1080, 240),
+            (3840, 2160, 144),
+            (1920, 1080, 60),
+            (1920, 1080, 75),
+            (1920, 1080, 0),
+            (1920, 1080, 60),
+        ];
+        assert_eq!(
+            refresh_modes(Some((1920, 1080, 60)), &modes),
+            [(1920, 1080, 60), (1920, 1080, 75), (1920, 1080, 240)]
+        );
+        assert!(refresh_modes(None, &modes).is_empty());
+        assert!(refresh_modes(Some((1920, 1080, 0)), &modes).is_empty());
     }
 }

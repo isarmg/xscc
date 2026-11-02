@@ -2,6 +2,10 @@ use crate::message_proto::{message, misc, Message};
 
 pub mod virtual_display;
 
+/// Millisecond-based capture pacing must retain a nonzero frame interval.
+/// This transport bound is independent of the display's supported refresh rates.
+pub const MAX_SESSION_FPS: u32 = 1000;
+
 pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
 pub const LOGIN_MSG_PASSWORD_WRONG: &str = "Wrong Password";
 pub const LOGIN_MSG_2FA_WRONG: &str = "Wrong 2FA Code";

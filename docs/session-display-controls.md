@@ -74,3 +74,28 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 ## 验证边界
 
 真实软件编码器回归、MFX 生产倍率 helper 的 SDK 编译断言、模式配置纯测试与 Windows 签名打包验证分别记录实际结果。完整 Windows、VRAM、macOS/Linux、Android/iOS 条件编译和应用回归由同一提交的原生 CI 验证。构建和单元测试不等同于物理 GPU、手机远控或全部显示模式的实测，不声称未经测量的吞吐量、帧率和延迟收益。最终可用模式还需满足捕获、编码和接收端渲染能力；本轮没有放松原有像素长度、溢出和渲染尺寸安全检查。
+
+
+## 2026-11-02：退出清理、真实刷新率及移动端指针
+
+Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请独占的显示变更窗口。视频循环收到同一个生命周期标记后正常退栈，待编码器和捕获器实际析构，后台操作才继续；变更结束后，仍有订阅的视频服务按原有循环重建捕获。等待最多 5 秒，超时保留设备并返回错误。最后一个远程会话退出也使用这条释放确认；新连接登记与清理互斥，等待后重新检查管理授权，避免旧退出任务删除新会话的屏幕。不在连接列表或服务器锁下等待。
+
+移除请求先记录期望数量 0；移除失败不再通过重新启用、重启适配器来回滚。自动无头登录不能覆盖已保存的 0 数量。固定签名 MttVDD 25.7.23 的 XML 模板要求正数量，因此 XML 的 1 不能代表实际仍有屏幕；实际状态使用 PnP/CCD。期望 0 而仍有设备时明确报告移除未完成。本次未改 CCD flags 或驱动安全策略；现场只读确认过虚拟屏的路径、信号及 GDI 当前模式均为 1920×1080@120Hz，物理屏为 60Hz，不能把视频 60FPS 直接当成虚拟屏 60Hz。
+
+桌面和移动端的单一“刷新率”菜单按当前分辨率列出主机实际提供的 Hz，沿现有显示模式请求及实际确认路径设置。显示器选择使用下拉菜单。会话的采集目标跟随实际确认的 Hz，取消固定四档及 120FPS 的旧限制；传输安全上限为 1000FPS，以保留至少 1ms 的既有毫秒计时周期，这不是显卡或显示器能力上限，也不是实际帧率承诺。QoS、网络、解码与呈现反馈仍可降低帧率。
+
+移动端鼠标模式绘制独立的 24 逻辑像素箭头，复用实际点击位置，不依赖远端光标是否隐藏、透明或尚无形状；边缘翻转箭头使其仍可见。触控模式保留原远端光标行为。远程画面外的全屏留空区域为纯黑。Android 会话申请当前物理尺寸下系统枚举的最高刷新率，退出或进入后台恢复原窗口首选模式及刷新率；系统节电、温度等策略仍可决定最终刷新率。
+
+验证边界：本轮未使用 USB 调试，未执行 Android 实机验证。现场残留屏已通过正常 Windows 管理员确认，在服务及捕获进程全部退出后仅停用 XSCC 所有的 MTT 设备；物理屏保留，其他应用的虚拟驱动未变更。未对已报告卡死的机器重复执行创建/撤销压力测试，不能据源码或交叉编译宣称内核卡死已实测消除。新版本需要真实 Windows 原生编译、Android 包构建及安装后验收。
+
+必要的既有运行路径变更：
+
+| 文件/模块 | 变更原因及回归范围 |
+| --- | --- |
+| `src/server/connection.rs`、`video_service.rs` 及其 `capture_lifecycle.rs` | Windows 连接登记、最后会话清理、捕获退出和恢复之间的释放屏障；非 Windows 保留原路径。 |
+| `src/virtual_display_manager/mtt_vdd.rs`、`mtt_vdd/configuration.rs` | 所有已识别适配器变更入口持独占屏障；0 数量持久化、失败及自动无头行为修复；其他驱动不接管。 |
+| `libs/base/src/session_protocol.rs`、`src/gpui_session.rs`、`src/client/io_loop.rs`、`src/client/streaming.rs`、`src/server/video_qos.rs`、`libs/scrap/src/common/codec.rs` | 原有 FPS 选项的合法范围及原生目标类型；沿用消息格式、QoS 和解码反馈；旧非流模式偏好范围保留。 |
+| `experiments/gpui-validation/src/client.rs`、`client/toolbar_controls.rs`、`remote_video.rs`、`remote_video/media_controls.rs` | 真实 Hz、显示器下拉及实际模式确认后的目标同步；删除旧手动 FPS 入口。 |
+| `experiments/gpui-mobile-management/src/remote_cursor.rs`、`session_view.rs`、`session_chrome.rs` | 可见本地指针、同坐标点击、真实 Hz/显示器菜单及纯黑留空；主页配色不变。 |
+| `packaging/gpui-android/app/src/main/java/org/xscc/gpui/RemoteSessionPresentation.java`、`app/build.gradle` | 会话内临时高刷新率请求及恢复、beta20 包版本；签名、包名和绑定格式不变。 |
+| Windows 工作流及既有 FPS/菜单测试 | 将生命周期释放和任意合法目标 FPS 回归纳入原生构建验证，避免空测试过滤通过。 |

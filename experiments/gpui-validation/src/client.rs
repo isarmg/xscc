@@ -995,50 +995,7 @@ impl ManagementPanel {
                         ),
                 )
             })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_shrink_0()
-                    .when(fullscreen, |row| row.flex_wrap())
-                    .gap_2()
-                    .children(state.monitors.iter().map(|monitor| {
-                        let index = monitor.index;
-                        let selected = state.current_monitor == index;
-                        let enabled = state.connected
-                            && !state.switching_monitor
-                            && state.pending_media.is_none()
-                            && monitor.available;
-                        ui::button(
-                            ("session-monitor", index),
-                            &format!(
-                                "屏幕 {} · {} · {}×{}{}",
-                                index + 1,
-                                monitor.name,
-                                monitor.width,
-                                monitor.height,
-                                if monitor.available {
-                                    ""
-                                } else {
-                                    " · 不可用"
-                                }
-                            ),
-                            selected,
-                            enabled,
-                            palette,
-                        )
-                        .map(compact)
-                        .max_w_full()
-                        .when(!fullscreen, |button| button.max_w(px(280.)).flex_shrink_0())
-                        .truncate()
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            if enabled {
-                                view.video
-                                    .update(cx, |video, cx| video.switch_monitor(index, cx));
-                            }
-                        }))
-                    })),
-            )
+            .child(self.render_display_dropdown(window, cx))
             .child(
                 div()
                     .flex()
@@ -1509,7 +1466,7 @@ mod tests {
             connecting: false,
             has_session: true,
             connected: true,
-            target_fps: librustdesk::gpui_session::TargetFps::Fps60,
+            target_fps: librustdesk::gpui_session::TargetFps::FPS_60,
             monitors: vec![],
             current_monitor: 0,
             switching_monitor: false,

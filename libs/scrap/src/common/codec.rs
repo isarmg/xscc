@@ -249,7 +249,7 @@ impl Encoder {
     }
 
     fn validate_frame_rate(fps: u32) -> ResultType<()> {
-        if !(1..=120).contains(&fps) {
+        if !(1..=base::session_protocol::MAX_SESSION_FPS).contains(&fps) {
             bail!("unsupported streaming frame rate: {fps}");
         }
         Ok(())
@@ -1295,9 +1295,9 @@ mod streaming_tests {
             let legacy = Encoder::new(config.clone(), false).unwrap();
             let at_30 = legacy.bitrate();
             assert_eq!(legacy.frame_rate(), None);
-            let mut streaming = Encoder::new_streaming(config.clone(), false, 120).unwrap();
-            assert_eq!(streaming.frame_rate(), Some(120));
-            assert_eq!(streaming.bitrate(), at_30 * 4);
+            let mut streaming = Encoder::new_streaming(config.clone(), false, 240).unwrap();
+            assert_eq!(streaming.frame_rate(), Some(240));
+            assert_eq!(streaming.bitrate(), at_30 * 8);
             let fmt = streaming.yuvfmt();
             let yuv = vec![128; fmt.v + fmt.stride[2] * fmt.h / 2];
             let packet = streaming

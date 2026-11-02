@@ -707,7 +707,7 @@ impl SessionView {
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接，等待首帧…".into();
-                    self.request_fps(TargetFps::Fps60, cx);
+                    self.request_fps(TargetFps::FPS_60, cx);
                     if let Some(session) = &self.session {
                         if let Err(error) = session.subscribe_remote_cursor() {
                             self.notice = error.to_string();
@@ -768,6 +768,17 @@ impl SessionView {
                 SessionEvent::Permission { name, enabled } if name == "keyboard" && enabled => {
                     self.initialize_pointer();
                     self.notice.clear();
+                }
+                SessionEvent::MediaControls(controls) => {
+                    if let Some(target) = controls.current_resolution.and_then(|mode| {
+                        TargetFps::new(
+                            mode.refresh_rate
+                                .min(base::session_protocol::MAX_SESSION_FPS),
+                        )
+                    }) && self.target_fps != Some(target)
+                    {
+                        self.request_fps(target, cx);
+                    }
                 }
                 SessionEvent::VirtualDisplayResult(result) => {
                     self.finish_virtual_display_result(result, window, cx);
@@ -939,7 +950,10 @@ impl SessionView {
         }
         // Pointer-mode painting and clicks share one continuous local position.
         // The host cursor mailbox can still contain an older position after a finger lifts.
-        let local = if self.input.mode() == InputMode::Pointer && self.input_allowed() {
+        let local = if snapshot.is_some()
+            && self.input.mode() == InputMode::Pointer
+            && self.input_allowed()
+        {
             self.input.snapshot().position
         } else {
             if snapshot
@@ -993,7 +1007,6 @@ impl SessionView {
             panel: self.panel,
             audio_on: audio.as_ref().is_some_and(|audio| audio.enabled),
             audio_error: audio.and_then(|audio| audio.error),
-            target_fps: self.target_fps.map(TargetFps::value),
             bitrate_supported: media.bitrate_supported,
             max_bitrate_kbps: media.max_bitrate_kbps,
             bitrate_limit_kbps: match media.bitrate_mode {
@@ -1222,16 +1235,6 @@ impl SessionView {
                     }
                 }
             }
-            ChromeAction::Fps(fps) => {
-                let target = match fps {
-                    30 => TargetFps::Fps30,
-                    60 => TargetFps::Fps60,
-                    90 => TargetFps::Fps90,
-                    120 => TargetFps::Fps120,
-                    _ => return,
-                };
-                self.request_fps(target, cx);
-            }
             ChromeAction::Bitrate(limit) => self.request_bitrate(limit),
             ChromeAction::Resolution(width, height, refresh_rate) => {
                 self.request_resolution(
@@ -1355,7 +1358,7 @@ impl Render for SessionView {
             .h(visible.height)
             .overflow_hidden()
             .track_focus(&self.focus)
-            .bg(rgb(0x080a0e))
+            .bg(rgb(0x000000))
             .child(
                 at(layout.video).overflow_hidden().children(
                     self.presentation

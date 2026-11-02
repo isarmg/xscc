@@ -5,10 +5,11 @@ pub(super) fn target_fps(
     custom: &str,
 ) -> i32 {
     let fps = if enabled {
-        match target.parse::<i32>() {
-            Ok(fps @ (60 | 90 | 120)) => fps,
-            _ => 60,
-        }
+        target
+            .parse::<i32>()
+            .ok()
+            .filter(|fps| (1..=base::session_protocol::MAX_SESSION_FPS as i32).contains(fps))
+            .unwrap_or(60)
     } else if quality == "custom" {
         custom
             .parse::<i32>()
@@ -32,6 +33,11 @@ mod tests {
         }
         assert_eq!(target_fps(true, "invalid", "best", "24"), 60);
         assert_eq!(target_fps(true, "120", "best", "24"), 120);
+        for fps in [75, 144, 165, 240, 360, 1000] {
+            assert_eq!(target_fps(true, &fps.to_string(), "best", "24"), fps);
+        }
+        assert_eq!(target_fps(true, "1001", "best", "24"), 60);
+        assert_eq!(target_fps(true, "0", "best", "24"), 60);
     }
 
     #[test]

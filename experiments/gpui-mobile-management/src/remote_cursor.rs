@@ -72,6 +72,30 @@ fn image_bounds(placement: &Placement, extent: (u32, u32), hotspot: (i32, i32)) 
     )
 }
 
+fn arrow_points(placement: &Placement, local_pointer: bool) -> [Point<Pixels>; 7] {
+    let origin = placement.point;
+    let horizontal = if local_pointer && origin.x + px(17.) > placement.frame.right() {
+        -1.
+    } else {
+        1.
+    };
+    let vertical = if local_pointer && origin.y + px(24.) > placement.frame.bottom() {
+        -1.
+    } else {
+        1.
+    };
+    [
+        (0., 0.),
+        (0., 20.),
+        (5., 15.),
+        (9., 24.),
+        (13., 22.),
+        (9., 13.),
+        (17., 13.),
+    ]
+    .map(|(x, y)| origin + point(px(x * horizontal), px(y * vertical)))
+}
+
 #[cfg(all(
     any(target_os = "android", target_os = "ios"),
     feature = "mobile-session"
@@ -111,6 +135,14 @@ mod native {
             local_pointer: Option<(i32, i32)>,
             window: &mut Window,
         ) -> Result<PreparedCursor, String> {
+            // A phone needs its own readable pointer even when the host hides its cursor.
+            if local_pointer.is_some() {
+                return Ok(PreparedCursor {
+                    visible: true,
+                    local_pointer,
+                    ..Default::default()
+                });
+            }
             let Some(snapshot) = snapshot else {
                 self.clear(window)?;
                 return Ok(PreparedCursor::default());
@@ -181,29 +213,23 @@ mod native {
                     bounds: placement.frame,
                 }),
                 |window| {
-                    paint_arrow(placement.point, window);
+                    paint_arrow(&placement, self.local_pointer.is_some(), window);
                 },
             );
         }
     }
 
-    fn paint_arrow(origin: Point<Pixels>, window: &mut Window) {
+    fn paint_arrow(placement: &Placement, local_pointer: bool, window: &mut Window) {
+        let points = arrow_points(placement, local_pointer);
         for stroke in [false, true] {
             let mut path = if stroke {
                 PathBuilder::stroke(px(1.5))
             } else {
                 PathBuilder::fill()
             };
-            path.move_to(origin);
-            for (x, y) in [
-                (0.0, 20.0),
-                (5.0, 15.0),
-                (9.0, 24.0),
-                (13.0, 22.0),
-                (9.0, 13.0),
-                (17.0, 13.0),
-            ] {
-                path.line_to(origin + point(px(x), px(y)));
+            path.move_to(points[0]);
+            for &point in &points[1..] {
+                path.line_to(point);
             }
             path.close();
             match path.build() {
@@ -211,7 +237,7 @@ mod native {
                 Err(error) => {
                     gpui_session::log_cursor_render_failure(&error);
                     window.paint_quad(fill(
-                        Bounds::new(origin, size(px(3.0), px(3.0))),
+                        Bounds::new(placement.point, size(px(3.0), px(3.0))),
                         rgb(0xffffff),
                     ));
                     break;
@@ -271,6 +297,54 @@ mod tests {
         assert_eq!(remote.point, point(px(500.0), px(20.0)));
         let centered = placement(viewport, (1000, 2000), (1920, -2000), None, None).unwrap();
         assert_eq!(centered.point, point(px(500.0), px(200.0)));
+    }
+
+    #[test]
+    fn local_arrow_tip_matches_click_after_relative_motion_without_a_remote_cursor() {
+        use crate::{
+            pointer_input::TrackpadInput,
+            touch_input::{Geometry, Output, Phase, Point as TouchPoint},
+        };
+
+        let viewport = Bounds::new(point(px(50.), px(20.)), size(px(1000.), px(800.)));
+        let geometry = Geometry {
+            bounds: (50., 20., 1000., 800.),
+            extent: (2000, 1000),
+            origin: (-2000, -100),
+        };
+        let mut pointer = TrackpadInput::default();
+        pointer.configure(geometry);
+        pointer.event(1, Phase::Started, TouchPoint(500., 400.), geometry);
+        pointer.event(1, Phase::Moved, TouchPoint(550., 375.), geometry);
+        pointer.event(1, Phase::Ended, TouchPoint(550., 375.), geometry);
+        pointer.event(2, Phase::Started, TouchPoint(600., 400.), geometry);
+        let clicks = pointer.event(2, Phase::Ended, TouchPoint(600., 400.), geometry);
+        let position = pointer.snapshot().position;
+        let (x, y) = position.unwrap();
+        assert!(clicks.contains(&Output::Down(x, y)));
+        assert!(clicks.contains(&Output::Up(x, y)));
+        let placed = placement(viewport, geometry.extent, geometry.origin, position, None).unwrap();
+        let expected = point(
+            px(50. + (x + 2000) as f32 * 0.5),
+            px(170. + (y + 100) as f32 * 0.5),
+        );
+        assert_eq!(arrow_points(&placed, true)[0], expected);
+    }
+
+    #[test]
+    fn local_arrow_body_remains_in_view_at_all_four_screen_corners() {
+        let viewport = Bounds::new(point(px(50.), px(20.)), size(px(1000.), px(800.)));
+        for position in [(-2000, -100), (-1, -100), (-2000, 899), (-1, 899)] {
+            let placed =
+                placement(viewport, (2000, 1000), (-2000, -100), Some(position), None).unwrap();
+            let points = arrow_points(&placed, true);
+            assert_eq!(points[0], placed.point);
+            assert!(
+                points
+                    .into_iter()
+                    .all(|point| placed.frame.contains(&point))
+            );
+        }
     }
 
     #[test]

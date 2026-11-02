@@ -103,7 +103,7 @@ fn constrained_startup_does_not_leave_a_large_queue() {
 
 #[test]
 fn explicit_streaming_starts_at_the_cap_and_legacy_keeps_its_guard() {
-    for cap in [3, 30, 60, 90, 120] {
+    for cap in [3, 30, 60, 75, 90, 120, 144, 165, 240, 360, 1000] {
         let mut legacy = session(cap, true);
         legacy.update_display_data("startup", 0);
         assert_eq!(legacy.fps(), INIT_FPS.min(cap));

@@ -1178,12 +1178,42 @@ impl Connection {
         // that got this far proved more than a self-reported id.
         self.clear_id_whitelist_failures();
         let auth_conn_type = AuthConnType::Remote;
-        self.authed_conn_id = Some(self::raii::AuthedConnID::new(
-            self.inner.id(),
-            auth_conn_type,
-            self.session_key(),
-            self.tx_from_authed.clone(),
-        ));
+        #[cfg(windows)]
+        {
+            let id = self.inner.id();
+            let key = self.session_key();
+            let sender = self.tx_from_authed.clone();
+            let registered = tokio::task::spawn_blocking(move || {
+                self::raii::AuthedConnID::new_when_display_idle(id, auth_conn_type, key, sender)
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("Display session registration failed: {error}"))
+            .and_then(|result| result);
+            match registered {
+                Ok(connection) => self.authed_conn_id = Some(connection),
+                Err(error) => {
+                    self.authorized = false;
+                    self.send_login_error(&error.to_string()).await;
+                    return false;
+                }
+            }
+            #[cfg(feature = "managed")]
+            if !self.session_authority_valid() {
+                self.authorized = false;
+                self.authed_conn_id = None;
+                self.send_login_error("Management authorization expired").await;
+                return false;
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            self.authed_conn_id = Some(self::raii::AuthedConnID::new(
+                self.inner.id(),
+                auth_conn_type,
+                self.session_key(),
+                self.tx_from_authed.clone(),
+            ));
+        }
         self.session_last_recv_time = SESSIONS
             .lock()
             .unwrap()
@@ -3942,6 +3972,43 @@ mod raii {
             Self(conn_id, conn_type)
         }
 
+        #[cfg(windows)]
+        pub fn new_when_display_idle(
+            conn_id: i32,
+            conn_type: AuthConnType,
+            session_key: SessionKey,
+            sender: mpsc::UnboundedSender<Data>,
+        ) -> ResultType<Self> {
+            let _registration = video_service::begin_connection(Duration::from_secs(5))
+                .map_err(|error| anyhow::anyhow!(error))?;
+            Ok(Self::new(conn_id, conn_type, session_key, sender))
+        }
+
+        #[cfg(windows)]
+        fn cleanup_last_remote_session() {
+            if Self::remote_conn_count() != 0 {
+                return;
+            }
+            let _idle = match video_service::wait_for_capture_idle(Duration::from_secs(5)) {
+                Ok(idle) => idle,
+                Err(error) => {
+                    hbb_common::throttled_log!(
+                        Duration::from_secs(30),
+                        error,
+                        "Virtual display session cleanup skipped: {error}"
+                    );
+                    return;
+                }
+            };
+            if Self::remote_conn_count() != 0 {
+                return;
+            }
+            display_service::restore_resolutions();
+            if let Err(error) = virtual_display_manager::reset_all() {
+                log::error!("Virtual display session cleanup failed: {error:#}");
+            }
+        }
+
         fn check_wake_lock() {
             let conn_count = AUTHED_CONNS.lock().unwrap().len();
             let remote_count = AUTHED_CONNS
@@ -4076,11 +4143,11 @@ mod raii {
                 {
                     *WALLPAPER_REMOVER.lock().unwrap() = None;
                 }
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                #[cfg(not(any(target_os = "android", target_os = "ios", windows)))]
                 display_service::restore_resolutions();
                 #[cfg(windows)]
-                if let Err(error) = virtual_display_manager::reset_all() {
-                    log::error!("Virtual display session cleanup failed: {error:#}");
+                if self.1 == AuthConnType::Remote {
+                    tokio::task::spawn_blocking(Self::cleanup_last_remote_session);
                 }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote {

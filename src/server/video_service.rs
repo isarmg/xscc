@@ -18,6 +18,13 @@
 // to-do:
 // https://slhck.info/video/2017/03/01/rate-control.html
 
+#[cfg(any(windows, test))]
+mod capture_lifecycle;
+#[cfg(windows)]
+pub(super) use capture_lifecycle::begin_connection;
+#[cfg(windows)]
+pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
+
 #[cfg(feature = "gpui-host")]
 mod metrics;
 
@@ -521,6 +528,9 @@ fn get_capturer(
 }
 
 fn run(vs: VideoService) -> ResultType<()> {
+    // Registered first so the acknowledgement follows every encoder/capturer destructor.
+    #[cfg(windows)]
+    let _capture_lifetime = capture_lifecycle::begin_capture();
     let mut raii = Raii::new(vs.idx, vs.sp.name());
     // Wayland only support one video capturer for now. It is ok to call ensure_inited() here.
     //
@@ -736,6 +746,11 @@ fn run_encoder(
     let sp_name = sp.name();
 
     while sp.ok() {
+        #[cfg(windows)]
+        if capture_lifecycle::change_pending() {
+            // The service restarts after the topology operation releases its idle guard.
+            return Ok(());
+        }
         // A static desktop still needs a fresh reference frame for newly joined viewers.
         sp.snapshot(|subscribers| {
             if subscribers.has_subscribes() {
@@ -1033,6 +1048,10 @@ fn run_encoder(
         let timeout_millis = 3_000u64;
         let wait_begin = Instant::now();
         while wait_begin.elapsed().as_millis() < timeout_millis as _ {
+            #[cfg(windows)]
+            if !sp.ok() || capture_lifecycle::change_pending() {
+                break;
+            }
             if vs.source.is_monitor() {
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }

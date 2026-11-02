@@ -128,7 +128,7 @@ impl RemoteVideo {
             generation: 0,
             connected: false,
             keyboard_allowed: false,
-            target_fps: TargetFps::Fps60,
+            target_fps: TargetFps::FPS_60,
             monitors: Vec::new(),
             current_monitor: 0,
             switching_monitor: false,
@@ -181,12 +181,6 @@ impl RemoteVideo {
 
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
         self.close();
-        self.publish(cx);
-        cx.notify();
-    }
-
-    pub fn request_fps(&mut self, target: TargetFps, cx: &mut Context<Self>) {
-        self.set_target_fps(target);
         self.publish(cx);
         cx.notify();
     }
