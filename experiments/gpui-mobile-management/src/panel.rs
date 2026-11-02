@@ -17,6 +17,12 @@ use std::{
 use xscc::protocol::InstanceRole;
 use xscc_native_management::{enrollment::ServerOrigin, manager::Status};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnbindConfirmation {
+    Remote,
+    Local,
+}
+
 pub struct Panel {
     commands: tokio::sync::mpsc::Sender<Command>,
     events: mpsc::Receiver<Event>,
@@ -27,7 +33,7 @@ pub struct Panel {
     initialized: bool,
     active: bool,
     busy: bool,
-    confirm_unbind: bool,
+    confirm_unbind: Option<UnbindConfirmation>,
     binding_expanded: bool,
     session_visible: bool,
     notice: String,
@@ -89,7 +95,7 @@ impl Panel {
                 match phase {
                     AppLifecyclePhase::Background | AppLifecyclePhase::Disconnected => {
                         view.active = false;
-                        view.confirm_unbind = false;
+                        view.confirm_unbind = None;
                         view.session_visible = false;
                         if let Some(status) = &mut view.status {
                             status.peers.clear();
@@ -131,7 +137,7 @@ impl Panel {
             initialized: false,
             active,
             busy: false,
-            confirm_unbind: false,
+            confirm_unbind: None,
             binding_expanded: true,
             session_visible: false,
             notice: "正在读取本机绑定…".into(),
@@ -167,6 +173,15 @@ impl Panel {
                     self.notice.clear();
                 }
                 Event::Status(mut status) => {
+                    if !status.configured
+                        && self
+                            .status
+                            .as_ref()
+                            .is_some_and(|previous| previous.configured)
+                    {
+                        self.binding_expanded = true;
+                        self.confirm_unbind = None;
+                    }
                     if !self.active {
                         status.peers.clear();
                     }
@@ -225,7 +240,7 @@ impl Panel {
         match self.commands.try_send(command) {
             Ok(()) => {
                 self.busy = true;
-                self.confirm_unbind = false;
+                self.confirm_unbind = None;
                 self.notice = "正在处理…".into();
             }
             Err(error) => self.notice = format!("管理操作未提交：{error}"),
@@ -360,7 +375,7 @@ impl Render for Panel {
                             })
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.binding_expanded = !view.binding_expanded;
-                                view.confirm_unbind = false;
+                                view.confirm_unbind = None;
                                 window.dismiss_virtual_keyboard();
                                 cx.notify();
                             })),
@@ -416,8 +431,8 @@ impl Render for Panel {
                     content = content.child(
                         button(
                             "unbind",
-                            if self.confirm_unbind {
-                                "确认解除本机绑定"
+                            if self.confirm_unbind == Some(UnbindConfirmation::Remote) {
+                                "确认解除服务器绑定"
                             } else {
                                 "解除绑定"
                             },
@@ -428,20 +443,46 @@ impl Render for Panel {
                                 return;
                             }
                             window.dismiss_virtual_keyboard();
-                            if view.confirm_unbind {
+                            if view.confirm_unbind == Some(UnbindConfirmation::Remote) {
                                 view.action(Command::Unbind, cx);
                             } else {
-                                view.confirm_unbind = true;
+                                view.confirm_unbind = Some(UnbindConfirmation::Remote);
                             }
                             cx.notify();
                         })),
                     );
-                    if self.confirm_unbind {
+                    content = content.child(
+                        button(
+                            "forget-local",
+                            if self.confirm_unbind == Some(UnbindConfirmation::Local) {
+                                "确认仅清除此机绑定"
+                            } else {
+                                "仅清除此机绑定"
+                            },
+                            false,
+                        )
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            if !view.enabled() {
+                                return;
+                            }
+                            window.dismiss_virtual_keyboard();
+                            if view.confirm_unbind == Some(UnbindConfirmation::Local) {
+                                view.action(Command::ForgetLocal, cx);
+                            } else {
+                                view.confirm_unbind = Some(UnbindConfirmation::Local);
+                            }
+                            cx.notify();
+                        })),
+                    );
+                    if let Some(confirmation) = self.confirm_unbind {
                         content = content
-                            .child("解除本机绑定后，需要重新输入实例密码。")
+                            .child(match confirmation {
+                                UnbindConfirmation::Remote => "解除服务器绑定后，需要重新输入实例密码。",
+                                UnbindConfirmation::Local => "仅删除此机绑定，不会撤销服务器记录；重新绑定前在网页重置对应实例密码。",
+                            })
                             .child(button("cancel-unbind", "取消", false).on_click(cx.listener(
                                 |view, _, _, cx| {
-                                    view.confirm_unbind = false;
+                                    view.confirm_unbind = None;
                                     cx.notify();
                                 },
                             )));

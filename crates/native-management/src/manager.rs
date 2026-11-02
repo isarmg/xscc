@@ -457,6 +457,23 @@ impl NativeManager {
         *self.phase.write().unwrap() = "unbound".into();
         Ok(())
     }
+    pub async fn forget_local_binding(&self) -> Result<()> {
+        let _guard = self.gate.lock().await;
+        self.stop_owner().await?;
+        let origin = self
+            .settings
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|settings| settings.server.clone());
+        if let Some(origin) = origin {
+            self.store.forget(&origin).await?;
+        }
+        self.save_settings(None).await?;
+        *self.binding.write().unwrap() = None;
+        *self.phase.write().unwrap() = "unbound".into();
+        Ok(())
+    }
     async fn start_owner(self: &Arc<Self>) {
         let (shutdown, receiver) = watch::channel(false);
         let this = self.clone();
@@ -678,5 +695,65 @@ mod tests {
         drop(manager);
         root.write("active.json", b"corrupt", false).unwrap();
         assert!(NativeManager::open(root, Arc::new(UnavailableHost)).is_err());
+    }
+    #[tokio::test]
+    async fn local_forget_removes_only_current_binding_and_preserves_installation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = PrivateDirectory::create(temporary.path(), "native").unwrap();
+        let manager = NativeManager::open(root.clone(), Arc::new(UnavailableHost)).unwrap();
+        let installation = manager.installation_id;
+        let current = ServerOrigin::parse("https://offline.invalid").unwrap();
+        let other = ServerOrigin::parse("https://other.invalid").unwrap();
+        for (origin, credential) in [(&current, "a"), (&other, "b")] {
+            let saved = SavedBinding::restore(
+                origin.clone(),
+                Binding {
+                    manager_id: uuid::Uuid::new_v4(),
+                    device_id: uuid::Uuid::new_v4(),
+                    installation_id: installation,
+                },
+                Zeroizing::new(credential.repeat(64)),
+            )
+            .unwrap();
+            manager.store.create(&saved).await.unwrap();
+            if origin == &current {
+                *manager.binding.write().unwrap() = Some(saved.binding().clone());
+            }
+        }
+        manager
+            .save_settings(Some(Settings {
+                version: 1,
+                server: current.clone(),
+                addresses: Vec::new(),
+            }))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), manager.forget_local_binding())
+            .await
+            .unwrap()
+            .unwrap();
+        let status = manager.status();
+        assert!(!status.configured && status.binding.is_none() && status.peers.is_empty());
+        assert_eq!(status.phase, "unbound");
+        assert!(manager.store.load(&current).await.unwrap().is_none());
+        let retained = manager.store.load(&other).await.unwrap().unwrap();
+        assert_eq!(retained.credential(), "b".repeat(64));
+        manager.forget_local_binding().await.unwrap();
+        drop(manager);
+        let reopened = NativeManager::open(root, Arc::new(UnavailableHost)).unwrap();
+        assert_eq!(reopened.installation_id, installation);
+        assert!(!reopened.configured());
+        assert!(!reopened.target_available(retained.binding().device_id));
+        assert!(reopened.target(retained.binding().device_id).is_err());
+        assert_eq!(
+            reopened
+                .store
+                .load(&other)
+                .await
+                .unwrap()
+                .unwrap()
+                .binding(),
+            retained.binding()
+        );
     }
 }

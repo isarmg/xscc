@@ -6,7 +6,7 @@ use xscc::{
     protocol::{DiagnosticSnapshot, HostAddress},
 };
 use xscc_native_management::{
-    manager::{NativeHost, NativeManager, Status},
+    manager::{Error as ManagementError, NativeHost, NativeManager, Status},
     private_fs::PrivateDirectory,
 };
 
@@ -14,6 +14,7 @@ pub enum Command {
     Enroll { server: String, code: String },
     Resume,
     Unbind,
+    ForgetLocal,
 }
 
 pub enum Event {
@@ -149,13 +150,20 @@ pub async fn run(
                     }
                     Command::Resume if active => manager.resume().await,
                     Command::Unbind if active => manager.unbind().await,
+                    Command::ForgetLocal if active => manager.forget_local_binding().await,
                     _ => {
                         publish(Event::Action(Err("应用在后台，操作未执行".into())));
                         continue;
                     }
                 };
                 publish_status();
-                let result = result.map_err(|error| error.to_string());
+                let result = result.map_err(|error| {
+                    if enrolling && matches!(&error, ManagementError::Denied) {
+                        "本机仍绑定其他服务器地址，请先解除绑定；旧地址无法连接时，可选择“仅清除此机绑定”。".into()
+                    } else {
+                        error.to_string()
+                    }
+                });
                 if !publish(if enrolling { Event::Enrolled(result) } else { Event::Action(result) }) {
                     break;
                 }
@@ -299,40 +307,42 @@ mod tests {
 
     #[tokio::test]
     async fn latest_background_state_rejects_queued_user_operation() {
-        let temporary = tempfile::tempdir().unwrap();
-        let (commands, receiver) = mpsc::channel(1);
-        let (lifecycle, phases) = watch::channel(true);
-        lifecycle.send_replace(false);
-        lifecycle.send_replace(true);
-        lifecycle.send_replace(false);
-        let (events, replies) = std::sync::mpsc::channel();
-        let wake = Arc::new(Notify::new());
-        commands.send(Command::Resume).await.unwrap();
-        let worker = tokio::spawn(run(
-            Ok(temporary.path().to_owned()),
-            receiver,
-            phases,
-            events,
-            wake.clone(),
-        ));
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                wake.notified().await;
-                for event in replies.try_iter() {
-                    if let Event::Action(result) = event {
-                        return result;
+        for command in [Command::Resume, Command::ForgetLocal] {
+            let temporary = tempfile::tempdir().unwrap();
+            let (commands, receiver) = mpsc::channel(1);
+            let (lifecycle, phases) = watch::channel(true);
+            lifecycle.send_replace(false);
+            lifecycle.send_replace(true);
+            lifecycle.send_replace(false);
+            let (events, replies) = std::sync::mpsc::channel();
+            let wake = Arc::new(Notify::new());
+            commands.send(command).await.unwrap();
+            let worker = tokio::spawn(run(
+                Ok(temporary.path().to_owned()),
+                receiver,
+                phases,
+                events,
+                wake.clone(),
+            ));
+            let result = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    wake.notified().await;
+                    for event in replies.try_iter() {
+                        if let Event::Action(result) = event {
+                            return result;
+                        }
                     }
                 }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(result.unwrap_err(), "应用在后台，操作未执行");
-        drop(commands);
-        drop(lifecycle);
-        tokio::time::timeout(Duration::from_secs(5), worker)
+            })
             .await
-            .unwrap()
             .unwrap();
+            assert_eq!(result.unwrap_err(), "应用在后台，操作未执行");
+            drop(commands);
+            drop(lifecycle);
+            tokio::time::timeout(Duration::from_secs(5), worker)
+                .await
+                .unwrap()
+                .unwrap();
+        }
     }
 }
