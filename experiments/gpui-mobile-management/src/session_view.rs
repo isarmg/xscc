@@ -345,6 +345,10 @@ impl SessionView {
     fn input_allowed(&self) -> bool {
         !self.view_only
             && self.pending_monitor.is_none()
+            && !self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
             && self.authorized()
             && self.extent.0 > 0
             && self.extent.1 > 0

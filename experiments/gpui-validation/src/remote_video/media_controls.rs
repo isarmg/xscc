@@ -136,7 +136,7 @@ impl RemoteVideo {
 
 pub(super) struct PendingVirtual {
     request_id: u64,
-    configure: bool,
+    pub(super) configure: bool,
     invalidate_current: bool,
     original_ids: Vec<String>,
     current_name: Option<String>,

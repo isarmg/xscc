@@ -475,6 +475,10 @@ impl RemoteVideo {
                 .pending_media
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
         {
             return false;
         }
@@ -532,6 +536,10 @@ impl RemoteVideo {
                 .pending_media
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
         {
             return false;
         }
@@ -577,6 +585,10 @@ impl RemoteVideo {
                 .pending_media
                 .as_ref()
                 .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
         {
             return false;
         }
