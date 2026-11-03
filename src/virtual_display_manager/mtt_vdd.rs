@@ -567,8 +567,13 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
                     bail!("Windows requires a restart to start the VDD driver");
                 }
             }
-            change_device(DICS_ENABLE)?;
-            change_device(DICS_PROPCHANGE)?;
+            if present {
+                change_device(if enabled {
+                    DICS_PROPCHANGE
+                } else {
+                    DICS_ENABLE
+                })?;
+            }
         } else if present {
             change_device(DICS_DISABLE)?;
         }

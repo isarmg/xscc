@@ -74,6 +74,17 @@ try {
     Assert-Unbound
     try { $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash }
     catch [System.UnauthorizedAccessException] { Write-Warning 'Identity contents are inaccessible; no ACL changes will be made' }
+    if ($env:XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER -eq 'true') {
+        $driverCheck = & cargo test --locked --manifest-path (Join-Path $root 'Cargo.toml') --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' -- --exact --ignored --nocapture 2>&1
+        $driverExit = $LASTEXITCODE
+        $driverCheck | Write-Output
+        $driverOutput = $driverCheck | Out-String
+        if ($driverExit -ne 0 -or $driverOutput -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;' -or
+            $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=120' -or $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=240' -or
+            $driverOutput -notmatch 'VDD_CI_REMOVED=0') {
+            throw 'Disposable virtual display high-refresh/removal check failed or did not run'
+        }
+    }
     Set-Content $sentinel 'Uninstall must preserve unknown files.'
     if (-not (Test-Path $key) -or (Get-ItemProperty $key).DisplayVersion -ne $env:PACKAGE_VERSION) {
         throw 'Host uninstall registration/version is missing or incorrect'

@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      validate_virtual_display_driver:
+        description: 'Verify actual 120/240 Hz and removal on the disposable runner only'
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -297,6 +302,8 @@ jobs:
       - name: Smoke test host service install and uninstall on disposable runner
         if: matrix.role == 'host' && !inputs.build_only
         timeout-minutes: 5
+        env:
+          XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER: ${{ inputs.validate_virtual_display_driver }}
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

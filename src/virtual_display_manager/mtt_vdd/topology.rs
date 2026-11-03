@@ -3,6 +3,10 @@ use base::session_protocol::virtual_display::{VirtualDisplayMode, VirtualDisplay
 use std::collections::{BTreeMap, BTreeSet};
 use winapi::um::{cfgmgr32::CM_Get_Parent, wingdi::*};
 
+const QDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x40;
+const SDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x20000;
+const DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE: u32 = 0x10;
+
 /// A newly enumerated PnP monitor can precede its Windows desktop path.
 #[derive(Debug)]
 pub(super) struct MonitorPathPending(String);
@@ -129,11 +133,11 @@ pub(super) struct Topology {
 
 impl Topology {
     pub(super) fn query(all: bool) -> ResultType<Self> {
-        let flags = if all {
+        let flags = (if all {
             QDC_ALL_PATHS
         } else {
             QDC_ONLY_ACTIVE_PATHS
-        };
+        }) | QDC_VIRTUAL_REFRESH_RATE_AWARE;
         for _ in 0..4 {
             let (mut paths, mut modes) = (0, 0);
             let result = unsafe { GetDisplayConfigBufferSizes(flags, &mut paths, &mut modes) };
@@ -254,18 +258,7 @@ impl Topology {
                     .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
                     .ok_or_else(|| anyhow::anyhow!("Missing active VDD target signal"))?;
                 let signal = &unsafe { target.u.targetMode() }.targetVideoSignalInfo;
-                let rate = signal.vSyncFreq;
-                if rate.Numerator == 0 || rate.Denominator == 0 {
-                    bail!("Windows reported an invalid active VDD signal rate");
-                }
-                // CCD may omit the divider for a non-Miracast target.
-                let divider = unsafe { signal.u.AdditionalSignalInfo() }
-                    .vSyncFreqDivider()
-                    .max(1);
-                let denominator = u64::from(rate.Denominator) * u64::from(divider);
-                screen.refresh_rate_units = u32::try_from(
-                    (u64::from(rate.Numerator) * 10000 + denominator / 2) / denominator,
-                )?;
+                screen.refresh_rate_units = active_refresh_rate(path, signal)?;
             }
             values.insert(id, screen);
         }
@@ -277,7 +270,7 @@ impl Topology {
     }
 
     fn apply(&self) -> ResultType<()> {
-        let flags = SDC_USE_SUPPLIED_DISPLAY_CONFIG;
+        let flags = SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_VIRTUAL_REFRESH_RATE_AWARE;
         let result = unsafe {
             SetDisplayConfig(
                 self.paths.len() as _,
@@ -389,6 +382,7 @@ impl Topology {
             *unsafe { target.u.targetMode_mut() } = target_mode(mode)?;
             path.targetInfo.modeInfoIdx = u32::try_from(topology.modes.len())?;
             topology.modes.push(target);
+            path.flags &= !DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE;
             path.targetInfo.refreshRate = rate(mode.refresh_rate_units);
             used.insert((
                 path.sourceInfo.adapterId.HighPart,
@@ -442,11 +436,37 @@ impl Topology {
                     bail!("Invalid VDD target mode");
                 }
                 *unsafe { target.u.targetMode_mut() } = target_mode(mode)?;
+                path.flags &= !DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE;
                 path.targetInfo.refreshRate = rate(mode.refresh_rate_units);
             }
         }
         topology.apply()
     }
+}
+
+fn active_refresh_rate(
+    path: &DISPLAYCONFIG_PATH_INFO,
+    signal: &DISPLAYCONFIG_VIDEO_SIGNAL_INFO,
+) -> ResultType<u32> {
+    let rate = signal.vSyncFreq;
+    if rate.Numerator == 0 || rate.Denominator == 0 {
+        bail!("Windows reported an invalid active VDD signal rate");
+    }
+    let divider = unsafe { signal.u.AdditionalSignalInfo() }
+        .vSyncFreqDivider()
+        .max(1);
+    let denominator = u64::from(rate.Denominator) * u64::from(divider);
+    let signal_units =
+        u32::try_from((u64::from(rate.Numerator) * 10000 + denominator / 2) / denominator)?;
+    // Windows 11 can expose a 60 Hz desktop on a faster target signal.
+    let desktop = path.targetInfo.refreshRate;
+    if desktop.Numerator == 0 || desktop.Denominator == 0 {
+        bail!("Windows reported an invalid active VDD desktop refresh rate");
+    }
+    let denominator = u64::from(desktop.Denominator);
+    let desktop_units =
+        u32::try_from((u64::from(desktop.Numerator) * 10000 + denominator / 2) / denominator)?;
+    Ok(desktop_units.min(signal_units))
 }
 
 fn rate(units: u32) -> DISPLAYCONFIG_RATIONAL {
@@ -493,6 +513,98 @@ fn target_mode(mode: VirtualDisplayMode) -> ResultType<DISPLAYCONFIG_TARGET_MODE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "creates a display only on an explicitly enabled disposable GitHub runner"]
+    fn disposable_runner_applies_high_refresh_and_removes_the_display() -> ResultType<()> {
+        use base::session_protocol::virtual_display::VirtualDisplayConfiguration;
+        use winapi::um::winuser::{EnumDisplaySettingsW, ENUM_CURRENT_SETTINGS};
+
+        for (name, expected) in [
+            ("GITHUB_ACTIONS", "true"),
+            ("RUNNER_ENVIRONMENT", "github-hosted"),
+            ("RUNNER_OS", "Windows"),
+            ("XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER", "true"),
+        ] {
+            if std::env::var(name).as_deref() != Ok(expected) {
+                bail!("Hardware check requires an explicitly enabled disposable Windows runner");
+            }
+        }
+        let original = Topology::query(false)?;
+        if original.paths.is_empty() || device()?.is_some() || registered_path()?.is_some() {
+            bail!("Refusing hardware check without an existing desktop or over an existing VDD");
+        }
+        let mut config = VirtualDisplayConfiguration {
+            count: 1,
+            modes: vec![VirtualDisplayMode {
+                width: 1920,
+                height: 1080,
+                refresh_rate_units: 1200000,
+            }],
+            persistent: false,
+        };
+        let check = (|| -> ResultType<()> {
+            for hz in [120, 240] {
+                config.modes[0].refresh_rate_units = hz * 10000;
+                let state = configuration::configure(&config)?;
+                if state.active_count != 1
+                    || state
+                        .displays
+                        .iter()
+                        .any(|screen| !screen.active || screen.refresh_rate_units != hz * 10000)
+                {
+                    bail!("Windows did not confirm the requested {hz} Hz desktop");
+                }
+                for screen in &state.displays {
+                    let name = wide(OsStr::new(&screen.name));
+                    let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
+                    mode.dmSize = std::mem::size_of_val(&mode) as _;
+                    if unsafe {
+                        EnumDisplaySettingsW(name.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode)
+                    } == 0
+                        || (mode.dmPelsWidth, mode.dmPelsHeight, mode.dmDisplayFrequency)
+                            != (1920, 1080, hz)
+                    {
+                        bail!("Windows current DEVMODE did not confirm {hz} Hz");
+                    }
+                }
+                println!("VDD_CI_DESKTOP_HZ={hz}");
+            }
+            Ok(())
+        })();
+        config.count = 0;
+        let cleanup = configuration::configure(&config);
+        let state = cleanup?;
+        check?;
+        if state.active_count != 0 || state.present_count != 0 || state.status != "disabled" {
+            bail!("VDD remained present or active after the removal request");
+        }
+        println!("VDD_CI_REMOVED=0");
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_refresh_does_not_inherit_a_faster_target_signal() {
+        let target = target_mode(VirtualDisplayMode {
+            width: 1920,
+            height: 1080,
+            refresh_rate_units: 2400000,
+        })
+        .unwrap();
+        let mut path: DISPLAYCONFIG_PATH_INFO = unsafe { std::mem::zeroed() };
+        path.targetInfo.refreshRate = rate(600000);
+        assert_eq!(
+            active_refresh_rate(&path, &target.targetVideoSignalInfo).unwrap(),
+            600000
+        );
+        for hz in [120, 240] {
+            path.targetInfo.refreshRate = rate(hz * 10000);
+            assert_eq!(
+                active_refresh_rate(&path, &target.targetVideoSignalInfo).unwrap(),
+                hz * 10000
+            );
+        }
+    }
 
     #[test]
     fn high_refresh_target_modes_preserve_the_idd_desktop_update_rate() {
