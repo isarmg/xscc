@@ -75,8 +75,39 @@ try {
     try { $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash }
     catch [System.UnauthorizedAccessException] { Write-Warning 'Identity contents are inaccessible; no ACL changes will be made' }
     if ($env:XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER -eq 'true') {
-        $driverCheck = & cargo test --locked --manifest-path (Join-Path $root 'Cargo.toml') --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' -- --exact --ignored --nocapture 2>&1
-        $driverExit = $LASTEXITCODE
+        $buildOutput = & cargo test --locked --manifest-path (Join-Path $root 'Cargo.toml') --lib --no-default-features --features use_dasp,gpui-host,hwcodec,vram --target x86_64-pc-windows-msvc --no-run --message-format=json 2>&1
+        if ($LASTEXITCODE -ne 0) { $buildOutput | Write-Output; throw 'Native VDD test build failed' }
+        $testArtifacts = @($buildOutput | ForEach-Object {
+            if ("$_".StartsWith('{')) { $_ | ConvertFrom-Json }
+        } | Where-Object {
+            $_.reason -eq 'compiler-artifact' -and $_.profile.test -and
+            $_.target.name -eq 'librustdesk' -and $_.executable
+        })
+        if ($testArtifacts.Count -ne 1) { throw 'Expected exactly one native root test executable' }
+        Stop-Service -Name 'XSCC Host' -ErrorAction Stop
+        (Get-Service -Name 'XSCC Host').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        $stopDeadline = (Get-Date).AddSeconds(30)
+        while (@(Get-Process -Name 'xscc-host' -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $stopDeadline) {
+            Start-Sleep -Milliseconds 250
+        }
+        if (@(Get-Process -Name 'xscc-host' -ErrorAction SilentlyContinue).Count -gt 0) {
+            throw 'Installed host did not exit normally before the disposable VDD test'
+        }
+        $releaseBackup = Join-Path $env:RUNNER_TEMP "xscc-host-before-vdd-$env:GITHUB_RUN_ID.exe"
+        if (Test-Path $releaseBackup) { throw 'Refusing to overwrite an existing host backup' }
+        $releaseHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+        Copy-Item -LiteralPath $exe -Destination $releaseBackup -ErrorAction Stop
+        try {
+            # Keep the production Program Files check intact while exercising this build's backend.
+            Copy-Item -LiteralPath $testArtifacts[0].executable -Destination $exe -Force -ErrorAction Stop
+            $driverCheck = & $exe 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' --exact --ignored --nocapture 2>&1
+            $driverExit = $LASTEXITCODE
+        } finally {
+            Copy-Item -LiteralPath $releaseBackup -Destination $exe -Force -ErrorAction Stop
+            if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $releaseHash) { throw 'Release host restoration checksum differs' }
+            Start-Service -Name 'XSCC Host' -ErrorAction Stop
+            (Get-Service -Name 'XSCC Host').WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+        }
         $driverCheck | Write-Output
         $driverOutput = $driverCheck | Out-String
         if ($driverExit -ne 0 -or $driverOutput -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;' -or
