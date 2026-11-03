@@ -290,7 +290,7 @@ impl Render for Panel {
         if self.session_visible {
             return div()
                 .size_full()
-                .bg(rgb(palette.page))
+                .bg(rgb(0x000000))
                 .text_color(rgb(palette.text))
                 .child(
                     div()

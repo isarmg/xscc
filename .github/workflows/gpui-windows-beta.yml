@@ -193,7 +193,9 @@ jobs:
           }
       - name: Test configurable virtual display mode preservation
         if: matrix.role == 'host' && !inputs.build_only
-        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
+        run: |
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::topology::tests"
       - name: Test encrypted management handshake and connection-close errors
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::transport::tests"

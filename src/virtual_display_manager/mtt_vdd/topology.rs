@@ -248,13 +248,24 @@ impl Topology {
                         screen.height = source.height;
                     }
                 }
-                let rate = path.targetInfo.refreshRate;
-                if rate.Denominator != 0 {
-                    screen.refresh_rate_units = u32::try_from(
-                        (u64::from(rate.Numerator) * 10000 + u64::from(rate.Denominator) / 2)
-                            / u64::from(rate.Denominator),
-                    )?;
+                let target = self
+                    .modes
+                    .get(path.targetInfo.modeInfoIdx as usize)
+                    .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+                    .ok_or_else(|| anyhow::anyhow!("Missing active VDD target signal"))?;
+                let signal = &unsafe { target.u.targetMode() }.targetVideoSignalInfo;
+                let rate = signal.vSyncFreq;
+                if rate.Numerator == 0 || rate.Denominator == 0 {
+                    bail!("Windows reported an invalid active VDD signal rate");
                 }
+                // CCD may omit the divider for a non-Miracast target.
+                let divider = unsafe { signal.u.AdditionalSignalInfo() }
+                    .vSyncFreqDivider()
+                    .max(1);
+                let denominator = u64::from(rate.Denominator) * u64::from(divider);
+                screen.refresh_rate_units = u32::try_from(
+                    (u64::from(rate.Numerator) * 10000 + denominator / 2) / denominator,
+                )?;
             }
             values.insert(id, screen);
         }
@@ -473,6 +484,33 @@ fn target_mode(mode: VirtualDisplayMode) -> ResultType<DISPLAYCONFIG_TARGET_MODE
         .ok_or_else(|| anyhow::anyhow!("VDD pixel signal rate overflow"))?
         / u64::from(rate.Denominator);
     signal.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
-    *unsafe { signal.u.videoStandard_mut() } = 255;
+    let additional = unsafe { signal.u.AdditionalSignalInfo_mut() };
+    additional.set_videoStandard(255);
+    additional.set_vSyncFreqDivider(1);
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_refresh_target_modes_preserve_the_idd_desktop_update_rate() {
+        for hz in [120, 240] {
+            let target = target_mode(VirtualDisplayMode {
+                width: 1920,
+                height: 1080,
+                refresh_rate_units: hz * 10000,
+            })
+            .unwrap();
+            let signal = target.targetVideoSignalInfo;
+            let additional = unsafe { signal.u.AdditionalSignalInfo() };
+            assert_eq!(additional.videoStandard(), 255);
+            assert_eq!(additional.vSyncFreqDivider(), 1);
+            assert_eq!(
+                signal.vSyncFreq.Numerator,
+                hz * signal.vSyncFreq.Denominator * additional.vSyncFreqDivider()
+            );
+        }
+    }
 }

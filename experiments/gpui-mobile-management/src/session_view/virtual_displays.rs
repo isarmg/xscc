@@ -133,6 +133,7 @@ impl SessionView {
                             state
                                 .displays
                                 .iter()
+                                .filter(|screen| screen.active)
                                 .map(|screen| screen.id.clone())
                                 .collect()
                         })

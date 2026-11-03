@@ -8,7 +8,7 @@ mod bitrate;
 mod resolution;
 pub(crate) mod virtual_displays;
 
-const PAGE: u32 = crate::theme::LIGHT.page;
+const PAGE: u32 = 0x000000;
 const SURFACE: u32 = crate::theme::LIGHT.panel;
 const RAISED: u32 = crate::theme::LIGHT.accent_soft;
 const BORDER: u32 = crate::theme::LIGHT.border;
