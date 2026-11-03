@@ -37,6 +37,15 @@ pub(super) fn present_count() -> ResultType<usize> {
     Ok(topology::monitor_ids()?.len())
 }
 
+fn display_query_error(error: anyhow::Error, problem: u32) -> anyhow::Error {
+    if problem == 0 {
+        return error;
+    }
+    // Remote restart classification still reads the original top-level error text.
+    let message = format!("{error} (previously observed VDD device problem code: {problem})");
+    error.context(message)
+}
+
 fn query() -> ResultType<VirtualDisplayState> {
     let bundle = bundle_path()?;
     let folder = bundle.join("config");
@@ -99,8 +108,11 @@ fn query() -> ResultType<VirtualDisplayState> {
             profile.monitor_count
         };
     }
-    let ids = topology::monitor_ids()?;
-    state.displays = Topology::query(true)?.screens(&ids)?;
+    let ids = topology::monitor_ids().map_err(|error| display_query_error(error, problem))?;
+    state.displays = Topology::query(true)
+        .map_err(|error| display_query_error(error, problem))?
+        .screens(&ids)
+        .map_err(|error| display_query_error(error, problem))?;
     state.present_count = u32::try_from(ids.len())?;
     state.active_count = u32::try_from(
         state
@@ -394,4 +406,32 @@ fn restart_required() -> ResultType<bool> {
         );
     }
     Ok(parameters.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT) != 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_query_failure_retains_the_observed_problem_and_original_cause() {
+        for message in ["Display query failed", "Display query requires a restart"] {
+            for problem in [0, 14, 22, 43] {
+                let cause =
+                    anyhow::Error::new(std::io::Error::from_raw_os_error(5)).context(message);
+                let root = cause.root_cause().to_string();
+                let error = display_query_error(cause, problem);
+                let text = error.to_string();
+                assert!(text.starts_with(message));
+                assert_eq!(text.contains("restart"), message.contains("restart"));
+                assert!(format!("{error:#}").contains(&root));
+                let source = error.downcast_ref::<std::io::Error>().unwrap();
+                assert_eq!(source.raw_os_error(), Some(5));
+                if problem == 0 {
+                    assert_eq!(text, message);
+                } else {
+                    assert!(text.contains(&format!("problem code: {problem}")));
+                }
+            }
+        }
+    }
 }
