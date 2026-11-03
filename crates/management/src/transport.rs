@@ -244,6 +244,7 @@ impl ManagerConnection {
                     | TransportError::Configuration
                     | TransportError::Protocol)
             ) {
+                execution.shutdown().await?;
                 return result;
             }
             if started.elapsed() >= Duration::from_secs(60) {

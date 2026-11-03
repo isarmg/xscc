@@ -121,9 +121,9 @@ pub async fn run(
             manager.resume().await.map_err(|error| error.to_string()),
         ));
     }
-    let mut publish_status = || {
+    let mut publish_status = |force: bool| {
         let status = manager.status();
-        if status == last_status {
+        if !force && status == last_status {
             return true;
         }
         last_status = status.clone();
@@ -136,15 +136,20 @@ pub async fn run(
             changed = lifecycle.changed() => {
                 if changed.is_err() { break; }
                 let next = *lifecycle.borrow_and_update();
-                if next == active { continue; }
+                if next == active {
+                    // A coalesced background/active pair still cleared the view's peers.
+                    if next && !publish_status(true) { break; }
+                    continue;
+                }
                 active = next;
                 let result = if active { manager.resume().await } else { manager.shutdown().await };
-                publish_status();
+                publish_status(false);
                 if !publish(Event::Lifecycle(result.map_err(|error| error.to_string()))) { break; }
             }
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 let enrolling = matches!(command, Command::Enroll { .. });
+                let refreshing = matches!(command, Command::Refresh);
                 let result = match command {
                     Command::Enroll { server, code } if active => {
                         manager.enroll(&server, &code, Vec::new()).await
@@ -158,7 +163,7 @@ pub async fn run(
                         continue;
                     }
                 };
-                publish_status();
+                publish_status(refreshing);
                 let result = result.map_err(|error| {
                     if enrolling && matches!(&error, ManagementError::Denied) {
                         "本机仍绑定其他服务器地址，请先解除绑定；旧地址无法连接时，可选择“仅清除此机绑定”。".into()
@@ -171,7 +176,7 @@ pub async fn run(
                 }
             }
             _ = timer.tick(), if active => {
-                if !publish_status() { break; }
+                if !publish_status(false) { break; }
             }
         }
     }
@@ -267,7 +272,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unchanged_idle_status_does_not_wake_the_management_view() {
+    async fn unchanged_status_is_republished_only_on_foreground_or_refresh() {
         let temporary = tempfile::tempdir().unwrap();
         let (commands, receiver) = mpsc::channel(1);
         let (lifecycle, phases) = watch::channel(true);
@@ -299,12 +304,35 @@ mod tests {
                 .try_iter()
                 .any(|event| matches!(event, Event::Status(_)))
         );
+        let mut republished = [false; 2];
+        for (index, received) in republished.iter_mut().enumerate() {
+            if index == 0 {
+                lifecycle.send_replace(false);
+                lifecycle.send_replace(true);
+            } else {
+                commands.send(Command::Refresh).await.unwrap();
+            }
+            *received = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    wake.notified().await;
+                    if replies
+                        .try_iter()
+                        .any(|event| matches!(event, Event::Status(_)))
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .is_ok();
+        }
         drop(commands);
         drop(lifecycle);
         tokio::time::timeout(Duration::from_secs(5), worker)
             .await
             .unwrap()
             .unwrap();
+        assert_eq!(republished, [true, true], "foreground, then manual refresh");
     }
 
     #[tokio::test]

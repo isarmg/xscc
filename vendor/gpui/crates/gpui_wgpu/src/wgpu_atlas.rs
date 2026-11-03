@@ -410,12 +410,17 @@ impl WgpuAtlasTexture {
 }
 
 fn fill_upload_data(data: &mut Vec<u8>, bytes: &[u8], format: Option<wgpu::TextureFormat>) {
-    data.clear();
-    data.extend_from_slice(bytes);
     if format == Some(wgpu::TextureFormat::Rgba8Unorm) {
-        for pixel in data.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
+        data.resize(bytes.len(), 0);
+        let (pixels, tail) = bytes.as_chunks::<4>();
+        let (output, remainder) = data.as_chunks_mut::<4>();
+        for (output, pixel) in output.iter_mut().zip(pixels) {
+            *output = [pixel[2], pixel[1], pixel[0], pixel[3]];
         }
+        remainder.copy_from_slice(tail);
+    } else {
+        data.clear();
+        data.extend_from_slice(bytes);
     }
 }
 
@@ -619,5 +624,19 @@ mod tests {
             swizzle_upload_data(&input, wgpu::TextureFormat::Rgba8Unorm),
             vec![0x30, 0x20, 0x10, 0x40, 0xCC, 0xBB, 0xAA, 0xDD]
         );
+    }
+
+    #[test]
+    fn swizzle_upload_data_preserves_tails_when_reusing_staging() {
+        let mut staging = Vec::new();
+        for len in [3, 31, 16, 7, 0, 35] {
+            let input: Vec<_> = (0..len).collect();
+            let mut expected = input.clone();
+            for pixel in expected.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+            fill_upload_data(&mut staging, &input, Some(wgpu::TextureFormat::Rgba8Unorm));
+            assert_eq!(staging, expected);
+        }
     }
 }

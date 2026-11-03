@@ -127,6 +127,106 @@ async fn transmit(peer: &mut Peer, message: ManagerMessage) {
     .await
     .unwrap()
 }
+
+#[tokio::test]
+async fn revoked_session_finishes_owned_execution_before_returning() {
+    timeout(Duration::from_secs(5), async {
+        let binding = Binding {
+            manager_id: uuid::Uuid::new_v4(),
+            device_id: uuid::Uuid::new_v4(),
+            installation_id: uuid::Uuid::new_v4(),
+        };
+        let caps = Capabilities {
+            protocol: PROTOCOL.into(),
+            client_version: "test".into(),
+            os: ClientOs::LinuxX86_64,
+            backend: Backend::Rustdesk,
+            execution_mode: ExecutionMode::Embedded,
+            diagnostics: true,
+        };
+        let task = Task {
+            protocol: TASK_PROTOCOL.into(),
+            operation_id: format!("op_{}", uuid::Uuid::new_v4()),
+            binding: binding.clone(),
+            permission: Permission::ReadDiagnostics,
+            command: Command::ReadDiagnostics {},
+        };
+        let facts = Facts::default();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let executor = Arc::new(Executor::new_with_capabilities(
+            binding.clone(),
+            caps.clone(),
+            Host {
+                started: started.clone(),
+                release: release.clone(),
+                calls: Arc::new(AtomicUsize::new(0)),
+            },
+            facts.clone(),
+        ));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let connection = ManagerConnection::new(
+            &format!("ws://{}{CONNECT_PATH}", listener.local_addr().unwrap()),
+            Zeroizing::new("a".repeat(64)),
+        )
+        .unwrap();
+        let (_health, receiver) = watch::channel(HealthObservation::default());
+        let (_shutdown, shutdown) = watch::channel(false);
+        let running = tokio::spawn(async move {
+            connection
+                .run(binding, caps, executor, receiver, shutdown)
+                .await
+        });
+        let (stream, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)] // Tungstenite fixes the handshake callback's error type.
+        let mut peer = tokio_tungstenite::accept_hdr_async(
+            stream,
+            |_: &tungstenite::handshake::server::Request,
+             mut response: tungstenite::handshake::server::Response| {
+                response.headers_mut().insert(
+                    header::SEC_WEBSOCKET_PROTOCOL,
+                    header::HeaderValue::from_static(WEBSOCKET_SUBPROTOCOL),
+                );
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        receive(&mut peer).await;
+        let expires = (std::time::SystemTime::now() + Duration::from_secs(10))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        transmit(
+            &mut peer,
+            ManagerMessage::Task {
+                mode: DeliveryMode::Execute,
+                task: Box::new(task.clone()),
+                expires_at_unix_ms: expires,
+                remaining_ms: 10_000,
+            },
+        )
+        .await;
+        started.notified().await;
+        transmit(&mut peer, ManagerMessage::Revoked {}).await;
+        // Socket closure confirms revocation was processed before checking the owner.
+        while peer.next().await.is_some() {}
+        assert!(
+            !running.is_finished(),
+            "revocation must not leave owned work running after its owner returns"
+        );
+        release.notify_one();
+        assert_eq!(running.await.unwrap(), Err(TransportError::Revoked));
+        let record = facts.load(&task.operation_id).await.unwrap().unwrap();
+        assert!(matches!(
+            record.report,
+            Some(Report::DiagnosticsRead { .. })
+        ));
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt() {
     timeout(Duration::from_secs(15), async {
