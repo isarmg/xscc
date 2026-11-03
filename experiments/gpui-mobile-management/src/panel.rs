@@ -350,7 +350,7 @@ impl Render for Panel {
         let mut header = div()
             .id("mobile-titlebar-actions")
             .w_full()
-            .min_h(px(theme::CONTROL_HEIGHT))
+            .min_h(px(32.))
             .flex()
             .items_center()
             .gap_2()
@@ -502,7 +502,7 @@ impl Render for Panel {
                             .flex()
                             .gap_2()
                             .child(
-                                button("confirm-unbind", "确认", false)
+                                header_button("confirm-unbind", "确认", false, enabled)
                                     .debug_selector(|| "confirm-unbind".into())
                                     .on_click(cx.listener(|view, _, window, cx| {
                                         let Some(confirmation) = view.confirm_unbind else {
@@ -519,12 +519,14 @@ impl Render for Panel {
                                         cx.notify();
                                     })),
                             )
-                            .child(button("cancel-unbind", "取消", false).on_click(cx.listener(
-                                |view, _, _, cx| {
-                                    view.confirm_unbind = None;
-                                    cx.notify();
-                                },
-                            ))),
+                            .child(
+                                header_button("cancel-unbind", "取消", false, enabled).on_click(
+                                    cx.listener(|view, _, _, cx| {
+                                        view.confirm_unbind = None;
+                                        cx.notify();
+                                    }),
+                                ),
+                            ),
                     ),
             );
         }
@@ -796,7 +798,7 @@ impl Render for Panel {
     }
 }
 
-// The rounded surface is compact; the complete 44px row remains tappable.
+// The rounded surface and its hit box share the same compact bounds.
 fn header_button(
     id: &'static str,
     label: &str,
@@ -808,8 +810,8 @@ fn header_button(
         .id(id)
         .debug_selector(|| id.into())
         .relative()
-        .h(px(theme::CONTROL_HEIGHT))
-        .min_h(px(theme::CONTROL_HEIGHT))
+        .h(px(32.))
+        .min_h(px(32.))
         .px_3()
         .flex()
         .items_center()
@@ -826,8 +828,8 @@ fn header_button(
         .child(
             div()
                 .absolute()
-                .top(px(6.))
-                .bottom(px(6.))
+                .top_0()
+                .bottom_0()
                 .left_0()
                 .right_0()
                 .child(theme::surface(
@@ -916,8 +918,14 @@ mod interaction_tests {
         cx.simulate_resize(size(px(1000.), px(720.)));
         cx.update(|window, cx| window.draw(cx).clear(cx));
         let toggle = cx.debug_bounds("toggle-server-binding").unwrap();
-        assert_eq!(toggle.size.height, px(44.));
-        // The first touch is outside the 32px decoration but inside its 44px envelope.
+        assert_eq!(toggle.size.height, px(32.));
+        tap(cx, point(toggle.center().x, toggle.top() - px(2.)));
+        cx.update(|_, cx| {
+            assert!(
+                !panel.read(cx).binding_expanded,
+                "outside the visible button must not toggle it"
+            )
+        });
         let edge = point(toggle.center().x, toggle.top() + px(2.));
         tap(cx, edge);
         cx.update(|_, cx| assert!(panel.read(cx).binding_expanded));
@@ -935,6 +943,9 @@ mod interaction_tests {
             "confirmation must not move the menu target"
         );
         let confirm = cx.debug_bounds("confirm-unbind").unwrap();
+        let cancel = cx.debug_bounds("cancel-unbind").unwrap();
+        assert_eq!(confirm.size.height, toggle.size.height);
+        assert_eq!(cancel.size.height, toggle.size.height);
         tap(cx, confirm.center());
         assert!(matches!(pending.try_recv(), Ok(Command::Unbind)));
         cx.update(|_, cx| {
