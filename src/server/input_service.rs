@@ -1,3 +1,4 @@
+mod modifier_keys;
 mod mouse_buttons;
 
 #[cfg(target_os = "linux")]
@@ -501,11 +502,32 @@ enum KeysDown {
     EnigoKey(u64),
 }
 
+impl KeysDown {
+    fn modifier(self) -> Option<ControlKey> {
+        match self {
+            Self::EnigoKey(key) => i32::try_from(key)
+                .ok()
+                .and_then(modifier_keys::legacy_modifier),
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            Self::RdevKey(RawKey::WinVirtualKeycode(code)) => {
+                modifier_keys::virtual_modifier(code as _)
+            }
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            Self::RdevKey(key) => modifier_keys::native_modifier(match key {
+                RawKey::ScanCode(code) => rdev::win_key_from_scancode(code as _),
+                RawKey::MacVirtualKeycode(code) => rdev::macos_key_from_code(code as _),
+                _ => return None,
+            }),
+        }
+    }
+}
+
 lazy_static::lazy_static! {
     static ref ENIGO: Arc<Mutex<Enigo>> = {
         Arc::new(Mutex::new(Enigo::new()))
     };
     static ref MOUSE_BUTTONS_DOWN: Mutex<mouse_buttons::PressedMouseButtons> = Default::default();
+    static ref MODIFIERS_DOWN: Mutex<modifier_keys::PressedModifiers> = Default::default();
     static ref KEYS_DOWN: Arc<Mutex<HashMap<KeysDown, Instant>>> = Default::default();
     static ref LATEST_PEER_INPUT_CURSOR: Arc<Mutex<Input>> = Default::default();
     static ref LATEST_SYS_CURSOR_POS: Arc<Mutex<(Option<Instant>, (i32, i32))>> = Arc::new(Mutex::new((None, (INVALID_CURSOR_POS, INVALID_CURSOR_POS))));
@@ -1061,6 +1083,10 @@ fn fix_mouse_down_timeout(force: bool) {
 
 fn fix_key_down_timeout(force: bool) {
     fix_mouse_down_timeout(force);
+    let mut modifiers = MODIFIERS_DOWN.lock().unwrap();
+    if force {
+        modifiers.release(None, handle_key);
+    }
     let key_down = KEYS_DOWN.lock().unwrap();
     if key_down.is_empty() {
         return;
@@ -1070,6 +1096,9 @@ fn fix_key_down_timeout(force: bool) {
 
     for (record_key, time) in cloned.into_iter() {
         if force || time.elapsed().as_millis() >= 360_000 {
+            if let Some(key) = record_key.modifier() {
+                modifiers.forget(key);
+            }
             record_pressed_key(record_key, false);
             release_record_key(record_key);
         }
@@ -1615,6 +1644,22 @@ pub fn handle_key(evt: &KeyEvent) {
     handle_key_(evt);
 }
 
+pub fn handle_key_for_connection(evt: &KeyEvent, conn: i32) {
+    if modifier_keys::modifier(evt).is_none() {
+        handle_key(evt);
+        return;
+    }
+    // Keep ownership changes and platform queue insertion in the same order across peers.
+    MODIFIERS_DOWN.lock().unwrap().handle(conn, evt, handle_key);
+}
+
+pub fn release_connection_modifiers(conn: i32) {
+    MODIFIERS_DOWN
+        .lock()
+        .unwrap()
+        .release(Some(conn), handle_key);
+}
+
 #[inline]
 #[cfg(target_os = "windows")]
 pub fn handle_key(evt: &KeyEvent) {
@@ -1765,6 +1810,9 @@ fn map_keyboard_mode(evt: &KeyEvent) {
 #[inline]
 fn wayland_send_raw_key(code: u16, down: bool) {
     let mut en = ENIGO.lock().unwrap();
+    if let Some(key) = modifier_keys::native_modifier(rdev::linux_key_from_code(code as u32)) {
+        record_pressed_key(KeysDown::EnigoKey(key as u64), down);
+    }
     if down {
         en.key_down(enigo::Key::Raw(code)).ok();
     } else {
@@ -2137,6 +2185,11 @@ fn release_keys(en: &mut Enigo, to_release: &Vec<Key>) {
 
 fn record_pressed_key(record_key: KeysDown, down: bool) {
     let mut key_down = KEYS_DOWN.lock().unwrap();
+    // Different protocol modes can hold the same modifier. Keep its latest native
+    // record so a suppressed alias-up cannot later expire another owner's hold.
+    if let Some(key) = record_key.modifier() {
+        key_down.retain(|record, _| record.modifier() != Some(key));
+    }
     if down {
         key_down.insert(record_key, Instant::now());
     } else {
@@ -2493,7 +2546,9 @@ pub fn handle_key_(evt: &KeyEvent) {
         }
         Some(key_event::Union::ControlKey(ck)) => {
             let key = ck.enum_value_or(ControlKey::Unknown);
-            if !skip_led_sync_control_key(&key) {
+            if !skip_led_sync_control_key(&key)
+                && (evt.down || modifier_keys::modifier(evt).is_none())
+            {
                 #[cfg(target_os = "macos")]
                 let is_numpad_key = false;
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -2506,7 +2561,9 @@ pub fn handle_key_(evt: &KeyEvent) {
                 _lock_mode_handler = Some(LockModesHandler::new_handler(evt, false));
             } else {
                 let key = crate::keyboard::keycode_to_rdev_key(*code);
-                if !skip_led_sync_rdev_key(&key) {
+                if !skip_led_sync_rdev_key(&key)
+                    && (evt.down || modifier_keys::modifier(evt).is_none())
+                {
                     #[cfg(target_os = "macos")]
                     let is_numpad_key = false;
                     #[cfg(any(target_os = "windows", target_os = "linux"))]

@@ -402,11 +402,13 @@ impl Topology {
         if let Some(mode) = requested {
             let mut right = 0i64;
             let mut preserve_positions = true;
+            let mut sources = Vec::new();
             for path in &topology.paths {
                 let owned = Self::owned_id(path, ids)?.is_some();
                 if let Some(info) = topology.modes.get(path.sourceInfo.modeInfoIdx as usize) {
                     if info.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE {
                         let source = unsafe { info.u.sourceMode() };
+                        sources.push((path.sourceInfo.modeInfoIdx, *source, owned));
                         if owned {
                             preserve_positions &=
                                 source.width == mode.width && source.height == mode.height;
@@ -415,6 +417,30 @@ impl Topology {
                                 right.max(i64::from(source.position.x) + i64::from(source.width));
                         }
                     }
+                }
+            }
+            if !preserve_positions
+                && sources.len() == topology.paths.len()
+                && used.len() == topology.paths.len()
+            {
+                let original: Vec<_> = sources.iter().map(|(_, source, _)| *source).collect();
+                let resized: Vec<_> = sources
+                    .iter()
+                    .map(|(_, source, owned)| {
+                        let mut source = *source;
+                        if *owned {
+                            source.width = mode.width;
+                            source.height = mode.height;
+                        }
+                        source
+                    })
+                    .collect();
+                if let Some(positions) = reflow_chain(&original, &resized) {
+                    for ((index, _, _), position) in sources.iter().zip(positions) {
+                        unsafe { topology.modes[*index as usize].u.sourceMode_mut() }.position =
+                            position;
+                    }
+                    preserve_positions = true;
                 }
             }
             for path in &mut topology.paths {
@@ -510,9 +536,164 @@ fn target_mode(mode: VirtualDisplayMode) -> ResultType<DISPLAYCONFIG_TARGET_MODE
     Ok(target)
 }
 
+// Reflow only straight chains; ambiguous layouts retain the existing placement.
+fn reflow_chain(
+    original: &[DISPLAYCONFIG_SOURCE_MODE],
+    resized: &[DISPLAYCONFIG_SOURCE_MODE],
+) -> Option<Vec<winapi::shared::windef::POINTL>> {
+    let primary = original
+        .iter()
+        .position(|source| source.position.x == 0 && source.position.y == 0)?;
+    for vertical in [false, true] {
+        let components = |source: &DISPLAYCONFIG_SOURCE_MODE| {
+            if vertical {
+                [
+                    i64::from(source.position.y),
+                    i64::from(source.position.x),
+                    i64::from(source.height),
+                    i64::from(source.width),
+                ]
+            } else {
+                [
+                    i64::from(source.position.x),
+                    i64::from(source.position.y),
+                    i64::from(source.width),
+                    i64::from(source.height),
+                ]
+            }
+        };
+        let mut order: Vec<_> = (0..original.len()).collect();
+        order.sort_by_key(|index| components(&original[*index])[0]);
+        if order.windows(2).any(|pair| {
+            let a = components(&original[pair[0]]);
+            let b = components(&original[pair[1]]);
+            let new_a = components(&resized[pair[0]]);
+            let new_b = components(&resized[pair[1]]);
+            a[0] + a[2] != b[0]
+                || (a[1] + a[3]).min(b[1] + b[3]) <= a[1].max(b[1])
+                || (new_a[1] + new_a[3]).min(new_b[1] + new_b[3]) <= new_a[1].max(new_b[1])
+        }) {
+            continue;
+        }
+        let pivot = order.iter().position(|index| *index == primary)?;
+        let mut positions: Vec<_> = resized.iter().map(components).collect();
+        for rank in pivot + 1..order.len() {
+            let (current, previous) = (order[rank], order[rank - 1]);
+            let anchor = positions[previous];
+            positions[current][0] = anchor[0] + anchor[2];
+        }
+        for rank in (0..pivot).rev() {
+            let (current, next) = (order[rank], order[rank + 1]);
+            let anchor = positions[next];
+            positions[current][0] = anchor[0] - positions[current][2];
+        }
+        // Outside documented GDI desktop bounds, retain the existing native path.
+        if positions.iter().any(|p| {
+            [p[0], p[1], p[0] + p[2], p[1] + p[3]]
+                .into_iter()
+                .any(|value| i16::try_from(value).is_err())
+        }) {
+            return None;
+        }
+        return positions
+            .into_iter()
+            .map(|p| {
+                Some(winapi::shared::windef::POINTL {
+                    x: i32::try_from(if vertical { p[1] } else { p[0] }).ok()?,
+                    y: i32::try_from(if vertical { p[0] } else { p[1] }).ok()?,
+                })
+            })
+            .collect();
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source(width: u32, height: u32, x: i32, y: i32) -> DISPLAYCONFIG_SOURCE_MODE {
+        DISPLAYCONFIG_SOURCE_MODE {
+            width,
+            height,
+            pixelFormat: DISPLAYCONFIG_PIXELFORMAT_32BPP,
+            position: winapi::shared::windef::POINTL { x, y },
+        }
+    }
+
+    #[test]
+    fn chain_resize_keeps_primary_order_and_negative_coordinates() {
+        let original = [
+            source(1920, 1080, -1920, 100),
+            source(1920, 1080, 0, 0),
+            source(1920, 1080, 1920, 200),
+        ];
+        for (width, height) in [(1280, 720), (2560, 1440)] {
+            let mut resized = original;
+            for screen in &mut resized[..2] {
+                screen.width = width;
+                screen.height = height;
+            }
+            let positions = reflow_chain(&original, &resized).unwrap();
+            assert_eq!(
+                positions.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+                [(-(width as i32), 100), (0, 0), (width as i32, 200)]
+            );
+        }
+        let original = [
+            source(1920, 1080, 200, -1080),
+            source(1920, 1080, 0, 0),
+            source(1920, 1080, 100, 1080),
+        ];
+        let mut resized = original;
+        for screen in &mut resized[1..] {
+            screen.width = 1280;
+            screen.height = 720;
+        }
+        let positions = reflow_chain(&original, &resized).unwrap();
+        assert_eq!(
+            positions.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            [(200, -1080), (0, 0), (100, 720)]
+        );
+    }
+
+    #[test]
+    fn chain_reflow_does_not_guess_new_contacts_or_clone_layouts() {
+        let original = [source(1920, 1080, 0, 0), source(1920, 1080, 1920, 1000)];
+        let positions = reflow_chain(&original, &original).unwrap();
+        assert_eq!(
+            positions.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            [(0, 0), (1920, 1000)]
+        );
+        let mut resized = original;
+        resized[0] = source(1280, 720, 0, 0);
+        assert!(reflow_chain(&original, &resized).is_none());
+        let grid = [
+            source(1920, 2160, -1920, 0),
+            source(1920, 1080, 0, 0),
+            source(1920, 1080, 0, 1080),
+            source(1920, 2160, 1920, 0),
+        ];
+        assert!(reflow_chain(&grid, &grid).is_none());
+        let clones = [source(1920, 1080, 0, 0); 2];
+        assert!(reflow_chain(&clones, &clones).is_none());
+    }
+
+    #[test]
+    fn chain_reflow_leaves_desktop_bounds_to_the_existing_fallback() {
+        let original = [source(1920, 1080, 0, 0), source(1, 1080, 1920, 0)];
+        let mut resized = original;
+        resized[0].width = 32766;
+        assert!(reflow_chain(&original, &resized).is_some());
+        resized[0].width = 32767;
+        assert!(reflow_chain(&original, &resized).is_none());
+        let original = [source(1920, 1080, -1920, 0), source(1, 1080, 0, 0)];
+        let mut resized = original;
+        resized[0].width = 32768;
+        assert_eq!(reflow_chain(&original, &resized).unwrap()[0].x, -32768);
+        resized[0].width = 32769;
+        assert!(reflow_chain(&original, &resized).is_none());
+    }
 
     #[test]
     fn refresh_only_keeps_the_virtual_primary_and_extended_positions() {

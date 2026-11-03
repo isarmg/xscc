@@ -16,6 +16,9 @@ printf '%s\n' "$pointer_tests"
 grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$pointer_tests" || { echo 'Pointer click regression did not run' >&2; exit 1; }
 # Test the same native role feature set that ships.
 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
+modifier_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" server::input_service::modifier_keys::tests:: 2>&1) || { printf '%s\n' "$modifier_tests"; exit 1; }
+printf '%s\n' "$modifier_tests"
+grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$modifier_tests" || { echo 'Modifier ownership regressions did not run all three tests' >&2; exit 1; }
 decode_tests=$(cargo test --locked -p hwcodec --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
 printf '%s\n' "$decode_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }

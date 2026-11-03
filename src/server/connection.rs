@@ -227,7 +227,9 @@ enum MessageInput {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     ReleaseMouseButtons(i32),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    Key((KeyEvent, bool)),
+    ReleaseModifiers(i32),
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    Key((KeyEvent, bool, i32)),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Pointer((PointerDeviceEvent, i32)),
     BlockOn,
@@ -319,7 +321,7 @@ pub struct Connection {
     #[cfg(windows)]
     portable: PortableState,
     options_in_login: Option<OptionMessage>,
-    #[cfg(not(any(target_os = "ios")))]
+    #[cfg(target_os = "android")]
     pressed_modifiers: HashSet<rdev::Key>,
     closed: bool,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -500,7 +502,7 @@ impl Connection {
             #[cfg(windows)]
             portable: Default::default(),
             options_in_login: None,
-            #[cfg(not(any(target_os = "ios")))]
+            #[cfg(target_os = "android")]
             pressed_modifiers: Default::default(),
             closed: false,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -622,6 +624,7 @@ impl Connection {
                                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                                 if !enabled {
                                     conn.release_mouse_buttons();
+                                    conn.release_pressed_modifiers();
                                 }
                                 conn.send_permission(Permission::Keyboard, enabled).await;
                                 if let Some(s) = conn.server.upgrade() {
@@ -930,16 +933,17 @@ impl Connection {
                     MessageInput::ReleaseMouseButtons(conn) => {
                         release_pressed_mouse_buttons(conn);
                     }
-                    MessageInput::Key((mut msg, press)) => {
+                    MessageInput::ReleaseModifiers(conn) => release_connection_modifiers(conn),
+                    MessageInput::Key((mut msg, press, conn)) => {
                         // Set the press state to false, use `down` only in `handle_key()`.
                         msg.press = false;
                         if press {
                             msg.down = true;
                         }
-                        handle_key(&msg);
+                        handle_key_for_connection(&msg, conn);
                         if press {
                             msg.down = false;
-                            handle_key(&msg);
+                            handle_key_for_connection(&msg, conn);
                         }
                     }
                     MessageInput::Pointer((msg, id)) => {
@@ -1570,7 +1574,9 @@ impl Connection {
     fn input_key(&self, msg: KeyEvent, press: bool) {
         // to-do: if is the legacy mode, and the key is function key "LockScreen".
         // Switch to the primary display.
-        self.tx_input.send(MessageInput::Key((msg, press))).ok();
+        self.tx_input
+            .send(MessageInput::Key((msg, press, self.inner.id())))
+            .ok();
     }
 
     // Auto Login: the password and Return the client would otherwise type itself, typed only if a
@@ -2306,14 +2312,6 @@ impl Connection {
                         } else {
                             me.press
                         };
-
-                        if let Some(key) = key {
-                            if is_press {
-                                self.pressed_modifiers.insert(key);
-                            } else {
-                                self.pressed_modifiers.remove(&key);
-                            }
-                        }
 
                         if is_press {
                             match me.union {
@@ -3060,6 +3058,7 @@ impl Connection {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if self.disable_keyboard {
                     self.release_mouse_buttons();
+                    self.release_pressed_modifiers();
                 }
                 if let Some(s) = self.server.upgrade() {
                     s.write().unwrap().subscribe(
@@ -3395,10 +3394,13 @@ impl Connection {
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn release_pressed_modifiers(&mut self) {
-        for modifier in self.pressed_modifiers.iter() {
-            rdev::simulate(&rdev::EventType::KeyRelease(*modifier)).ok();
+        if self
+            .tx_input
+            .send(MessageInput::ReleaseModifiers(self.inner.id()))
+            .is_err()
+        {
+            release_connection_modifiers(self.inner.id());
         }
-        self.pressed_modifiers.clear();
     }
 
     fn get_auto_disconenct_timer() -> Option<(Instant, u64)> {
