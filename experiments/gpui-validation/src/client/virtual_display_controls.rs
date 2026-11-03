@@ -257,6 +257,32 @@ impl ManagementPanel {
                 )));
             }
             if self.virtual_display.editing {
+                let count = if self.host {
+                    self.virtual_display.count.clone().into_any_element()
+                } else {
+                    self.virtual_display
+                        .count_controls(
+                            state.maximum_count,
+                            enabled,
+                            palette,
+                            cx,
+                            cx.listener(|view, increase: &bool, window, cx| {
+                                if view.virtual_display_edit_enabled()
+                                    && let Some(state) = view.virtual_display_state()
+                                {
+                                    view.virtual_display.step_count(
+                                        *increase,
+                                        state.maximum_count,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                        .into_any_element()
+                };
                 body = body
                     .child(
                         ui::button(
@@ -279,7 +305,7 @@ impl ManagementPanel {
                             cx.notify();
                         })),
                     )
-                    .child(self.virtual_display.fields(palette))
+                    .child(self.virtual_display.fields(palette, count))
                     .child(div().flex().gap_2().children(
                         [(false, "会话模式"), (true, "长期保留")].into_iter().map(
                             |(persistent, label)| {

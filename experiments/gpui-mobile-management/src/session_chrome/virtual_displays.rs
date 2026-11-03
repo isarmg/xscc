@@ -81,6 +81,31 @@ impl SessionChrome {
             )));
         }
         if self.virtual_display.editing {
+            let count = self.virtual_display.count_controls(
+                state.maximum_count,
+                enabled,
+                palette,
+                cx,
+                cx.listener(|view, increase: &bool, window, cx| {
+                    if view.model.connected
+                        && view.model.pending_monitor.is_none()
+                        && !view.model.virtual_display_pending
+                        && view.model.can_control
+                        && !view.model.view_only
+                        && let Some(state) = view
+                            .model
+                            .virtual_display_configuration
+                            .as_ref()
+                            .filter(|state| state.configurable())
+                    {
+                        view.virtual_display
+                            .step_count(*increase, state.maximum_count, window, cx);
+                    }
+                    window.dismiss_virtual_keyboard();
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            );
             body = body
                 .child(
                     div()
@@ -105,7 +130,7 @@ impl SessionChrome {
                             }))
                         }),
                 )
-                .child(self.virtual_display.fields(palette))
+                .child(self.virtual_display.fields(palette, count))
                 .child(div().flex().gap_2().children(
                     [(false, "会话模式"), (true, "长期保留")].into_iter().map(
                         |(persistent, label)| {
@@ -225,5 +250,108 @@ impl SessionChrome {
             );
         }
         body
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod tests {
+    use super::*;
+    use crate::{
+        session_chrome::{ChromeModel, MediaMenu},
+        session_layout::{Panel, Rect},
+    };
+    use gpui_test_support::{TestAppContext, TouchEvent, TouchId, TouchPhase, size};
+    use std::{cell::Cell, rc::Rc};
+
+    fn tap(cx: &mut gpui_test_support::VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("visible virtual display control: {selector}"));
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            cx.simulate_event(TouchEvent {
+                id: TouchId(1),
+                phase,
+                position: bounds.center(),
+                force: None,
+                predicted_position: None,
+            });
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn count_buttons_preserve_existing_values_and_disable_while_pending(cx: &mut TestAppContext) {
+        let (editor, cx) = cx.add_window_view(|window, cx| {
+            let mut editor = SessionChrome::new(cx);
+            editor.media_menu = Some(MediaMenu::VirtualDisplays);
+            editor.model = ChromeModel {
+                connected: true,
+                can_control: true,
+                panel: Panel::Display,
+                virtual_display_configuration: Some(form::State {
+                    protocol_version: 1,
+                    status: "ready".into(),
+                    configured_count: 12,
+                    persistent: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            editor.model.layout.panel = Some(Rect {
+                x: 0.,
+                y: 0.,
+                width: 500.,
+                height: 1100.,
+            });
+            let state = editor.model.virtual_display_configuration.clone().unwrap();
+            editor.virtual_display.begin(&state, window, cx);
+            editor
+        });
+        let emitted = Rc::new(Cell::new(false));
+        let events = emitted.clone();
+        let _subscription = cx
+            .update(|window, cx| window.subscribe(&editor, cx, move |_, _, _, _| events.set(true)));
+        cx.simulate_resize(size(px(800.), px(1100.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let configuration = |cx: &mut gpui_test_support::VisualTestContext| {
+            cx.update(|_, cx| editor.read(cx).virtual_display.configuration(cx).unwrap())
+        };
+        tap(cx, "virtual-count-plus");
+        tap(cx, "virtual-count-minus");
+        assert!(!emitted.get(), "stepping must not send a host request");
+        assert_eq!(
+            configuration(cx),
+            form::Configuration {
+                count: 11,
+                mode: None,
+                persistent: true
+            }
+        );
+        for _ in 0..12 {
+            tap(cx, "virtual-count-minus");
+        }
+        assert_eq!(configuration(cx).count, 0);
+        for _ in 0..9 {
+            tap(cx, "virtual-count-plus");
+        }
+        assert_eq!(configuration(cx).count, 8);
+        for pending in [true, false] {
+            cx.update(|_, cx| {
+                editor.update(cx, |view, cx| {
+                    let mut model = view.model.clone();
+                    model.virtual_display_pending = pending;
+                    view.set_model(model, cx);
+                })
+            });
+            tap(cx, "virtual-count-minus");
+            assert_eq!(
+                configuration(cx).count,
+                if pending { 8 } else { 7 },
+                "pending taps must not change the draft; confirmed controls must recover"
+            );
+        }
+        assert!(
+            !emitted.get(),
+            "only applying the draft may send a host request"
+        );
     }
 }

@@ -1,5 +1,20 @@
 use crate::{text_field::TextField, theme};
 use gpui::{App, AppContext, Entity, EntityInputHandler, Window, div, prelude::*, px, rgb};
+use std::rc::Rc;
+
+const CONTROLLER_MAX_COUNT: u32 = 8;
+
+pub fn controller_count_step(count: u32, increase: bool, maximum: Option<u32>) -> Option<u32> {
+    if increase {
+        (count
+            < maximum
+                .unwrap_or(CONTROLLER_MAX_COUNT)
+                .min(CONTROLLER_MAX_COUNT))
+        .then(|| count + 1)
+    } else {
+        count.checked_sub(1)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mode {
@@ -116,6 +131,97 @@ impl Editor {
         self.use_mode = true;
     }
 
+    pub fn step_count(
+        &mut self,
+        increase: bool,
+        maximum: Option<u32>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Ok(count) = self.count.read(cx).value().parse::<u32>() else {
+            self.error = Some("虚拟屏数量必须是非负整数。".into());
+            return;
+        };
+        if let Some(next) = controller_count_step(count, increase, maximum) {
+            replace(&self.count, &next.to_string(), window, cx);
+        }
+    }
+
+    pub fn count_controls(
+        &self,
+        maximum: Option<u32>,
+        enabled: bool,
+        palette: theme::Palette,
+        cx: &App,
+        on_step: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> gpui::Div {
+        let count = self.count.read(cx).value().parse::<u32>().ok();
+        let maximum = maximum
+            .unwrap_or(CONTROLLER_MAX_COUNT)
+            .min(CONTROLLER_MAX_COUNT);
+        let on_step = Rc::new(on_step);
+        let button = |increase| {
+            let (id, label, description) = if increase {
+                ("virtual-count-plus", "+", "增加虚拟屏数量")
+            } else {
+                ("virtual-count-minus", "−", "减少虚拟屏数量")
+            };
+            let enabled = enabled
+                && count.is_some_and(|count| {
+                    controller_count_step(count, increase, Some(maximum)).is_some()
+                });
+            let on_step = on_step.clone();
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .aria_label(description)
+                .w(px(48.))
+                .min_h(px(48.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(10.))
+                .bg(rgb(palette.accent_soft))
+                .opacity(if enabled { 1. } else { 0.42 })
+                .child(label)
+                .when(enabled, |button| {
+                    button.cursor_pointer().focusable().tab_index(0).on_click(
+                        move |_, window, cx| {
+                            on_step(&increase, window, cx);
+                        },
+                    )
+                })
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(button(false))
+                    .child(
+                        div()
+                            .min_w(px(64.))
+                            .text_center()
+                            .child(self.count.read(cx).value().to_owned()),
+                    )
+                    .child(button(true)),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(palette.muted))
+                    .child(if count.is_some_and(|count| count > maximum) {
+                        format!("当前数量超过 {maximum} 个，可用 − 减少；不会自动移除。")
+                    } else {
+                        format!("最多可设置 {maximum} 个虚拟屏。")
+                    }),
+            )
+    }
+
     pub fn configuration(&self, cx: &App) -> Result<Configuration, String> {
         if self.count.read(cx).is_composing() {
             return Err("请先完成输入。".into());
@@ -168,10 +274,10 @@ impl Editor {
         })
     }
 
-    pub fn fields(&self, palette: theme::Palette) -> gpui::Div {
+    pub fn fields(&self, palette: theme::Palette, count: impl IntoElement) -> gpui::Div {
         div().flex().flex_col().gap_2()
             .child(div().text_size(px(12.)).child("目标虚拟屏数量（0 为全部移除）"))
-            .child(self.count.clone())
+            .child(count)
             .when(self.use_mode, |body| {
                 body.child(div().flex().gap_2()
                     .child(div().flex_1().min_w_0().child(self.width.clone()))
@@ -292,7 +398,20 @@ pub fn parse_refresh_rate(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_refresh_rate, parse_refresh_rate};
+    use super::{controller_count_step, format_refresh_rate, parse_refresh_rate};
+
+    #[test]
+    fn controller_count_buttons_allow_zero_and_stop_at_eight_or_host_limit() {
+        assert_eq!(controller_count_step(0, false, None), None);
+        assert_eq!(controller_count_step(1, false, None), Some(0));
+        assert_eq!(controller_count_step(7, true, None), Some(8));
+        assert_eq!(controller_count_step(8, true, None), None);
+        assert_eq!(controller_count_step(3, true, Some(4)), Some(4));
+        assert_eq!(controller_count_step(4, true, Some(4)), None);
+        assert_eq!(controller_count_step(8, true, Some(32)), None);
+        assert_eq!(controller_count_step(12, true, None), None);
+        assert_eq!(controller_count_step(12, false, None), Some(11));
+    }
 
     #[test]
     fn display_refresh_rate_preserves_ten_thousandth_hz_precision() {

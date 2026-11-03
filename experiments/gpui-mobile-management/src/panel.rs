@@ -321,6 +321,10 @@ impl Render for Panel {
             .status
             .as_ref()
             .is_some_and(|status| status.role == Some(InstanceRole::Controller));
+        let role_mismatch = self
+            .status
+            .as_ref()
+            .is_some_and(|status| has_role_mismatch(status.role));
         let peers: Vec<_> = self
             .status
             .as_ref()
@@ -581,7 +585,7 @@ impl Render for Panel {
                     );
             }
         }
-        if configured && !correct_role {
+        if configured && role_mismatch {
             content = content.child(
                 div()
                     .text_color(rgb(palette.danger))
@@ -614,12 +618,16 @@ impl Render for Panel {
                     .justify_center()
                     .py_8()
                     .child(ui::monitor(palette))
-                    .child(if !configured {
+                    .child(if !self.initialized {
+                        "正在读取状态"
+                    } else if !configured {
                         "绑定管理实例后即可查看设备"
-                    } else if !correct_role {
+                    } else if role_mismatch {
                         "需要检查实例角色"
-                    } else if !current_peers {
-                        "等待设备状态同步"
+                    } else if !current_peers || !correct_role {
+                        connection_wait_message(
+                            self.status.as_ref().map(|status| status.phase.as_str()),
+                        )
                     } else {
                         "暂无授权设备"
                     }),
@@ -855,9 +863,47 @@ fn card_columns(width: f32) -> u16 {
     ((width + 16.) / 252.).floor().clamp(1., 4.) as u16
 }
 
+fn has_role_mismatch(role: Option<InstanceRole>) -> bool {
+    role.is_some_and(|role| role != InstanceRole::Controller)
+}
+
+fn connection_wait_message(phase: Option<&str>) -> &'static str {
+    match phase {
+        Some("offline") => "尚未连接管理服务器",
+        Some("error") => "管理连接失败，请重试",
+        Some("revoked") => "管理授权已撤销",
+        _ => "等待设备状态同步",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::card_columns;
+    use super::{InstanceRole, card_columns, connection_wait_message, has_role_mismatch};
+
+    #[test]
+    fn unavailable_role_is_not_a_confirmed_role_mismatch() {
+        assert!(!has_role_mismatch(None));
+        assert!(!has_role_mismatch(Some(InstanceRole::Controller)));
+        assert!(has_role_mismatch(Some(InstanceRole::Controlled)));
+    }
+
+    #[test]
+    fn unavailable_connection_uses_the_observed_phase() {
+        assert_eq!(
+            connection_wait_message(Some("offline")),
+            "尚未连接管理服务器"
+        );
+        assert_eq!(
+            connection_wait_message(Some("error")),
+            "管理连接失败，请重试"
+        );
+        assert_eq!(connection_wait_message(Some("revoked")), "管理授权已撤销");
+        assert_eq!(
+            connection_wait_message(Some("connecting")),
+            "等待设备状态同步"
+        );
+        assert_eq!(connection_wait_message(None), "等待设备状态同步");
+    }
 
     #[test]
     fn device_cards_follow_desktop_columns_on_phone_and_tablet() {

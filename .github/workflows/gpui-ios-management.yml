@@ -119,6 +119,9 @@ jobs:
         run: |
           cargo fmt --check
           cargo test --locked --bin xscc-gpui-mobile-management
+          count_tests=$(cargo test --locked --bin xscc-gpui-mobile-management count_buttons 2>&1) || { printf '%s\n' "$count_tests"; exit 1; }
+          printf '%s\n' "$count_tests"
+          grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$count_tests" || { echo 'Virtual display count controls did not run both tests' >&2; exit 1; }
       - name: Run GPUI raw touch regression tests
         working-directory: vendor/gpui
         run: |
