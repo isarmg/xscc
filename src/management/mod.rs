@@ -229,7 +229,7 @@ pub(crate) async fn handle(request: Request) -> Reply {
             }).await;
             return match result {
                 Ok(Ok(value)) => Reply { value: Some(value), error: None },
-                Ok(Err(error)) => Reply::error(error),
+                Ok(Err(error)) => Reply::error(format!("{error:#}")),
                 Err(error) => Reply::error(error),
             };
         }

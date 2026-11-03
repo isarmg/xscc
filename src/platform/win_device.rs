@@ -207,7 +207,15 @@ pub unsafe fn install_driver(
         }
         return Err(cause);
     }
-    *reboot_required = reboot_required_ == TRUE;
+    let mut parameters: SP_DEVINSTALL_PARAMS_W = std::mem::zeroed();
+    parameters.cbSize = std::mem::size_of::<SP_DEVINSTALL_PARAMS_W>() as _;
+    if SetupDiGetDeviceInstallParamsW(*dev_info, &mut dev_info_data, &mut parameters) == FALSE {
+        return Err(DeviceError::new_api_last_err(
+            "SetupDiGetDeviceInstallParamsW",
+        ));
+    }
+    *reboot_required =
+        reboot_required_ == TRUE || parameters.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT) != 0;
 
     Ok(())
 }
@@ -372,10 +380,12 @@ pub unsafe fn device_io_control(
         &mut bytes_returned,
         null_mut(),
     );
-    CloseHandle(h_device);
     if result == FALSE {
-        return Err(DeviceError::new_api_last_err("DeviceIoControl"));
+        let cause = DeviceError::new_api_last_err("DeviceIoControl");
+        CloseHandle(h_device);
+        return Err(cause);
     }
+    CloseHandle(h_device);
     if outbuf_max_len > 0 {
         outbuf.set_len(bytes_returned as _);
         Ok(outbuf)
