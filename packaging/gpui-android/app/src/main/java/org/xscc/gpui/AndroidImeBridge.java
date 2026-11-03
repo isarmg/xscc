@@ -40,6 +40,8 @@ public class AndroidImeBridge extends GameActivity {
     private long dispatchGeneration;
     private long dispatchEpoch;
     private boolean applyingState;
+    private AndroidTextEditor editor;
+    private android.view.inputmethod.InputConnection editorConnection;
 
     public static native void nativeTextChanged(long generation, String text,
             int selectionStart, int selectionEnd, int composingStart, int composingEnd);
@@ -74,6 +76,8 @@ public class AndroidImeBridge extends GameActivity {
         ++epoch;
         applyingState = true;
         try {
+            closeEditorConnection();
+            if (editor != null) { editor.hideEditor(); }
             // Invalidate old connections before a hide/restart can call closeConnection.
             imeSurface.connection.setSoftKeyboardActive(false, 0);
             EditorInfo info = new EditorInfo();
@@ -109,11 +113,76 @@ public class AndroidImeBridge extends GameActivity {
         }
         applyingState = true;
         try {
+            closeEditorConnection();
+            if (editor != null) { editor.hideEditor(); }
             imeSurface.connection.setSoftKeyboardActive(false, 0);
             super.setTextInputState(new State("", 0, 0, -1, -1));
             setImeEditorInfo(new EditorInfo());
         } finally {
             applyingState = false;
+        }
+    }
+
+    public void configureEditor(long nextGeneration, int inputType, int action, int options,
+            String text, int selectionStart, int selectionEnd, int composingStart, int composingEnd,
+            boolean show, float x, float y, float width, float height, float fontSize,
+            int color, int weight, boolean italic, String family, boolean menu) {
+        configureIme(nextGeneration, inputType, action, options, text, selectionStart, selectionEnd,
+                composingStart, composingEnd, false);
+        if (generation != nextGeneration) { return; }
+        if (editor == null) { editor = new AndroidTextEditor(this); }
+        applyingState = true;
+        try {
+            editor.configure(nextGeneration, inputType, action, options,
+                    new State(text, selectionStart, selectionEnd, composingStart, composingEnd),
+                    x, y, width, height, fontSize, color, weight, italic, family);
+        } finally { applyingState = false; }
+        // Focus/restart may have asked for a connection while applyingState was set.
+        editor.activate(show, menu);
+    }
+
+    public void updateEditor(long sourceGeneration, float x, float y, float width, float height,
+            float fontSize, int color, int weight, boolean italic, String family, boolean show, boolean menu) {
+        requireUiThread();
+        if (editor == null || !editorActive(sourceGeneration)) { return; }
+        editor.updatePresentation(x, y, width, height, fontSize, color, weight, italic, family);
+        editor.showInteraction(show, menu);
+    }
+
+    final View editorSurface() { return imeSurface; }
+
+    final boolean editorActive(long sourceGeneration) {
+        return onUiThread() && !applyingState && sourceGeneration != 0 && sourceGeneration == generation;
+    }
+
+    final boolean dispatchingEditorInput() { return dispatchGeneration != 0; }
+
+    final void editorChanged(long sourceGeneration, State state) {
+        if (editorActive(sourceGeneration)) {
+            nativeTextChanged(sourceGeneration, state.text, state.selectionStart, state.selectionEnd,
+                    state.composingRegionStart, state.composingRegionEnd);
+        }
+    }
+
+    final void editorAction(long sourceGeneration, int action) {
+        if (editorActive(sourceGeneration)) { nativeAction(sourceGeneration, action); }
+    }
+
+    final android.view.inputmethod.InputConnection protectEditorConnection(
+            android.view.inputmethod.InputConnection delegate, long sourceGeneration) {
+        ++epoch;
+        editorConnection = delegate;
+        return new SessionConnection(delegate, sourceGeneration, epoch);
+    }
+
+    final void closeEditorConnection() {
+        android.view.inputmethod.InputConnection previous = editorConnection;
+        editorConnection = null;
+        if (previous != null) {
+            boolean wasApplying = applyingState;
+            applyingState = true;
+            try { previous.closeConnection(); }
+            finally { applyingState = wasApplying; }
         }
     }
 
@@ -189,12 +258,12 @@ public class AndroidImeBridge extends GameActivity {
     // GameActivity's covariant return type requires its concrete InputConnection subclass.
     // Use a detached view so the guard's constructor cannot replace surface key/insets listeners.
     private final class SessionConnection extends InputConnection {
-        private final InputConnection delegate;
+        private final android.view.inputmethod.InputConnection delegate;
         private final long sourceGeneration;
         private final long sourceEpoch;
         private boolean closed;
 
-        SessionConnection(InputConnection delegate, long sourceGeneration, long sourceEpoch) {
+        SessionConnection(android.view.inputmethod.InputConnection delegate, long sourceGeneration, long sourceEpoch) {
             super(AndroidImeBridge.this, new View(AndroidImeBridge.this),
                     new Settings(new EditorInfo(), false));
             this.delegate = delegate;
@@ -211,6 +280,14 @@ public class AndroidImeBridge extends GameActivity {
             return active() ? dispatch(sourceGeneration, sourceEpoch, operation) : rejected;
         }
 
+        private boolean edit(Supplier<Boolean> operation) {
+            return call(false, () -> {
+                boolean result = operation.get();
+                if (!(delegate instanceof InputConnection) && editor != null) { editor.publishState(); }
+                return result;
+            });
+        }
+
         @Override
         public Editable getEditable() {
             // Never expose a mutable backing buffer that could outlive this session.
@@ -219,17 +296,17 @@ public class AndroidImeBridge extends GameActivity {
 
         @Override
         public boolean beginBatchEdit() {
-            return call(false, () -> delegate.beginBatchEdit());
+            return edit(() -> delegate.beginBatchEdit());
         }
 
         @Override
         public boolean endBatchEdit() {
-            return call(false, () -> delegate.endBatchEdit());
+            return edit(() -> delegate.endBatchEdit());
         }
 
         @Override
         public boolean commitText(CharSequence text, int cursor) {
-            return call(false, () -> delegate.commitText(text, cursor));
+            return edit(() -> delegate.commitText(text, cursor));
         }
 
         @Override
@@ -239,7 +316,7 @@ public class AndroidImeBridge extends GameActivity {
 
         @Override
         public boolean setComposingText(CharSequence text, int cursor) {
-            return call(false, () -> delegate.setComposingText(text, cursor));
+            return edit(() -> delegate.setComposingText(text, cursor));
         }
 
         @Override
@@ -249,7 +326,7 @@ public class AndroidImeBridge extends GameActivity {
 
         @Override
         public boolean setComposingRegion(int start, int end) {
-            return call(false, () -> delegate.setComposingRegion(start, end));
+            return edit(() -> delegate.setComposingRegion(start, end));
         }
 
         @Override
@@ -259,28 +336,28 @@ public class AndroidImeBridge extends GameActivity {
 
         @Override
         public boolean finishComposingText() {
-            return call(false, () -> delegate.finishComposingText());
+            return edit(() -> delegate.finishComposingText());
         }
 
         @Override
         public boolean setSelection(int start, int end) {
-            return call(false, () -> delegate.setSelection(start, end));
+            return edit(() -> delegate.setSelection(start, end));
         }
 
         @Override
         public boolean deleteSurroundingText(int before, int after) {
-            return call(false, () -> delegate.deleteSurroundingText(before, after));
+            return edit(() -> delegate.deleteSurroundingText(before, after));
         }
 
         @Override
         public boolean deleteSurroundingTextInCodePoints(int before, int after) {
-            return call(false, () -> delegate.deleteSurroundingTextInCodePoints(before, after));
+            return edit(() -> delegate.deleteSurroundingTextInCodePoints(before, after));
         }
 
         @Override
         public boolean replaceText(int start, int end, CharSequence text, int cursor,
                 TextAttribute attributes) {
-            return call(false, () -> {
+            return edit(() -> {
                 delegate.beginBatchEdit();
                 try {
                     return delegate.finishComposingText() && delegate.setSelection(start, end)
@@ -294,8 +371,9 @@ public class AndroidImeBridge extends GameActivity {
         @Override
         public boolean sendKeyEvent(KeyEvent event) {
             // BaseInputConnection re-posts keys, losing the originating session.
-            return event != null && call(false,
-                    () -> delegate.onKey(imeSurface, event.getKeyCode(), event));
+            return event != null && edit(() -> delegate instanceof InputConnection
+                    ? ((InputConnection) delegate).onKey(imeSurface, event.getKeyCode(), event)
+                    : editor != null && editor.dispatchKeyEvent(event));
         }
 
         @Override
@@ -305,42 +383,42 @@ public class AndroidImeBridge extends GameActivity {
 
         @Override
         public boolean performEditorAction(int action) {
-            return call(false, () -> delegate.performEditorAction(action));
+            return edit(() -> delegate.performEditorAction(action));
         }
 
         @Override
         public boolean commitCompletion(CompletionInfo text) {
-            return call(false, () -> delegate.commitCompletion(text));
+            return edit(() -> delegate.commitCompletion(text));
         }
 
         @Override
         public boolean commitCorrection(CorrectionInfo correction) {
-            return call(false, () -> delegate.commitCorrection(correction));
+            return edit(() -> delegate.commitCorrection(correction));
         }
 
         @Override
         public boolean performContextMenuAction(int id) {
-            return call(false, () -> delegate.performContextMenuAction(id));
+            return edit(() -> delegate.performContextMenuAction(id));
         }
 
         @Override
         public boolean performPrivateCommand(String action, Bundle data) {
-            return call(false, () -> delegate.performPrivateCommand(action, data));
+            return edit(() -> delegate.performPrivateCommand(action, data));
         }
 
         @Override
         public boolean clearMetaKeyStates(int states) {
-            return call(false, () -> delegate.clearMetaKeyStates(states));
+            return edit(() -> delegate.clearMetaKeyStates(states));
         }
 
         @Override
         public boolean reportFullscreenMode(boolean enabled) {
-            return call(false, () -> delegate.reportFullscreenMode(enabled));
+            return edit(() -> delegate.reportFullscreenMode(enabled));
         }
 
         @Override
         public boolean setImeConsumesInput(boolean consumesInput) {
-            return call(false, () -> delegate.setImeConsumesInput(consumesInput));
+            return edit(() -> delegate.setImeConsumesInput(consumesInput));
         }
 
         @Override

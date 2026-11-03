@@ -66,6 +66,7 @@ pub(crate) struct WindowState {
     presentation: crate::session_presentation::Presentation,
     pub(crate) ime_configuration: RefCell<TextInputConfiguration>,
     pub(crate) ime_show: Cell<bool>,
+    pub(crate) ime_menu: Cell<bool>,
     request_frame: Callback<Box<dyn FnMut(RequestFrameOptions)>>,
     pub input: Callback<Box<dyn FnMut(PlatformInput) -> DispatchEventResult>>,
     active_changed: Callback<Box<dyn FnMut(bool)>>,
@@ -126,6 +127,7 @@ impl AndroidWindow {
             presentation: crate::session_presentation::Presentation::new(&platform.app),
             ime_configuration: RefCell::default(),
             ime_show: Cell::new(false),
+            ime_menu: Cell::new(false),
             request_frame: Callback::default(),
             input: Callback::default(),
             active_changed: Callback::default(),
@@ -529,6 +531,10 @@ impl PlatformWindow for AndroidWindow {
     }
     fn hide_soft_keyboard(&self) {
         self.0.dismiss_keyboard();
+    }
+    fn show_text_input_menu(&self) {
+        self.0.ime_menu.set(true);
+        self.0.schedule_frame();
     }
     fn show_soft_keyboard(&self) {
         self.0.ime_show.set(true);

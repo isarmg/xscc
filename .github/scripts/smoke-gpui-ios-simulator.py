@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install and launch the management-only app in an existing iOS 26 runtime."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,6 @@ import plistlib
 import re
 import shutil
 import subprocess
-import sys
 import time
 
 
@@ -72,7 +72,7 @@ def launch_app(udid, bundle_id, phase, output, report):
         return launch(prefix, retry=True), prefix
 
 
-def smoke(binary, output):
+def smoke(binary, output, text_input_binary=None):
     output.mkdir(parents=True, exist_ok=True)
     udid = None
     report = {'scope': 'Management-only Simulator smoke; no codec/session or touch automation',
@@ -114,6 +114,19 @@ def smoke(binary, output):
             report[phase] = {'pid': pid, 'alive_after_seconds': 8, 'screenshot': phase + '.png',
                              'log_prefix': log_prefix}
             run('xcrun', 'simctl', 'terminate', udid, info['CFBundleIdentifier'])
+        if text_input_binary is not None:
+            report['native_text_input'] = {'result': 'failed', 'executable': text_input_binary.name}
+            build = run('xcrun', 'vtool', '-show-build', str(text_input_binary))
+            if not re.search(r'platform\s+IOSSIMULATOR\s', build + '\n') or not re.search(r'minos\s+26\.0(?:\.0)?\s', build + '\n'):
+                raise ValueError('Expected iOS Simulator minimum 26.0 UIKit test executable')
+            if run('xcrun', 'lipo', '-archs', str(text_input_binary)) != 'arm64':
+                raise ValueError('Expected ARM64 UIKit test executable')
+            run('codesign', '--force', '--sign', '-', str(text_input_binary))
+            text = run('xcrun', 'simctl', 'spawn', udid, str(text_input_binary), timeout=120)
+            marker = 'UIKit text input native protocol smoke test passed'
+            if marker not in text.splitlines():
+                raise ValueError('Native UIKit text input test did not report successful execution')
+            report['native_text_input'].update(result='passed', success_marker=marker)
         report['result'] = 'installed_and_launched_twice; screenshots_require_review'
     except Exception as error:
         if isinstance(error, subprocess.TimeoutExpired):
@@ -147,6 +160,10 @@ def smoke(binary, output):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        raise SystemExit('Usage: smoke-gpui-ios-simulator.py SIMULATOR_EXECUTABLE OUTPUT_DIRECTORY')
-    smoke(Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('simulator_executable', type=Path)
+    parser.add_argument('output_directory', type=Path)
+    parser.add_argument('--text-input-executable', type=Path)
+    args = parser.parse_args()
+    smoke(args.simulator_executable.resolve(), args.output_directory.resolve(),
+          args.text_input_executable.resolve() if args.text_input_executable else None)

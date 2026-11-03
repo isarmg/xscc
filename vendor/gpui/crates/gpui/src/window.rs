@@ -3009,6 +3009,12 @@ impl Window {
         self.platform_window.show_soft_keyboard();
     }
 
+    /// Opens Android's native editing menu at the focused text field selection.
+    #[cfg(target_os = "android")]
+    pub fn show_text_input_menu(&self) {
+        self.platform_window.show_text_input_menu();
+    }
+
     /// Requests dismissal of the virtual keyboard without changing GPUI focus.
     pub fn dismiss_virtual_keyboard(&self) {
         self.platform_window.hide_soft_keyboard();
@@ -5518,9 +5524,11 @@ impl Window {
 
         if focus_handle.is_focused(self) {
             let cx = self.to_async(cx);
-            self.next_frame.input_handlers.push(Some(
-                PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id),
-            ));
+            let input_handler =
+                PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id);
+            #[cfg(target_os = "android")]
+            let input_handler = input_handler.with_text_style(self.text_style(), self.rem_size());
+            self.next_frame.input_handlers.push(Some(input_handler));
         }
     }
 

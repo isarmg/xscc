@@ -1381,6 +1381,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Requests that the soft keyboard be shown.
     fn show_soft_keyboard(&self) {}
 
+    /// Requests the native editing menu for the focused Android text field.
+    #[cfg(target_os = "android")]
+    fn show_text_input_menu(&self) {}
+
     /// Requests that the soft keyboard be hidden.
     fn hide_soft_keyboard(&self) {}
 
@@ -2048,6 +2052,8 @@ pub struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
     focus_id: Option<crate::FocusId>,
+    #[cfg(target_os = "android")]
+    text_style: Option<(crate::TextStyle, Pixels)>,
 }
 
 #[expect(missing_docs)]
@@ -2064,12 +2070,26 @@ impl PlatformInputHandler {
             cx,
             handler,
             focus_id: None,
+            #[cfg(target_os = "android")]
+            text_style: None,
         }
     }
 
     pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
         self.focus_id = Some(focus_id);
         self
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn with_text_style(mut self, style: crate::TextStyle, rem_size: Pixels) -> Self {
+        self.text_style = Some((style, rem_size));
+        self
+    }
+
+    /// The focused field's painted typography, for an Android native editor.
+    #[cfg(target_os = "android")]
+    pub fn text_style(&self) -> Option<(crate::TextStyle, Pixels)> {
+        self.text_style.clone()
     }
 
     /// Identifies the input field registered through [`Window::handle_input`].

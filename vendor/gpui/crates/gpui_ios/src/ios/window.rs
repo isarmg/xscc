@@ -348,6 +348,7 @@ impl IosWindow {
         text_input_view.setAlpha(0.01);
         text_input_view.setUserInteractionEnabled(true);
         view.addSubview(&text_input_view);
+        text_input_view.install_editing_interaction(&view);
 
         let pixel_w = (screen_bounds_cg.size.width * scale) as i32;
         let pixel_h = (screen_bounds_cg.size.height * scale) as i32;

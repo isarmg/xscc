@@ -74,7 +74,6 @@ pub struct TextField {
     last_bounds: Option<Bounds<Pixels>>,
     scroll_x: Pixels,
     selecting: bool,
-    edit_menu: bool,
 }
 
 impl TextField {
@@ -91,7 +90,6 @@ impl TextField {
             last_bounds: None,
             scroll_x: px(0.),
             selecting: false,
-            edit_menu: false,
         }
     }
 
@@ -111,7 +109,6 @@ impl TextField {
         self.last_line = None;
         self.scroll_x = px(0.);
         self.selecting = false;
-        self.edit_menu = false;
         window.notify_text_input_changed(&self.focus);
         cx.notify();
     }
@@ -217,7 +214,6 @@ impl TextField {
     }
 
     fn paste_action(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit_menu = false;
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.replace_text_in_range(None, &text, window, cx);
         }
@@ -240,8 +236,8 @@ impl TextField {
         if self.selection.is_empty() {
             self.move_to(self.index_at(position), false, window, cx);
         }
-        // Opening the menu must not query clipboard availability or contents.
-        self.edit_menu = true;
+        #[cfg(target_os = "android")]
+        window.show_text_input_menu();
         cx.stop_propagation();
         cx.notify();
     }
@@ -265,7 +261,6 @@ impl TextField {
         window.focus(&self.focus, cx);
         window.request_virtual_keyboard();
         self.selecting = true;
-        self.edit_menu = false;
         if event.click_count >= 2 {
             self.select_all(&SelectAll, window, cx);
         } else {
@@ -559,59 +554,6 @@ impl Render for TextField {
             .flex_col()
             .gap_1()
             .child(input)
-            .when(
-                cfg!(target_os = "android") && focused && self.edit_menu,
-                |field| {
-                    // Inline actions stay inside the viewport and are not clipped by
-                    // the single-line input's content mask. Passwords offer no copy.
-                    field.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .text_color(rgb(palette.accent))
-                            .child(
-                                div()
-                                    .id("paste")
-                                    .min_h(px(44.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .cursor_pointer()
-                                    .child("粘贴")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.paste_action(&Paste, window, cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("select-all")
-                                    .min_h(px(44.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .cursor_pointer()
-                                    .child("全选")
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.select_all(&SelectAll, window, cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("dismiss-edit-menu")
-                                    .min_h(px(44.))
-                                    .px_3()
-                                    .flex()
-                                    .items_center()
-                                    .cursor_pointer()
-                                    .child("完成")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.edit_menu = false;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                },
-            )
     }
 }
 
@@ -725,6 +667,21 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
             }
         },
         move |bounds, mut paint, window, cx| {
+            if cfg!(target_os = "ios") {
+                let touch_field = field.clone();
+                window.on_mouse_event(move |event: &gpui::TouchDragEvent, phase, window, cx| {
+                    if phase.bubble()
+                        && event.phase == gpui::TouchPhase::Started
+                        && bounds.contains(&event.start_position)
+                    {
+                        touch_field.update(cx, |field, cx| {
+                            window.focus(&field.focus, cx);
+                            window.request_virtual_keyboard();
+                            field.move_to(field.index_at(event.start_position), false, window, cx);
+                        });
+                    }
+                });
+            }
             // Android long press is a distinct gesture event. Claim it here so
             // release cannot fall back to a tap and erase the edit menu/selection.
             if cfg!(target_os = "android") {
@@ -746,24 +703,27 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
             let focus = field.read(cx).focus.clone();
             window.handle_input(&focus, ElementInputHandler::new(bounds, field.clone()), cx);
             let line = paint.line;
-            window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                if let Some(selection) = paint.selection.take() {
-                    window.paint_quad(selection);
-                }
-                if let Err(error) = line.paint(
-                    point(bounds.left() - paint.scroll_x, bounds.top()),
-                    window.line_height(),
-                    gpui::TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                ) {
-                    eprintln!("Unable to paint text field: {error}");
-                }
-                if let Some(cursor) = paint.cursor.take() {
-                    window.paint_quad(cursor);
-                }
-            });
+            let native_editor = cfg!(target_os = "android") && focus.is_focused(window);
+            if !native_editor {
+                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    if let Some(selection) = paint.selection.take() {
+                        window.paint_quad(selection);
+                    }
+                    if let Err(error) = line.paint(
+                        point(bounds.left() - paint.scroll_x, bounds.top()),
+                        window.line_height(),
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    ) {
+                        eprintln!("Unable to paint text field: {error}");
+                    }
+                    if let Some(cursor) = paint.cursor.take() {
+                        window.paint_quad(cursor);
+                    }
+                });
+            }
             field.update(cx, |field, _| {
                 field.last_line = Some(line);
                 field.last_bounds = Some(bounds);

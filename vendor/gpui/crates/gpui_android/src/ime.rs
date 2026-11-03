@@ -12,6 +12,7 @@ pub(crate) struct ImeState {
     focus: Option<FocusId>,
     sent: Option<TextState>,
     configuration: Option<TextInputConfiguration>,
+    editor: Option<crate::ime_bridge::Editor>,
     pub requested: bool,
     seen_visible: bool,
     generation: u64,
@@ -39,11 +40,32 @@ fn snapshot(handler: &mut PlatformInputHandler) -> Option<(FocusId, TextState)> 
 impl WindowState {
     /// Called outside GPUI update/paint transactions. Handler calls may enter GPUI.
     pub(crate) fn sync_ime(&self) {
+        let show_menu = self.ime_menu.replace(false);
         if !self.visible.get() {
             self.dismiss_keyboard();
             return;
         }
         let current = self.input_handler.with(snapshot).flatten();
+        let editor = self
+            .input_handler
+            .with(|handler| {
+                let bounds = handler.element_bounds()?;
+                // Hidden IME-only contexts (the remote keyboard) retain GameTextInput.
+                if bounds.size.height <= gpui::px(1.) || bounds.size.width <= gpui::px(0.) {
+                    return None;
+                }
+                let (style, rem_size) = handler.text_style()?;
+                let rgba = u32::from(gpui::Rgba::from(style.color));
+                Some(crate::ime_bridge::Editor {
+                    bounds,
+                    font_size: style.font_size.to_pixels(rem_size),
+                    color: rgba.rotate_right(8) as i32,
+                    family: style.font_family,
+                    weight: style.font_weight.0 as i32,
+                    italic: style.font_style == gpui::FontStyle::Italic,
+                })
+            })
+            .flatten();
         let configuration = self.ime_configuration.borrow().clone();
         let mut ime = self.ime.borrow_mut();
         let Some((focus, current)) = current else {
@@ -58,7 +80,8 @@ impl WindowState {
         let show_requested = self.ime_show.replace(false);
         let changed_session = ime.focus != Some(focus)
             || ime.configuration.as_ref() != Some(&configuration)
-            || show_requested
+            || (show_requested && editor.is_none())
+            || ime.editor.is_some() != editor.is_some()
             || ime.sent.as_ref() != Some(&current);
         if changed_session {
             let (kind, action, options) = editor_info(&configuration);
@@ -73,10 +96,26 @@ impl WindowState {
                 options.bits() as i32,
                 native_state(&current),
                 ime.requested,
+                editor.clone(),
+                self.scale.get(),
+                show_menu,
             );
             ime.focus = Some(focus);
             ime.configuration = Some(configuration);
+            ime.editor = editor;
             ime.sent = Some(current);
+        } else if let Some(editor) = editor {
+            if ime.editor.as_ref() != Some(&editor) || show_requested || show_menu {
+                ime.requested |= show_requested;
+                self.ime_bridge.update_editor(
+                    ime.generation,
+                    editor.clone(),
+                    self.scale.get(),
+                    show_requested,
+                    show_menu,
+                );
+                ime.editor = Some(editor);
+            }
         }
     }
 

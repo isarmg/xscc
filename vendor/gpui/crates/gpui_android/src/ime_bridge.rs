@@ -15,6 +15,16 @@ use std::sync::{
     mpsc::{self, Receiver, Sender},
 };
 
+#[derive(Clone, PartialEq)]
+pub(crate) struct Editor {
+    pub bounds: gpui::Bounds<gpui::Pixels>,
+    pub font_size: gpui::Pixels,
+    pub color: i32,
+    pub family: gpui::SharedString,
+    pub weight: i32,
+    pub italic: bool,
+}
+
 pub(crate) struct Event {
     pub generation: u64,
     pub kind: EventKind,
@@ -75,6 +85,9 @@ impl Bridge {
         options: i32,
         state: TextInputState,
         show: bool,
+        editor: Option<Editor>,
+        scale: f32,
+        menu: bool,
     ) {
         self.with_activity(move |env, activity| {
             let text = env.new_string(&state.text)?;
@@ -84,6 +97,37 @@ impl Bridge {
                 composing_start,
                 composing_end,
             ] = offsets(&state);
+            if let Some(editor) = editor {
+                let family = env.new_string(editor.family.as_ref())?;
+                env.call_method(
+                    activity,
+                    jni_str!("configureEditor"),
+                    jni_sig!("(JIIILjava/lang/String;IIIIZFFFFFIIZLjava/lang/String;Z)V"),
+                    &[
+                        JValue::Long(generation as jlong),
+                        JValue::Int(input_type),
+                        JValue::Int(action),
+                        JValue::Int(options),
+                        JValue::Object(&text),
+                        JValue::Int(selection_start),
+                        JValue::Int(selection_end),
+                        JValue::Int(composing_start),
+                        JValue::Int(composing_end),
+                        JValue::Bool(show),
+                        JValue::Float(f32::from(editor.bounds.origin.x) * scale),
+                        JValue::Float(f32::from(editor.bounds.origin.y) * scale),
+                        JValue::Float(f32::from(editor.bounds.size.width) * scale),
+                        JValue::Float(f32::from(editor.bounds.size.height) * scale),
+                        JValue::Float(f32::from(editor.font_size) * scale),
+                        JValue::Int(editor.color),
+                        JValue::Int(editor.weight),
+                        JValue::Bool(editor.italic),
+                        JValue::Object(&family),
+                        JValue::Bool(menu),
+                    ],
+                )?;
+                return Ok(());
+            }
             env.call_method(
                 activity,
                 jni_str!("configureIme"),
@@ -99,6 +143,39 @@ impl Bridge {
                     JValue::Int(composing_start),
                     JValue::Int(composing_end),
                     JValue::Bool(show),
+                ],
+            )?;
+            Ok(())
+        });
+    }
+
+    pub(crate) fn update_editor(
+        &self,
+        generation: u64,
+        editor: Editor,
+        scale: f32,
+        show: bool,
+        menu: bool,
+    ) {
+        self.with_activity(move |env, activity| {
+            let family = env.new_string(editor.family.as_ref())?;
+            env.call_method(
+                activity,
+                jni_str!("updateEditor"),
+                jni_sig!("(JFFFFFIIZLjava/lang/String;ZZ)V"),
+                &[
+                    JValue::Long(generation as jlong),
+                    JValue::Float(f32::from(editor.bounds.origin.x) * scale),
+                    JValue::Float(f32::from(editor.bounds.origin.y) * scale),
+                    JValue::Float(f32::from(editor.bounds.size.width) * scale),
+                    JValue::Float(f32::from(editor.bounds.size.height) * scale),
+                    JValue::Float(f32::from(editor.font_size) * scale),
+                    JValue::Int(editor.color),
+                    JValue::Int(editor.weight),
+                    JValue::Bool(editor.italic),
+                    JValue::Object(&family),
+                    JValue::Bool(show),
+                    JValue::Bool(menu),
                 ],
             )?;
             Ok(())

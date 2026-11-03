@@ -111,7 +111,8 @@ def required_native_jobs(workflow):
             'Verify source and device SDK', 'Check formatting and host management and keyboard tests',
             'Run GPUI raw touch regression tests', 'Build native codec dependencies',
             'Check and build native device application', 'Validate and package unsigned preview'),
-        'simulator-smoke': ('Build management-only Simulator application',
+        'simulator-smoke': ('Build native UIKit editing regression executable',
+                            'Build management-only Simulator application',
                             'Install, launch, capture and relaunch in Simulator'),
     }
 

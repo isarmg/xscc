@@ -54,6 +54,20 @@ TextSnapshot takeSnapshot()
 '''.strip().splitlines()
 
 STUBS = {
+# The real native widget is compiled by Gradle against Android. This host test
+# continues exercising the existing connection/session gate without UI emulation.
+'org.xscc.gpui.AndroidTextEditor': '''public class AndroidTextEditor extends android.view.View {
+    public AndroidTextEditor(AndroidImeBridge owner) { super(owner); }
+    void configure(long g, int t, int a, int o, com.google.androidgamesdk.gametextinput.State s,
+        float x, float y, float w, float h, float size, int color, int weight,
+        boolean italic, String family) {}
+    void updatePresentation(float x, float y, float w, float h, float size, int color,
+        int weight, boolean italic, String family) {}
+    void showInteraction(boolean show, boolean menu) {}
+    void activate(boolean show, boolean menu) {}
+    void hideEditor() {}
+    void publishState() {}
+}''',
 'android.content.Context': 'public class Context {}',
 'android.os.Looper': '''public class Looper {
     private static final Looper MAIN = new Looper();
@@ -280,7 +294,18 @@ public final class BridgeTest extends AndroidImeBridge {
         });
         thread.start(); thread.join();
         check(error.get() == null, "off-thread rejection");
-        System.out.println("PASS: all 38 framework methods audited; stale password, close, configure/hide, source-tagged action/hardware, and UI-thread gates");
+        bridge.configureEditor(16, 1, 6, 0, "native field", 12, 12, -1, -1, true,
+                20, 40, 200, 22, 14, 0xff1f2328, 400, false, "Roboto", false);
+        InputConnection nativeSession = (InputConnection) bridge.protectEditorConnection(bridge.original, 16);
+        bridge.updateEditor(16, 20, 10, 200, 22, 14, 0xff1f2328, 400, false, "Roboto", false, true);
+        check(bridge.original.state.text.equals("native field") && nativeSession.commitText("geometry kept input", 1),
+                "geometry/menu update replaced the input session or document");
+        bridge.updateEditor(15, 0, 0, 50, 22, 14, 0xff1f2328, 400, false, "Roboto", true, true);
+        check(nativeSession.commitText("current field", 1) && lastGeneration() == 16,
+                "stale geometry update invalidated the current field");
+        bridge.hideIme(17);
+        rejectEveryMethod(nativeSession);
+        System.out.println("PASS: all 38 framework methods audited; stale password, close, configure/hide, source-tagged action/hardware, UI-thread and same-session geometry/menu gates");
     }
 }
 '''

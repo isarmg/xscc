@@ -4,7 +4,7 @@ use gpui::{
     TextInputStateChange, px,
 };
 use objc2::rc::{Retained, Weak};
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{
@@ -155,6 +155,68 @@ define_class!(
             resigned
         }
 
+        #[unsafe(method(canPerformAction:withSender:))]
+        fn can_perform_action(&self, action: Sel, sender: Option<&AnyObject>) -> bool {
+            (|| {
+            if [sel!(paste:), sel!(copy:), sel!(cut:), sel!(select:), sel!(selectAll:)].contains(&action) {
+                if !self.isFirstResponder() { return false; }
+                return self.with_handler(|handler| {
+                    if !handler.query_accepts_focused_text_input() { return false; }
+                    let Some(document) = document_range(handler) else { return false; };
+                    let Some(selection) = handler.selected_text_range(false) else { return false; };
+                    if !contains_range(&document, &selection.range) { return false; }
+                    if action == sel!(paste:) {
+                        return unsafe { UIPasteboard::generalPasteboard().hasStrings() };
+                    }
+                    if action == sel!(selectAll:) {
+                        return !document.is_empty() && selection.range != document;
+                    }
+                    if action == sel!(select:) {
+                        return !document.is_empty() && selection.range.is_empty();
+                    }
+                    !self.isSecureTextEntry() && !selection.range.is_empty()
+                }).unwrap_or(false);
+            }
+            unsafe { msg_send![super(self), canPerformAction: action, withSender: sender] }
+            })()
+        }
+
+        #[unsafe(method(paste:))]
+        fn paste(&self, _sender: Option<&AnyObject>) {
+            if !self.isFirstResponder() { return; }
+            if let Some(text) = unsafe { UIPasteboard::generalPasteboard().string() } {
+                self.edit(|handler| handler.replace_text_in_range(None, &text.to_string()));
+            }
+        }
+
+        #[unsafe(method(copy:))]
+        fn copy(&self, _sender: Option<&AnyObject>) { self.copy_selection(false); }
+
+        #[unsafe(method(cut:))]
+        fn cut(&self, _sender: Option<&AnyObject>) { self.copy_selection(true); }
+
+        #[unsafe(method(selectAll:))]
+        fn select_all(&self, _sender: Option<&AnyObject>) {
+            self.edit(|handler| {
+                if let Some(range) = document_range(handler) {
+                    handler.set_selected_text_range(range);
+                }
+            });
+        }
+
+        #[unsafe(method(select:))]
+        fn select(&self, _sender: Option<&AnyObject>) {
+            let Some(selection) = self.selectedTextRange() else { return; };
+            let tokenizer = self.tokenizer();
+            let position = selection.start();
+            let word = tokenizer.rangeEnclosingPosition_withGranularity_inDirection(
+                &position, UITextGranularity::Word, UITextStorageDirection::Forward.0,
+            ).or_else(|| tokenizer.rangeEnclosingPosition_withGranularity_inDirection(
+                &position, UITextGranularity::Word, UITextStorageDirection::Backward.0,
+            ));
+            if let Some(word) = word { self.setSelectedTextRange(Some(&word)); }
+        }
+
         #[unsafe(method(reconcileTextInput))]
         fn reconcile_text_input(&self) {
             self.ivars().update_pending.set(false);
@@ -191,6 +253,16 @@ define_class!(
             }
         }
 
+    }
+
+    unsafe impl UITextInteractionDelegate for TextInputView {
+        #[unsafe(method(interactionShouldBegin:atPoint:))]
+        fn interaction_should_begin(&self, _interaction: &UITextInteraction, point: CGPoint) -> bool {
+            self.isFirstResponder() && self.with_handler(|handler| {
+                handler.query_accepts_focused_text_input()
+                    && handler.character_index_for_point(gpui::point(px(point.x as f32), px(point.y as f32))).is_some()
+            }).unwrap_or(false)
+        }
     }
 
     unsafe impl UIKeyInput for TextInputView {
@@ -502,6 +574,39 @@ impl TextInputView {
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
+    pub(super) fn install_editing_interaction(&self, view: &UIView) {
+        let interaction =
+            UITextInteraction::textInteractionForMode(UITextInteractionMode::Editable, self.mtm());
+        unsafe {
+            interaction.setTextInput(Some(self));
+        }
+        interaction.setDelegate(Some(ProtocolObject::from_ref(self)));
+        view.addInteraction(ProtocolObject::from_ref(&*interaction));
+    }
+
+    fn copy_selection(&self, remove: bool) {
+        if !self.isFirstResponder() || self.isSecureTextEntry() {
+            return;
+        }
+        self.edit(|handler| {
+            let Some(selection) = handler.selected_text_range(false) else {
+                return;
+            };
+            if selection.range.is_empty() {
+                return;
+            }
+            let Some(text) = read_text(handler, selection.range.clone()) else {
+                return;
+            };
+            unsafe {
+                UIPasteboard::generalPasteboard().setString(Some(&text));
+            }
+            if remove {
+                handler.replace_text_in_range(Some(selection.range), "");
+            }
+        });
+    }
+
     pub(super) fn set_window(&self, window: std::rc::Weak<IosWindowState>) {
         *self.ivars().window.0.borrow_mut() = window;
     }
@@ -785,6 +890,8 @@ pub(super) mod tests {
     )]
     pub(crate) fn native_protocol_smoke_test(main_thread: MainThreadMarker) {
         stale_native_objects_test(main_thread);
+        native_editing_interaction_test(main_thread);
+        native_edit_actions_test(main_thread);
         let view = TextInputView::new(CGRect::ZERO, main_thread);
         let position = view.new_position(3);
         assert_eq!(view.validated_offset(&position), Some(3));
@@ -962,6 +1069,50 @@ pub(super) mod tests {
         view.resignFirstResponder();
         assert!(view.ivars().keyboard_desired.get());
         window.setHidden(true);
+    }
+
+    fn native_editing_interaction_test(main_thread: MainThreadMarker) {
+        let container = UIView::initWithFrame(
+            UIView::alloc(main_thread),
+            CGRect::new(CGPoint::ZERO, CGSize::new(320., 480.)),
+        );
+        let view = TextInputView::new(CGRect::new(CGPoint::ZERO, CGSize::new(1., 1.)), main_thread);
+        container.addSubview(&view);
+        view.install_editing_interaction(&container);
+        let interactions = container.interactions();
+        assert_eq!(interactions.len(), 1);
+        let interaction = interactions.objectAtIndex(0);
+        let interaction = interaction.downcast::<UITextInteraction>().unwrap();
+        assert_eq!(
+            interaction.textInteractionMode(),
+            UITextInteractionMode::Editable
+        );
+        let responder: &UIResponder = &view;
+        assert_eq!(interaction.textInput().as_deref(), Some(responder));
+        let delegate = interaction.delegate().unwrap();
+        assert!(!delegate.interactionShouldBegin_atPoint(&interaction, CGPoint::new(20., 40.)));
+        assert_eq!(view.textInputView(), container);
+    }
+
+    fn native_edit_actions_test(main_thread: MainThreadMarker) {
+        let view = TextInputView::new(CGRect::ZERO, main_thread);
+        for action in [
+            sel!(paste:),
+            sel!(copy:),
+            sel!(cut:),
+            sel!(select:),
+            sel!(selectAll:),
+        ] {
+            assert!(view.respondsToSelector(action));
+            assert!(!unsafe { view.canPerformAction_withSender(action, None) });
+        }
+        unsafe {
+            let _: () = msg_send![&*view, paste: Option::<&AnyObject>::None];
+            let _: () = msg_send![&*view, copy: Option::<&AnyObject>::None];
+            let _: () = msg_send![&*view, cut: Option::<&AnyObject>::None];
+            let _: () = msg_send![&*view, selectAll: Option::<&AnyObject>::None];
+        }
+        assert!(view.selectedTextRange().is_none());
     }
 
     fn stale_native_objects_test(main_thread: MainThreadMarker) {
