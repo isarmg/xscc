@@ -41,6 +41,8 @@ pub struct MediaControls {
     pub virtual_display_supported: bool,
     pub virtual_display_driver: String,
     pub can_add_virtual_display: bool,
+    pub virtual_display_count: Option<u32>,
+    pub virtual_display_pending: bool,
     pub virtual_display_remove_latest_only: bool,
     /// Amyuni exposes only the latest count token, never a physical monitor index.
     pub virtual_display_ids: Vec<u32>,
@@ -57,6 +59,7 @@ pub(super) struct Controls {
     retina: bool,
     display_scales: Vec<f64>,
     current_refresh_rate: u32,
+    pending_virtual: Option<(String, Vec<u32>)>,
 }
 
 impl Controls {
@@ -122,6 +125,8 @@ impl Controls {
     }
 
     pub(super) fn additions(&mut self, text: &str) -> ResultType<()> {
+        self.state.virtual_display_count = None;
+        self.state.can_add_virtual_display = false;
         if text.is_empty() {
             return Ok(());
         }
@@ -139,21 +144,14 @@ impl Controls {
             if state.protocol_version != 1 { bail!("Unsupported virtual display configuration version"); }
             self.state.virtual_display_configuration = Some(state);
         }
-        self.idd_impl.clear();
-        if let Some(implementation) = object.get("idd_impl") {
-            self.idd_impl = implementation
-                .as_str()
-                .ok_or_else(|| {
-                    hbb_common::anyhow::anyhow!("Invalid remote display implementation")
-                })?
-                .into();
-        }
-        self.state.virtual_display_driver.clone_from(&self.idd_impl);
-        self.state.virtual_display_ids.clear();
+        let implementation = match object.get("idd_impl") {
+            Some(implementation) => implementation.as_str().ok_or_else(|| {
+                hbb_common::anyhow::anyhow!("Invalid remote display implementation")
+            })?,
+            None => "",
+        };
         let supported = self.windows && self.installed && self.display_controls_supported;
-        self.state.virtual_display_remove_latest_only =
-            matches!(self.idd_impl.as_str(), "amyuni_idd" | "mtt_vdd");
-        match self.idd_impl.as_str() {
+        let (ids, count, can_add) = match implementation {
             "mtt_vdd" if supported => {
                 let count = object
                     .get("virtual_display_count")
@@ -175,11 +173,11 @@ impl Controls {
                             })? as u32,
                     ),
                 };
-                if count > 0 {
-                    self.state.virtual_display_ids.push(count);
-                }
-                self.state.virtual_display_supported = true;
-                self.state.can_add_virtual_display = count < maximum.unwrap_or(i32::MAX as u32);
+                (
+                    (count > 0).then_some(count).into_iter().collect(),
+                    Some(count),
+                    count < maximum.unwrap_or(8).min(8),
+                )
             }
             "amyuni_idd" if supported => {
                 let count = object
@@ -191,13 +189,14 @@ impl Controls {
                     })
                     .transpose()?
                     .unwrap_or(0) as u32;
-                if count > 0 {
-                    self.state.virtual_display_ids.push(count);
-                }
-                self.state.virtual_display_supported = true;
-                self.state.can_add_virtual_display = count < 4;
+                (
+                    (count > 0).then_some(count).into_iter().collect(),
+                    Some(count),
+                    count < 4,
+                )
             }
             "rustdesk_idd" if supported => {
+                let mut parsed_ids = Vec::new();
                 if let Some(ids) = object.get("rustdesk_virtual_displays") {
                     let ids = ids.as_array().ok_or_else(|| {
                         hbb_common::anyhow::anyhow!("Invalid remote virtual displays")
@@ -209,18 +208,30 @@ impl Controls {
                             .ok_or_else(|| {
                                 hbb_common::anyhow::anyhow!("Invalid remote virtual display index")
                             })?;
-                        self.state.virtual_display_ids.push(id as u32);
+                        parsed_ids.push(id as u32);
                     }
-                    self.state.virtual_display_ids.sort_unstable();
-                    self.state.virtual_display_ids.dedup();
+                    parsed_ids.sort_unstable();
+                    parsed_ids.dedup();
                 }
-                self.state.virtual_display_supported = true;
-                self.state.can_add_virtual_display = self.state.virtual_display_ids.len() < 4;
+                let count = parsed_ids.len() as u32;
+                (parsed_ids, Some(count), count < 4)
             }
-            _ => {
-                self.state.virtual_display_supported = false;
-                self.state.can_add_virtual_display = false;
-            }
+            _ => (Vec::new(), None, false),
+        };
+        self.idd_impl = implementation.into();
+        self.state.virtual_display_driver.clone_from(&self.idd_impl);
+        self.state.virtual_display_ids = ids;
+        self.state.virtual_display_count = count;
+        self.state.virtual_display_supported = count.is_some();
+        self.state.virtual_display_remove_latest_only =
+            matches!(implementation, "amyuni_idd" | "mtt_vdd");
+        self.state.can_add_virtual_display = can_add;
+        if count.is_some()
+            && self.pending_virtual.as_ref().is_some_and(|(driver, ids)| {
+                driver == implementation && *ids == self.state.virtual_display_ids
+            })
+        {
+            self.pending_virtual = None;
         }
         Ok(())
     }
@@ -266,7 +277,9 @@ impl Handler {
             && !state.resolutions.is_empty()
             && state.current_resolution.is_some();
         state.virtual_display_supported &= connected && keyboard && !pending;
-        state.can_add_virtual_display &= state.virtual_display_supported;
+        state.virtual_display_pending = controls.pending_virtual.is_some();
+        state.can_add_virtual_display &=
+            state.virtual_display_supported && !state.virtual_display_pending;
         state
     }
 }
@@ -350,26 +363,22 @@ impl SessionHandle {
         if !state.virtual_display_supported {
             bail!("Virtual displays are unavailable or input is disabled");
         }
+        let mut controls = self.session.ui_handler.0.controls.write().unwrap();
+        if controls.pending_virtual.is_some() {
+            bail!("A virtual display request is unconfirmed; reconnect before retrying");
+        }
         let (index, on) = match request {
             VirtualDisplayRequest::Add => {
-                if !state.can_add_virtual_display {
+                if !state.can_add_virtual_display || !controls.state.can_add_virtual_display {
                     bail!("No additional virtual display is available");
                 }
-                let index = self
-                    .session
-                    .ui_handler
-                    .0
-                    .controls
-                    .read()
-                    .unwrap()
-                    .next_virtual_id()
-                    .ok_or_else(|| {
-                        hbb_common::anyhow::anyhow!("No virtual display slot is available")
-                    })?;
+                let index = controls.next_virtual_id().ok_or_else(|| {
+                    hbb_common::anyhow::anyhow!("No virtual display slot is available")
+                })?;
                 (index, true)
             }
             VirtualDisplayRequest::Remove(index) => {
-                if !state.virtual_display_ids.contains(&index) {
+                if !controls.state.virtual_display_ids.contains(&index) {
                     bail!("The virtual display is no longer available");
                 }
                 (index, false)
@@ -381,7 +390,32 @@ impl SessionHandle {
             on,
             ..Default::default()
         });
-        self.send_media_request(misc)
+        let mut expected = controls.state.virtual_display_ids.clone();
+        if controls.state.virtual_display_remove_latest_only {
+            let count = if on {
+                controls.state.virtual_display_count.ok_or_else(|| {
+                    hbb_common::anyhow::anyhow!("Virtual display count is unknown")
+                })? + 1
+            } else {
+                index - 1
+            };
+            expected.clear();
+            if count > 0 {
+                expected.push(count);
+            }
+        } else if on {
+            expected.push(index);
+            expected.sort_unstable();
+        } else {
+            expected.retain(|id| *id != index);
+        }
+        self.send_media_request(misc)?;
+        // Legacy replies have no request ID. Only the expected inventory confirms
+        // this operation; an error or elapsed time cannot rule out a late apply.
+        controls.pending_virtual = Some((controls.idd_impl.clone(), expected));
+        drop(controls);
+        self.session.ui_handler.publish_media_controls();
+        Ok(())
     }
 
     pub(super) fn send_media_request(&self, misc: Misc) -> ResultType<()> {
@@ -405,6 +439,169 @@ impl SessionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_virtual_display_inventory_distinguishes_unknown_from_zero() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let handler = &handle.session.ui_handler;
+        handler.set_peer_info(&PeerInfo {
+            platform: "Windows".into(),
+            features: Some(Features {
+                display_controls: true,
+                ..Default::default()
+            })
+            .into(),
+            ..Default::default()
+        });
+        for count in [0, 7, 8, 12] {
+            handler.set_platform_additions(&format!(
+                r#"{{"is_installed":true,"idd_impl":"mtt_vdd","virtual_display_count":{count}}}"#
+            ));
+            let state = handle.media_controls();
+            assert_eq!(state.virtual_display_count, Some(count));
+            assert_eq!(state.can_add_virtual_display, count < 8);
+            assert_eq!(
+                state.virtual_display_ids.last().copied(),
+                (count > 0).then_some(count)
+            );
+        }
+        for invalid in [
+            "{",
+            r#"{"idd_impl":"mtt_vdd"}"#,
+            r#"{"idd_impl":"mtt_vdd","virtual_display_count":-1}"#,
+            r#"{"idd_impl":"mtt_vdd","virtual_display_count":0,"virtual_display_max_count":0}"#,
+            "",
+        ] {
+            handler.set_platform_additions(invalid);
+            let state = handle.media_controls();
+            assert_eq!(state.virtual_display_count, None);
+            assert!(!state.can_add_virtual_display);
+            assert_eq!(state.virtual_display_ids, vec![12]);
+        }
+        // Older hosts omit these inventories when no virtual displays exist.
+        for driver in ["amyuni_idd", "rustdesk_idd"] {
+            handler.set_platform_additions(&format!(r#"{{"idd_impl":"{driver}"}}"#));
+            let state = handle.media_controls();
+            assert_eq!(state.virtual_display_count, Some(0));
+            assert!(state.can_add_virtual_display);
+        }
+    }
+
+    #[test]
+    fn legacy_virtual_display_requests_wait_for_confirmed_inventory() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        *handle.session.sender.write().unwrap() = Some(sender);
+        let handler = &handle.session.ui_handler;
+        handler.set_peer_info(&PeerInfo {
+            platform: "Windows".into(),
+            features: Some(Features {
+                display_controls: true,
+                ..Default::default()
+            })
+            .into(),
+            platform_additions:
+                r#"{"is_installed":true,"idd_impl":"mtt_vdd","virtual_display_count":7}"#.into(),
+            ..Default::default()
+        });
+        let update_count = |count| {
+            handler.set_platform_additions(&format!(
+                r#"{{"idd_impl":"mtt_vdd","virtual_display_count":{count}}}"#
+            ))
+        };
+        handle
+            .request_virtual_display(VirtualDisplayRequest::Add)
+            .unwrap();
+        assert!(handle
+            .request_virtual_display(VirtualDisplayRequest::Add)
+            .is_err());
+        assert!(handle
+            .request_virtual_display(VirtualDisplayRequest::Remove(7))
+            .is_err());
+        let Data::Message(message) = receiver.try_recv().unwrap() else {
+            panic!("expected add")
+        };
+        assert!(message.misc().toggle_virtual_display().on);
+        assert_eq!(message.misc().toggle_virtual_display().display, 0);
+        assert!(receiver.try_recv().is_err());
+        update_count(7);
+        handler.media_options(&OptionMessage::default());
+        handler.msgbox(
+            "media-control-error",
+            "Virtual display",
+            "unconfirmed failure",
+            "",
+            false,
+        );
+        handler.set_platform_additions(
+            r#"{"idd_impl":"mtt_vdd","virtual_display_count":8,"virtual_display_max_count":0}"#,
+        );
+        assert!(handle.media_controls().virtual_display_pending);
+        assert!(!handle.media_controls().can_add_virtual_display);
+        update_count(8);
+        assert!(!handle.media_controls().virtual_display_pending);
+        assert!(handle
+            .request_virtual_display(VirtualDisplayRequest::Add)
+            .is_err());
+        handle
+            .request_virtual_display(VirtualDisplayRequest::Remove(8))
+            .unwrap();
+        update_count(8);
+        assert!(handle.media_controls().virtual_display_pending);
+        update_count(7);
+        assert!(!handle.media_controls().virtual_display_pending);
+        assert!(handle.media_controls().can_add_virtual_display);
+        update_count(12);
+        assert!(handle
+            .request_virtual_display(VirtualDisplayRequest::Add)
+            .is_err());
+        handle
+            .request_virtual_display(VirtualDisplayRequest::Remove(12))
+            .unwrap();
+        update_count(11);
+        assert!(!handle.media_controls().virtual_display_pending);
+        for (initial, added, removed, index) in [
+            (
+                r#"{"idd_impl":"amyuni_idd","amyuni_virtual_displays":2}"#,
+                r#"{"idd_impl":"amyuni_idd","amyuni_virtual_displays":3}"#,
+                r#"{"idd_impl":"amyuni_idd","amyuni_virtual_displays":2}"#,
+                3,
+            ),
+            (
+                r#"{"idd_impl":"rustdesk_idd","rustdesk_virtual_displays":[1,3]}"#,
+                r#"{"idd_impl":"rustdesk_idd","rustdesk_virtual_displays":[1,2,3]}"#,
+                r#"{"idd_impl":"rustdesk_idd","rustdesk_virtual_displays":[1,3]}"#,
+                2,
+            ),
+        ] {
+            handler.set_platform_additions(initial);
+            handle
+                .request_virtual_display(VirtualDisplayRequest::Add)
+                .unwrap();
+            assert!(handle
+                .request_virtual_display(VirtualDisplayRequest::Add)
+                .is_err());
+            handler.set_platform_additions(initial);
+            assert!(handle.media_controls().virtual_display_pending);
+            handler.set_platform_additions(added);
+            assert!(!handle.media_controls().virtual_display_pending);
+            handle
+                .request_virtual_display(VirtualDisplayRequest::Remove(index))
+                .unwrap();
+            handler.set_platform_additions(removed);
+            assert!(!handle.media_controls().virtual_display_pending);
+        }
+        update_count(7);
+        drop(receiver);
+        assert!(handle
+            .request_virtual_display(VirtualDisplayRequest::Add)
+            .is_err());
+        assert!(!handle.media_controls().virtual_display_pending);
+    }
 
     #[test]
     fn same_screen_switch_confirms_hz_without_geometry_change() {
@@ -621,7 +818,7 @@ mod tests {
         assert_eq!(handle.media_controls().virtual_display_ids, vec![8]);
         assert_eq!(handle.media_controls().virtual_display_driver, "mtt_vdd");
         assert!(handle.media_controls().virtual_display_remove_latest_only);
-        assert!(handle.media_controls().can_add_virtual_display);
+        assert!(!handle.media_controls().can_add_virtual_display);
         peer.platform = "Mac OS".into();
         peer.resolutions.as_mut().unwrap().current_resolution = None.into();
         peer.displays[0].width = 3840;

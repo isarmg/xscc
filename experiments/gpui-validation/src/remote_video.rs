@@ -395,7 +395,13 @@ impl RemoteVideo {
                     }
                     self.monitors = monitors;
                 }
-                SessionEvent::MediaControls(controls) => self.update_media_controls(controls),
+                SessionEvent::MediaControls(controls) => {
+                    self.update_media_controls(controls);
+                    // Cross-thread snapshots can enter the queue out of order.
+                    if let Some(session) = &self.session {
+                        self.media_controls = session.media_controls();
+                    }
+                }
                 SessionEvent::VirtualDisplayResult(result) => {
                     self.finish_virtual_display_result(result)
                 }

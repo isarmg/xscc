@@ -21,7 +21,9 @@ impl ManagementPanel {
         let palette = theme::palette(window.appearance());
         let state = &self.video_state;
         let controls = &state.media_controls;
-        let busy = state.switching_monitor || state.pending_media.is_some();
+        let busy = state.switching_monitor
+            || state.pending_media.is_some()
+            || controls.virtual_display_pending;
         let idle = state.connected && !busy;
         div()
             .flex()
@@ -36,10 +38,19 @@ impl ManagementPanel {
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(palette.muted))
-                    .child(if busy {
+                    .child(if controls.virtual_display_pending {
+                        "正在等待虚拟屏数量确认；未响应时请断开重连。"
+                    } else if busy {
                         "等待当前调节完成后，可继续管理虚拟显示器。"
+                    } else if controls.virtual_display_count.is_none() {
+                        "虚拟屏数量尚未确认，请检查主机虚拟屏支持和控制权限，或断开重连。"
                     } else if !controls.virtual_display_supported {
                         "主机未启用虚拟显示器支持、权限受限，或被控端需要升级。"
+                    } else if controls
+                        .virtual_display_count
+                        .is_some_and(|count| count >= 8)
+                    {
+                        "控制端最多添加 8 个虚拟屏，可移除不再使用的虚拟屏。"
                     } else if !controls.can_add_virtual_display {
                         "已达到主机允许的虚拟显示器数量。可移除不再使用的虚拟屏。"
                     } else {
@@ -68,6 +79,7 @@ impl ManagementPanel {
                     if state.connected
                         && !state.switching_monitor
                         && state.pending_media.is_none()
+                        && !state.media_controls.virtual_display_pending
                         && state.media_controls.virtual_display_supported
                         && state.media_controls.can_add_virtual_display
                     {
@@ -97,6 +109,7 @@ impl ManagementPanel {
                     if state.connected
                         && !state.switching_monitor
                         && state.pending_media.is_none()
+                        && !state.media_controls.virtual_display_pending
                         && state.media_controls.virtual_display_supported
                         && state.media_controls.virtual_display_ids.contains(&id)
                     {

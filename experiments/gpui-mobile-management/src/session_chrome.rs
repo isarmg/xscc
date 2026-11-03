@@ -616,14 +616,19 @@ impl SessionChrome {
                 virtual_displays = self.virtual_display_controls(cx);
             }
         } else if model.virtual_display_supported {
+            let virtual_ready = ready && !model.virtual_display_pending;
             virtual_displays = virtual_displays
                 .child(
                     self.button(
                         cx,
                         "session-virtual-add",
-                        "添加虚拟屏幕",
+                        if model.virtual_display_pending {
+                            "处理中，等待确认…"
+                        } else {
+                            "添加虚拟屏幕"
+                        },
                         false,
-                        ready && model.can_add_virtual_display,
+                        virtual_ready && model.can_add_virtual_display,
                         ChromeAction::AddVirtualDisplay,
                     )
                     .w_full(),
@@ -652,7 +657,7 @@ impl SessionChrome {
                             format!("移除虚拟屏幕 {id}")
                         },
                         false,
-                        ready && model.can_control && !model.view_only,
+                        virtual_ready && model.can_control && !model.view_only,
                         ChromeAction::RemoveVirtualDisplay(id),
                     )
                     .w_full(),

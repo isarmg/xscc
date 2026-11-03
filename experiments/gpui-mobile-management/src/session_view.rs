@@ -785,6 +785,14 @@ impl SessionView {
                 }
                 SessionEvent::ControlError(error) => {
                     self.notice = error;
+                    if self
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.media_controls().virtual_display_pending)
+                    {
+                        self.notice
+                            .push_str(" 虚拟屏结果尚未确认，请断开重连后重试。");
+                    }
                 }
                 SessionEvent::Error(error) => {
                     self.stop();
@@ -1026,7 +1034,8 @@ impl SessionView {
                 .virtual_display_configuration
                 .as_ref()
                 .map(virtual_displays::project),
-            virtual_display_pending: self.pending_virtual.is_some(),
+            virtual_display_pending: self.pending_virtual.is_some()
+                || media.virtual_display_pending,
             virtual_display_supported: media.virtual_display_supported,
             virtual_display_driver: media.virtual_display_driver,
             virtual_display_remove_latest_only: media.virtual_display_remove_latest_only,

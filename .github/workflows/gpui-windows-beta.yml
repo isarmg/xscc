@@ -234,6 +234,12 @@ jobs:
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::streaming::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::io_loop::ui_send_tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests"
+          $legacyTests = & cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "${{ matrix.core_features }}" --target x86_64-pc-windows-msvc gpui_session::controls::tests::legacy_virtual_display 2>&1
+          $legacyExit = $LASTEXITCODE
+          $legacyTests | Write-Output
+          if ($legacyExit -ne 0 -or ($legacyTests | Out-String) -notmatch '(?m)^test result: ok\. 2 passed; 0 failed;') {
+            throw 'Legacy virtual display regressions did not pass both tests'
+          }
       - name: Test Enigo parse error formatting
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
