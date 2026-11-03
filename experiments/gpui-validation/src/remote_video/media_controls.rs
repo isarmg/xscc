@@ -297,6 +297,19 @@ impl RemoteVideo {
                 })
             })
             .or_else(|| {
+                result
+                    .state
+                    .displays
+                    .iter()
+                    .filter(|screen| screen.active)
+                    .filter_map(|screen| screen.index)
+                    .find(|index| {
+                        self.monitors
+                            .iter()
+                            .any(|monitor| monitor.index == *index && monitor.available)
+                    })
+            })
+            .or_else(|| {
                 self.monitors
                     .iter()
                     .find(|monitor| monitor.available)

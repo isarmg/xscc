@@ -86,6 +86,7 @@ def required_native_jobs(workflow):
                 elif role == 'controller':
                     steps += ('Verify Linux native prerequisites',
                               'Test opt-in QUIC transport and media framing',
+                              'Test mobile management header touch actions',
                               'Test mobile audio queue and mute lifecycle',
                               'Test opt-in QUIC session integration')
                 else:

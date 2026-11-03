@@ -206,7 +206,7 @@ impl Panel {
                 }
                 Event::Action(result) => {
                     self.busy = false;
-                    self.notice = result.err().unwrap_or_default();
+                    self.notice = result.err().unwrap_or_else(|| "操作完成。".into());
                 }
                 Event::Lifecycle(result) => {
                     if let Err(error) = result {
@@ -241,11 +241,18 @@ impl Panel {
                 cx.notify();
             });
         }
+        let pending = match &command {
+            Command::Enroll { .. } => "正在绑定实例…",
+            Command::Resume => "正在重新连接…",
+            Command::Refresh => "正在刷新设备状态…",
+            Command::Unbind => "正在解绑实例…",
+            Command::ForgetLocal => "正在清除此机绑定…",
+        };
         match self.commands.try_send(command) {
             Ok(()) => {
                 self.busy = true;
                 self.confirm_unbind = None;
-                self.notice = "正在处理…".into();
+                self.notice = pending.into();
             }
             Err(error) => self.notice = format!("管理操作未提交：{error}"),
         }
@@ -336,6 +343,9 @@ impl Render for Panel {
         let button = |id: &'static str, label: &str, primary: bool| {
             ui::button(id, label, primary, enabled, palette)
         };
+        let header_button = |id: &'static str, label: &str, primary: bool, available: bool| {
+            header_button(id, label, primary, available, palette)
+        };
         let mut header = div()
             .id("mobile-titlebar-actions")
             .w_full()
@@ -391,7 +401,7 @@ impl Render for Panel {
                 .flex_shrink_0(),
             )
             .child(
-                button(
+                header_button(
                     "toggle-server-binding",
                     if configured {
                         if self.binding_expanded {
@@ -405,10 +415,11 @@ impl Render for Panel {
                         "绑定实例"
                     },
                     true,
+                    self.initialized && self.active,
                 )
                 .flex_shrink_0()
                 .on_click(cx.listener(|view, _, window, cx| {
-                    if !view.enabled() {
+                    if !view.initialized || !view.active {
                         return;
                     }
                     view.binding_expanded = !view.binding_expanded;
@@ -418,7 +429,7 @@ impl Render for Panel {
                 })),
             )
             .child(
-                button("refresh", "刷新", false)
+                header_button("refresh", "刷新", false, enabled)
                     .flex_shrink_0()
                     .on_click(cx.listener(|view, _, window, cx| {
                         window.dismiss_virtual_keyboard();
@@ -433,7 +444,7 @@ impl Render for Panel {
                 .is_some_and(|status| !matches!(status.phase.as_str(), "online" | "connecting"))
             {
                 header = header.child(
-                    button("resume", "重新连接", false)
+                    header_button("resume", "重新连接", false, enabled)
                         .flex_shrink_0()
                         .on_click(cx.listener(|view, _, window, cx| {
                             window.dismiss_virtual_keyboard();
@@ -443,29 +454,17 @@ impl Render for Panel {
                 );
             }
             header = header.child(
-                button(
-                    "unbind",
-                    if self.confirm_unbind == Some(UnbindConfirmation::Remote) {
-                        "确认解绑并断开"
-                    } else {
-                        "解绑实例"
-                    },
-                    false,
-                )
-                .flex_shrink_0()
-                .text_color(rgb(palette.danger))
-                .on_click(cx.listener(|view, _, window, cx| {
-                    if !view.enabled() {
-                        return;
-                    }
-                    window.dismiss_virtual_keyboard();
-                    if view.confirm_unbind == Some(UnbindConfirmation::Remote) {
-                        view.action(Command::Unbind, cx);
-                    } else {
+                header_button("unbind", "解绑实例", false, enabled)
+                    .flex_shrink_0()
+                    .text_color(rgb(palette.danger))
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        if !view.enabled() {
+                            return;
+                        }
+                        window.dismiss_virtual_keyboard();
                         view.confirm_unbind = Some(UnbindConfirmation::Remote);
-                    }
-                    cx.notify();
-                })),
+                        cx.notify();
+                    })),
             );
         }
         let content_width = (f32::from(visible.size.width) - 32.).clamp(1., 1200.);
@@ -476,6 +475,58 @@ impl Render for Panel {
             .w_full()
             .max_w(px(1200.))
             .child(header);
+        // Keep action feedback beside the menu instead of below the device list.
+        if !self.notice.is_empty() {
+            content = content.child(
+                div()
+                    .id("management-action-notice")
+                    .text_color(rgb(palette.muted))
+                    .child(self.notice.clone()),
+            );
+        }
+        if let Some(confirmation) = self.confirm_unbind {
+            content = content.child(
+                ui::card(palette)
+                    .id("unbind-confirmation")
+                    .p_3()
+                    .gap_2()
+                    .child(match confirmation {
+                        UnbindConfirmation::Remote => "解除服务器绑定后，需要重新输入实例密码。",
+                        UnbindConfirmation::Local => {
+                            "仅删除此机绑定，不会撤销服务器记录；重新绑定前在网页重置对应实例密码。"
+                        }
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                button("confirm-unbind", "确认", false)
+                                    .debug_selector(|| "confirm-unbind".into())
+                                    .on_click(cx.listener(|view, _, window, cx| {
+                                        let Some(confirmation) = view.confirm_unbind else {
+                                            return;
+                                        };
+                                        window.dismiss_virtual_keyboard();
+                                        view.action(
+                                            match confirmation {
+                                                UnbindConfirmation::Remote => Command::Unbind,
+                                                UnbindConfirmation::Local => Command::ForgetLocal,
+                                            },
+                                            cx,
+                                        );
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(button("cancel-unbind", "取消", false).on_click(cx.listener(
+                                |view, _, _, cx| {
+                                    view.confirm_unbind = None;
+                                    cx.notify();
+                                },
+                            ))),
+                    ),
+            );
+        }
         if self.binding_expanded {
             if configured {
                 let status = self.status.as_ref();
@@ -502,31 +553,16 @@ impl Render for Panel {
                                     },
                                 ),
                         )
-                        .child(
-                            button(
-                                "forget-local",
-                                if self.confirm_unbind == Some(UnbindConfirmation::Local) {
-                                    "确认仅清除此机绑定"
-                                } else {
-                                    "仅清除此机绑定"
-                                },
-                                false,
-                            )
-                            .on_click(cx.listener(
-                                |view, _, window, cx| {
-                                    if !view.enabled() {
-                                        return;
-                                    }
-                                    window.dismiss_virtual_keyboard();
-                                    if view.confirm_unbind == Some(UnbindConfirmation::Local) {
-                                        view.action(Command::ForgetLocal, cx);
-                                    } else {
-                                        view.confirm_unbind = Some(UnbindConfirmation::Local);
-                                    }
-                                    cx.notify();
-                                },
-                            )),
-                        ),
+                        .child(button("forget-local", "仅清除此机绑定", false).on_click(
+                            cx.listener(|view, _, window, cx| {
+                                if !view.enabled() {
+                                    return;
+                                }
+                                window.dismiss_virtual_keyboard();
+                                view.confirm_unbind = Some(UnbindConfirmation::Local);
+                                cx.notify();
+                            }),
+                        )),
                 );
             } else {
                 content =
@@ -541,25 +577,6 @@ impl Render for Panel {
                             )),
                     );
             }
-        }
-        if let Some(confirmation) = self.confirm_unbind {
-            content = content.child(
-                ui::card(palette)
-                    .p_3()
-                    .gap_2()
-                    .child(match confirmation {
-                        UnbindConfirmation::Remote => "解除服务器绑定后，需要重新输入实例密码。",
-                        UnbindConfirmation::Local => {
-                            "仅删除此机绑定，不会撤销服务器记录；重新绑定前在网页重置对应实例密码。"
-                        }
-                    })
-                    .child(button("cancel-unbind", "取消", false).on_click(cx.listener(
-                        |view, _, _, cx| {
-                            view.confirm_unbind = None;
-                            cx.notify();
-                        },
-                    ))),
-            );
         }
         if configured && !correct_role {
             content = content.child(
@@ -753,13 +770,6 @@ impl Render for Panel {
             devices = devices.child(card);
         }
         content = content.child(devices);
-        if !self.notice.is_empty() {
-            content = content.child(
-                div()
-                    .text_color(rgb(palette.danger))
-                    .child(self.notice.clone()),
-            );
-        }
         div()
             .size_full()
             .bg(rgb(palette.page))
@@ -784,6 +794,59 @@ impl Render for Panel {
     }
 }
 
+// The rounded surface is compact; the complete 44px row remains tappable.
+fn header_button(
+    id: &'static str,
+    label: &str,
+    primary: bool,
+    enabled: bool,
+    palette: theme::Palette,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .debug_selector(|| id.into())
+        .relative()
+        .h(px(theme::CONTROL_HEIGHT))
+        .min_h(px(theme::CONTROL_HEIGHT))
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(13.))
+        .line_height(px(20.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(rgb(if primary {
+            palette.on_accent
+        } else {
+            palette.text
+        }))
+        .opacity(if enabled { 1. } else { 0.45 })
+        .child(
+            div()
+                .absolute()
+                .top(px(6.))
+                .bottom(px(6.))
+                .left_0()
+                .right_0()
+                .child(theme::surface(
+                    rgb(if primary {
+                        palette.accent
+                    } else {
+                        palette.panel
+                    }),
+                    (!primary).then_some(rgb(palette.border)),
+                    theme::CONTROL_EXTENT,
+                )),
+        )
+        .child(label.to_owned())
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(|style| style.opacity(0.85))
+                .active(|style| style.opacity(0.65))
+        })
+}
+
 fn card_columns(width: f32) -> u16 {
     ((width + 16.) / 252.).floor().clamp(1., 4.) as u16
 }
@@ -798,5 +861,107 @@ mod tests {
         assert_eq!(card_columns(608.), 2);
         assert_eq!(card_columns(992.), 4);
         assert_eq!(card_columns(2400.), 4);
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod interaction_tests {
+    use super::*;
+    use gpui_test_support::{TestAppContext, TouchEvent, TouchId, TouchPhase, point, size};
+
+    fn tap(cx: &mut gpui_test_support::VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            cx.simulate_event(TouchEvent {
+                id: TouchId(1),
+                phase,
+                position,
+                force: None,
+                predicted_position: None,
+            });
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn unbind_confirms_once_and_busy_actions_keep_local_menu_responsive(cx: &mut TestAppContext) {
+        let (commands, mut pending) = tokio::sync::mpsc::channel(1);
+        let (events, incoming) = mpsc::channel();
+        let (lifecycle, _) = tokio::sync::watch::channel(true);
+        let (panel, cx) = cx.add_window_view(|_, cx| Panel {
+            commands,
+            events: incoming,
+            lifecycle,
+            server: cx.new(|cx| TextField::new("服务端地址", false, cx)),
+            code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
+            status: Some(Status {
+                configured: true,
+                server: None,
+                phase: "online".into(),
+                binding: None,
+                role: Some(InstanceRole::Controller),
+                addresses: vec![],
+                peers: vec![],
+            }),
+            initialized: true,
+            active: true,
+            busy: false,
+            confirm_unbind: None,
+            binding_expanded: false,
+            session_visible: false,
+            notice: String::new(),
+            _updates: gpui::Task::ready(()),
+            _lifecycle: cx.on_app_lifecycle(|_, _| {}),
+        });
+        cx.simulate_resize(size(px(1000.), px(720.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let toggle = cx.debug_bounds("toggle-server-binding").unwrap();
+        assert_eq!(toggle.size.height, px(44.));
+        // The first touch is outside the 32px decoration but inside its 44px envelope.
+        let edge = point(toggle.center().x, toggle.top() + px(2.));
+        tap(cx, edge);
+        cx.update(|_, cx| assert!(panel.read(cx).binding_expanded));
+        tap(cx, edge);
+        cx.update(|_, cx| assert!(!panel.read(cx).binding_expanded));
+        let unbind = cx.debug_bounds("unbind").unwrap();
+        tap(cx, unbind.center());
+        cx.update(|_, cx| {
+            assert!(panel.read(cx).confirm_unbind == Some(UnbindConfirmation::Remote))
+        });
+        assert!(pending.try_recv().is_err(), "the first tap must not unbind");
+        assert_eq!(
+            cx.debug_bounds("unbind").unwrap(),
+            unbind,
+            "confirmation must not move the menu target"
+        );
+        let confirm = cx.debug_bounds("confirm-unbind").unwrap();
+        tap(cx, confirm.center());
+        assert!(matches!(pending.try_recv(), Ok(Command::Unbind)));
+        cx.update(|_, cx| {
+            let view = panel.read(cx);
+            assert!(view.busy);
+            assert!(view.confirm_unbind.is_none());
+            assert_eq!(view.notice, "正在解绑实例…");
+        });
+        tap(cx, unbind.center());
+        assert!(
+            pending.try_recv().is_err(),
+            "busy repeats must not enqueue another unbind"
+        );
+        let toggle = cx.debug_bounds("toggle-server-binding").unwrap();
+        tap(cx, toggle.center());
+        cx.update(|_, cx| {
+            assert!(
+                panel.read(cx).binding_expanded,
+                "local menu must remain usable while a network action runs"
+            )
+        });
+        events
+            .send(Event::Action(Err("management authorization denied".into())))
+            .unwrap();
+        cx.update(|window, cx| panel.update(cx, |view, cx| view.consume(window, cx)));
+        cx.update(|_, cx| {
+            let view = panel.read(cx);
+            assert!(!view.busy);
+            assert_eq!(view.notice, "management authorization denied");
+        });
     }
 }

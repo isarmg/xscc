@@ -277,8 +277,13 @@ jobs:
         run: ./.github/scripts/test-gpui-codec-probe.ps1
       - name: Install NSIS compiler
         run: |
-          choco install nsis --version=3.11 --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          $nsisInstalled = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --version=3.11 --yes --no-progress
+            if ($LASTEXITCODE -eq 0) { $nsisInstalled = $true; break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 5 }
+          }
+          if (-not $nsisInstalled) { throw 'NSIS installation failed after three attempts' }
       - name: Assemble unsigned packages and integrity manifest
         env:
           SOURCE_SHA: ${{ github.sha }}
