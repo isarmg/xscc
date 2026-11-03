@@ -653,11 +653,11 @@ impl RemoteVideo {
                 event.y = event.y.saturating_add(self.origin.1);
             }
             if let Some(session) = &self.session {
-                if let Some(position) = input::position_before_press(message.mouse_event()) {
-                    if let Err(error) = session.send_input(InputCommand::Mouse(position)) {
-                        self.notice = error.to_string();
-                        return true;
-                    }
+                if let Some(position) = input::position_before_press(message.mouse_event())
+                    && let Err(error) = session.send_input(InputCommand::Mouse(position))
+                {
+                    self.notice = error.to_string();
+                    return true;
                 }
                 if let Err(error) =
                     session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
