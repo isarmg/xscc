@@ -122,6 +122,9 @@ jobs:
           count_tests=$(cargo test --locked --bin xscc-gpui-mobile-management count_buttons 2>&1) || { printf '%s\n' "$count_tests"; exit 1; }
           printf '%s\n' "$count_tests"
           grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$count_tests" || { echo 'Virtual display count controls did not run both tests' >&2; exit 1; }
+          retry_test=$(cargo test --locked --bin xscc-gpui-mobile-management failed_enrollment_keeps_retry_form 2>&1) || { printf '%s\n' "$retry_test"; exit 1; }
+          printf '%s\n' "$retry_test"
+          grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$retry_test" || { echo 'Enrollment retry interaction test did not run' >&2; exit 1; }
       - name: Run GPUI raw touch regression tests
         working-directory: vendor/gpui
         run: |

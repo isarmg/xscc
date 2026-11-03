@@ -43,6 +43,7 @@ pub struct PrivacyModeImpl {
     displays: Vec<Display>,
     virtual_displays: Vec<Display>,
     virtual_displays_added: Vec<u32>,
+    display_settings_changed: bool,
 }
 
 struct TurnOnGuard<'a> {
@@ -82,6 +83,7 @@ impl PrivacyModeImpl {
             displays: Vec::new(),
             virtual_displays: Vec::new(),
             virtual_displays_added: Vec::new(),
+            display_settings_changed: false,
         }
     }
 
@@ -203,6 +205,8 @@ impl PrivacyModeImpl {
             new_primary_dm.u1.s2_mut().dmPosition.x = 0;
             new_primary_dm.u1.s2_mut().dmPosition.y = 0;
             new_primary_dm.dmFields |= DM_POSITION;
+            // Even a non-success return can leave CDS_UPDATEREGISTRY changes behind.
+            self.display_settings_changed = true;
             let rc = ChangeDisplaySettingsExW(
                 display.name.as_ptr(),
                 &mut new_primary_dm,
@@ -338,13 +342,13 @@ impl PrivacyModeImpl {
         if self.virtual_displays.is_empty() {
             let displays =
                 virtual_display_manager::plug_in_peer_request(vec![Self::default_display_modes()])?;
+            self.virtual_displays_added.extend(displays);
             if is_async_mode {
                 thread::sleep(Duration::from_secs(1));
             }
             self.set_displays();
             // No physical displays, no need to use the privacy mode.
             if self.displays.is_empty() {
-                virtual_display_manager::plug_out_monitor_indices(&displays, false, false)?;
                 bail!(NO_PHYSICAL_DISPLAYS);
             }
 
@@ -357,8 +361,6 @@ impl PrivacyModeImpl {
                     self.set_displays();
                 }
             }
-
-            self.virtual_displays_added.extend(displays);
         }
 
         Ok(())
@@ -521,12 +523,24 @@ impl PrivacyMode for PrivacyModeImpl {
         state: Option<PrivacyModeState>,
     ) -> ResultType<()> {
         self.check_off_conn_id(conn_id)?;
+        if !self.display_settings_changed {
+            virtual_display_manager::plug_out_monitor_indices(
+                &self.virtual_displays_added,
+                false,
+                false,
+            )?;
+            self.virtual_displays_added.clear();
+            self.displays.clear();
+            self.virtual_displays.clear();
+            return Ok(());
+        }
         super::win_input::unhook()?;
         let _tmp_ignore_changed_holder = crate::display_service::temp_ignore_displays_changed();
         self.restore();
         // We need to force restore the registry connectivity.
         // This is because the registry connection may be changed by `self.restore()`, but will not be fully restored.
         restore_reg_connectivity(false, true);
+        self.display_settings_changed = false;
 
         if self.conn_id != INVALID_PRIVACY_MODE_CONN_ID {
             if let Some(state) = state {

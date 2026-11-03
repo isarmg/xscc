@@ -35,6 +35,7 @@ pub struct Panel {
     initialized: bool,
     active: bool,
     busy: bool,
+    enrollment_failed: bool,
     confirm_unbind: Option<UnbindConfirmation>,
     binding_expanded: bool,
     session_visible: bool,
@@ -139,6 +140,7 @@ impl Panel {
             initialized: false,
             active,
             busy: false,
+            enrollment_failed: false,
             confirm_unbind: None,
             binding_expanded: true,
             session_visible: false,
@@ -170,11 +172,15 @@ impl Panel {
                 }
                 Event::Opened(status) => {
                     self.initialized = true;
+                    self.enrollment_failed = false;
                     self.binding_expanded = !status.configured;
                     self.status = Some(status);
                     self.notice.clear();
                 }
                 Event::Status(mut status) => {
+                    if !status.configured || status.binding.is_some() {
+                        self.enrollment_failed = false;
+                    }
                     if !status.configured
                         && self
                             .status
@@ -197,9 +203,10 @@ impl Panel {
                 }
                 Event::Enrolled(result) => {
                     self.busy = false;
+                    self.enrollment_failed = result.is_err();
+                    self.binding_expanded = self.enrollment_failed;
                     if result.is_ok() {
                         self.code.update(_cx, |field, cx| field.clear(window, cx));
-                        self.binding_expanded = false;
                         window.dismiss_virtual_keyboard();
                     }
                     self.notice = result.err().unwrap_or_default();
@@ -408,7 +415,7 @@ impl Render for Panel {
             .child(
                 header_button(
                     "toggle-server-binding",
-                    if configured {
+                    if configured && !self.enrollment_failed {
                         if self.binding_expanded {
                             "收起实例信息"
                         } else {
@@ -571,18 +578,22 @@ impl Render for Panel {
                             }),
                         )),
                 );
-            } else {
-                content =
-                    content.child(
-                        ui::card(palette)
-                            .p_4()
-                            .child(ui::heading("绑定管理实例", "", palette))
-                            .child(self.server.clone())
-                            .child(self.code.clone())
-                            .child(button("enroll", "绑定并连接", true).on_click(
-                                cx.listener(|view, _, window, cx| view.enroll(window, cx)),
-                            )),
-                    );
+            }
+            if !configured || self.enrollment_failed {
+                content = content.child(
+                    ui::card(palette)
+                        .p_4()
+                        .child(ui::heading("绑定管理实例", "", palette))
+                        .child(self.server.clone())
+                        .child(self.code.clone())
+                        .child(
+                            button("enroll", "绑定并连接", true)
+                                .debug_selector(|| "enroll".into())
+                                .on_click(
+                                    cx.listener(|view, _, window, cx| view.enroll(window, cx)),
+                                ),
+                        ),
+                );
             }
         }
         if configured && role_mismatch {
@@ -917,6 +928,7 @@ mod tests {
 #[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod interaction_tests {
     use super::*;
+    use gpui::EntityInputHandler;
     use gpui_test_support::{TestAppContext, TouchEvent, TouchId, TouchPhase, point, size};
 
     fn tap(cx: &mut gpui_test_support::VisualTestContext, position: gpui::Point<gpui::Pixels>) {
@@ -929,6 +941,100 @@ mod interaction_tests {
                 predicted_position: None,
             });
         }
+    }
+
+    #[gpui_test_support::test]
+    fn failed_enrollment_keeps_retry_form_after_configuration_is_saved(cx: &mut TestAppContext) {
+        let (commands, mut pending) = tokio::sync::mpsc::channel(1);
+        let (events, incoming) = mpsc::channel();
+        let (lifecycle, _) = tokio::sync::watch::channel(true);
+        let status = Status {
+            configured: true,
+            server: Some("http://127.0.0.1:8080/".into()),
+            phase: "offline".into(),
+            binding: None,
+            role: None,
+            addresses: vec![],
+            peers: vec![],
+        };
+        let (panel, cx) = cx.add_window_view(|_, cx| Panel {
+            commands,
+            events: incoming,
+            lifecycle,
+            server: cx.new(|cx| TextField::new("服务端地址", false, cx)),
+            code: cx.new(|cx| TextField::new("控制端实例密码", true, cx)),
+            status: Some(status.clone()),
+            initialized: true,
+            active: true,
+            busy: false,
+            enrollment_failed: false,
+            confirm_unbind: None,
+            binding_expanded: true,
+            session_visible: false,
+            notice: String::new(),
+            _updates: gpui::Task::ready(()),
+            _lifecycle: cx.on_app_lifecycle(|_, _| {}),
+        });
+        cx.simulate_resize(size(px(1000.), px(900.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("enroll").is_none(),
+            "offline startup is not a failed enrollment"
+        );
+        cx.update(|window, cx| {
+            panel.read(cx).code.clone().update(cx, |field, cx| {
+                field.replace_text_in_range(None, &"b".repeat(36), window, cx)
+            });
+        });
+        events
+            .send(Event::Enrolled(Err("incorrect instance password".into())))
+            .unwrap();
+        events.send(Event::Status(status)).unwrap();
+        let code = "a".repeat(36);
+        cx.update(|window, cx| {
+            panel.update(cx, |view, cx| {
+                view.consume(window, cx);
+                assert_eq!(view.notice, "incorrect instance password");
+                assert_eq!(view.code.read(cx).value(), "b".repeat(36));
+                view.server.update(cx, |field, cx| {
+                    field.replace_text_in_range(None, "http://127.0.0.1:8080", window, cx)
+                });
+                view.code.update(cx, |field, cx| {
+                    field.replace_text_in_range(Some(0..36), &code, window, cx)
+                });
+                cx.notify();
+            });
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            pending.try_recv().is_err(),
+            "a failure must not enroll automatically"
+        );
+        let retry = cx
+            .debug_bounds("enroll")
+            .expect("the retry form must survive the configured status");
+        tap(cx, retry.center());
+        assert!(
+            matches!(pending.try_recv(), Ok(Command::Enroll { server, code: sent }) if server == "http://127.0.0.1:8080" && sent == code)
+        );
+        tap(cx, retry.center());
+        assert!(
+            pending.try_recv().is_err(),
+            "busy taps must not send a second request"
+        );
+        events.send(Event::Enrolled(Ok(()))).unwrap();
+        cx.update(|window, cx| {
+            panel.update(cx, |view, cx| {
+                view.consume(window, cx);
+                assert!(view.code.read(cx).value().is_empty());
+                cx.notify();
+            });
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            cx.debug_bounds("enroll").is_none(),
+            "successful enrollment closes the form"
+        );
     }
 
     #[gpui_test_support::test]
@@ -954,6 +1060,7 @@ mod interaction_tests {
             initialized: true,
             active: true,
             busy: false,
+            enrollment_failed: false,
             confirm_unbind: None,
             binding_expanded: false,
             session_visible: false,

@@ -52,6 +52,7 @@ struct ManagementPanel {
     statistics: Statistics,
     status_error: Option<String>,
     action_pending: bool,
+    enrollment_failed: bool,
     confirm_unbind: bool,
     show_login: bool,
     notice: String,
@@ -187,7 +188,8 @@ impl ManagementPanel {
         } else {
             vec![self.server.clone(), self.password.clone()]
         };
-        let configured = self.status.as_ref().is_some_and(|status| status.configured);
+        let configured = (!self.enrollment_failed || !self.show_login)
+            && self.status.as_ref().is_some_and(|status| status.configured);
         let fields = if configured || !self.show_login {
             if self.host {
                 &fields[..2]
@@ -279,6 +281,9 @@ impl ManagementPanel {
                     }
                     match result {
                         Ok(status) => {
+                            if !status.configured || status.binding.is_some() {
+                                self.enrollment_failed = false;
+                            }
                             if self.status.is_none()
                                 && self.address_host.read(cx).value().is_empty()
                                 && self.address_port.read(cx).value().is_empty()
@@ -301,6 +306,7 @@ impl ManagementPanel {
                                 self.show_login,
                                 self.status.as_ref().map(|status| status.configured),
                                 status.configured,
+                                self.enrollment_failed,
                             );
                             self.status = Some(status);
                             self.status_error = None;
@@ -316,8 +322,12 @@ impl ManagementPanel {
                     self.action_pending = false;
                     match result {
                         Ok(status) => {
+                            if enrollment || !status.configured || status.binding.is_some() {
+                                self.enrollment_failed = false;
+                            }
                             self.populate_address_fields(&status, window, cx);
                             if enrollment {
+                                self.show_login = false;
                                 self.password
                                     .update(cx, |field, cx| field.clear(window, cx));
                             }
@@ -331,11 +341,16 @@ impl ManagementPanel {
                                 self.show_login,
                                 self.status.as_ref().map(|status| status.configured),
                                 status.configured,
+                                self.enrollment_failed,
                             );
                             self.status = Some(status);
                             self.status_error = None;
                         }
                         Err(error) => {
+                            if enrollment {
+                                self.enrollment_failed = true;
+                                self.show_login = true;
+                            }
                             self.notice = format!("操作未完成：{error}。请检查设置后重试。")
                         }
                     }
@@ -503,7 +518,7 @@ impl ManagementPanel {
                     .child(
                         header_button(
                             "login-menu",
-                            if configured {
+                            if configured && !self.enrollment_failed {
                                 if self.show_login {
                                     "收起实例信息"
                                 } else {
@@ -739,7 +754,7 @@ impl Render for ManagementPanel {
                             row.child(div().child(format!("实例编号：{}", binding.device_id)))
                         })))
             })
-            .when(!configured && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
+            .when((!configured || self.enrollment_failed) && self.show_login && self.initialized && self.status.is_some(), |root| root.child(self.render_binding(palette, cx)))
             .when(self.host && self.initialized, |root| root.child(self.render_addresses(palette, cx)))
             .child(div().flex().items_center().justify_between().gap_2()
                 .child(div().text_size(px(18.)).font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1377,6 +1392,7 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         statistics: Statistics::Compact,
                         status_error: None,
                         action_pending: false,
+                        enrollment_failed: false,
                         confirm_unbind: false,
                         show_login: true,
                         notice: initial_notice,
@@ -1424,8 +1440,13 @@ fn format_peer_address(host: &str, port: u16) -> String {
     }
 }
 
-fn binding_panel_open(current: bool, previous: Option<bool>, configured: bool) -> bool {
-    if previous == Some(configured) {
+fn binding_panel_open(
+    current: bool,
+    previous: Option<bool>,
+    configured: bool,
+    enrollment_failed: bool,
+) -> bool {
+    if enrollment_failed || previous == Some(configured) {
         current
     } else {
         !configured
@@ -1511,12 +1532,14 @@ mod tests {
 
     #[test]
     fn binding_panel_collapses_after_binding_and_preserves_manual_expansion() {
-        assert!(!super::binding_panel_open(true, None, true));
-        assert!(!super::binding_panel_open(true, Some(false), true));
-        assert!(super::binding_panel_open(true, Some(true), true));
-        assert!(!super::binding_panel_open(false, Some(true), true));
-        assert!(super::binding_panel_open(false, Some(true), false));
-        assert!(super::binding_panel_open(true, Some(false), false));
+        assert!(!super::binding_panel_open(true, None, true, false));
+        assert!(!super::binding_panel_open(true, Some(false), true, false));
+        assert!(super::binding_panel_open(true, Some(true), true, false));
+        assert!(!super::binding_panel_open(false, Some(true), true, false));
+        assert!(super::binding_panel_open(false, Some(true), false, false));
+        assert!(super::binding_panel_open(true, Some(false), false, false));
+        assert!(super::binding_panel_open(true, Some(false), true, true));
+        assert!(!super::binding_panel_open(false, Some(true), true, true));
     }
 
     #[test]
