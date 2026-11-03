@@ -153,16 +153,33 @@ pub fn convert_to_yuv(
             let (input, input_stride) = match src_pixfmt {
                 crate::Pixfmt::BGRA => (src.as_ptr(), src_stride[0]),
                 crate::Pixfmt::RGBA => {
-                    mid_data.resize(src.len(), 0);
-                    call_yuv!(ABGRToARGB(
-                        src.as_ptr(),
-                        src_stride[0] as _,
-                        mid_data.as_mut_ptr(),
-                        src_stride[0] as _,
-                        src_width as _,
-                        src_height as _,
-                    ));
-                    (mid_data.as_ptr(), src_stride[0])
+                    // I444 rows are independent; keep the swizzle in a small reusable block.
+                    const ROWS: usize = 32;
+                    mid_data.resize(src_stride[0] * src_height.min(ROWS), 0);
+                    for row in (0..src_height).step_by(ROWS) {
+                        let height = (src_height - row).min(ROWS);
+                        call_yuv!(ABGRToARGB(
+                            src[row * src_stride[0]..].as_ptr(),
+                            src_stride[0] as _,
+                            mid_data.as_mut_ptr(),
+                            src_stride[0] as _,
+                            src_width as _,
+                            height as _,
+                        ));
+                        call_yuv!(ARGBToI444(
+                            mid_data.as_ptr(),
+                            src_stride[0] as _,
+                            dst_y.add(row * dst_stride_y),
+                            dst_stride_y as _,
+                            dst_u.add(row * dst_stride_u),
+                            dst_stride_u as _,
+                            dst_v.add(row * dst_stride_v),
+                            dst_stride_v as _,
+                            src_width as _,
+                            height as _,
+                        ));
+                    }
+                    return Ok(());
                 }
                 crate::Pixfmt::RGB565LE => {
                     let mid_stride = src_width * 4;
@@ -233,4 +250,67 @@ pub fn convert(captured: &PixelBuffer, pixfmt: crate::Pixfmt, dst: &mut Vec<u8>)
         }
     }
     Ok(())
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "ios"),
+    any(target_os = "linux", target_os = "android", not(feature = "capture"))
+))]
+mod tests {
+    use super::*;
+    use crate::Pixfmt;
+
+    #[test]
+    fn rgba_i444_keeps_padded_planes_and_bounds_conversion_scratch() {
+        for (width, height) in [(1, 1), (31, 31), (32, 32), (33, 33), (1921, 129)] {
+            let stride = width * 4 + 16;
+            let source: Vec<_> = (0..stride * height)
+                .map(|i| (i * 37 + i / stride) as u8)
+                .collect();
+            let mut bgra = vec![0; source.len()];
+            assert_eq!(
+                unsafe {
+                    ABGRToARGB(
+                        source.as_ptr(),
+                        stride as _,
+                        bgra.as_mut_ptr(),
+                        stride as _,
+                        width as _,
+                        height as _,
+                    )
+                },
+                0
+            );
+            let plane_stride = (width + 63) / 64 * 64;
+            let plane_height = (height + 63) / 64 * 64;
+            let format = EncodeYuvFormat {
+                pixfmt: Pixfmt::I444,
+                w: width,
+                h: height,
+                stride: vec![plane_stride, plane_stride * 2, plane_stride * 3],
+                u: plane_stride * plane_height,
+                v: plane_stride * plane_height * 3,
+            };
+            let mut expected = vec![0xa5; plane_stride * plane_height * 6];
+            convert_to_yuv(
+                &PixelBuffer::new(&bgra, Pixfmt::BGRA, width, height),
+                &format,
+                &mut expected,
+                &mut Vec::new(),
+            )
+            .unwrap();
+            let mut actual = vec![0xa5; expected.len()];
+            let mut scratch = Vec::new();
+            convert_to_yuv(
+                &PixelBuffer::new(&source, Pixfmt::RGBA, width, height),
+                &format,
+                &mut actual,
+                &mut scratch,
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "{width}x{height}");
+            assert!(scratch.len() <= stride * 32);
+        }
+    }
 }

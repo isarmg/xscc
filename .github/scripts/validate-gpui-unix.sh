@@ -32,6 +32,9 @@ limit_tests=$(cargo test --locked -p scrap --lib --target "$target" codec::bitra
 printf '%s\n' "$limit_tests"
 grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$limit_tests" || { echo 'No passing explicit bitrate tests' >&2; exit 1; }
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    conversion_tests=$(cargo test --locked -p scrap --lib --target "$target" common::convert::tests:: 2>&1) || { printf '%s\n' "$conversion_tests"; exit 1; }
+    printf '%s\n' "$conversion_tests"
+    grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$conversion_tests" || { echo 'RGBA conversion regression did not run' >&2; exit 1; }
     # Select only the excluded dependency package while reusing the root lockfile.
     cargo test --locked -p rust-pulsectl --lib --target "$target"
     for filter in upload_staging_reuses_allocation_after_snapshot swizzle_upload_data; do

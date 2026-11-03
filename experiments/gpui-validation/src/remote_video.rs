@@ -364,12 +364,16 @@ impl RemoteVideo {
                     if name == "keyboard" {
                         if !enabled {
                             self.release_input();
+                            self.notice = "主机已禁用键鼠控制，当前仅可观看。".into();
                             if self.pending_media.as_ref().is_some_and(|pending| {
                                 !matches!(pending.request, MediaRequest::Bitrate(_))
                             }) {
                                 self.pending_media = None;
                                 self.notice = "调节未完成：主机已撤销显示控制权限。".into();
                             }
+                        } else if self.notice == "主机已禁用键鼠控制，当前仅可观看。"
+                        {
+                            self.notice = "主机已恢复键鼠控制。".into();
                         }
                         self.keyboard_allowed = enabled;
                     }
