@@ -51,6 +51,12 @@ function Assert-Unbound {
 $identityHash = $null
 try {
     Invoke-Installer $installer
+    $fontLicense = Join-Path $installed 'MAPLE-FONT-OFL.txt'
+    if (-not (Test-Path $fontLicense) -or
+        (Get-FileHash $fontLicense -Algorithm SHA256).Hash -ne
+        (Get-FileHash (Join-Path $root 'experiments/shared/fonts/OFL.txt') -Algorithm SHA256).Hash) {
+        throw 'Installed Maple font license is missing or differs from its source'
+    }
     $service = Get-HostService
     if (-not $service -or $service.State -ne 'Running' -or $service.StartMode -ne 'Auto' -or $service.StartName -ne 'LocalSystem') {
         throw 'Expected the dedicated running AutoStart LocalSystem service'
@@ -93,7 +99,7 @@ while (((Get-HostService) -or (Test-Path $exe) -or (Test-Path $key)) -and (Get-D
     Start-Sleep -Milliseconds 250
 }
 if ((Get-HostService) -or (Test-Path $key)) { throw 'Service/uninstall registration remains after uninstall' }
-foreach ($name in @('xscc-host.exe', 'Uninstall.exe', 'LICENCE', 'README.txt', 'build-info.json', 'dependencies.txt', 'THIRD_PARTY_NOTICES.txt', 'GPUI-LICENSE-APACHE.txt')) {
+foreach ($name in @('xscc-host.exe', 'Uninstall.exe', 'LICENCE', 'README.txt', 'build-info.json', 'dependencies.txt', 'THIRD_PARTY_NOTICES.txt', 'GPUI-LICENSE-APACHE.txt', 'MAPLE-FONT-OFL.txt')) {
     if (Test-Path (Join-Path $installed $name)) { throw "Known package file was not removed: $name" }
 }
 if (-not (Test-Path $sentinel)) { throw 'Uninstaller deleted the unknown sentinel file' }

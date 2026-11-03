@@ -1,6 +1,25 @@
 // Contour adapted from XCSS; dashboard palettes are maintained locally.
 // https://github.com/isarmg/xcss/tree/d0a41861d949f2b0626249b25a35f562fb59b592/web/admin-ui
 use gpui::WindowAppearance;
+#[cfg(all(
+    not(target_os = "android"),
+    any(feature = "live-session", feature = "mobile-management")
+))]
+use std::borrow::Cow;
+
+#[cfg(any(feature = "live-session", feature = "mobile-management"))]
+pub const FONT_FAMILY: &str = "Maple Mono Normal NL";
+
+#[cfg(all(
+    not(target_os = "android"),
+    any(feature = "live-session", feature = "mobile-management")
+))]
+pub fn embedded_fonts() -> Vec<Cow<'static, [u8]>> {
+    vec![
+        Cow::Borrowed(include_bytes!("../../shared/fonts/MapleMonoFull-Regular.ttf").as_slice()),
+        Cow::Borrowed(include_bytes!("../../shared/fonts/MapleMonoFull-Bold.ttf").as_slice()),
+    ]
+}
 #[cfg(any(feature = "live-session", feature = "mobile-management"))]
 use gpui::{Bounds, IntoElement, PathBuilder, Pixels, Rgba, canvas, fill, point, prelude::*, px};
 

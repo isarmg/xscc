@@ -29,6 +29,15 @@ retain their respective licenses and notices; it is not an assertion that all
 third-party components share the application license or Apache-2.0. Review the
 pinned Cargo.lock and vcpkg dependencies when preparing a redistribution.
 
+Maple Mono Normal NL (Regular and Bold)
+Copyright 2022 The Maple Mono Project Authors
+https://github.com/subframe7536/maple-font
+License: SIL Open Font License, Version 1.1.
+The complete font copyright notice and license are included in MAPLE-FONT-OFL.txt.
+The bundled full-coverage fonts originate from the project's custom Maple Mono
+web-font resources; the native TTF resources and license are maintained in
+experiments/shared/fonts. The font license is separate from the application license.
+
 Windows host virtual display support
 Amyuni USB Mobile Monitor Indirect Display Driver 2.0.0.1
 Copyright 2014-2021 Amyuni Technologies Inc. https://www.amyuni.com

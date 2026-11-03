@@ -1118,7 +1118,6 @@ impl ManagementPanel {
 }
 
 struct Client {
-    font: gpui::SharedString,
     host: bool,
     management: Entity<ManagementPanel>,
     menu: Entity<ManagementMenu>,
@@ -1179,7 +1178,7 @@ impl Render for Client {
             .flex_col()
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
-            .font_family(self.font.clone())
+            .font_family(theme::FONT_FAMILY)
             .on_key_down(cx.listener(Self::key_down))
             .text_size(px(theme::BODY_SIZE))
             .line_height(px(theme::LINE_HEIGHT))
@@ -1245,6 +1244,13 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
     let handle = runtime.handle().clone();
     let host = cfg!(feature = "native-host");
     gpui::application().run(move |cx: &mut App| {
+        #[cfg(not(target_os = "android"))]
+        if let Err(error) = cx.text_system().add_fonts(theme::embedded_fonts()) {
+            *app_error.lock().unwrap() =
+                Some(format!("Could not load Maple client fonts: {error}"));
+            cx.quit();
+            return;
+        }
         text_field::init(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -1299,19 +1305,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     .detach();
                 let video = cx.new(|cx| RemoteVideo::new(handle.clone(), window, cx));
                 let video_state = video.read(cx).state();
-                let fonts = window.text_system().all_font_names();
-                let preferred = if cfg!(target_os = "windows") {
-                    ["Microsoft YaHei UI", "Segoe UI", "Arial"]
-                } else if cfg!(target_os = "macos") {
-                    ["PingFang SC", "Helvetica Neue", "Arial"]
-                } else {
-                    ["Noto Sans CJK SC", "Noto Sans", "DejaVu Sans"]
-                };
-                let font: gpui::SharedString = preferred
-                    .into_iter()
-                    .find(|candidate| fonts.iter().any(|name| name.as_str() == *candidate))
-                    .unwrap_or("sans-serif")
-                    .into();
                 let management = cx.new(|cx| {
                     let (sender, receiver) = mpsc::channel();
                     let subscriptions = vec![cx.subscribe_in(
@@ -1402,7 +1395,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                     management: management.clone(),
                 });
                 cx.new(|cx| Client {
-                    font,
                     menu,
                     host,
                     _subscription: cx.observe(&management, |_, _, cx| cx.notify()),

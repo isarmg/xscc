@@ -96,6 +96,7 @@ def package(binary, output, role, version):
                        ROOT / "packaging/gpui-windows/THIRD_PARTY_NOTICES.txt",
                        ROOT / "packaging/gpui-macos/README.txt"):
             shutil.copyfile(source, resources / source.name)
+        shutil.copyfile(ROOT / "experiments/shared/fonts/OFL.txt", resources / "MAPLE-FONT-OFL.txt")
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump(info, stream)
         (contents / "PkgInfo").write_bytes(b"APPL????")

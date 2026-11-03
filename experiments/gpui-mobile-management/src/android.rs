@@ -62,6 +62,16 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
             "Android hardware decoder discovery failed; continuing with software codecs: {error:#}"
         );
     }
+    // Share APK assets with the native EditText instead of embedding a second
+    // copy of these full CJK fonts in the native library.
+    let assets = app.asset_manager();
+    let mut fonts = Vec::with_capacity(2);
+    for name in [c"MapleMonoFull-Regular.ttf", c"MapleMonoFull-Bold.ttf"] {
+        let mut asset = assets
+            .open(name)
+            .ok_or_else(|| format!("Bundled Maple font is missing: {}", name.to_string_lossy()))?;
+        fonts.push(std::borrow::Cow::Owned(asset.buffer()?.to_vec()));
+    }
     let application = gpui::android(app)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -69,6 +79,11 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let handle = runtime.handle().clone();
     application.run(move |cx: &mut App| {
+        if let Err(error) = cx.text_system().add_fonts(fonts) {
+            log::error!("Could not load the bundled Maple fonts: {error}");
+            cx.quit();
+            return;
+        }
         text_field::init(cx);
         if let Err(error) = cx.open_window(WindowOptions::default(), |window, cx| {
             cx.new(|cx| panel::Panel::new(directory, handle, window, cx))

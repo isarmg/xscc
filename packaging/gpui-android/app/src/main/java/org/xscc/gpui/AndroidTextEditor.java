@@ -2,6 +2,8 @@ package org.xscc.gpui;
 
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.fonts.Font;
+import android.graphics.fonts.FontFamily;
 import android.text.Editable;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -17,11 +19,14 @@ import android.widget.FrameLayout;
 
 import com.google.androidgamesdk.gametextinput.State;
 
+import java.io.IOException;
+
 /** A real native editor over only the focused GPUI field's content rectangle. */
 final class AndroidTextEditor extends EditText {
     private final AndroidImeBridge owner;
     private long generation;
     private boolean batchEdit;
+    private Typeface mapleTypeface;
 
     AndroidTextEditor(AndroidImeBridge owner) {
         super(owner);
@@ -74,9 +79,31 @@ final class AndroidTextEditor extends EditText {
         layout.leftMargin = surfacePosition[0] - contentPosition[0] + Math.round(x);
         layout.topMargin = surfacePosition[1] - contentPosition[1] + Math.round(y);
         setLayoutParams(layout);
-        setTypeface(Typeface.create(Typeface.create(family, Typeface.NORMAL), weight, italic));
+        setTypeface(editorTypeface(family, weight, italic));
         setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSize);
         setTextColor(color);
+    }
+
+    private Typeface editorTypeface(String family, int weight, boolean italic) {
+        if ("Maple Mono Normal NL".equals(family)) {
+            if (mapleTypeface == null) {
+                try {
+                    Font regular = new Font.Builder(owner.getAssets(), "MapleMonoFull-Regular.ttf")
+                            .setWeight(400).build();
+                    Font bold = new Font.Builder(owner.getAssets(), "MapleMonoFull-Bold.ttf")
+                            .setWeight(700).build();
+                    FontFamily faces = new FontFamily.Builder(regular).addFont(bold).build();
+                    mapleTypeface = new Typeface.CustomFallbackBuilder(faces)
+                            .setSystemFallback("sans-serif").build();
+                } catch (IOException error) {
+                    throw new IllegalStateException("Bundled Maple fonts could not be loaded", error);
+                }
+            }
+            return Typeface.create(mapleTypeface, weight, italic);
+        }
+        // Keep the diagnostic editor's default alias meaningful on Android.
+        String systemFamily = ".SystemUIFont".equals(family) ? "sans-serif" : family;
+        return Typeface.create(Typeface.create(systemFamily, Typeface.NORMAL), weight, italic);
     }
 
     void activate(boolean show, boolean menu) {

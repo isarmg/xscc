@@ -24,6 +24,7 @@ printf '%s\n' "$role" > "$staging/$name/role"
 cp -- "$root/packaging/gpui-linux/README.txt" "$staging/$name/README.txt"
 cp -- "$root/LICENCE" "$staging/$name/LICENCE"
 cp -- "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" "$staging/$name/GPUI-LICENSE-APACHE.txt"
+cp -- "$root/experiments/shared/fonts/OFL.txt" "$staging/$name/MAPLE-FONT-OFL.txt"
 cp -- "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" "$staging/$name/THIRD_PARTY_NOTICES.txt"
 tar -czf "$output/$name.tar.gz" -C "$staging" "$name"
 (cd -- "$output" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")

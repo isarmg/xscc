@@ -41,6 +41,7 @@ Copy-Item $exe (Join-Path $payload $name)
 Copy-Item "$root/LICENCE" $payload
 Copy-Item "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" $payload
+Copy-Item "$root/experiments/shared/fonts/OFL.txt" (Join-Path $payload 'MAPLE-FONT-OFL.txt')
 Copy-Item "$root/packaging/gpui-windows/$readme" (Join-Path $payload 'README.txt')
 if ($role -eq 'host') {
     & "$PSScriptRoot/prepare-gpui-virtual-display.ps1" -PayloadDirectory $payload

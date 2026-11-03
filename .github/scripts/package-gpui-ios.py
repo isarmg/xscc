@@ -99,6 +99,8 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
             subprocess.run(['codesign', '--remove-signature', str(executable)], check=True)
         require('LC_CODE_SIGNATURE' not in command('xcrun', 'otool', '-l', str(executable)),
                 'Unexpected executable signature')
+        shutil.copyfile(Path(__file__).resolve().parents[2] / 'experiments/shared/fonts/OFL.txt',
+                        app / 'MAPLE-FONT-OFL.txt')
         (app / 'Info.plist').write_bytes(plistlib.dumps(info))
         subprocess.run(['ditto', '-c', '-k', '--keepParent', '--norsrc', str(payload), str(ipa)], check=True)
     with zipfile.ZipFile(ipa) as zipped:

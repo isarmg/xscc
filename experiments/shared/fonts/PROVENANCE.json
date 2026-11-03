@@ -1,0 +1,27 @@
+{
+  "conversion": "FontTools 4.57.0; WOFF2 to TTF; recalcTimestamp=False",
+  "fonts": [
+    {
+      "file": "MapleMonoFull-Regular.ttf",
+      "bytes": 18231408,
+      "sha256": "639cb309b2ae0c1d01405f83e00ddaf9f738f793db8d75125ffa2fa1a5313775",
+      "source": "one-kvm/web/vendor/xcss/web-fonts/MapleMonoFull-Regular.woff2",
+      "source_sha256": "1255571e3ad6f2bcc1b897a52d70fdefd09ed40d3ccef4435f6d0be808919a7b",
+      "family": "Maple Mono Normal NL",
+      "weight": 400,
+      "unicode_codepoints": 22731,
+      "glyphs": 23233
+    },
+    {
+      "file": "MapleMonoFull-Bold.ttf",
+      "bytes": 18184588,
+      "sha256": "64183529d8277afb712b60f6a79114fb9ab4d2d300ab296fd9c88238bb644024",
+      "source": "one-kvm/web/vendor/xcss/web-fonts/MapleMonoFull-Bold.woff2",
+      "source_sha256": "282ad3ebc7409f93806e8235449d31670af1d1420ade7d76a97a5a4dd23b928b",
+      "family": "Maple Mono Normal NL",
+      "weight": 700,
+      "unicode_codepoints": 22731,
+      "glyphs": 23233
+    }
+  ]
+}

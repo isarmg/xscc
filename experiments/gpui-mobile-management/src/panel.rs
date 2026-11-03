@@ -297,6 +297,7 @@ impl Render for Panel {
         if self.session_visible {
             return div()
                 .size_full()
+                .font_family(theme::FONT_FAMILY)
                 .bg(rgb(0x000000))
                 .text_color(rgb(palette.text))
                 .child(
@@ -772,6 +773,7 @@ impl Render for Panel {
         content = content.child(devices);
         div()
             .size_full()
+            .font_family(theme::FONT_FAMILY)
             .bg(rgb(palette.page))
             .text_color(rgb(palette.text))
             .text_size(px(theme::BODY_SIZE))

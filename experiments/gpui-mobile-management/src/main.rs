@@ -112,6 +112,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = runtime.handle().clone();
     gpui::application().run(move |cx: &mut App| {
         eprintln!("XSCC_GPUI_LAUNCH_CALLBACK_REACHED");
+        #[cfg(not(target_os = "android"))]
+        if let Err(error) = cx.text_system().add_fonts(theme::embedded_fonts()) {
+            eprintln!("Could not load Maple client fonts: {error}");
+            cx.quit();
+            return;
+        }
         text_field::init(cx);
         if let Err(error) = cx.open_window(WindowOptions::default(), |window, cx| {
             cx.new(|cx| panel::Panel::new(directory, handle, window, cx))

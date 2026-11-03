@@ -22,6 +22,7 @@ def prepareGameActivity = tasks.register('prepareGameActivity', Exec) {
 
 android {
     sourceSets.main.java.srcDir '../vendor/game-text-input/src/main/java'
+    sourceSets.main.assets.srcDir rootProject.file('../../experiments/shared/fonts')
     namespace 'org.xscc.gpui.smoke'
     compileSdk 36
     buildFeatures {
