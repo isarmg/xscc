@@ -535,6 +535,17 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
     } else {
         None
     };
+    if present
+        && problem()? == 0
+        && previous_count == count as usize
+        && previous
+            .as_ref()
+            .zip(xml.as_ref())
+            .is_some_and(|(previous, xml)| previous.as_slice() == xml.as_bytes())
+    {
+        // CCD can select an already declared mode without re-enumerating the adapter.
+        return Ok(());
+    }
     let apply = (|| -> ResultType<()> {
         if let Some(xml) = xml {
             write_profile(&path, &xml)?;

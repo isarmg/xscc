@@ -21,6 +21,9 @@ if [[ $target == aarch64-apple-darwin ]]; then
     printf '%s\n' "$quartz_tests"
     grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz borrowed-plane tests did not run both tests' >&2; exit 1; }
 fi
+parse_tests=$(cargo test --locked -p enigo --lib --target "$target" dsl::tests::parse_error_display_describes_the_invalid_input 2>&1) || { printf '%s\n' "$parse_tests"; exit 1; }
+printf '%s\n' "$parse_tests"
+grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$parse_tests" || { echo 'Enigo parse error regression did not run' >&2; exit 1; }
 cargo test --locked -p xscc-native-management --target "$target"
 cargo test --locked -p hbb_common --lib --target "$target" tcp::tests
 cargo test --locked -p scrap --lib --target "$target" codec::rate_control::tests::

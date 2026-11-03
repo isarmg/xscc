@@ -274,6 +274,28 @@ mod tests {
     }
 
     #[test]
+    fn selecting_declared_refresh_rates_preserves_the_loaded_profile_bytes() {
+        let modes = [
+            Mode::new(1920, 1080, 1200000).unwrap(),
+            Mode::new(1920, 1080, 2400000).unwrap(),
+        ];
+        let xml = Profile::parse(XML.into())
+            .unwrap()
+            .render(1, modes)
+            .unwrap();
+        let loaded = Profile::parse(xml.clone()).unwrap();
+        assert_eq!(loaded.render(1, [modes[0]]).unwrap(), xml);
+        assert_eq!(loaded.render(1, [modes[1]]).unwrap(), xml);
+        assert_ne!(loaded.render(2, []).unwrap(), xml);
+        assert_ne!(
+            loaded
+                .render(1, [Mode::new(1920, 1080, 3600000).unwrap()])
+                .unwrap(),
+            xml
+        );
+    }
+
+    #[test]
     fn pinned_driver_checks_intermediate_products_without_capping_normal_8k() {
         for (width, height, units) in [
             (3840, 2160, 1200000),

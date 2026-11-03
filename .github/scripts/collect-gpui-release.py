@@ -36,6 +36,104 @@ def expected_artifacts(version, sha):
     }
 
 
+
+def required_native_jobs(workflow):
+    if workflow == 'gpui-windows-beta.yml':
+        common = (
+            'Verify beta packager rejects stable versions', 'Check formatting',
+            'Lint Windows preview', 'Test Windows preview',
+            'Test native session and host regression coverage',
+            'Test encrypted management handshake and connection-close errors',
+            'Test managed IPC peer authorization',
+            'Test native codec probe parser and failure handling',
+            'Compile and test test-only IP role', 'Build standalone release executable',
+            'Prepare and verify final application manifest',
+            'Smoke test release CLI and bounded hardware codec probe',
+            'Assemble unsigned packages and integrity manifest',
+        )
+        return {
+            'candidate (controller, live-session, use_dasp,gpui-session,hwcodec)': common + (
+                'Test FFmpeg decoded-plane reuse with native bindings',
+                'Test framed transport wire compatibility and blocked-write isolation',
+                'Test frame-rate-aware codec budget and timestamp duration',
+                'Test high-refresh session FPS transport and adaptation',
+                'Test Enigo parse error formatting',
+                'Smoke test per-user installer and uninstaller',
+            ),
+            'candidate (host, native-host-vram, use_dasp,gpui-host,hwcodec,vram)': common + (
+                'Compile optional Windows VRAM reconfiguration path',
+                'Test same-codec VRAM initialization fallback parameters',
+                'Test virtual display protocol and pipelined DXGI readback',
+                'Test configurable virtual display mode preservation',
+                'Test video pacing, capture release, queue bounds and reconfiguration',
+                'Test host management authorization policy',
+                'Test idle host input unblock is a no-op',
+                'Verify existing elevated runner token for host CLI',
+                'Smoke test host service install and uninstall on disposable runner',
+            ),
+        }
+    if workflow == 'gpui-unix-beta.yml':
+        common = ('Test package capability and beta-only gates', 'Validate candidate label',
+                  'Lint, test and build real native role',
+                  'Record candidate provenance and validation limits')
+        jobs = {}
+        for platform in ('linux', 'macos'):
+            for role, feature, core in (('controller', 'live-session', 'gpui-session'),
+                                        ('host', 'native-host', 'gpui-host')):
+                steps = common + (f'Package and smoke-test unpacked {"Linux executable" if platform == "linux" else "macOS application"}',)
+                if platform == 'macos':
+                    steps += ('Verify native Apple Silicon and macOS 26 SDK', 'Test macOS packaging validation')
+                elif role == 'controller':
+                    steps += ('Verify Linux native prerequisites',
+                              'Test opt-in QUIC transport and media framing',
+                              'Test mobile audio queue and mute lifecycle',
+                              'Test opt-in QUIC session integration')
+                else:
+                    steps += ('Verify Linux native prerequisites',
+                              'Compile optional Linux DRM capture and wake paths')
+                jobs[f'{platform} ({role}, {feature}, use_dasp,{core},hwcodec)'] = steps
+        return jobs
+    if workflow == 'gpui-android-smoke.yml':
+        common = ('Check source and package validation tests',
+                  'Test GPUI Android geometry on the host',
+                  'Test mobile enrollment input against the shared protocol',
+                  'Cross-compile the selected GPUI library',
+                  'Test Java IME generation and single-line editor actions on the host',
+                  'Assemble optimized release APK', 'Verify actual APK and package evidence')
+        # GitHub truncates the default matrix job names to 100 characters.
+        return {
+            'android (smoke, Smoke, experiments/gpui-android-smoke, xscc_gpui_android_smoke, org.xscc.gpui.smo...': common,
+            'android (management, Management, experiments/gpui-mobile-management, xscc_gpui_android_management...': common + (
+                'Build Android native codec dependencies', 'Prepare stable management-preview signature'),
+        }
+    return {
+        'device-preview (interactive-playback-preview, mobile-session, --playback-preview)': (
+            'Verify source and device SDK', 'Check formatting and host management and keyboard tests',
+            'Run GPUI raw touch regression tests', 'Build native codec dependencies',
+            'Check and build native device application', 'Validate and package unsigned preview'),
+        'simulator-smoke': ('Build management-only Simulator application',
+                            'Install, launch, capture and relaunch in Simulator'),
+    }
+
+
+def verify_native_jobs(repo, workflow, run, sha):
+    records = api(f'repos/{repo}/actions/runs/{run["id"]}/jobs', filter='latest', per_page=100)
+    jobs = records['jobs']
+    required = required_native_jobs(workflow)
+    if (records['total_count'] != len(jobs) or len(jobs) != len(required)
+            or {job['name'] for job in jobs} != set(required)):
+        raise ValueError(f'Incomplete native job matrix for {workflow}')
+    for job in jobs:
+        if (job['run_id'] != run['id'] or job['head_sha'] != sha
+                or job['status'] != 'completed' or job['conclusion'] != 'success'):
+            raise ValueError(f'Native job has not passed for the requested source: {job["name"]}')
+        for name in required[job['name']]:
+            steps = [step for step in job['steps'] if step['name'] == name]
+            if len(steps) != 1 or steps[0]['status'] != 'completed' or steps[0]['conclusion'] != 'success':
+                raise ValueError(f'Full native validation required: {job["name"]}: {name}')
+    return [job['id'] for job in jobs]
+
+
 def verify_metadata(directory, kind, sha, version):
     if kind == 'windows':
         records = list(directory.glob('*-build-info.json'))
@@ -85,13 +183,16 @@ def collect(repo, sha, version, output):
     output.mkdir(parents=True, exist_ok=False)
     provenance = []
     for workflow, expected in expected_artifacts(version, sha).items():
-        runs = api(f'repos/{repo}/actions/workflows/{workflow}/runs', head_sha=sha, event='push', per_page=100)['workflow_runs']
-        runs = [run for run in runs if run['head_sha'] == sha and run['head_branch'] in ('main', 'feat/management-prep')]
+        runs = api(f'repos/{repo}/actions/workflows/{workflow}/runs', head_sha=sha, per_page=100)['workflow_runs']
+        runs = [run for run in runs if run['head_sha'] == sha
+                and run['event'] in ('push', 'workflow_dispatch')
+                and run['head_branch'] in ('main', 'feat/management-prep')]
         if not runs:
             raise ValueError(f'No source-matched build for {workflow}')
         run = max(runs, key=lambda run: run['id'])
         if run['status'] != 'completed' or run['conclusion'] != 'success':
             raise ValueError(f'{workflow} has not passed: {run["html_url"]}')
+        native_jobs = verify_native_jobs(repo, workflow, run, sha)
         artifacts = api(f'repos/{repo}/actions/runs/{run["id"]}/artifacts', per_page=100)['artifacts']
         for name, kind in expected.items():
             matches = [artifact for artifact in artifacts if artifact['name'] == name and not artifact['expired']]
@@ -117,7 +218,7 @@ def collect(repo, sha, version, output):
                     if (output / destination).exists():
                         raise ValueError(f'Release filename collision: {destination}')
                     shutil.copy2(file, output / destination)
-            provenance.append({'artifact': name, 'id': artifact['id'], 'digest': digest, 'run': run['html_url'], 'source_sha': sha})
+            provenance.append({'artifact': name, 'id': artifact['id'], 'digest': digest, 'run': run['html_url'], 'source_sha': sha, 'native_job_ids': native_jobs})
     (output / 'release-provenance.json').write_text(json.dumps({'source_sha': sha, 'version': version, 'artifacts': provenance}, indent=2) + '\n')
     files = sorted(output.iterdir())
     (output / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(file.read_bytes()).hexdigest()}  {file.name}\n' for file in files))

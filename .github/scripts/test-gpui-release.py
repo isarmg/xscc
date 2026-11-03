@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import copy
 import hashlib
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -22,32 +24,95 @@ class ReleaseTests(unittest.TestCase):
                 self.assertIn(f'xscc-{role}-0.1.0-beta.2-{platform}-managed-unsigned', names)
         self.assertFalse(any('test-lan-direct' in name for name in names))
 
+    @staticmethod
+    def native_jobs(workflow, sha):
+        jobs = [dict(id=index, name=name, run_id=17, head_sha=sha,
+                     status='completed', conclusion='success',
+                     steps=[dict(name=step, status='completed', conclusion='success') for step in steps])
+                for index, (name, steps) in enumerate(release.required_native_jobs(workflow).items(), 1)]
+        return dict(total_count=len(jobs), jobs=jobs)
+
     def test_collect_accepts_main_and_feature_only_for_the_exact_successful_source(self):
         sha = 'a' * 40
-        for branch, source, conclusion, accepted in (
-            ('main', sha, 'success', True),
-            ('feat/management-prep', sha, 'success', True),
-            ('unreviewed', sha, 'success', False),
-            ('main', 'b' * 40, 'success', False),
-            ('main', sha, 'failure', False),
-        ):
-            with self.subTest(branch=branch, source=source, conclusion=conclusion), tempfile.TemporaryDirectory() as temporary:
+        cases = [(workflow, 'workflow_dispatch', 'main', sha, 'success', True)
+                 for workflow in release.expected_artifacts('0.1.0-beta.2', sha)]
+        cases += [('gpui-windows-beta.yml', event, branch, source, conclusion, accepted)
+                  for event, branch, source, conclusion, accepted in (
+                      ('push', 'main', sha, 'success', True),
+                      ('push', 'feat/management-prep', sha, 'success', True),
+                      ('push', 'unreviewed', sha, 'success', False),
+                      ('push', 'main', 'b' * 40, 'success', False),
+                      ('push', 'main', sha, 'failure', False),
+                      ('pull_request', 'main', sha, 'success', False),
+                  )]
+        for workflow, event, branch, source, conclusion, accepted in cases:
+            with self.subTest(workflow=workflow, event=event, branch=branch, source=source, conclusion=conclusion), tempfile.TemporaryDirectory() as temporary:
                 output = Path(temporary) / 'release'
-                run = {'id': 17, 'head_sha': source, 'head_branch': branch,
-                       'status': 'completed', 'conclusion': conclusion, 'html_url': 'https://example.invalid/run/17'}
+                run = dict(id=17, head_sha=source, head_branch=branch, event=event,
+                           status='completed', conclusion=conclusion, html_url='https://example.invalid/run/17')
                 def api(endpoint, **parameters):
-                    if endpoint.endswith('/gpui-windows-beta.yml/runs'):
-                        self.assertEqual(parameters, {'head_sha': sha, 'event': 'push', 'per_page': 100})
+                    if endpoint.endswith('/' + workflow + '/runs'):
+                        self.assertEqual(parameters, {'head_sha': sha, 'per_page': 100})
                         return {'workflow_runs': [run]}
+                    if endpoint.endswith('/runs/17/jobs'):
+                        self.assertEqual(parameters, {'filter': 'latest', 'per_page': 100})
+                        return self.native_jobs(workflow, sha)
                     self.assertEqual(endpoint, 'repos/isarmg/xscc/actions/runs/17/artifacts')
                     return {'artifacts': []}
-                with mock.patch.object(release, 'expected_artifacts', return_value={'gpui-windows-beta.yml': {}}), mock.patch.object(release, 'api', side_effect=api):
+                with mock.patch.object(release, 'expected_artifacts', return_value={workflow: {}}), mock.patch.object(release, 'api', side_effect=api):
                     if accepted:
                         release.collect('isarmg/xscc', sha, '0.1.0-beta.4', output)
                         self.assertEqual(json.loads((output / 'release-provenance.json').read_text())['source_sha'], sha)
                     else:
                         with self.assertRaises(ValueError):
                             release.collect('isarmg/xscc', sha, '0.1.0-beta.4', output)
+
+    def test_collect_rejects_build_only_partial_or_foreign_native_validation(self):
+        sha = 'a' * 40
+        for workflow, damage in (
+            ('gpui-windows-beta.yml', 'build-only'),
+            ('gpui-android-smoke.yml', 'build-only'),
+            ('gpui-unix-beta.yml', 'missing-role'),
+            ('gpui-ios-management.yml', 'missing-role'),
+            ('gpui-unix-beta.yml', 'foreign-source'),
+            ('gpui-ios-management.yml', 'failed-job'),
+            ('gpui-windows-beta.yml', 'missing-step'),
+            ('gpui-android-smoke.yml', 'incomplete-page'),
+        ):
+            with self.subTest(workflow=workflow, damage=damage), tempfile.TemporaryDirectory() as temporary:
+                records = copy.deepcopy(self.native_jobs(workflow, sha))
+                if damage == 'build-only':
+                    for job in records['jobs']:
+                        job['steps'][0]['conclusion'] = 'skipped'
+                elif damage == 'missing-role':
+                    records['jobs'].pop()
+                    records['total_count'] -= 1
+                elif damage == 'foreign-source':
+                    records['jobs'][0]['head_sha'] = 'b' * 40
+                elif damage == 'failed-job':
+                    records['jobs'][0]['conclusion'] = 'failure'
+                elif damage == 'missing-step':
+                    records['jobs'][0]['steps'].pop()
+                else:
+                    records['total_count'] += 1
+                run = dict(id=17, head_sha=sha, head_branch='main', event='workflow_dispatch',
+                           status='completed', conclusion='success', html_url='https://example.invalid/run/17')
+                def api(endpoint, **parameters):
+                    if endpoint.endswith('/runs'):
+                        return {'workflow_runs': [run]}
+                    self.assertTrue(endpoint.endswith('/runs/17/jobs'))
+                    return records
+                with mock.patch.object(release, 'expected_artifacts', return_value={workflow: {}}), mock.patch.object(release, 'api', side_effect=api):
+                    with self.assertRaises(ValueError):
+                        release.collect('isarmg/xscc', sha, '0.1.0-beta.4', Path(temporary) / 'release')
+
+    def test_required_validation_names_match_current_native_producers(self):
+        workflows = Path(__file__).resolve().parents[1] / 'workflows'
+        for workflow in release.expected_artifacts('0.1.0-beta.2', 'a' * 40):
+            declared = set(re.findall(r'^\s+- name: (.+)$', (workflows / workflow).read_text(), re.MULTILINE))
+            for job, steps in release.required_native_jobs(workflow).items():
+                with self.subTest(workflow=workflow, job=job):
+                    self.assertTrue(set(steps) <= declared, set(steps) - declared)
 
     def test_metadata_rejects_wrong_revision_and_test_candidates(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -224,6 +224,15 @@ jobs:
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::streaming::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::io_loop::ui_send_tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests"
+      - name: Test Enigo parse error formatting
+        if: matrix.role == 'controller' && !inputs.build_only
+        run: |
+          $parseTests = & cargo test --locked -p enigo --lib --target x86_64-pc-windows-msvc dsl::tests::parse_error_display_describes_the_invalid_input 2>&1
+          $parseExit = $LASTEXITCODE
+          $parseTests | Write-Output
+          if ($parseExit -ne 0 -or ($parseTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') {
+            throw 'Enigo parse error regression failed or matched no tests'
+          }
       - name: Test managed IPC peer authorization
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "ipc::ipc_auth::tests"
