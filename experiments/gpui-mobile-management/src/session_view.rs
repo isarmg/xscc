@@ -528,6 +528,10 @@ impl SessionView {
                     }
                 }
                 if let Err(error) = session.send_input(InputCommand::Key(key)) {
+                    if error.is::<gpui_session::InputPermissionDenied>() {
+                        control.cancel();
+                        break;
+                    }
                     failure = Some(error.to_string());
                     break;
                 }
