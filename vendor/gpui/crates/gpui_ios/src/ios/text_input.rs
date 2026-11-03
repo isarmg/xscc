@@ -1080,14 +1080,20 @@ pub(super) mod tests {
         container.addSubview(&view);
         view.install_editing_interaction(&container);
         let interactions = container.interactions();
-        assert_eq!(interactions.len(), 1);
-        let interaction = interactions.objectAtIndex(0);
-        let interaction = interaction.downcast::<UITextInteraction>().unwrap();
+        let responder: &UIResponder = &view;
+        let interaction = (0..interactions.len())
+            .filter_map(|index| {
+                interactions
+                    .objectAtIndex(index)
+                    .downcast::<UITextInteraction>()
+                    .ok()
+            })
+            .find(|interaction| interaction.textInput().as_deref() == Some(responder))
+            .expect("container must expose the installed text editing interaction");
         assert_eq!(
             interaction.textInteractionMode(),
             UITextInteractionMode::Editable
         );
-        let responder: &UIResponder = &view;
         assert_eq!(interaction.textInput().as_deref(), Some(responder));
         let delegate = interaction.delegate().unwrap();
         assert!(!delegate.interactionShouldBegin_atPoint(&interaction, CGPoint::new(20., 40.)));

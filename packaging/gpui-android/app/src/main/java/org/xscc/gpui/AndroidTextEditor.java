@@ -43,8 +43,8 @@ final class AndroidTextEditor extends EditText {
             int color, int weight, boolean italic, String family) {
         generation = 0;
         batchEdit = false;
-        setInputType(inputType);
         setSingleLine(true);
+        setInputType(inputType);
         setImeOptions(options | action);
         updatePresentation(x, y, width, height, fontSize, color, weight, italic, family);
         setText(state.text);
