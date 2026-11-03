@@ -139,7 +139,7 @@ impl Encoder<Bytes> for BytesCodec {
         } else {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "Overflow"));
         }
-        buf.extend(data);
+        buf.extend_from_slice(&data);
         Ok(())
     }
 }
@@ -147,6 +147,27 @@ impl Encoder<Bytes> for BytesCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn encode_appends_sliced_payloads_with_unchanged_wire_headers() {
+        for (len, header) in [
+            (0, &[0][..]),
+            (0x3F, &[0xFC][..]),
+            (0x40, &[0x01, 0x01][..]),
+            (0x3FFF, &[0xFD, 0xFF][..]),
+            (0x4000, &[0x02, 0x00, 0x01][..]),
+            (0x3FFFFF, &[0xFE, 0xFF, 0xFF][..]),
+            (0x400000, &[0x03, 0x00, 0x00, 0x01][..]),
+        ] {
+            let source = Bytes::from((0..len + 6).map(|i| i as u8).collect::<Vec<_>>());
+            let payload = source.slice(3..3 + len);
+            let mut buf = BytesMut::from(&b"prefix"[..]);
+            BytesCodec::new().encode(payload.clone(), &mut buf).unwrap();
+            assert_eq!(&buf[..6], b"prefix");
+            assert_eq!(&buf[6..6 + header.len()], header);
+            assert_eq!(&buf[6 + header.len()..], payload.as_ref());
+        }
+    }
+
     #[test]
     fn test_codec1() {
         let mut codec = BytesCodec::new();

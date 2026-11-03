@@ -326,14 +326,14 @@ impl RemoteVideo {
             self.notice = "配置已应用，当前没有可捕获的屏幕。".into();
             return;
         };
-        if index == self.current_monitor
-            && pending.current_name.as_ref().is_some_and(|name| {
-                self.monitors
-                    .iter()
-                    .any(|monitor| monitor.index == index && &monitor.name == name)
-            })
-        {
-            if pending.invalidate_current {
+        if index == self.current_monitor {
+            if pending.invalidate_current
+                || !pending.current_name.as_ref().is_some_and(|name| {
+                    self.monitors
+                        .iter()
+                        .any(|monitor| monitor.index == index && &monitor.name == name)
+                })
+            {
                 self.extent = (0, 0);
                 self.video.invalidate();
             }

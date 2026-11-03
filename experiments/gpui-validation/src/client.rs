@@ -256,6 +256,7 @@ impl ManagementPanel {
         while let Ok(reply) = self.receiver.try_recv() {
             match reply {
                 Reply::VirtualDisplay(result) => {
+                    changed = true;
                     self.local_virtual_pending = false;
                     match result {
                         Ok(state) => {
