@@ -25,6 +25,8 @@ use winapi::{
     },
 };
 
+mod install_parameters;
+
 #[link(name = "Newdev")]
 extern "system" {
     fn UpdateDriverForPlugAndPlayDevicesW(
@@ -58,7 +60,7 @@ struct DeviceInfo(HDEVINFO);
 impl DeviceInfo {
     fn setup_di_create_device_info_list(class_guid: &mut GUID) -> Result<Self, DeviceError> {
         let dev_info = unsafe { SetupDiCreateDeviceInfoList(class_guid, null_mut()) };
-        if dev_info == null_mut() {
+        if dev_info == INVALID_HANDLE_VALUE {
             return Err(DeviceError::new_api_last_err("SetupDiCreateDeviceInfoList"));
         }
 
@@ -80,7 +82,7 @@ impl DeviceInfo {
                 null_mut(),
             )
         };
-        if dev_info == null_mut() {
+        if dev_info == INVALID_HANDLE_VALUE {
             return Err(DeviceError::new_api_last_err("SetupDiGetClassDevsExW"));
         }
         Ok(Self(dev_info))
@@ -118,10 +120,7 @@ pub unsafe fn install_driver(
         .encode_wide()
         .chain(Some(0).into_iter())
         .collect::<Vec<u16>>();
-    let hardware_id = OsStr::new(hardware_id)
-        .encode_wide()
-        .chain(Some(0).into_iter())
-        .collect::<Vec<u16>>();
+    let hardware_id = install_parameters::hardware_id_multi_sz(hardware_id);
 
     let mut class_guid: GUID = std::mem::zeroed();
     let mut class_name: [u16; 32] = [0; 32];
@@ -184,9 +183,29 @@ pub unsafe fn install_driver(
         &mut reboot_required_,
     ) == FALSE
     {
-        return Err(DeviceError::new_api_last_err(
-            "UpdateDriverForPlugAndPlayDevicesW",
-        ));
+        let cause = DeviceError::new_api_last_err("UpdateDriverForPlugAndPlayDevicesW");
+        // Only remove the root devnode registered by this attempt, not a shared driver package.
+        if SetupDiCallClassInstaller(DIF_REMOVE, *dev_info, &mut dev_info_data) == FALSE {
+            let cleanup = DeviceError::new_api_last_err("SetupDiCallClassInstaller(DIF_REMOVE)");
+            return Err(DeviceError::Raw(format!(
+                "{cause}; removing the newly registered device failed: {cleanup}"
+            )));
+        }
+        let mut parameters: SP_DEVINSTALL_PARAMS_W = std::mem::zeroed();
+        parameters.cbSize = std::mem::size_of::<SP_DEVINSTALL_PARAMS_W>() as _;
+        if SetupDiGetDeviceInstallParamsW(*dev_info, &mut dev_info_data, &mut parameters) == FALSE {
+            let cleanup = DeviceError::new_api_last_err("SetupDiGetDeviceInstallParamsW");
+            return Err(DeviceError::Raw(format!(
+                "{cause}; checking newly registered device removal failed: {cleanup}"
+            )));
+        }
+        if parameters.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT) != 0 {
+            *reboot_required = true;
+            return Err(DeviceError::Raw(format!(
+                "{cause}; Windows requires a restart to remove the newly registered device"
+            )));
+        }
+        return Err(cause);
     }
     *reboot_required = reboot_required_ == TRUE;
 

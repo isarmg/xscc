@@ -399,11 +399,16 @@ impl Topology {
         }
         if let Some(mode) = preferred {
             let mut right = 0i64;
+            let mut preserve_positions = true;
             for path in &topology.paths {
-                if Self::owned_id(path, ids)?.is_none() {
-                    if let Some(info) = topology.modes.get(path.sourceInfo.modeInfoIdx as usize) {
-                        if info.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE {
-                            let source = unsafe { info.u.sourceMode() };
+                let owned = Self::owned_id(path, ids)?.is_some();
+                if let Some(info) = topology.modes.get(path.sourceInfo.modeInfoIdx as usize) {
+                    if info.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE {
+                        let source = unsafe { info.u.sourceMode() };
+                        if owned {
+                            preserve_positions &=
+                                source.width == mode.width && source.height == mode.height;
+                        } else {
                             right =
                                 right.max(i64::from(source.position.x) + i64::from(source.width));
                         }
@@ -422,15 +427,7 @@ impl Topology {
                     bail!("Invalid VDD source mode");
                 }
                 let source = unsafe { source.u.sourceMode_mut() };
-                source.width = mode.width;
-                source.height = mode.height;
-                source.position = winapi::shared::windef::POINTL {
-                    x: i32::try_from(right)?,
-                    y: 0,
-                };
-                right = right
-                    .checked_add(i64::from(mode.width))
-                    .ok_or_else(|| anyhow::anyhow!("Virtual desktop placement overflow"))?;
+                resize_source(source, mode, &mut right, preserve_positions)?;
                 path.targetInfo.rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
                 path.targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
                 path.targetInfo.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
@@ -447,6 +444,27 @@ impl Topology {
         }
         topology.apply()
     }
+}
+
+fn resize_source(
+    source: &mut DISPLAYCONFIG_SOURCE_MODE,
+    mode: VirtualDisplayMode,
+    right: &mut i64,
+    preserve_positions: bool,
+) -> ResultType<()> {
+    // A refresh-only change must not move the desktop or change its primary display.
+    if !preserve_positions {
+        source.position = winapi::shared::windef::POINTL {
+            x: i32::try_from(*right)?,
+            y: 0,
+        };
+        *right = right
+            .checked_add(i64::from(mode.width))
+            .ok_or_else(|| anyhow::anyhow!("Virtual desktop placement overflow"))?;
+    }
+    source.width = mode.width;
+    source.height = mode.height;
+    Ok(())
 }
 
 fn rate(units: u32) -> DISPLAYCONFIG_RATIONAL {
@@ -493,6 +511,40 @@ fn target_mode(mode: VirtualDisplayMode) -> ResultType<DISPLAYCONFIG_TARGET_MODE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_only_keeps_the_virtual_primary_and_extended_positions() {
+        let mode = VirtualDisplayMode {
+            width: 1920,
+            height: 1080,
+            refresh_rate_units: 1200000,
+        };
+        for (x, y) in [(0, 0), (-1920, 0), (0, -1080)] {
+            let mut source = DISPLAYCONFIG_SOURCE_MODE {
+                width: 1920,
+                height: 1080,
+                pixelFormat: DISPLAYCONFIG_PIXELFORMAT_32BPP,
+                position: winapi::shared::windef::POINTL { x, y },
+            };
+            let mut right = 3840;
+            resize_source(&mut source, mode, &mut right, true).unwrap();
+            assert_eq!((source.position.x, source.position.y), (x, y));
+            assert_eq!(right, 3840);
+            resize_source(
+                &mut source,
+                VirtualDisplayMode {
+                    width: 2560,
+                    ..mode
+                },
+                &mut right,
+                false,
+            )
+            .unwrap();
+            assert_eq!((source.position.x, source.position.y), (3840, 0));
+            assert_eq!((source.width, source.height), (2560, 1080));
+            assert_eq!(right, 6400);
+        }
+    }
 
     #[test]
     fn high_refresh_target_modes_preserve_the_idd_desktop_update_rate() {

@@ -463,6 +463,10 @@ impl<T: InvokeUiSession> Remote<T> {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(message::Union::Clipboard(_)) | Some(message::Union::MultiClipboards(_)) => {
                         self.initial_clipboard_pending = false;
+                        // Permission can change after the clipboard listener queues an update.
+                        if !self.handler.is_text_clipboard_required() {
+                            return true;
+                        }
                     }
                     Some(message::Union::Misc(misc)) => match misc.union {
                         Some(misc::Union::RefreshVideo(_)) => {
@@ -1716,11 +1720,21 @@ mod ui_send_tests {
         peer.set_send_timeout(30);
         let (sender, receiver) = mpsc::unbounded_channel();
         let mut remote = Remote::new(Session::<QuietUi>::default(), receiver, sender.clone());
+        remote.is_connected = true;
         let mut message = Message::new();
         message.set_clipboard(Clipboard {
             content: vec![0x7b; 1024 * 1024].into(),
             ..Default::default()
         });
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            *remote.handler.server_keyboard_enabled.write().unwrap() = true;
+            *remote.handler.server_clipboard_enabled.write().unwrap() = true;
+            let queued = Data::Message(message.clone());
+            *remote.handler.server_clipboard_enabled.write().unwrap() = false;
+            assert!(remote.handle_msg_from_ui(queued, &mut peer).await);
+            *remote.handler.server_clipboard_enabled.write().unwrap() = true;
+        }
         let mut sending = Box::pin(remote.handle_msg_from_ui(Data::Message(message), &mut peer));
         assert!(futures::poll!(&mut sending).is_pending());
         let mut release = Message::new();
@@ -1905,6 +1919,8 @@ mod tests {
         assert!(arrives(&mut far).await, "the 2FA code was held back");
 
         remote.is_connected = true;
+        *remote.handler.server_keyboard_enabled.write().unwrap() = true;
+        *remote.handler.server_clipboard_enabled.write().unwrap() = true;
         assert!(remote.handle_msg_from_ui(clipboard(), &mut peer).await);
         assert!(
             arrives(&mut far).await,
