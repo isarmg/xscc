@@ -588,13 +588,34 @@ impl RemoteVideo {
         let y = self.scroll_remainder.1.trunc() as i32;
         self.scroll_remainder.0 -= x as f32;
         self.scroll_remainder.1 -= y as f32;
-        if let Some(message) = input::wheel(x, y, trackpad, event.modifiers)
-            && let Some(session) = &self.session
-            && let Err(error) =
-                session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
+        let bounds = self.bounds.get();
+        if let Some(messages) = input::wheel_at(
+            (
+                f32::from(event.position.x - bounds.origin.x),
+                f32::from(event.position.y - bounds.origin.y),
+            ),
+            (bounds.size.width.into(), bounds.size.height.into()),
+            self.extent,
+            self.origin,
+            (x, y),
+            trackpad,
+            event.modifiers,
+        ) && let Some(session) = &self.session
         {
-            self.notice = error.to_string();
-            return true;
+            for (index, message) in messages.iter().enumerate() {
+                if let Err(error) =
+                    session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
+                {
+                    self.notice = error.to_string();
+                    return true;
+                }
+                if index == 0 {
+                    session.update_local_cursor_position(
+                        message.mouse_event().x,
+                        message.mouse_event().y,
+                    );
+                }
+            }
         }
         false
     }

@@ -435,7 +435,9 @@ impl Topology {
                         source
                     })
                     .collect();
-                if let Some(positions) = reflow_chain(&original, &resized) {
+                if present.len() == ids.len() && retains_source_positions(&original, &resized) {
+                    preserve_positions = true;
+                } else if let Some(positions) = reflow_chain(&original, &resized) {
                     for ((index, _, _), position) in sources.iter().zip(positions) {
                         unsafe { topology.modes[*index as usize].u.sourceMode_mut() }.position =
                             position;
@@ -536,6 +538,54 @@ fn target_mode(mode: VirtualDisplayMode) -> ResultType<DISPLAYCONFIG_TARGET_MODE
     Ok(target)
 }
 
+// Only use this with the unchanged set of active sources returned by Windows.
+// Keeping every original contact preserves that desktop's connected region.
+fn retains_source_positions(
+    original: &[DISPLAYCONFIG_SOURCE_MODE],
+    resized: &[DISPLAYCONFIG_SOURCE_MODE],
+) -> bool {
+    let bounds = |source: &DISPLAYCONFIG_SOURCE_MODE| {
+        let x = i64::from(source.position.x);
+        let y = i64::from(source.position.y);
+        [
+            x,
+            y,
+            x + i64::from(source.width),
+            y + i64::from(source.height),
+        ]
+    };
+    let contacts = |a: [i64; 4], b: [i64; 4]| {
+        let horizontal = a[0].max(b[0]) < a[2].min(b[2]);
+        let vertical = a[1].max(b[1]) < a[3].min(b[3]);
+        [
+            vertical && a[2] == b[0],
+            vertical && b[2] == a[0],
+            horizontal && a[3] == b[1],
+            horizontal && b[3] == a[1],
+        ]
+    };
+    for (i, source) in resized.iter().enumerate() {
+        let a = bounds(source);
+        if a.into_iter().any(|value| i16::try_from(value).is_err()) {
+            return false;
+        }
+        for (j, other) in resized.iter().enumerate().skip(i + 1) {
+            let b = bounds(other);
+            if a[0].max(b[0]) < a[2].min(b[2]) && a[1].max(b[1]) < a[3].min(b[3]) {
+                return false;
+            }
+            if contacts(bounds(&original[i]), bounds(&original[j]))
+                .into_iter()
+                .zip(contacts(a, b))
+                .any(|(before, after)| before && !after)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // Reflow only straight chains; ambiguous layouts retain the existing placement.
 fn reflow_chain(
     original: &[DISPLAYCONFIG_SOURCE_MODE],
@@ -619,6 +669,57 @@ mod tests {
             pixelFormat: DISPLAYCONFIG_PIXELFORMAT_32BPP,
             position: winapi::shared::windef::POINTL { x, y },
         }
+    }
+
+    #[test]
+    fn stationary_resize_keeps_l_shaped_and_grid_layouts() {
+        for original in [
+            vec![
+                source(1920, 1080, 0, 0),
+                source(1920, 1080, 0, -1080),
+                source(1920, 1080, 1920, -1080),
+            ],
+            vec![
+                source(1920, 1080, 1920, 1080),
+                source(1920, 1080, 0, 0),
+                source(1920, 1080, 1920, 0),
+                source(1920, 1080, 0, 1080),
+            ],
+        ] {
+            for (width, height) in [(1280, 720), (2560, 1440)] {
+                let mut resized = original.clone();
+                resized[0].width = width;
+                resized[0].height = height;
+                assert!(retains_source_positions(&original, &resized));
+            }
+        }
+    }
+
+    #[test]
+    fn stationary_resize_declines_overlap_changed_sides_and_desktop_overflow() {
+        let original = [source(100, 100, 0, 0), source(100, 100, 100, 50)];
+        let resized = [source(150, 50, 0, 0), original[1]];
+        // The same pair still touches, but now on a different edge.
+        assert!(!retains_source_positions(&original, &resized));
+        let original = [
+            source(100, 100, 0, 0),
+            source(100, 100, 100, 0),
+            source(100, 100, 100, 100),
+            source(100, 100, 0, 150),
+        ];
+        let mut resized = original;
+        resized[0].height = 200;
+        // Original contacts remain, but the first and last screen now overlap.
+        assert!(!retains_source_positions(&original, &resized));
+        let original = [source(1920, 1080, 0, 0)];
+        assert!(retains_source_positions(
+            &original,
+            &[source(32767, 1080, 0, 0)]
+        ));
+        assert!(!retains_source_positions(
+            &original,
+            &[source(32768, 1080, 0, 0)]
+        ));
     }
 
     #[test]

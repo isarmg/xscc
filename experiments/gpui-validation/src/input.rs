@@ -225,10 +225,81 @@ pub fn wheel(x: i32, y: i32, trackpad: bool, modifiers: gpui::Modifiers) -> Opti
     Some(message)
 }
 
+#[cfg(any(feature = "live-session", test))]
+pub fn wheel_at(
+    position: (f32, f32),
+    viewport: (f32, f32),
+    frame: (u32, u32),
+    origin: (i32, i32),
+    delta: (i32, i32),
+    trackpad: bool,
+    modifiers: gpui::Modifiers,
+) -> Option<[Message; 2]> {
+    let scroll = wheel(delta.0, delta.1, trackpad, modifiers)?;
+    let mut position = pointer(position.0, position.1, viewport, frame, 0, 0)?;
+    let event = position.mut_mouse_event();
+    event.x = event.x.saturating_add(origin.0);
+    event.y = event.y.saturating_add(origin.1);
+    event.modifiers = scroll.mouse_event().modifiers.clone();
+    // Scroll coordinates are deltas; the host scrolls wherever its pointer is now.
+    Some([position, scroll])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use protobuf::Message as _;
+
+    #[test]
+    fn scroll_position_matches_pointer_coordinates_and_keeps_delta() {
+        let modifiers = gpui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        for trackpad in [false, true] {
+            let events = wheel_at(
+                (100.0, 200.0),
+                (1000.0, 800.0),
+                (2000, 1000),
+                (-2000, -100),
+                (2, -3),
+                trackpad,
+                modifiers,
+            )
+            .unwrap();
+            let position = events[0].mouse_event();
+            let scroll = events[1].mouse_event();
+            assert_eq!(
+                (position.mask, position.x, position.y),
+                (input::MOUSE_TYPE_MOVE, -1800, 0)
+            );
+            assert_eq!((scroll.x, scroll.y), (2, -3));
+            assert_eq!(
+                scroll.mask,
+                if trackpad {
+                    input::MOUSE_TYPE_TRACKPAD
+                } else {
+                    input::MOUSE_TYPE_WHEEL
+                }
+            );
+            assert_eq!(position.modifiers, scroll.modifiers);
+            assert_eq!(scroll.modifiers, vec![ControlKey::Shift.into()]);
+        }
+        for (position, delta) in [((500.0, 1.0), (0, 1)), ((100.0, 200.0), (0, 0))] {
+            assert!(
+                wheel_at(
+                    position,
+                    (1000.0, 800.0),
+                    (2000, 1000),
+                    (-2000, -100),
+                    delta,
+                    false,
+                    modifiers
+                )
+                .is_none()
+            );
+        }
+    }
 
     #[test]
     fn clicks_position_the_host_pointer_without_duplicating_drag_events() {

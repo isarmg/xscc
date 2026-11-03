@@ -161,6 +161,13 @@ jobs:
           $pointerExit = $LASTEXITCODE
           $pointerTests | Write-Output
           if ($pointerExit -ne 0 -or ($pointerTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Pointer click regression did not run' }
+      - name: Test scroll positioning
+        if: matrix.role == 'controller' && !inputs.build_only
+        run: |
+          $scrollTests = & cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::scroll_position_matches_pointer_coordinates_and_keeps_delta 2>&1
+          $scrollExit = $LASTEXITCODE
+          $scrollTests | Write-Output
+          if ($scrollExit -ne 0 -or ($scrollTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Scroll position regression did not run' }
       - name: Test FFmpeg decoded-plane reuse with native bindings
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
