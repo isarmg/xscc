@@ -308,6 +308,7 @@ impl Topology {
     pub(super) fn configure(
         ids: &[String],
         preferred: Option<VirtualDisplayMode>,
+        requested: Option<VirtualDisplayMode>,
     ) -> ResultType<()> {
         let mut topology = Self::query(true)?;
         let all = topology.paths.clone();
@@ -397,7 +398,8 @@ impl Topology {
             ));
             topology.paths.push(path);
         }
-        if let Some(mode) = preferred {
+        // A fallback activates new paths; only an explicit mode changes existing ones.
+        if let Some(mode) = requested {
             let mut right = 0i64;
             let mut preserve_positions = true;
             for path in &topology.paths {

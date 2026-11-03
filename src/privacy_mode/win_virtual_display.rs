@@ -44,6 +44,7 @@ pub struct PrivacyModeImpl {
     virtual_displays: Vec<Display>,
     virtual_displays_added: Vec<u32>,
     display_settings_changed: bool,
+    restore_failed: bool,
 }
 
 struct TurnOnGuard<'a> {
@@ -84,6 +85,7 @@ impl PrivacyModeImpl {
             virtual_displays: Vec::new(),
             virtual_displays_added: Vec::new(),
             display_settings_changed: false,
+            restore_failed: false,
         }
     }
 
@@ -402,10 +404,13 @@ impl PrivacyModeImpl {
         Ok(())
     }
 
-    fn restore(&mut self) {
-        Self::restore_displays(&self.displays);
-        Self::restore_displays(&self.virtual_displays);
-        allow_err!(Self::commit_change_display(0));
+    fn restore(&mut self) -> ResultType<()> {
+        Self::restore_displays(&self.displays)?;
+        // A stale virtual display must not prevent the physical displays from recovering.
+        for display in &self.virtual_displays {
+            allow_err!(Self::restore_displays(std::slice::from_ref(display)));
+        }
+        Self::commit_change_display(0)?;
         self.displays.clear();
         self.virtual_displays.clear();
         let is_virtual_display_added = self.virtual_displays_added.len() > 0;
@@ -422,9 +427,10 @@ impl PrivacyModeImpl {
             // We can't replug the virtual dislays here.
             // TODO: plug out + plug in the virtual displays (`IDD_IMPL_AMYUNI`) in a short time makes the server side crash.
         }
+        Ok(())
     }
 
-    fn restore_displays(displays: &[Display]) {
+    fn restore_displays(displays: &[Display]) -> ResultType<()> {
         for display in displays {
             unsafe {
                 let mut dm = display.dm.clone();
@@ -433,19 +439,37 @@ impl PrivacyModeImpl {
                 } else {
                     CDS_NORESET | CDS_UPDATEREGISTRY
                 };
-                ChangeDisplaySettingsExW(
+                let rc = ChangeDisplaySettingsExW(
                     display.name.as_ptr(),
                     &mut dm,
                     std::ptr::null_mut(),
                     flags,
                     std::ptr::null_mut(),
                 );
+                if rc != DISP_CHANGE_SUCCESSFUL {
+                    bail!(
+                        "Failed to restore display {:?}: {}",
+                        std::string::String::from_utf16(&display.name),
+                        Self::change_display_settings_ex_err_msg(rc)
+                    );
+                }
             }
         }
+        Ok(())
     }
 }
 
 impl PrivacyMode for PrivacyModeImpl {
+    fn check_on_conn_id(&self, conn_id: i32) -> ResultType<bool> {
+        if conn_id == INVALID_PRIVACY_MODE_CONN_ID {
+            bail!("Invalid privacy mode connection ID");
+        }
+        if self.conn_id != INVALID_PRIVACY_MODE_CONN_ID && self.conn_id != conn_id {
+            bail!(super::OCCUPIED);
+        }
+        Ok(self.conn_id == conn_id && !self.restore_failed)
+    }
+
     fn is_async_privacy_mode(&self) -> bool {
         virtual_display_manager::is_amyuni_idd()
     }
@@ -466,6 +490,9 @@ impl PrivacyMode for PrivacyModeImpl {
         if self.check_on_conn_id(conn_id)? {
             log::debug!("Privacy mode of conn {} is already on", conn_id);
             return Ok(true);
+        }
+        if self.display_settings_changed {
+            self.turn_off_privacy(INVALID_PRIVACY_MODE_CONN_ID, None)?;
         }
         self.set_displays();
         if self.displays.is_empty() {
@@ -508,11 +535,11 @@ impl PrivacyMode for PrivacyModeImpl {
             reset_config_reg_connectivity();
         };
 
+        super::win_input::hook()?;
+
         // OpenInputDesktop and block the others' input ?
         guard.conn_id = conn_id;
         guard.succeeded = true;
-
-        allow_err!(super::win_input::hook());
 
         Ok(true)
     }
@@ -536,7 +563,9 @@ impl PrivacyMode for PrivacyModeImpl {
         }
         super::win_input::unhook()?;
         let _tmp_ignore_changed_holder = crate::display_service::temp_ignore_displays_changed();
-        self.restore();
+        self.restore_failed = true;
+        self.restore()?;
+        self.restore_failed = false;
         // We need to force restore the registry connectivity.
         // This is because the registry connection may be changed by `self.restore()`, but will not be fully restored.
         restore_reg_connectivity(false, true);

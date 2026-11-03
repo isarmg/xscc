@@ -151,6 +151,15 @@ pub fn pointer_with_capture(
 }
 
 #[cfg(any(feature = "live-session", test))]
+pub fn position_before_press(event: &MouseEvent) -> Option<MouseEvent> {
+    // The host does not move the pointer for button events, even with coordinates.
+    (event.mask & input::MOUSE_TYPE_MASK == input::MOUSE_TYPE_DOWN).then(|| MouseEvent {
+        mask: input::MOUSE_TYPE_MOVE,
+        ..event.clone()
+    })
+}
+
+#[cfg(any(feature = "live-session", test))]
 pub fn release_key(pressed: &Message) -> Message {
     let mut message = pressed.clone();
     let event = message.mut_key_event();
@@ -220,6 +229,26 @@ pub fn wheel(x: i32, y: i32, trackpad: bool, modifiers: gpui::Modifiers) -> Opti
 mod tests {
     use super::*;
     use protobuf::Message as _;
+
+    #[test]
+    fn clicks_position_the_host_pointer_without_duplicating_drag_events() {
+        let mut message = pointer(100.0, 200.0, (1000.0, 800.0), (2000, 1000), 1, 1).unwrap();
+        let pressed = message.mut_mouse_event();
+        pressed.x -= 2000;
+        pressed.y -= 100;
+        pressed.modifiers.push(ControlKey::Shift.into());
+        let position = position_before_press(pressed).unwrap();
+        assert_eq!(
+            (position.mask, position.x, position.y),
+            (input::MOUSE_TYPE_MOVE, -1800, 0)
+        );
+        assert_eq!(position.modifiers, pressed.modifiers);
+        for kind in [input::MOUSE_TYPE_MOVE, input::MOUSE_TYPE_UP] {
+            pressed.mask = (pressed.mask & !input::MOUSE_TYPE_MASK) | kind;
+            assert!(position_before_press(pressed).is_none());
+        }
+    }
+
     #[test]
     fn printable_keys_use_edges_and_release_the_original_character() {
         let pressed = key(

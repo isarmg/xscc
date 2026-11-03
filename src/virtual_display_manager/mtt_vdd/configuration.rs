@@ -257,7 +257,7 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             // Wait only inside this explicit operation; real topology rejections fail immediately.
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
-                match Topology::configure(&ids, preferred) {
+                match Topology::configure(&ids, preferred, config.modes.first().copied()) {
                     Ok(()) => break,
                     Err(error)
                         if error

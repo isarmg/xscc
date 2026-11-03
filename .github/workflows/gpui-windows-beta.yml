@@ -154,6 +154,13 @@ jobs:
       - name: Test Windows preview
         if: ${{ !inputs.build_only }}
         run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
+      - name: Test pointer click positioning
+        if: ${{ !inputs.build_only }}
+        run: |
+          $pointerTests = & cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::clicks_position_the_host_pointer_without_duplicating_drag_events 2>&1
+          $pointerExit = $LASTEXITCODE
+          $pointerTests | Write-Output
+          if ($pointerExit -ne 0 -or ($pointerTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Pointer click regression did not run' }
       - name: Test FFmpeg decoded-plane reuse with native bindings
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
