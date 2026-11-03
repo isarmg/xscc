@@ -406,6 +406,10 @@ impl SessionView {
                 y,
                 ..Default::default()
             })) {
+                if error.is::<gpui_session::InputPermissionDenied>() {
+                    drop(self.input.cancel());
+                    return;
+                }
                 failure = Some(error.to_string());
                 break;
             }

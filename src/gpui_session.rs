@@ -89,6 +89,10 @@ pub enum InputCommand {
     Mouse(MouseEvent),
 }
 
+#[derive(Debug, hbb_common::thiserror::Error)]
+#[error("Remote input permission is disabled")]
+pub struct InputPermissionDenied;
+
 #[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
 fn mobile_pointer_permitted(enabled: bool, input: &InputCommand) -> bool {
     enabled && matches!(input, InputCommand::Mouse(_))
@@ -441,7 +445,7 @@ impl SessionHandle {
             }
         }
         if !mailbox.keyboard.load(Ordering::Acquire) {
-            bail!("Remote input permission is disabled");
+            return Err(InputPermissionDenied.into());
         }
         let mut message = Message::new();
         match input {
@@ -1594,6 +1598,17 @@ mod tests {
             };
             assert_eq!(key.down, down);
         }
+        handle.session.ui_handler.set_permission("keyboard", false);
+        let error = handle
+            .send_input(InputCommand::Mouse(MouseEvent {
+                mask: base::session_protocol::input::MOUSE_TYPE_UP,
+                ..Default::default()
+            }))
+            .unwrap_err();
+        assert!(error.is::<InputPermissionDenied>());
+        assert_eq!(error.to_string(), "Remote input permission is disabled");
+        assert!(receiver.try_recv().is_err());
+        handle.session.ui_handler.set_permission("keyboard", true);
         handle.disconnect();
         assert!(handle
             .send_input(InputCommand::Key(KeyEvent::default()))
