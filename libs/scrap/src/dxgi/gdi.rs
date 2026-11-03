@@ -157,12 +157,16 @@ impl CapturerGDI {
                 &mut bmi as _,
                 DIB_RGB_COLORS,
             );
-            if res == 0 {
-                return Err("GetDIBits failed".into());
-            }
-            Ok(())
+            check_copied_rows(res, self.height)
         }
     }
+}
+
+fn check_copied_rows(copied: i32, height: i32) -> Result<(), Box<dyn std::error::Error>> {
+    if copied != height {
+        return Err(format!("GetDIBits copied {copied} of {height} rows").into());
+    }
+    Ok(())
 }
 
 impl Drop for CapturerGDI {
@@ -179,6 +183,14 @@ impl Drop for CapturerGDI {
 mod tests {
     use super::*;
     use winapi::um::wingdi::{CreateBitmap, SetPixel, CLR_INVALID};
+
+    #[test]
+    fn gdi_rejects_incomplete_readback() {
+        assert!(check_copied_rows(2, 2).is_ok());
+        for copied in [0, 1, 3] {
+            assert!(check_copied_rows(copied, 2).is_err());
+        }
+    }
 
     #[test]
     fn gdi_frames_keep_top_down_bgra_order_when_reusing_the_output() {

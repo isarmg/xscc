@@ -415,6 +415,16 @@ fn change_device(state: u32) -> ResultType<()> {
     Ok(())
 }
 
+fn profile_activation_state(enabled: bool) -> u32 {
+    // DeviceAdd reads the profile on enable. Restart only a running adapter:
+    // unnecessary swapchain teardown can trigger upstream watchdog issue #531.
+    if enabled {
+        DICS_PROPCHANGE
+    } else {
+        DICS_ENABLE
+    }
+}
+
 fn problem() -> ResultType<u32> {
     let (_, data) = device()?.ok_or_else(|| anyhow::anyhow!("VDD device disappeared"))?;
     let mut status = 0;
@@ -567,8 +577,7 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
                     bail!("Windows requires a restart to start the VDD driver");
                 }
             }
-            change_device(DICS_ENABLE)?;
-            change_device(DICS_PROPCHANGE)?;
+            change_device(profile_activation_state(enabled))?;
         } else if present {
             change_device(DICS_DISABLE)?;
         }
@@ -647,4 +656,15 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
 
 pub(super) fn reset_all() -> ResultType<()> {
     configuration::cleanup_session()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_activation_only_restarts_an_already_enabled_adapter() {
+        assert_eq!(profile_activation_state(false), DICS_ENABLE);
+        assert_eq!(profile_activation_state(true), DICS_PROPCHANGE);
+    }
 }

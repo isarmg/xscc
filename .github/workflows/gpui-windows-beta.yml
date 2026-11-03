@@ -194,13 +194,14 @@ jobs:
           $gdiTests = & cargo test --locked -p scrap --lib --features capture,hwcodec,vram --target x86_64-pc-windows-msvc dxgi::gdi::tests:: 2>&1
           $gdiExit = $LASTEXITCODE
           $gdiTests | Write-Output
-          if ($gdiExit -ne 0 -or ($gdiTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') {
+          if ($gdiExit -ne 0 -or ($gdiTests | Out-String) -notmatch '(?m)^test result: ok\. 2 passed; 0 failed;') {
             throw 'GDI frame regression did not pass'
           }
       - name: Test configurable virtual display mode preservation
         if: matrix.role == 'host' && !inputs.build_only
         run: |
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::topology::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "platform::win_device::install_parameters::tests"
       - name: Test encrypted management handshake and connection-close errors
