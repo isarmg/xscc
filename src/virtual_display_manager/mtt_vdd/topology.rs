@@ -332,16 +332,26 @@ impl Topology {
                 present.insert(id);
             }
         }
-        let mut right = topology
-            .modes
+        let (mut right, y) = topology
+            .paths
             .iter()
+            .filter_map(|path| topology.modes.get(path.sourceInfo.modeInfoIdx as usize))
             .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
             .map(|mode| {
                 let source = unsafe { mode.u.sourceMode() };
-                i64::from(source.position.x) + i64::from(source.width)
+                let top = i64::from(source.position.y);
+                let y = if preferred.is_some_and(|mode| {
+                    top < i64::from(mode.height) && top + i64::from(source.height) > 0
+                }) {
+                    0
+                } else {
+                    source.position.y
+                };
+                (i64::from(source.position.x) + i64::from(source.width), y)
             })
-            .max()
-            .unwrap_or(0);
+            // Retain y=0 when any rightmost source gives it an edge contact.
+            .max_by_key(|(right, y)| (*right, *y == 0))
+            .unwrap_or((0, 0));
         for id in ids {
             if present.contains(id) {
                 continue;
@@ -375,7 +385,7 @@ impl Topology {
                 pixelFormat: DISPLAYCONFIG_PIXELFORMAT_32BPP,
                 position: winapi::shared::windef::POINTL {
                     x: i32::try_from(right)?,
-                    y: 0,
+                    y,
                 },
             };
             right = right

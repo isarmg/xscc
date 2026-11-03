@@ -97,6 +97,12 @@ impl TouchInput {
         self.scroll.0 -= x as f32;
         self.scroll.1 -= y as f32;
         if x != 0 || y != 0 {
+            // Anchor each scroll to the first touch, even if the host cursor moved.
+            if let Some((geometry, start)) = self.geometry.zip(self.start)
+                && let Some((target_x, target_y)) = geometry.map(start, false)
+            {
+                output.push(Output::Move(target_x, target_y));
+            }
             output.push(Output::Scroll(x, y));
         }
         output
@@ -273,11 +279,20 @@ mod tests {
             vec![Output::Move(-130, 40), Output::Up(-130, 40)]
         );
         i.event(3, Phase::Moved, Point(100., 100.), g);
-        assert_eq!(i.flush(), vec![Output::Scroll(0, 10)]);
+        let scroll = vec![Output::Move(-150, 40), Output::Scroll(0, 10)];
+        assert_eq!(i.flush(), scroll);
         assert!(i.event(4, Phase::Started, Point(110., 100.), g).is_empty());
         assert!(i.event(2, Phase::Cancelled, Point(70., 80.), g).is_empty());
         assert!(i.event(3, Phase::Ended, Point(100., 100.), g).is_empty());
         assert!(i.event(4, Phase::Ended, Point(110., 100.), g).is_empty());
+        for _ in 0..2 {
+            i.event(1, Phase::Started, Point(50., 80.), g);
+            i.event(2, Phase::Started, Point(100., 80.), g);
+            i.event(2, Phase::Moved, Point(100., 100.), g);
+            assert_eq!(i.flush(), scroll);
+            assert!(i.event(1, Phase::Ended, Point(50., 80.), g).is_empty());
+            assert!(i.event(2, Phase::Ended, Point(100., 100.), g).is_empty());
+        }
     }
     #[test]
     fn motion_is_coalesced_and_reset_rejects_late_events() {

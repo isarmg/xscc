@@ -724,7 +724,6 @@ impl SessionView {
                         if let Some(control) = &self.keyboard_control {
                             control.cancel();
                         }
-                        self.current_monitor = None;
                         self.extent = (0, 0);
                         self.quality = SessionQuality::default();
                         self.presentation.invalidate();
@@ -733,7 +732,12 @@ impl SessionView {
                     self.monitors = monitors;
                 }
                 SessionEvent::Quality { index, update } => {
-                    if accepts_display_update(self.current_monitor, self.pending_monitor, index) {
+                    if accepts_display_update(self.current_monitor, self.pending_monitor, index)
+                        && self
+                            .monitors
+                            .iter()
+                            .any(|monitor| monitor.index == index && monitor.available)
+                    {
                         self.quality.merge(update);
                     }
                 }
