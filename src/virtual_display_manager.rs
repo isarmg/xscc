@@ -159,8 +159,9 @@ pub fn plug_out_monitor_indices(
 ) -> ResultType<()> {
     match IDD_IMPL {
         IDD_IMPL_MTT_VDD => {
-            for _ in indices {
-                mtt_vdd::plug_out_monitor(i32::try_from(mtt_vdd::get_monitor_count())?, force_all)?;
+            // Count-based indices must stay intact so stale requests are rejected.
+            for &index in indices.iter().rev() {
+                mtt_vdd::plug_out_monitor(i32::try_from(index)?, force_all)?;
             }
             Ok(())
         }

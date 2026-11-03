@@ -32,6 +32,9 @@ limit_tests=$(cargo test --locked -p scrap --lib --target "$target" codec::bitra
 printf '%s\n' "$limit_tests"
 grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$limit_tests" || { echo 'No passing explicit bitrate tests' >&2; exit 1; }
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    compression_tests=$(cargo test --locked -p hbb_common --lib --target "$target" compress::tests:: 2>&1) || { printf '%s\n' "$compression_tests"; exit 1; }
+    printf '%s\n' "$compression_tests"
+    grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$compression_tests" || { echo 'Compression regressions did not pass all three tests' >&2; exit 1; }
     conversion_tests=$(cargo test --locked -p scrap --lib --target "$target" common::convert::tests:: 2>&1) || { printf '%s\n' "$conversion_tests"; exit 1; }
     printf '%s\n' "$conversion_tests"
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$conversion_tests" || { echo 'RGBA conversion regression did not run' >&2; exit 1; }

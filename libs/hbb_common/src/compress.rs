@@ -35,7 +35,11 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
 }
 
 pub fn decompress(data: &[u8]) -> Vec<u8> {
-    decompress_with_limit(data, MAX_DECOMPRESSED_SIZE).unwrap_or_default()
+    try_decompress(data).unwrap_or_default()
+}
+
+pub fn try_decompress(data: &[u8]) -> io::Result<Vec<u8>> {
+    decompress_with_limit(data, MAX_DECOMPRESSED_SIZE)
 }
 
 fn decompress_with_limit(data: &[u8], limit: usize) -> io::Result<Vec<u8>> {
@@ -56,6 +60,13 @@ fn decompress_with_limit(data: &[u8], limit: usize) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_frame_is_distinct_from_empty_payload() {
+        assert!(try_decompress(b"invalid zstd frame").is_err());
+        assert!(decompress(b"invalid zstd frame").is_empty());
+        assert_eq!(try_decompress(&compress(b"")).unwrap(), Vec::<u8>::new());
+    }
 
     #[test]
     fn rejects_data_larger_than_limit() {

@@ -403,10 +403,8 @@ pub use proto::get_msg_if_not_support_multi_clip;
 mod proto {
     #[cfg(not(target_os = "android"))]
     use arboard::ClipboardData;
-    use hbb_common::{
-        compress::{compress as compress_func, decompress},
-    };
     use base::message_proto::{Clipboard, ClipboardFormat, Message, MultiClipboards};
+    use hbb_common::compress::{compress as compress_func, try_decompress};
 
     fn text_to_proto(s: String) -> Clipboard {
         let compressed = compress_func(s.as_bytes());
@@ -449,7 +447,13 @@ mod proto {
             return None;
         }
         let data = if clipboard.compress {
-            decompress(&clipboard.content)
+            match try_decompress(&clipboard.content) {
+                Ok(data) => data,
+                Err(error) => {
+                    hbb_common::log::trace!("Discarding invalid compressed clipboard: {error}");
+                    return None;
+                }
+            }
         } else {
             clipboard.content.into()
         };
@@ -493,7 +497,11 @@ mod proto {
 
         #[test]
         fn text_round_trips_with_and_without_compression() {
-            for text in ["Hi".to_owned(), "文字 clipboard ".repeat(100)] {
+            for text in [
+                String::new(),
+                "Hi".to_owned(),
+                "文字 clipboard ".repeat(100),
+            ] {
                 let clipboard = text_to_proto(text.clone());
                 assert_eq!(clipboard.compress, text.len() > 100);
                 assert!(matches!(
@@ -501,6 +509,14 @@ mod proto {
                     Some(ClipboardData::Text(restored)) if restored == text
                 ));
             }
+            let empty = Clipboard {
+                compress: true,
+                content: super::compress_func(b"").into(),
+                ..Default::default()
+            };
+            assert!(
+                matches!(from_clipboard(empty), Some(ClipboardData::Text(text)) if text.is_empty())
+            );
         }
 
         #[test]
@@ -536,6 +552,14 @@ mod proto {
                 content: vec![0xff].into(),
                 ..Default::default()
             });
+            for content in [b"invalid zstd frame".to_vec(), vec![0x28, 0xb5]] {
+                clipboards.push(Clipboard {
+                    format: ClipboardFormat::Text.into(),
+                    compress: true,
+                    content: content.into(),
+                    ..Default::default()
+                });
+            }
             let restored = from_multi_clipboards(clipboards);
             assert_eq!(restored.len(), 1);
             assert!(matches!(&restored[0], ClipboardData::Text(text) if text == "text"));

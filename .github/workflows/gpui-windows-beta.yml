@@ -233,6 +233,10 @@ jobs:
         run: |
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::streaming::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::io_loop::ui_send_tests"
+          $clipboardTests = & cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "${{ matrix.core_features }}" --target x86_64-pc-windows-msvc clipboard::proto::tests 2>&1
+          $clipboardExit = $LASTEXITCODE
+          $clipboardTests | Write-Output
+          if ($clipboardExit -ne 0 -or ($clipboardTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') { throw 'Clipboard protocol regressions did not pass all three tests' }
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "gpui_session::tests"
           $legacyTests = & cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "${{ matrix.core_features }}" --target x86_64-pc-windows-msvc gpui_session::controls::tests::legacy_virtual_display 2>&1
           $legacyExit = $LASTEXITCODE
