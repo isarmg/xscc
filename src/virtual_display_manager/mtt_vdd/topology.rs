@@ -722,16 +722,39 @@ mod tests {
             persistent: false,
         };
         let check = (|| -> ResultType<()> {
-            for hz in [120, 240, 120, 240] {
+            for (step, hz) in [120, 240, 120, 240].into_iter().enumerate() {
                 config.modes[0].refresh_rate_units = hz * 10000;
-                let state = configuration::configure(&config)?;
+                let state = if step < 2 {
+                    configuration::configure(&config)?
+                } else {
+                    let name = configuration::state()
+                        .displays
+                        .into_iter()
+                        .find(|screen| screen.active)
+                        .ok_or_else(|| anyhow::anyhow!("No active VDD for the refresh menu check"))?
+                        .name;
+                    let mode = crate::platform::windows::display_modes::supported(&name)
+                        .resolutions
+                        .into_iter()
+                        .find(|mode| {
+                            mode.width == 1920 && mode.height == 1080 && mode.refresh_rate == hz
+                        })
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("The menu does not offer the declared {hz} Hz mode")
+                        })?;
+                    crate::platform::windows::display_modes::change(&name, &mode)?;
+                    configuration::state()
+                };
                 if state.active_count != 1
                     || state
                         .displays
                         .iter()
                         .any(|screen| !screen.active || screen.refresh_rate_units != hz * 10000)
                 {
-                    bail!("Windows did not confirm the requested {hz} Hz desktop");
+                    bail!(
+                        "Windows did not confirm the requested {hz} Hz desktop: {}",
+                        state.message
+                    );
                 }
                 for screen in &state.displays {
                     let name = wide(OsStr::new(&screen.name));
