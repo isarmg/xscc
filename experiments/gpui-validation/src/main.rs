@@ -46,6 +46,7 @@ mod text_field;
     test
 ))]
 mod theme;
+mod virtual_display_cli;
 #[cfg(any(
     all(
         any(target_os = "windows", target_os = "linux", target_os = "macos"),
@@ -252,6 +253,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .worker_threads(2)
         .enable_all()
         .build()?;
+    if let Some(command) = options.virtual_display.as_ref() {
+        #[cfg(all(target_os = "windows", feature = "native-host"))]
+        {
+            librustdesk::gpui_host::initialize().map_err(std::io::Error::other)?;
+            let state = runtime.block_on(command.execute())?;
+            println!("{}", serde_json::to_string(&state)?);
+            return Ok(());
+        }
+        #[cfg(not(all(target_os = "windows", feature = "native-host")))]
+        {
+            let _ = command;
+            return Err("Virtual display management requires the installed Windows Host".into());
+        }
+    }
     #[cfg(all(
         any(target_os = "windows", target_os = "linux", target_os = "macos"),
         feature = "live-session"

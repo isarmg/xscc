@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 pub struct Options {
     pub diagnostic: bool,
+    pub virtual_display: Option<crate::virtual_display_cli::Command>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -19,6 +20,16 @@ impl Options {
         arguments: impl IntoIterator<Item = String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut result = Self::default();
+        let arguments: Vec<_> = arguments.into_iter().collect();
+        if let Some(command) = crate::virtual_display_cli::Command::parse(&arguments)? {
+            if !cfg!(all(target_os = "windows", feature = "native-host")) {
+                return Err(
+                    "Virtual display management requires the installed Windows Host".into(),
+                );
+            }
+            result.virtual_display = Some(command);
+            return Ok(result);
+        }
         let mut arguments = arguments.into_iter();
         while let Some(key) = arguments.next() {
             if key == "--help" {
@@ -65,6 +76,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             diagnostic: false,
+            virtual_display: None,
             width: 1280,
             height: 720,
             fps: 60,
@@ -80,7 +92,7 @@ fn help_text() -> String {
     let (name, normal) = if cfg!(feature = "native-host") {
         (
             "XSCC Host Beta",
-            "xscc-host.exe\nOpen the installed host as administrator to bind its instance and configure its system service.",
+            "xscc-host.exe\nOpen the installed host as administrator to bind its instance and configure its system service.\n  --virtual-display-status\n  --virtual-display-configure JSON (count, modes, persistent)\nLocal management requires the installed administrator Host and its running SYSTEM service.",
         )
     } else if cfg!(feature = "live-session") {
         (
@@ -113,6 +125,22 @@ mod tests {
             assert!(help.contains("XSCC Host Beta"));
         } else if cfg!(feature = "live-session") {
             assert!(help.contains("XSCC Controller Beta"));
+        }
+    }
+
+    #[test]
+    fn virtual_management_is_host_only_and_does_not_start_diagnostics() {
+        let result = parse(&["--virtual-display-status"]);
+        if cfg!(all(target_os = "windows", feature = "native-host")) {
+            let options = result.unwrap();
+            assert!(matches!(
+                options.virtual_display,
+                Some(crate::virtual_display_cli::Command::Status)
+            ));
+            assert!(!options.diagnostic);
+            assert_eq!(options.seconds, None);
+        } else {
+            assert!(result.is_err());
         }
     }
 
