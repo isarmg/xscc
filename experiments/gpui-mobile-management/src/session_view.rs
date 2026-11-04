@@ -7,7 +7,7 @@ use crate::{
     remote_image::remote_image,
     remote_keyboard::{Command, KeyboardControl, KeyboardEvent, KeyboardPage, RemoteKeyboard},
     session_chrome::{ChromeAction, ChromeModel, ChromeMonitor, SessionChrome},
-    session_input::{ControlRegions, InputMode, SessionInput},
+    session_input::{Control, ControlRegions, InputMode, SessionInput},
     session_layout::{self, Panel, Rect, SessionLayout},
     touch_input::{Geometry, Output, Phase, Point},
 };
@@ -1006,7 +1006,7 @@ impl SessionView {
             .map(SessionHandle::media_controls)
             .unwrap_or_default();
         let model = ChromeModel {
-            layout: self.layout,
+            layout: self.mouse_layout(),
             connecting: self.connecting.is_some(),
             connected: self.connected,
             has_frame: self.connected
@@ -1099,9 +1099,11 @@ impl SessionView {
                     .unwrap_or_else(|| "—".into()),
                 self.quality.codec.as_deref().unwrap_or("—"),
             ),
-            left_pressed: pointer.left_down,
-            right_pressed: pointer.right_down,
-            middle_pressed: pointer.middle_down,
+            left_pressed: pointer.left_down || self.input.control_pressed(Control::Left),
+            right_pressed: pointer.right_down || self.input.control_pressed(Control::Right),
+            middle_pressed: pointer.middle_down || self.input.control_pressed(Control::Middle),
+            moving_control: self.input.moving_control(),
+            wheel_position: self.input.wheel_position(),
             right_click_armed: self.input.right_click_armed(),
         };
         self.chrome.update(cx, |chrome, cx| {
@@ -1109,13 +1111,47 @@ impl SessionView {
         });
     }
 
+    fn mouse_layout(&self) -> SessionLayout {
+        let mut layout = self.layout;
+        if let Some(mouse) = &mut layout.mouse {
+            let bounds = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
+            let controls = self.input.placed_controls(
+                ControlRegions {
+                    left: Some(bounds(mouse.left)),
+                    middle: Some(bounds(mouse.middle)),
+                    right: Some(bounds(mouse.right)),
+                    wheel: Some(bounds(mouse.wheel)),
+                    reserved: Some(bounds(layout.rail)),
+                },
+                bounds(layout.stage),
+            );
+            for (rect, placed) in [
+                (&mut mouse.left, controls.left),
+                (&mut mouse.middle, controls.middle),
+                (&mut mouse.right, controls.right),
+                (&mut mouse.wheel, controls.wheel),
+            ] {
+                if let Some((x, y, _, _)) = placed {
+                    rect.x = x;
+                    rect.y = y;
+                }
+            }
+        }
+        layout
+    }
+
     fn publish_pointer_chrome(&self, cx: &mut Context<Self>) {
         let pointer = self.input.snapshot();
         let changed = {
             let model = self.chrome.read(cx).model();
-            model.left_pressed != pointer.left_down
-                || model.right_pressed != pointer.right_down
-                || model.middle_pressed != pointer.middle_down
+            model.left_pressed != (pointer.left_down || self.input.control_pressed(Control::Left))
+                || model.right_pressed
+                    != (pointer.right_down || self.input.control_pressed(Control::Right))
+                || model.middle_pressed
+                    != (pointer.middle_down || self.input.control_pressed(Control::Middle))
+                || model.moving_control != self.input.moving_control()
+                || model.wheel_position != self.input.wheel_position()
+                || model.layout != self.mouse_layout()
                 || model.right_click_armed != self.input.right_click_armed()
         };
         if changed {
@@ -1226,6 +1262,18 @@ impl SessionView {
                     self.initialize_pointer();
                 }
             }
+            ChromeAction::MouseButton(control) => {
+                if self.input_allowed() {
+                    let output = self.input.click_control(control);
+                    self.send_outputs(output);
+                }
+            }
+            ChromeAction::MouseWheel(delta) => {
+                if self.input_allowed() {
+                    let output = self.input.wheel_step(delta);
+                    self.send_outputs(output);
+                }
+            }
             ChromeAction::ToggleMouseButtons => {
                 self.release_input();
                 self.mouse_buttons = !self.mouse_buttons;
@@ -1321,6 +1369,8 @@ fn stage_geometry(
                 left: Some(global(mouse.left)),
                 right: Some(global(mouse.right)),
                 middle: Some(global(mouse.middle)),
+                wheel: Some(global(mouse.wheel)),
+                reserved: Some(global(layout.rail)),
             })
             .unwrap_or_default(),
     )
@@ -1400,6 +1450,30 @@ impl Render for SessionView {
                 .top(px(layout.video.y))
                 .w(px(layout.video.width))
                 .h(px(layout.video.height)),
+            )
+            .child(
+                canvas(
+                    move |bounds, window, _| {
+                        viewport_bounds.set(bounds);
+                        (
+                            bounds,
+                            enabled.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
+                        )
+                    },
+                    move |_, (bounds, hitbox), window, _| {
+                        let (geometry, controls) = stage_geometry(bounds, layout, extent, origin);
+                        if let Some(hitbox) = hitbox {
+                            window.on_touch_event(owner, &hitbox, move |event, window, cx| {
+                                touch(&(event.clone(), geometry, controls), window, cx);
+                            });
+                        }
+                    },
+                )
+                .absolute()
+                .left(px(layout.stage.x))
+                .top(px(layout.stage.y))
+                .w(px(layout.stage.width))
+                .h(px(layout.stage.height)),
             )
             .child(
                 self.chrome.clone().cached(
@@ -1487,29 +1561,6 @@ impl Render for SessionView {
                     ),
             );
         }
-        root.child(
-            canvas(
-                move |bounds, window, _| {
-                    viewport_bounds.set(bounds);
-                    (
-                        bounds,
-                        enabled.then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal)),
-                    )
-                },
-                move |_, (bounds, hitbox), window, _| {
-                    let (geometry, controls) = stage_geometry(bounds, layout, extent, origin);
-                    if let Some(hitbox) = hitbox {
-                        window.on_touch_event(owner, &hitbox, move |event, window, cx| {
-                            touch(&(event.clone(), geometry, controls), window, cx);
-                        });
-                    }
-                },
-            )
-            .absolute()
-            .left(px(layout.stage.x))
-            .top(px(layout.stage.y))
-            .w(px(layout.stage.width))
-            .h(px(layout.stage.height)),
-        )
+        root
     }
 }

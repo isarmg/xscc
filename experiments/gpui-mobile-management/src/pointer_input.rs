@@ -128,6 +128,12 @@ impl TrackpadInput {
         output
     }
 
+    pub fn scroll_vertical(&mut self, delta: f32) {
+        if delta.is_finite() {
+            self.scroll.1 = (self.scroll.1 + f64::from(delta)).clamp(-240., 240.);
+        }
+    }
+
     pub fn set_button(&mut self, button: PointerButton, pressed: bool) -> Vec<Output> {
         let held = match button {
             PointerButton::Left => self.left.is_some(),

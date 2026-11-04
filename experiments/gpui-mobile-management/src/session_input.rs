@@ -1,8 +1,13 @@
 //! Routes a stage's captured touch sequence without mixing mouse controls into video gestures.
 use crate::{
-    pointer_input::{PointerButton, PointerSnapshot, TrackpadInput},
+    pointer_input::{PointerSnapshot, TrackpadInput},
     touch_input::{Geometry, Output, Phase, Point, TouchInput},
 };
+
+mod floating_controls;
+pub use floating_controls::Control;
+use floating_controls::{Gesture, Mode, Placements};
+use std::time::Instant;
 
 pub type Bounds = (f32, f32, f32, f32);
 
@@ -18,12 +23,14 @@ pub struct ControlRegions {
     pub left: Option<Bounds>,
     pub right: Option<Bounds>,
     pub middle: Option<Bounds>,
+    pub wheel: Option<Bounds>,
+    pub reserved: Option<Bounds>,
 }
 
 #[derive(Clone, Copy)]
 enum Route {
     Video,
-    Button(PointerButton),
+    Control(Gesture),
     Ignored,
     Retired,
 }
@@ -40,6 +47,7 @@ pub struct SessionInput {
     pointer: TrackpadInput,
     geometry: Option<Geometry>,
     controls: ControlRegions,
+    placements: Placements,
     contacts: Vec<Contact>,
 }
 
@@ -94,14 +102,80 @@ impl SessionInput {
         self.mode == InputMode::Direct && self.direct.right_click_armed()
     }
 
+    pub fn click_control(&mut self, control: Control) -> Vec<Output> {
+        if self.mode != InputMode::Pointer || self.active() {
+            return Vec::new();
+        }
+        let Some(button) = control.button() else {
+            return Vec::new();
+        };
+        let mut output = self.pointer.set_button(button, true);
+        output.extend(self.pointer.set_button(button, false));
+        output
+    }
+
+    pub fn wheel_step(&mut self, delta: i32) -> Vec<Output> {
+        if self.mode != InputMode::Pointer || self.active() {
+            return Vec::new();
+        }
+        self.pointer.scroll_vertical(delta as f32);
+        self.pointer.flush()
+    }
+
+    pub fn placed_controls(&self, controls: ControlRegions, bounds: Bounds) -> ControlRegions {
+        self.placements.regions(controls, bounds)
+    }
+
+    pub fn moving_control(&self) -> Option<Control> {
+        self.contacts
+            .iter()
+            .find_map(|contact| match contact.route {
+                Route::Control(gesture) if gesture.mode == Mode::Moving => Some(gesture.control),
+                _ => None,
+            })
+    }
+
+    pub fn wheel_position(&self) -> f32 {
+        self.contacts
+            .iter()
+            .find_map(|contact| match contact.route {
+                Route::Control(gesture)
+                    if gesture.control == Control::Wheel && gesture.mode == Mode::Scrolling =>
+                {
+                    Some(
+                        ((gesture.point.1 - gesture.bounds.1 - 16.)
+                            / (gesture.bounds.3 - 32.).max(1.))
+                        .clamp(0., 1.),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or(0.5)
+    }
+
+    pub fn control_pressed(&self, control: Control) -> bool {
+        self.contacts.iter().any(|contact| {
+            matches!(contact.route, Route::Control(gesture)
+            if gesture.control == control && matches!(gesture.mode, Mode::Waiting | Mode::Held))
+        })
+    }
+
     pub fn pending(&self) -> bool {
-        match self.mode {
+        self.contacts.iter().any(|contact| {
+            matches!(contact.route,
+            Route::Control(gesture) if gesture.mode == Mode::Waiting)
+        }) || match self.mode {
             InputMode::Direct => self.direct.pending(),
             InputMode::Pointer => self.pointer.pending(),
         }
     }
 
     pub fn flush(&mut self) -> Vec<Output> {
+        for contact in &mut self.contacts {
+            if let Route::Control(gesture) = &mut contact.route {
+                gesture.advance(Instant::now());
+            }
+        }
         match self.mode {
             InputMode::Direct => self.direct.flush(),
             InputMode::Pointer => self.pointer.flush(),
@@ -148,6 +222,18 @@ impl SessionInput {
         geometry: Geometry,
         controls: ControlRegions,
     ) -> Vec<Output> {
+        self.event_at(id, phase, point, geometry, controls, Instant::now())
+    }
+
+    fn event_at(
+        &mut self,
+        id: u64,
+        phase: Phase,
+        point: Point,
+        geometry: Geometry,
+        controls: ControlRegions,
+        now: Instant,
+    ) -> Vec<Output> {
         if self
             .contacts
             .iter()
@@ -161,12 +247,32 @@ impl SessionInput {
             if self.contacts.iter().any(|contact| contact.id == id) {
                 return output;
             }
-            let route = self.route(point, geometry);
+            let mut route = self.route(point, geometry, now);
+            if matches!(route, Route::Video) {
+                for contact in &mut self.contacts {
+                    if let Route::Control(gesture) = &mut contact.route {
+                        gesture.advance(now);
+                        if gesture.mode == Mode::Waiting
+                            && let Some(button) = gesture.control.button()
+                        {
+                            gesture.mode = Mode::Held;
+                            output.extend(self.pointer.set_button(button, true));
+                        }
+                    }
+                }
+            } else if let Route::Control(gesture) = &mut route {
+                if self.contacts.iter().any(|contact| matches!(contact.route, Route::Control(other) if other.control == gesture.control)) {
+                    route = Route::Ignored;
+                } else if self.contacts.iter().any(|contact| matches!(contact.route, Route::Video))
+                    && let Some(button) = gesture.control.button()
+                {
+                    gesture.mode = Mode::Held;
+                    output.extend(self.pointer.set_button(button, true));
+                }
+            }
             self.contacts.push(Contact { id, route });
-            match route {
-                Route::Video => output.extend(self.video_event(id, phase, point, geometry)),
-                Route::Button(button) => output.extend(self.pointer.set_button(button, true)),
-                _ => {}
+            if matches!(route, Route::Video) {
+                output.extend(self.video_event(id, phase, point, geometry));
             }
             return output;
         }
@@ -178,14 +284,24 @@ impl SessionInput {
         } else {
             match self.contacts[index].route {
                 Route::Video => output.extend(self.video_event(id, phase, point, geometry)),
-                Route::Button(button) if phase == Phase::Ended => {
-                    let still_held = self.contacts.iter().enumerate().any(|(other, contact)| {
-                        other != index
-                            && matches!(contact.route, Route::Button(held) if held == button)
-                    });
-                    if !still_held {
-                        output.extend(self.pointer.set_button(button, false));
+                Route::Control(mut gesture) => {
+                    let scroll = gesture.update(point, now);
+                    if gesture.mode == Mode::Moving {
+                        self.placements.move_control(gesture, geometry.bounds);
+                    } else if scroll != 0. {
+                        self.pointer.scroll_vertical(scroll);
                     }
+                    if phase == Phase::Ended
+                        && let Some(button) = gesture.control.button()
+                    {
+                        if gesture.mode == Mode::Waiting {
+                            output.extend(self.pointer.set_button(button, true));
+                            output.extend(self.pointer.set_button(button, false));
+                        } else if gesture.mode == Mode::Held {
+                            output.extend(self.pointer.set_button(button, false));
+                        }
+                    }
+                    self.contacts[index].route = Route::Control(gesture);
                 }
                 _ => {}
             }
@@ -222,7 +338,7 @@ impl SessionInput {
         }
     }
 
-    fn route(&self, point: Point, geometry: Geometry) -> Route {
+    fn route(&self, point: Point, geometry: Geometry, now: Instant) -> Route {
         if self
             .contacts
             .iter()
@@ -231,26 +347,19 @@ impl SessionInput {
             return Route::Retired;
         }
         if self.mode == InputMode::Pointer {
-            if self
-                .controls
-                .left
-                .is_some_and(|bounds| contains(bounds, point))
-            {
-                return Route::Button(PointerButton::Left);
-            }
-            if self
-                .controls
-                .right
-                .is_some_and(|bounds| contains(bounds, point))
-            {
-                return Route::Button(PointerButton::Right);
-            }
-            if self
-                .controls
-                .middle
-                .is_some_and(|bounds| contains(bounds, point))
-            {
-                return Route::Button(PointerButton::Middle);
+            let controls = self.placed_controls(self.controls, geometry.bounds);
+            // Match the paint order when the user deliberately overlaps controls.
+            for control in [
+                Control::Wheel,
+                Control::Middle,
+                Control::Right,
+                Control::Left,
+            ] {
+                if let Some(bounds) = control.bounds(controls)
+                    && contains(bounds, point)
+                {
+                    return Route::Control(Gesture::new(control, point, bounds, now));
+                }
             }
         }
         if contains(geometry.bounds, point) {
@@ -288,6 +397,8 @@ mod tests {
                 left: Some((0., 100., 70., 50.)),
                 right: Some((70., 100., 70., 50.)),
                 middle: Some((140., 100., 60., 50.)),
+                wheel: None,
+                reserved: None,
             },
         )
     }
@@ -330,124 +441,218 @@ mod tests {
     }
 
     #[test]
-    fn floating_middle_hold_video_motion_and_two_finger_scroll_are_independent() {
-        let (g, controls) = layout();
+    fn short_taps_click_but_long_press_moves_each_control_without_remote_input() {
+        let (mut g, _) = layout();
+        g.bounds = (0., 0., 320., 240.);
         let controls = ControlRegions {
-            middle: Some((140., 60., 60., 40.)),
-            ..controls
+            left: Some((20., 180., 48., 48.)),
+            middle: Some((80., 180., 48., 48.)),
+            right: Some((140., 180., 48., 48.)),
+            wheel: Some((200., 100., 48., 112.)),
+            reserved: Some((268., 0., 44., 44.)),
         };
+        for control in [
+            Control::Left,
+            Control::Middle,
+            Control::Right,
+            Control::Wheel,
+        ] {
+            let mut input = SessionInput::default();
+            input.configure(g, controls);
+            input.set_mode(InputMode::Pointer);
+            let bounds = control.bounds(controls).unwrap();
+            let point = Point(bounds.0 + 24., bounds.1 + 24.);
+            let now = Instant::now();
+            assert!(
+                input
+                    .event_at(1, Phase::Started, point, g, controls, now)
+                    .is_empty()
+            );
+            assert!(input.pending());
+            assert!(input.control_pressed(control));
+            let tap = input
+                .event_at(1, Phase::Ended, point, g, controls, now)
+                .into_iter()
+                .filter(|event| !matches!(event, Output::Move(_, _)))
+                .collect::<Vec<_>>();
+            match control {
+                Control::Left => assert!(matches!(
+                    tap.as_slice(),
+                    [Output::Down(_, _), Output::Up(_, _)]
+                )),
+                Control::Middle => assert!(matches!(
+                    tap.as_slice(),
+                    [Output::MiddleDown(_, _), Output::MiddleUp(_, _)]
+                )),
+                Control::Right => assert!(matches!(
+                    tap.as_slice(),
+                    [Output::RightDown(_, _), Output::RightUp(_, _)]
+                )),
+                Control::Wheel => assert!(tap.is_empty()),
+            }
+            input.event_at(2, Phase::Started, point, g, controls, now);
+            let later = now + floating_controls::HOLD_TO_MOVE;
+            assert!(
+                input
+                    .event_at(2, Phase::Moved, Point(-500., -500.), g, controls, later)
+                    .is_empty()
+            );
+            assert_eq!(input.moving_control(), Some(control));
+            let moved = input.placed_controls(controls, g.bounds);
+            assert_eq!(control.bounds(moved).map(|b| (b.0, b.1)), Some((0., 0.)));
+            assert!(
+                input
+                    .event_at(2, Phase::Ended, Point(-500., -500.), g, controls, later)
+                    .is_empty()
+            );
+            assert!(input.flush().is_empty());
+            assert!(!input.active() && input.moving_control().is_none());
+            // The saved placement, not the original button rectangle, receives the next tap.
+            assert!(
+                input
+                    .event_at(3, Phase::Started, Point(24., 24.), g, controls, later)
+                    .is_empty()
+            );
+            let moved_tap = input.event_at(3, Phase::Ended, Point(24., 24.), g, controls, later);
+            assert_eq!(
+                moved_tap.len(),
+                if control == Control::Wheel { 0 } else { 3 }
+            );
+            input.event_at(4, Phase::Started, Point(24., 24.), g, controls, later);
+            assert!(
+                input
+                    .event_at(
+                        4,
+                        Phase::Moved,
+                        Point(900., -900.),
+                        g,
+                        controls,
+                        later + floating_controls::HOLD_TO_MOVE
+                    )
+                    .is_empty()
+            );
+            let placed = control
+                .bounds(input.placed_controls(controls, g.bounds))
+                .unwrap();
+            assert!(
+                placed.0 >= 0.
+                    && placed.1 >= 0.
+                    && placed.0 + placed.2 <= 320.
+                    && placed.1 + placed.3 <= 240.
+            );
+            assert!(
+                placed.1 >= 44. || placed.0 + placed.2 <= 268.,
+                "the toolbar must not cover a moved control"
+            );
+            assert!(input.cancel_event(4, Phase::Cancelled).is_empty());
+            assert!(
+                input
+                    .event_at(
+                        4,
+                        Phase::Ended,
+                        Point(900., -900.),
+                        g,
+                        controls,
+                        later + floating_controls::HOLD_TO_MOVE
+                    )
+                    .is_empty()
+            );
+            assert!(!input.active() && !input.pending());
+        }
+    }
+
+    #[test]
+    fn wheel_sliding_and_button_plus_video_drag_remain_independent_and_balanced() {
+        let (g, mut controls) = layout();
+        controls.wheel = Some((160., 0., 40., 80.));
         let mut input = SessionInput::default();
         input.configure(g, controls);
         input.set_mode(InputMode::Pointer);
-        assert_eq!(
-            input.event(1, Phase::Started, Point(170., 80.), g, controls),
-            vec![Output::Move(-200, 150), Output::MiddleDown(-200, 150)]
-        );
-        assert!(input.snapshot().middle_down);
-        input.event(2, Phase::Started, Point(60., 30.), g, controls);
-        input.event(2, Phase::Moved, Point(80., 30.), g, controls);
-        assert_eq!(input.flush(), vec![Output::Move(-160, 150)]);
-        assert!(
-            input
-                .event(1, Phase::Moved, Point(10., 130.), g, controls)
-                .is_empty()
-        );
-        assert!(
-            !input.pending(),
-            "moving the middle-button finger must not scroll"
-        );
-        assert!(
-            input
-                .event(2, Phase::Ended, Point(80., 30.), g, controls)
-                .is_empty()
-        );
-        assert!(input.snapshot().middle_down);
-        assert_eq!(
-            input.event(1, Phase::Ended, Point(10., 130.), g, controls),
-            vec![Output::MiddleUp(-160, 150)]
-        );
-        assert!(!input.active() && !input.pending() && !input.snapshot().middle_down);
-
-        // Multiple fingers on one floating button own exactly one balanced press.
-        assert!(matches!(
-            input
-                .event(3, Phase::Started, Point(170., 80.), g, controls)
-                .as_slice(),
-            [Output::Move(_, _), Output::MiddleDown(_, _)]
-        ));
-        assert!(
-            input
-                .event(4, Phase::Started, Point(160., 80.), g, controls)
-                .is_empty()
-        );
-        assert!(
-            input
-                .event(3, Phase::Ended, Point(170., 80.), g, controls)
-                .is_empty()
-        );
-        assert_eq!(
-            input.event(4, Phase::Ended, Point(160., 80.), g, controls),
-            vec![Output::MiddleUp(-160, 150)]
-        );
-
-        // A button while a video finger rests cancels the latent left-tap candidate.
-        input.event(5, Phase::Started, Point(60., 30.), g, controls);
-        input.event(6, Phase::Started, Point(170., 80.), g, controls);
-        assert_eq!(
-            input.event(6, Phase::Ended, Point(170., 80.), g, controls),
-            vec![Output::MiddleUp(-160, 150)]
-        );
-        assert!(
-            input
-                .event(5, Phase::Ended, Point(60., 30.), g, controls)
-                .is_empty()
-        );
-
-        // Left and right holds retain their original independent drag behavior.
-        assert_eq!(
-            input.event(9, Phase::Started, Point(20., 120.), g, controls),
-            vec![Output::Move(-160, 150), Output::Down(-160, 150)]
-        );
-        assert_eq!(
-            input.event(10, Phase::Started, Point(90., 120.), g, controls),
-            vec![Output::Move(-160, 150), Output::RightDown(-160, 150)]
-        );
-        input.event(11, Phase::Started, Point(60., 30.), g, controls);
-        input.event(11, Phase::Moved, Point(80., 50.), g, controls);
-        assert_eq!(input.flush(), vec![Output::Move(-120, 190)]);
-        assert_eq!(
-            input.event(9, Phase::Ended, Point(20., 120.), g, controls),
-            vec![Output::Up(-120, 190)]
-        );
-        assert_eq!(
-            input.event(10, Phase::Ended, Point(90., 120.), g, controls),
-            vec![Output::RightUp(-120, 190)]
-        );
-        assert!(
-            input
-                .event(11, Phase::Ended, Point(80., 50.), g, controls)
-                .is_empty()
-        );
-
-        // Scrolling remains a two-video-finger gesture, independent of button routing.
-        input.event(7, Phase::Started, Point(60., 20.), g, controls);
-        input.event(8, Phase::Started, Point(90., 20.), g, controls);
-        input.event(7, Phase::Moved, Point(60., 40.), g, controls);
-        input.event(8, Phase::Moved, Point(90., 40.), g, controls);
+        let now = Instant::now();
+        input.event_at(1, Phase::Started, Point(180., 20.), g, controls, now);
+        input.event_at(1, Phase::Moved, Point(180., 40.), g, controls, now);
         assert_eq!(
             input.flush(),
-            vec![Output::Move(-120, 190), Output::Scroll(0, 20)]
+            vec![Output::Move(-200, 150), Output::Scroll(0, 20)]
         );
         assert!(
             input
-                .event(7, Phase::Ended, Point(60., 40.), g, controls)
+                .event_at(
+                    1,
+                    Phase::Ended,
+                    Point(180., 40.),
+                    g,
+                    controls,
+                    now + floating_controls::HOLD_TO_MOVE
+                )
+                .is_empty()
+        );
+        assert_eq!(input.placed_controls(controls, g.bounds), controls);
+        assert_eq!(input.wheel_position(), 0.5);
+        for (id, point, down, up) in [
+            (
+                2,
+                Point(20., 120.),
+                Output::Down(-200, 150),
+                Output::Up(-160, 150),
+            ),
+            (
+                4,
+                Point(90., 120.),
+                Output::RightDown(-160, 150),
+                Output::RightUp(-120, 150),
+            ),
+            (
+                6,
+                Point(170., 120.),
+                Output::MiddleDown(-120, 150),
+                Output::MiddleUp(-80, 150),
+            ),
+        ] {
+            assert!(
+                input
+                    .event_at(id, Phase::Started, point, g, controls, now)
+                    .is_empty()
+            );
+            assert!(
+                input
+                    .event_at(id + 1, Phase::Started, Point(60., 30.), g, controls, now)
+                    .contains(&down)
+            );
+            input.event_at(id + 1, Phase::Moved, Point(80., 30.), g, controls, now);
+            input.flush();
+            assert_eq!(
+                input.event_at(id, Phase::Ended, point, g, controls, now),
+                vec![up]
+            );
+            assert!(
+                input
+                    .event_at(id + 1, Phase::Ended, Point(80., 30.), g, controls, now)
+                    .is_empty()
+            );
+        }
+        assert!(matches!(
+            input.click_control(Control::Middle).as_slice(),
+            [
+                Output::Move(_, _),
+                Output::MiddleDown(_, _),
+                Output::MiddleUp(_, _)
+            ]
+        ));
+        assert!(input.wheel_step(-40).contains(&Output::Scroll(0, -40)));
+        // Fast movement before the hold is neither a click nor a reposition.
+        input.event_at(10, Phase::Started, Point(20., 120.), g, controls, now);
+        assert!(
+            input
+                .event_at(10, Phase::Moved, Point(40., 120.), g, controls, now)
                 .is_empty()
         );
         assert!(
             input
-                .event(8, Phase::Ended, Point(90., 40.), g, controls)
+                .event_at(10, Phase::Ended, Point(40., 120.), g, controls, now)
                 .is_empty()
         );
+        assert_eq!(input.placed_controls(controls, g.bounds), controls);
     }
 
     #[test]
@@ -458,7 +663,9 @@ mod tests {
         input.set_mode(InputMode::Pointer);
         assert!(input.set_position((-350, 70)));
         assert!(!input.set_position((50, 70)));
+        input.event(100 + 1, Phase::Started, Point(60., 30.), g, controls);
         input.event(1, Phase::Started, Point(20., 120.), g, controls);
+        input.event(100 + 1, Phase::Ended, Point(60., 30.), g, controls);
         assert_eq!(
             input.set_mode(InputMode::Direct),
             vec![Output::Up(-350, 70)]
@@ -511,7 +718,9 @@ mod tests {
                 .is_empty()
         );
         input.set_mode(InputMode::Pointer);
+        input.event(100 + 3, Phase::Started, Point(60., 30.), rotated, controls);
         input.event(3, Phase::Started, Point(90., 120.), rotated, controls);
+        input.event(100 + 3, Phase::Ended, Point(60., 30.), rotated, controls);
         assert!(
             input
                 .cancel()
@@ -527,7 +736,9 @@ mod tests {
         assert_eq!(input.mode(), InputMode::Pointer);
         assert!(!input.active() && input.snapshot().position.is_none());
         input.configure(g, controls);
+        input.event(100 + 11, Phase::Started, Point(60., 30.), g, controls);
         input.event(11, Phase::Started, Point(20., 120.), g, controls);
+        input.event(100 + 11, Phase::Ended, Point(60., 30.), g, controls);
         let other_display = Geometry {
             origin: (1000, 50),
             ..g
@@ -558,9 +769,23 @@ mod tests {
         assert_eq!(input.snapshot().position, current_display_position);
 
         input.event(
+            100 + 31,
+            Phase::Started,
+            Point(60., 30.),
+            other_display,
+            controls,
+        );
+        input.event(
             31,
             Phase::Started,
             Point(170., 120.),
+            other_display,
+            controls,
+        );
+        input.event(
+            100 + 31,
+            Phase::Ended,
+            Point(60., 30.),
             other_display,
             controls,
         );
@@ -577,9 +802,23 @@ mod tests {
         );
 
         input.event(
+            100 + 32,
+            Phase::Started,
+            Point(60., 30.),
+            other_display,
+            controls,
+        );
+        input.event(
             32,
             Phase::Started,
             Point(170., 120.),
+            other_display,
+            controls,
+        );
+        input.event(
+            100 + 32,
+            Phase::Ended,
+            Point(60., 30.),
             other_display,
             controls,
         );
@@ -590,9 +829,23 @@ mod tests {
         input.event(32, Phase::Ended, Point(170., 120.), g, controls);
         input.set_mode(InputMode::Pointer);
         input.event(
+            100 + 33,
+            Phase::Started,
+            Point(60., 30.),
+            other_display,
+            controls,
+        );
+        input.event(
             33,
             Phase::Started,
             Point(170., 120.),
+            other_display,
+            controls,
+        );
+        input.event(
+            100 + 33,
+            Phase::Ended,
+            Point(60., 30.),
             other_display,
             controls,
         );

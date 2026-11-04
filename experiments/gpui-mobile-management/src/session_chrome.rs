@@ -1,10 +1,14 @@
-use crate::session_layout::{Panel, Rect, SessionLayout};
+use crate::{
+    session_input::Control,
+    session_layout::{Panel, Rect, SessionLayout},
+};
 use gpui::{
-    Context, Div, EventEmitter, IntoElement, PathBuilder, Render, Stateful, Window, canvas, div,
-    point, prelude::*, px, rgb,
+    Context, Div, EventEmitter, IntoElement, PathBuilder, Render, Role, Stateful, Window, canvas,
+    div, point, prelude::*, px, rgb,
 };
 
 mod bitrate;
+mod mouse_controls;
 mod resolution;
 pub(crate) mod virtual_displays;
 
@@ -61,6 +65,8 @@ pub struct ChromeModel {
     pub left_pressed: bool,
     pub right_pressed: bool,
     pub middle_pressed: bool,
+    pub moving_control: Option<Control>,
+    pub wheel_position: f32,
     pub right_click_armed: bool,
 }
 
@@ -72,6 +78,8 @@ pub enum ChromeAction {
     ClosePanel,
     SetPointer(bool),
     ToggleMouseButtons,
+    MouseButton(Control),
+    MouseWheel(i32),
     ToggleViewOnly,
     ToggleAudio,
     Bitrate(Option<u32>),
@@ -151,8 +159,8 @@ impl SessionChrome {
     ) -> Stateful<Div> {
         div()
             .id(id)
-            .min_h(px(48.))
-            .min_w(px(48.))
+            .min_h(px(44.))
+            .min_w(px(44.))
             .px_3()
             .flex()
             .items_center()
@@ -249,24 +257,23 @@ impl SessionChrome {
         if !model.rail_expanded {
             return at(model.layout.rail)
                 .id("session-rail-expand")
-                .bg(rgb(PAGE))
+                .role(Role::Button)
+                .aria_label("展开操控栏")
+                .aria_expanded(false)
+                .rounded(px(12.))
+                .bg(rgb(RAISED))
+                .border_1()
+                .border_color(rgb(BORDER))
                 .flex()
+                .flex_col()
                 .items_center()
                 .justify_center()
+                .text_size(px(10.))
+                .line_height(px(12.))
                 .occlude()
                 .cursor_pointer()
-                .child(
-                    div()
-                        .w(px(12.))
-                        .h(px(48.))
-                        .rounded_full()
-                        .overflow_hidden()
-                        .bg(rgb(RAISED))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(glyph(Glyph::Expand, MUTED)),
-                )
+                .child(glyph(Glyph::Expand, TEXT))
+                .child("展开")
                 .on_click(cx.listener(|_, _, _, cx| {
                     cx.emit(ChromeAction::ToggleRail);
                     cx.stop_propagation();
@@ -278,8 +285,8 @@ impl SessionChrome {
             .flex()
             .flex_col()
             .items_center()
-            .gap_2()
-            .py_2()
+            .gap_1()
+            .py_1()
             .overflow_y_scroll()
             .occlude();
         for (id, label, icon, panel, enabled) in [
@@ -324,7 +331,6 @@ impl SessionChrome {
             (false, true),
             ChromeAction::Exit,
         ))
-        .child(div().flex_1())
         .child(self.rail_button(
             cx,
             "session-rail-collapse",
@@ -345,14 +351,23 @@ impl SessionChrome {
         action: ChromeAction,
     ) -> Stateful<Div> {
         self.button(cx, id, "", state.0, state.1, action)
-            .w(px(48.))
-            .h(px(48.))
+            .role(Role::Button)
+            .aria_label(label.to_owned())
+            .w(px(44.))
+            .h(px(44.))
             .px_0()
             .flex_shrink_0()
             .flex_col()
             .text_size(px(10.))
             .line_height(px(12.))
-            .child(glyph(icon, TEXT))
+            .child(glyph(
+                icon,
+                if state.0 {
+                    crate::theme::LIGHT.on_accent
+                } else {
+                    TEXT
+                },
+            ))
             .child(label.to_owned())
     }
 
@@ -430,52 +445,43 @@ impl SessionChrome {
                 )
                 .flex_1(),
             );
-        let mut body =
-            div()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .child(section("控制方式"))
-                .child(mode)
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(
-                    if model.pointer_mode {
-                        "滑动移动指针，轻点左键；双指轻点右键，双指滑动滚动。"
-                    } else {
-                        "直接触摸远程画面，拖动时保持按住。"
-                    },
-                ))
-                .child(self.toggle(
-                    cx,
-                    "session-audio",
-                    "声音",
-                    model.audio_on,
-                    model.connected,
-                    ChromeAction::ToggleAudio,
-                ))
-                .child(self.toggle(
-                    cx,
-                    "session-view-only",
-                    "仅查看",
-                    model.view_only || !model.can_control,
-                    model.connected && (model.can_control || model.can_request_control),
-                    ChromeAction::ToggleViewOnly,
-                ))
-                .when(model.can_request_control && !model.can_control, |body| {
-                    body.child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child("启用控制会重新连接。"),
-                    )
-                })
-                .child(self.toggle(
-                    cx,
-                    "session-mouse-buttons",
-                    "鼠标按键",
-                    model.mouse_buttons,
-                    input_ready && model.pointer_mode && !model.view_only,
-                    ChromeAction::ToggleMouseButtons,
-                ));
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(mode)
+            .child(self.toggle(
+                cx,
+                "session-audio",
+                "声音",
+                model.audio_on,
+                model.connected,
+                ChromeAction::ToggleAudio,
+            ))
+            .child(self.toggle(
+                cx,
+                "session-view-only",
+                "仅查看",
+                model.view_only || !model.can_control,
+                model.connected && (model.can_control || model.can_request_control),
+                ChromeAction::ToggleViewOnly,
+            ))
+            .when(model.can_request_control && !model.can_control, |body| {
+                body.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .child("启用控制会重新连接。"),
+                )
+            })
+            .child(self.toggle(
+                cx,
+                "session-mouse-buttons",
+                "鼠标按键",
+                model.mouse_buttons,
+                input_ready && model.pointer_mode && !model.view_only,
+                ChromeAction::ToggleMouseButtons,
+            ));
         if !model.pointer_mode {
             body = body.child(
                 self.button(
@@ -526,7 +532,7 @@ impl SessionChrome {
                         MediaMenu::Bitrate => "session-bitrate-menu",
                         MediaMenu::VirtualDisplays => "session-virtual-displays-menu",
                     })
-                    .min_h(px(48.))
+                    .min_h(px(44.))
                     .px_3()
                     .flex()
                     .items_center()
@@ -694,7 +700,7 @@ impl SessionChrome {
             let mut body = div()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_2()
                 .child(
                     self.media_menu(
                         MediaMenu::Displays,
@@ -724,7 +730,7 @@ impl SessionChrome {
                 )
                 .child(self.media_settings(window, cx));
             if !self.model.quality.is_empty() {
-                body = body.child(section("连接状态")).child(
+                body = body.child(
                     div()
                         .text_size(px(12.))
                         .line_height(px(19.))
@@ -746,9 +752,9 @@ impl SessionChrome {
             .flex_col()
             .child(
                 div()
-                    .h(px(56.))
+                    .h(px(48.))
                     .flex_shrink_0()
-                    .px_3()
+                    .px_2()
                     .flex()
                     .items_center()
                     .justify_between()
@@ -762,8 +768,10 @@ impl SessionChrome {
                             true,
                             ChromeAction::ClosePanel,
                         )
-                        .w(px(48.))
-                        .h(px(48.))
+                        .role(Role::Button)
+                        .aria_label("关闭面板")
+                        .w(px(44.))
+                        .h(px(44.))
                         .px_0()
                         .child(glyph(Glyph::Close, TEXT)),
                     ),
@@ -774,10 +782,11 @@ impl SessionChrome {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .p_3()
+                    .px_2()
+                    .pb_2()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_2()
                     .child(body)
                     .when(!self.model.notice.is_empty(), |body| {
                         body.child(
@@ -789,64 +798,6 @@ impl SessionChrome {
                         )
                     }),
             )
-    }
-
-    fn floating_mouse_buttons(&self) -> Div {
-        let Some(mouse) = self.model.layout.mouse else {
-            return div();
-        };
-        let mut dock = div().absolute().top_0().left_0().size_full();
-        for (rect, icon, label, pressed) in [
-            (
-                mouse.left,
-                Glyph::MouseLeft,
-                "左键",
-                self.model.left_pressed,
-            ),
-            (
-                mouse.right,
-                Glyph::MouseRight,
-                "右键",
-                self.model.right_pressed,
-            ),
-            (
-                mouse.middle,
-                Glyph::MouseMiddle,
-                "中键",
-                self.model.middle_pressed,
-            ),
-        ] {
-            dock = dock.child(
-                at(rect)
-                    .rounded_full()
-                    .bg(gpui::rgba(if pressed {
-                        (ACCENT << 8) | 0xe8
-                    } else {
-                        (RAISED << 8) | 0xb8
-                    }))
-                    .border_1()
-                    .border_color(rgb(if pressed { ACCENT } else { BORDER }))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .flex_col()
-                    .text_color(rgb(if pressed {
-                        crate::theme::LIGHT.on_accent
-                    } else {
-                        TEXT
-                    }))
-                    .child(glyph(
-                        icon,
-                        if pressed {
-                            crate::theme::LIGHT.on_accent
-                        } else {
-                            TEXT
-                        },
-                    ))
-                    .child(div().text_size(px(10.)).line_height(px(12.)).child(label)),
-            );
-        }
-        dock
     }
 }
 
@@ -890,7 +841,7 @@ impl Render for SessionChrome {
                     }),
             );
         }
-        chrome = chrome.child(self.floating_mouse_buttons());
+        chrome = chrome.child(mouse_controls::render(&self.model, cx));
         if let Some(panel) = self.model.layout.panel {
             chrome = chrome.child(self.panel(panel, window, cx));
         }
@@ -907,13 +858,6 @@ fn at(rect: Rect) -> Div {
         .h(px(rect.height))
 }
 
-fn section(label: &str) -> Div {
-    div()
-        .text_size(px(12.))
-        .text_color(rgb(MUTED))
-        .child(label.to_owned())
-}
-
 #[derive(Clone, Copy)]
 enum Glyph {
     Operations,
@@ -923,9 +867,6 @@ enum Glyph {
     Expand,
     Collapse,
     Close,
-    MouseLeft,
-    MouseRight,
-    MouseMiddle,
 }
 
 fn glyph(shape: Glyph, color: u32) -> impl IntoElement {
@@ -987,48 +928,6 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
         Glyph::Expand => &[&[(15., 6.), (9., 12.), (15., 18.)]],
         Glyph::Collapse => &[&[(9., 6.), (15., 12.), (9., 18.)]],
         Glyph::Close => &[&[(6., 6.), (18., 18.)], &[(18., 6.), (6., 18.)]],
-        Glyph::MouseLeft => &[&[
-            (12., 3.),
-            (6., 3.),
-            (4., 6.),
-            (4., 18.),
-            (7., 22.),
-            (17., 22.),
-            (20., 18.),
-            (20., 6.),
-            (18., 3.),
-            (12., 3.),
-            (12., 12.),
-            (4., 12.),
-        ]],
-        Glyph::MouseRight => &[&[
-            (12., 3.),
-            (6., 3.),
-            (4., 6.),
-            (4., 18.),
-            (7., 22.),
-            (17., 22.),
-            (20., 18.),
-            (20., 6.),
-            (18., 3.),
-            (12., 3.),
-            (12., 12.),
-            (20., 12.),
-        ]],
-        Glyph::MouseMiddle => &[
-            &[
-                (7., 3.),
-                (17., 3.),
-                (20., 6.),
-                (20., 18.),
-                (17., 22.),
-                (7., 22.),
-                (4., 18.),
-                (4., 6.),
-                (7., 3.),
-            ],
-            &[(10., 6.), (14., 6.), (14., 12.), (10., 12.), (10., 6.)],
-        ],
     }
 }
 
@@ -1069,5 +968,104 @@ mod refresh_tests {
         );
         assert!(refresh_modes(None, &modes).is_empty());
         assert!(refresh_modes(Some((1920, 1080, 0)), &modes).is_empty());
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod rail_tests {
+    use super::*;
+    use gpui_test_support::{
+        AppContext, Entity, HitboxBehavior, TestAppContext, TouchEvent, TouchId, TouchPhase,
+    };
+    use std::{cell::Cell, rc::Rc};
+
+    struct Stage {
+        chrome: Entity<SessionChrome>,
+        remote_touches: Rc<Cell<usize>>,
+    }
+
+    impl Render for Stage {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let owner = cx.entity_id();
+            let remote_touches = self.remote_touches.clone();
+            let stage = self.chrome.read(cx).model.layout.stage;
+            div()
+                .relative()
+                .w(px(320.))
+                .h(px(640.))
+                .child(
+                    canvas(
+                        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                        move |_, hitbox, window, _| {
+                            window.on_touch_event(owner, &hitbox, move |_, _, _| {
+                                remote_touches.set(remote_touches.get() + 1);
+                            });
+                        },
+                    )
+                    .absolute()
+                    .w(px(stage.width))
+                    .h(px(stage.height)),
+                )
+                .child(self.chrome.clone())
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn corner_button_toggles_without_sending_remote_touch_and_leaves_the_lower_edge_free(
+        cx: &mut TestAppContext,
+    ) {
+        let remote_touches = Rc::new(Cell::new(0));
+        let (stage, cx) = cx.add_window_view(|_, cx| Stage {
+            chrome: cx.new(|cx| {
+                let mut chrome = SessionChrome::new(cx);
+                chrome.model.has_frame = true;
+                chrome.model.layout =
+                    crate::session_layout::layout(320., 640., false, Panel::None, false, 88.);
+                chrome
+            }),
+            remote_touches: remote_touches.clone(),
+        });
+        let chrome = cx.update(|_, cx| stage.read(cx).chrome.clone());
+        let toggles = Rc::new(Cell::new(0));
+        let count = toggles.clone();
+        let _subscription = cx.update(|window, cx| {
+            window.subscribe(&chrome, cx, move |chrome, action, _, cx| {
+                assert_eq!(*action, ChromeAction::ToggleRail);
+                count.set(count.get() + 1);
+                chrome.update(cx, |chrome, cx| {
+                    let expanded = !chrome.model.rail_expanded;
+                    let mut model = chrome.model.clone();
+                    model.rail_expanded = expanded;
+                    model.layout = crate::session_layout::layout(
+                        320.,
+                        640.,
+                        expanded,
+                        Panel::None,
+                        false,
+                        88.,
+                    );
+                    chrome.set_model(model, cx);
+                });
+            })
+        });
+        for (y, end, expected_toggles, expected_remote) in [
+            (30., TouchPhase::Ended, 1, 0),
+            (218., TouchPhase::Ended, 2, 0),
+            (400., TouchPhase::Ended, 2, 2),
+            (30., TouchPhase::Cancelled, 2, 2),
+            (30., TouchPhase::Ended, 3, 2),
+        ] {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            for phase in [TouchPhase::Started, end] {
+                cx.simulate_event(TouchEvent {
+                    id: TouchId(1),
+                    phase,
+                    position: point(px(290.), px(y)),
+                    ..TouchEvent::default()
+                });
+            }
+            assert_eq!(toggles.get(), expected_toggles);
+            assert_eq!(remote_touches.get(), expected_remote);
+        }
     }
 }

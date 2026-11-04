@@ -20,6 +20,7 @@ pub struct MouseControls {
     pub left: Rect,
     pub right: Rect,
     pub middle: Rect,
+    pub wheel: Rect,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -48,9 +49,9 @@ pub fn layout(
         0.
     };
     let rail_width = if rail_expanded {
-        64_f32.min(width * 0.2)
+        56_f32.min(width * 0.2)
     } else {
-        44_f32.min(width)
+        0.
     };
     let available_width = (width - rail_width).max(0.);
     let options = matches!(panel, Panel::Operations | Panel::Display);
@@ -82,11 +83,23 @@ pub fn layout(
         height: stage_height,
     };
     let video = stage;
-    let rail = Rect {
-        x: available_width,
-        y: 0.,
-        width: rail_width,
-        height,
+    let rail = if rail_expanded {
+        Rect {
+            x: available_width,
+            y: 0.,
+            width: rail_width,
+            height,
+        }
+    } else {
+        let size = 44_f32.min(width).min(height);
+        let right = 8_f32.min((width - size).max(0.));
+        let top = 8_f32.min((height - size).max(0.));
+        Rect {
+            x: width - size - right,
+            y: top,
+            width: size,
+            height: size,
+        }
     };
     let control_panel = if options {
         Some(if side_width > 0. {
@@ -114,10 +127,10 @@ pub fn layout(
         height: bottom_height,
     });
     let mouse =
-        (pointer_buttons && panel != Panel::Keyboard && stage_width >= 160. && stage_height >= 64.)
+        (pointer_buttons && panel != Panel::Keyboard && stage_width >= 224. && stage_height >= 64.)
             .then(|| {
                 let key_size = 48.;
-                let first = (video.width - key_size * 3. - 16.) / 2.;
+                let first = (video.width - key_size * 4. - 24.) / 2.;
                 let left = Rect {
                     x: first,
                     y: video.height - key_size - 12.,
@@ -132,10 +145,18 @@ pub fn layout(
                     x: first + 2. * (key_size + 8.),
                     ..left
                 };
+                let wheel_height = 112_f32.min(video.height - 24.).max(44.);
+                let wheel = Rect {
+                    x: first + 3. * (key_size + 8.),
+                    y: video.height - wheel_height - 12.,
+                    width: key_size,
+                    height: wheel_height,
+                };
                 MouseControls {
                     left,
                     middle,
                     right,
+                    wheel,
                 }
             });
     SessionLayout {
@@ -180,16 +201,40 @@ mod tests {
             ] {
                 for expanded in [true, false] {
                     let layout = layout(width, height, expanded, panel, true, 176.);
-                    for control in [Some(layout.rail), layout.panel, layout.keyboard]
-                        .into_iter()
-                        .flatten()
+                    for control in [
+                        expanded.then_some(layout.rail),
+                        layout.panel,
+                        layout.keyboard,
+                    ]
+                    .into_iter()
+                    .flatten()
                     {
                         assert!(!overlaps(layout.video, control), "{layout:?}");
                     }
                     assert!(layout.video.width > 0. && layout.video.height >= 44.);
-                    assert!(layout.stage.x + layout.stage.width <= layout.rail.x + 0.01);
+                    if expanded {
+                        assert!(layout.stage.x + layout.stage.width <= layout.rail.x + 0.01);
+                    }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn collapsed_controls_are_a_top_right_button_without_reserving_a_sidebar() {
+        for (width, height) in [(1280., 576.), (800., 360.), (320., 640.), (960., 154.)] {
+            let layout = layout(width, height, false, Panel::None, false, 88.);
+            assert_eq!(layout.video, layout.viewport);
+            assert_eq!(layout.stage, layout.viewport);
+            assert_eq!(
+                layout.rail,
+                Rect {
+                    x: width - 52.,
+                    y: 8.,
+                    width: 44.,
+                    height: 44.,
+                }
+            );
         }
     }
 
@@ -208,7 +253,7 @@ mod tests {
                 assert_eq!(shown.stage, hidden.stage);
                 if let Some(mouse) = shown.mouse {
                     assert_ne!(panel, Panel::Keyboard);
-                    for button in [mouse.left, mouse.middle, mouse.right] {
+                    for button in [mouse.left, mouse.middle, mouse.right, mouse.wheel] {
                         assert!(button.width >= 44. && button.height >= 44.);
                         assert!(button.x >= shown.video.x && button.y >= shown.video.y);
                         assert!(button.x + button.width <= shown.video.x + shown.video.width);
@@ -216,6 +261,7 @@ mod tests {
                     }
                     assert!(!overlaps(mouse.left, mouse.middle));
                     assert!(!overlaps(mouse.middle, mouse.right));
+                    assert!(!overlaps(mouse.right, mouse.wheel));
                 }
             }
         }
