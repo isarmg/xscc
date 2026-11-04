@@ -431,10 +431,9 @@ mod cpal_impl {
                 }
             }
         }
-        let device = device.unwrap_or(
-            HOST.default_input_device()
-                .with_context(|| "Failed to get default input device for loopback")?,
-        );
+        let device = device
+            .or_else(|| HOST.default_input_device())
+            .with_context(|| "Failed to get default input device for loopback")?;
         log::info!("Input device: {}", device.name().unwrap_or("".to_owned()));
         let format = device
             .default_input_config()

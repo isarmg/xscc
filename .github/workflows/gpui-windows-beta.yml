@@ -262,6 +262,9 @@ jobs:
           if ($legacyExit -ne 0 -or ($legacyTests | Out-String) -notmatch '(?m)^test result: ok\. 2 passed; 0 failed;') {
             throw 'Legacy virtual display regressions did not pass both tests'
           }
+      - name: Test independent audio playback backlogs
+        if: matrix.role == 'controller' && !inputs.build_only
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "client::audio_state_tests::playback_sessions_shrink_backlogs_independently"
       - name: Test Enigo parse error formatting
         if: matrix.role == 'controller' && !inputs.build_only
         run: |

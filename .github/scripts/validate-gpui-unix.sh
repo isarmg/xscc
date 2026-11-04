@@ -26,6 +26,9 @@ decode_tests=$(cargo test --locked -p hwcodec --lib --target "$target" ffmpeg_ra
 printf '%s\n' "$decode_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }
 if [[ $target == aarch64-apple-darwin ]]; then
+    audio_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" client::audio_state_tests::playback_sessions_shrink_backlogs_independently 2>&1) || { printf '%s\n' "$audio_tests"; exit 1; }
+    printf '%s\n' "$audio_tests"
+    grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$audio_tests" || { echo 'Audio playback backlog regression did not run' >&2; exit 1; }
     quartz_tests=$(cargo test --locked -p scrap --lib --no-default-features --features capture --target "$target" quartz::frame::tests:: -- --nocapture 2>&1) || { printf '%s\n' "$quartz_tests"; exit 1; }
     printf '%s\n' "$quartz_tests"
     grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz borrowed-plane tests did not run both tests' >&2; exit 1; }

@@ -441,6 +441,7 @@ struct AudioBuffer(
     usize,
     [usize; 30],
     Arc<std::sync::atomic::AtomicUsize>,
+    Option<std::time::Instant>,
 );
 
 #[cfg(not(target_os = "linux"))]
@@ -453,6 +454,7 @@ impl Default for AudioBuffer {
             48000 * 2,
             [0; 30],
             Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            None,
         )
     }
 }
@@ -470,27 +472,18 @@ impl AudioBuffer {
     }
 
     fn try_shrink(&mut self, having: usize) {
-        extern crate chrono;
-        use chrono::prelude::*;
-
         let mut i = (having * 10) / self.1;
         if i > 29 {
             i = 29;
         }
         self.2[i] += 1;
 
-        #[allow(non_upper_case_globals)]
-        static mut tms: i64 = 0;
-        let dt = Local::now().timestamp_millis();
-        unsafe {
-            if tms == 0 {
-                tms = dt;
-                return;
-            } else if dt < tms + 12000 {
-                return;
-            }
-            tms = dt;
+        let now = std::time::Instant::now();
+        let last_shrink = self.4.get_or_insert(now);
+        if now.duration_since(*last_shrink) < Duration::from_secs(12) {
+            return;
         }
+        *last_shrink = now;
 
         // the safer water mark to drop
         let mut zero = 0;

@@ -126,3 +126,26 @@ fn identical_format_failure_preserves_playback_and_resampler_history() {
 fn drain_audio(handler: &AudioHandler) -> Vec<f32> {
     handler.audio_buffer.0.lock().unwrap().pop_iter().collect()
 }
+
+#[test]
+fn playback_sessions_shrink_backlogs_independently() {
+    let mut first = super::AudioBuffer::default();
+    let mut second = super::AudioBuffer::default();
+    let queued = vec![SAMPLE_VALUE; OUTPUT_RATE as usize * CHANNELS as usize];
+    first.append_pcm(&queued);
+    second.append_pcm(&queued);
+    std::thread::sleep(std::time::Duration::from_secs(12));
+
+    first.append_pcm(&[]);
+    second.append_pcm(&[]);
+
+    for buffer in [&first, &second] {
+        let remaining: Vec<_> = buffer.0.lock().unwrap().pop_iter().collect();
+        assert!(!remaining.is_empty());
+        assert!(
+            remaining.len() < queued.len(),
+            "another session deferred backlog removal"
+        );
+        assert!(remaining.iter().all(|sample| *sample == SAMPLE_VALUE));
+    }
+}
