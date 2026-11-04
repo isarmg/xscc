@@ -176,7 +176,7 @@ fn mouse_icon(control: Control, color: u32) -> impl IntoElement {
     .flex_shrink_0()
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod tests {
     use super::*;
     use crate::{
