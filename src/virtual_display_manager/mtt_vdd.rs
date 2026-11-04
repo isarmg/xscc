@@ -455,7 +455,13 @@ pub(super) fn get_monitor_count() -> usize {
 fn wait_for_count(count: usize) -> ResultType<()> {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(10) {
-        if configuration::present_count()? == count {
+        // Disabling the root can precede removal of its monitor children.
+        let actual = if count == 0 {
+            topology::monitor_ids()?.len()
+        } else {
+            configuration::present_count()?
+        };
+        if actual == count {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -577,7 +583,9 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
                     bail!("Windows requires a restart to start the VDD driver");
                 }
             }
-            change_device(profile_activation_state(enabled))?;
+            if present {
+                change_device(profile_activation_state(enabled))?;
+            }
         } else if present {
             change_device(DICS_DISABLE)?;
         }
@@ -595,10 +603,7 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
         let configuration = restore_configuration(&path, previous.as_deref(), restore_path);
         let device_state = (|| -> ResultType<()> {
             if device()?.is_some() {
-                change_device(if enabled { DICS_ENABLE } else { DICS_DISABLE })?;
-                if enabled {
-                    change_device(DICS_PROPCHANGE)?;
-                }
+                change_device(if enabled { DICS_PROPCHANGE } else { DICS_DISABLE })?;
             }
             wait_for_count(previous_count)
         })();

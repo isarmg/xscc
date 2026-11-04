@@ -342,10 +342,7 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             }
             if let Err(error) = (|| -> ResultType<()> {
                 if device()?.is_some() {
-                    change_device(if enabled { DICS_ENABLE } else { DICS_DISABLE })?;
-                    if enabled {
-                        change_device(DICS_PROPCHANGE)?;
-                    }
+                    change_device(if enabled { DICS_PROPCHANGE } else { DICS_DISABLE })?;
                 }
                 snapshot.restore()?;
                 if let Some(bytes) = previous_policy {

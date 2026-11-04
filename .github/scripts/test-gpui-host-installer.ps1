@@ -50,7 +50,9 @@ function Assert-Unbound {
 
 $identityHash = $null
 try {
+    Write-Host 'HOST_CI_STAGE=install'
     Invoke-Installer $installer
+    Write-Host 'HOST_CI_STAGE=verify-service'
     $fontLicense = Join-Path $installed 'MAPLE-FONT-OFL.txt'
     if (-not (Test-Path $fontLicense) -or
         (Get-FileHash $fontLicense -Algorithm SHA256).Hash -ne
@@ -74,6 +76,53 @@ try {
     Assert-Unbound
     try { $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash }
     catch [System.UnauthorizedAccessException] { Write-Warning 'Identity contents are inaccessible; no ACL changes will be made' }
+    if ($env:XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER -eq 'true') {
+        Write-Host 'VDD_CI_STAGE=read-test-artifact'
+        $buildLog = Join-Path $env:RUNNER_TEMP 'xscc-vdd-test-build.jsonl'
+        if (-not (Test-Path -LiteralPath $buildLog)) { throw 'Prepared native test build manifest is missing' }
+        $buildOutput = Get-Content -LiteralPath $buildLog
+        $testArtifacts = @($buildOutput | ForEach-Object {
+            if ("$_".StartsWith('{')) { $_ | ConvertFrom-Json }
+        } | Where-Object {
+            $_.reason -eq 'compiler-artifact' -and $_.profile.test -and
+            $_.target.name -eq 'librustdesk' -and $_.executable
+        })
+        if ($testArtifacts.Count -ne 1) { throw 'Expected exactly one native root test executable' }
+        Write-Host 'VDD_CI_STAGE=stop-service'
+        Stop-Service -Name 'XSCC Host' -ErrorAction Stop
+        (Get-Service -Name 'XSCC Host').WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+        $stopDeadline = (Get-Date).AddSeconds(30)
+        while (@(Get-Process -Name 'xscc-host' -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $stopDeadline) {
+            Start-Sleep -Milliseconds 250
+        }
+        if (@(Get-Process -Name 'xscc-host' -ErrorAction SilentlyContinue).Count -gt 0) {
+            throw 'Installed host did not exit normally before the disposable VDD test'
+        }
+        $releaseBackup = Join-Path $env:RUNNER_TEMP "xscc-host-before-vdd-$env:GITHUB_RUN_ID.exe"
+        if (Test-Path $releaseBackup) { throw 'Refusing to overwrite an existing host backup' }
+        $releaseHash = (Get-FileHash $exe -Algorithm SHA256).Hash
+        Copy-Item -LiteralPath $exe -Destination $releaseBackup -ErrorAction Stop
+        try {
+            # Keep the production Program Files check intact while exercising this build's backend.
+            Copy-Item -LiteralPath $testArtifacts[0].executable -Destination $exe -Force -ErrorAction Stop
+            Write-Host 'VDD_CI_STAGE=run-driver-check'
+            $driverCheck = & $exe 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' --exact --ignored --nocapture 2>&1
+            $driverExit = $LASTEXITCODE
+        } finally {
+            Write-Host 'VDD_CI_STAGE=restore-host'
+            Copy-Item -LiteralPath $releaseBackup -Destination $exe -Force -ErrorAction Stop
+            if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $releaseHash) { throw 'Release host restoration checksum differs' }
+            Start-Service -Name 'XSCC Host' -ErrorAction Stop
+            (Get-Service -Name 'XSCC Host').WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+        }
+        $driverCheck | Write-Output
+        $driverOutput = $driverCheck | Out-String
+        if ($driverExit -ne 0 -or $driverOutput -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;' -or
+            $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=120' -or $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=240' -or
+            $driverOutput -notmatch 'VDD_CI_REMOVED=0') {
+            throw 'Disposable virtual display high-refresh/removal check failed or did not run'
+        }
+    }
     Set-Content $sentinel 'Uninstall must preserve unknown files.'
     if (-not (Test-Path $key) -or (Get-ItemProperty $key).DisplayVersion -ne $env:PACKAGE_VERSION) {
         throw 'Host uninstall registration/version is missing or incorrect'
