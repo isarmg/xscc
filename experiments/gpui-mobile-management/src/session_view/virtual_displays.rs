@@ -2,7 +2,7 @@ use super::SessionView;
 use crate::session_chrome::virtual_displays::form;
 use gpui::{Context, Window};
 use librustdesk::gpui_session::{
-    VirtualDisplayConfiguration, VirtualDisplayMode, VirtualDisplayResult, VirtualDisplayState,
+    VirtualDisplayConfiguration, VirtualDisplayResult, VirtualDisplayState,
 };
 
 pub(super) struct PendingVirtual {
@@ -16,38 +16,11 @@ pub(super) struct PendingVirtual {
 pub(super) fn project(state: &VirtualDisplayState) -> form::State {
     form::State {
         protocol_version: state.protocol_version,
-        driver: state.driver.clone(),
         status: state.status.clone(),
         message: state.message.clone(),
         configured_count: state.configured_count,
-        present_count: state.present_count,
-        active_count: state.active_count,
         persistent: state.persistent,
         maximum_count: state.maximum_count,
-        displays: state
-            .displays
-            .iter()
-            .map(|screen| form::Screen {
-                id: screen.id.clone(),
-                name: screen.name.clone(),
-                index: screen.index,
-                active: screen.active,
-                mode: form::Mode {
-                    width: screen.width,
-                    height: screen.height,
-                    refresh_rate_units: screen.refresh_rate_units,
-                },
-            })
-            .collect(),
-        modes: state
-            .modes
-            .iter()
-            .map(|mode| form::Mode {
-                width: mode.width,
-                height: mode.height,
-                refresh_rate_units: mode.refresh_rate_units,
-            })
-            .collect(),
     }
 }
 
@@ -70,15 +43,7 @@ impl SessionView {
         self.request_virtual_configuration(Some(VirtualDisplayConfiguration {
             count: configuration.count,
             persistent: configuration.persistent,
-            modes: configuration
-                .mode
-                .into_iter()
-                .map(|mode| VirtualDisplayMode {
-                    width: mode.width,
-                    height: mode.height,
-                    refresh_rate_units: mode.refresh_rate_units,
-                })
-                .collect(),
+            modes: Vec::new(),
         }));
     }
 

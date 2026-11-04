@@ -106,7 +106,6 @@ pub struct SessionChrome {
     bitrate: bitrate::BitrateEditor,
     resolution: resolution::ResolutionEditor,
     media_menu: Option<MediaMenu>,
-    virtual_display: virtual_displays::form::Editor,
 }
 
 impl EventEmitter<ChromeAction> for SessionChrome {}
@@ -118,7 +117,6 @@ impl SessionChrome {
             bitrate: bitrate::BitrateEditor::new(cx),
             resolution: resolution::ResolutionEditor::new(cx),
             media_menu: None,
-            virtual_display: virtual_displays::form::Editor::new(cx),
         }
     }
 
@@ -141,7 +139,6 @@ impl SessionChrome {
         }
         if model.panel != Panel::Display || !model.connected {
             self.media_menu = None;
-            self.virtual_display.editing = false;
         }
         self.model = model;
         cx.notify();
@@ -553,6 +550,15 @@ impl SessionChrome {
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 view.bitrate.cancel();
                                 view.media_menu = (view.media_menu != Some(menu)).then_some(menu);
+                                if view.media_menu == Some(MediaMenu::VirtualDisplays)
+                                    && view
+                                        .model
+                                        .virtual_display_configuration
+                                        .as_ref()
+                                        .is_some_and(|state| state.protocol_version >= 1)
+                                {
+                                    cx.emit(ChromeAction::QueryVirtualDisplays);
+                                }
                                 window.dismiss_virtual_keyboard();
                                 cx.stop_propagation();
                                 cx.notify();
@@ -612,71 +618,11 @@ impl SessionChrome {
                 self.bitrate_controls(cx),
                 cx,
             ));
-        let mut virtual_displays = div().flex().flex_col().gap_2();
-        if model
-            .virtual_display_configuration
-            .as_ref()
-            .is_some_and(|state| state.protocol_version >= 1)
-        {
-            if self.media_menu == Some(MediaMenu::VirtualDisplays) {
-                virtual_displays = self.virtual_display_controls(cx);
-            }
-        } else if model.virtual_display_supported {
-            let virtual_ready = ready && !model.virtual_display_pending;
-            virtual_displays = virtual_displays
-                .child(
-                    self.button(
-                        cx,
-                        "session-virtual-add",
-                        if model.virtual_display_pending {
-                            "处理中，等待确认…"
-                        } else {
-                            "添加虚拟屏幕"
-                        },
-                        false,
-                        virtual_ready && model.can_add_virtual_display,
-                        ChromeAction::AddVirtualDisplay,
-                    )
-                    .w_full(),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .line_height(px(19.))
-                        .text_color(rgb(MUTED))
-                        .child(if model.virtual_display_driver == "amyuni_idd" {
-                            "首次添加会在被控端启用随包驱动；Amyuni许可含广告页面条款。添加后可在屏幕列表中选择。"
-                        } else if model.virtual_display_driver == "mtt_vdd" {
-                            "使用正式签名驱动；分辨率、刷新率和数量由主机驱动与 Windows 确认。"
-                        } else {
-                            "首次添加会在被控端启用随包驱动。添加后可在屏幕列表中选择。"
-                        }),
-                );
-            for &id in &model.virtual_display_ids {
-                virtual_displays = virtual_displays.child(
-                    self.button(
-                        cx,
-                        format!("session-virtual-remove-{id}"),
-                        &if model.virtual_display_remove_latest_only {
-                            "移除最近添加的虚拟屏幕".to_owned()
-                        } else {
-                            format!("移除虚拟屏幕 {id}")
-                        },
-                        false,
-                        virtual_ready && model.can_control && !model.view_only,
-                        ChromeAction::RemoveVirtualDisplay(id),
-                    )
-                    .w_full(),
-                );
-            }
+        let virtual_displays = if self.media_menu == Some(MediaMenu::VirtualDisplays) {
+            self.virtual_display_controls(cx)
         } else {
-            virtual_displays = virtual_displays.child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(MUTED))
-                    .child("远端未提供虚拟显示器控制。"),
-            );
-        }
+            div()
+        };
         body = body.child(self.media_menu(
             MediaMenu::VirtualDisplays,
             "虚拟显示器",

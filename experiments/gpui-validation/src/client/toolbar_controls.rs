@@ -95,13 +95,8 @@ impl ManagementPanel {
             ),
             ToolbarMenu::VirtualDisplays => (
                 "session-virtual-displays-dropdown",
-                if self.host {
-                    "显示设置  ▾"
-                } else {
-                    "虚拟显示器  ▾"
-                }
-                .to_owned(),
-                420_f32,
+                "虚拟显示器  ▾".to_owned(),
+                240_f32,
                 if self.host {
                     self.initialized
                 } else {
@@ -138,11 +133,8 @@ impl ManagementPanel {
                 };
                 if enabled {
                     view.toolbar_menu = Some(menu);
-                    if menu == ToolbarMenu::VirtualDisplays
-                        && view.host
-                        && view.local_virtual_display.is_none()
-                    {
-                        view.query_local_virtual_displays();
+                    if menu == ToolbarMenu::VirtualDisplays {
+                        view.query_virtual_displays(cx);
                     }
                     cx.notify();
                 }

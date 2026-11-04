@@ -60,7 +60,6 @@ struct ManagementPanel {
     video_state: VideoState,
     bitrate: bitrate_controls::BitrateEditor,
     resolution: resolution_controls::ResolutionEditor,
-    virtual_display: virtual_display_controls::form::Editor,
     local_virtual_display: Option<virtual_display_controls::form::State>,
     local_virtual_pending: bool,
     _subscriptions: Vec<Subscription>,
@@ -1334,9 +1333,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                                 window.toggle_fullscreen();
                             }
                             view.sync_bitrate_editor(state, cx);
-                            if !state.connected {
-                                view.virtual_display.editing = false;
-                            }
                             view.video_state = state.clone();
                             cx.notify();
                         },
@@ -1400,7 +1396,6 @@ pub fn run(runtime: &tokio::runtime::Runtime) -> Result<(), Box<dyn std::error::
                         video_state,
                         bitrate: bitrate_controls::BitrateEditor::new(cx),
                         resolution: resolution_controls::ResolutionEditor::new(cx),
-                        virtual_display: virtual_display_controls::form::Editor::new(cx),
                         local_virtual_display: None,
                         local_virtual_pending: false,
                         _subscriptions: subscriptions,
