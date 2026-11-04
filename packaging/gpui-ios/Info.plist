@@ -21,6 +21,7 @@
       </dict></array>
     </dict>
   </dict>
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
   <key>UILaunchScreen</key><dict/>
   <key>UISupportedInterfaceOrientations</key><array>
     <string>UIInterfaceOrientationPortrait</string>

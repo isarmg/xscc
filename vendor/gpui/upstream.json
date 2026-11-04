@@ -41,6 +41,8 @@
     "crates/gpui_android/src/gpui_android.rs",
     "crates/gpui_android/src/session_presentation.rs",
     "crates/gpui_android/src/window.rs",
+    "crates/gpui_ios/Cargo.toml",
+    "crates/gpui_ios/src/ios/application.rs",
     "crates/gpui_ios/src/ios/window.rs",
     "crates/gpui_ios/src/ios/window/session_presentation.rs",
     "crates/gpui_linux/Cargo.toml",
@@ -75,7 +77,8 @@
     "Expose Hidden cursor style for application-painted pointers; Windows clears HCURSOR, macOS registers a transparent NSCursor and Wayland clears the pointer surface without using cursor-shape-v1. Optional X11 retains an arrow fallback.",
     "Expose an opt-in reversible mobile session presentation request. Android uses its existing Java UI-thread bridge and AndroidX compat system-bar APIs without hiding IME; UIKit uses per-controller visibility/orientation policy and public scene geometry requests, preserving existing safe-area/keyboard geometry and restoring on exit/background. The application entry is SmokeActivity.setRemoteSessionPresentation(boolean), retained by an exact R8 member rule; AndroidImeBridge text-input code is unchanged.",
     "Expose Window::painted_images only under cfg(test) or the test-support feature, cloning the last rendered frame's polychrome sprites for application scene regressions to inspect image layout, clipping and texture UV mapping; production renderer, layout and Img behavior are unchanged.",
-    "Android requests a fresh presentation only for a native redraw, a new surface, or a failed presentation retry; normal frame callbacks draw dirty content without submitting the same clean scene again."
+    "Android requests a fresh presentation only for a native redraw, a new surface, or a failed presentation retry; normal frame callbacks draw dirty content without submitting the same clean scene again.",
+    "While reversible iOS session presentation is active, request the showing screen's maximum refresh rate through the existing CADisplayLink preferredFrameRateRange; return to CAFrameRateRangeDefault on exit/background. The product iPhone plist opts into ProMotion rates; inactive presentation, Android's existing refresh request and decoding are unchanged."
   ],
   "initial_workspace_member_count": 28,
   "removed_crates": [

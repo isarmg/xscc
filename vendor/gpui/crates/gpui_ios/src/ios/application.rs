@@ -10,7 +10,7 @@ use objc2::{
 use objc2_foundation::{
     NSDictionary, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSSet, NSString,
 };
-use objc2_quartz_core::CADisplayLink;
+use objc2_quartz_core::{CADisplayLink, CAFrameRateRange, CAFrameRateRangeDefault};
 use objc2_ui_kit::{
     UIApplication, UIApplicationDelegate, UIApplicationLaunchOptionsKey, UIOpenURLContext, UIScene,
     UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIWindowScene,
@@ -74,6 +74,27 @@ impl IosApplicationState {
         if let Some(display_link) = display_link {
             display_link.setPaused(paused);
         }
+    }
+
+    pub(super) fn update_session_frame_rate(&self) {
+        let Some(display_link) = self.display_link.borrow().clone() else {
+            return;
+        };
+        let mut maximum: Option<f32> = None;
+        self.with_windows(|window| {
+            if let Some(rate) = window.session_frame_rate() {
+                maximum = Some(maximum.map_or(rate, |previous| previous.max(rate)));
+            }
+        });
+        let range = maximum.map_or_else(
+            || unsafe { CAFrameRateRangeDefault },
+            |maximum| CAFrameRateRange {
+                minimum: maximum,
+                maximum,
+                preferred: maximum,
+            },
+        );
+        display_link.setPreferredFrameRateRange(range);
     }
 
     fn stop_display_link(&self) {
@@ -318,6 +339,7 @@ define_class!(
                 display_link
             };
             *application.display_link.borrow_mut() = Some(display_link);
+            application.update_session_frame_rate();
         }
 
         #[unsafe(method(sceneDidDisconnect:))]

@@ -7,6 +7,14 @@ use objc2_ui_kit::{
 };
 use std::ptr::NonNull;
 
+impl IosWindowState {
+    pub(in crate::ios) fn session_frame_rate(&self) -> Option<f32> {
+        self.session_presentation
+            .get()
+            .map(|_| self.window.screen().maximumFramesPerSecond() as f32)
+    }
+}
+
 pub(super) fn set_enabled(window: &IosWindowState, enabled: bool) {
     let original = window.session_presentation.get();
     if enabled == original.is_some() {
@@ -39,6 +47,9 @@ pub(super) fn set_enabled(window: &IosWindowState, enabled: bool) {
         window.session_presentation.set(None);
         original.unwrap_or_else(|| window.view_controller.supportedInterfaceOrientations())
     };
+    if let Some(platform) = window.platform.upgrade() {
+        platform.application.update_session_frame_rate();
+    }
     window.view_controller.setNeedsStatusBarAppearanceUpdate();
     window
         .view_controller

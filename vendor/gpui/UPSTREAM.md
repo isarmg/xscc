@@ -121,6 +121,13 @@ requests public window-scene geometry, and restores the inherited controller
 policy and previous scene orientation on exit/background/window close. iPad
 multiwindow geometry requests may be declined; errors are logged and existing
 actual bounds, safe-area and keyboard notifications continue to drive layout.
+Active UIKit session presentation also requests the current screen's maximum
+frame rate through the existing `CADisplayLink.preferredFrameRateRange`, restoring
+`CAFrameRateRangeDefault` on exit/background. The product iPhone plist enables
+`CADisableMinimumFrameDurationOnPhone`; the OS can still limit actual cadence for
+power or thermal conditions. Android retains its existing reversible window
+refresh-rate request. No additional display clock or decoder is introduced.
+
 No private orientation KVC, forced iPad fullscreen, dependency, or decoder change
 is introduced. Native compilation and physical-device acceptance are separate;
 no device rotation/immersive-mode success is claimed from source inspection.

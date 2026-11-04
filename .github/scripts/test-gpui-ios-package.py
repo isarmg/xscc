@@ -37,6 +37,10 @@ class DevicePreviewTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 package.validate_metadata({**info, key: value})
 
+    def test_iphone_promotion_frame_rates_are_unlocked(self):
+        info = plistlib.loads((Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist').read_bytes())
+        self.assertIs(info.get('CADisableMinimumFrameDurationOnPhone'), True)
+
     def test_device_executable(self):
         with patch.object(package, 'command', side_effect=[
             'arm64', 'MH_MAGIC_64 ARM64 EXECUTE', 'platform IOS\nminos 26.0\nsdk 26.5',
