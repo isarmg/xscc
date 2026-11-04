@@ -623,6 +623,10 @@ pub(super) fn plug_in_headless() -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
     if get_monitor_count() == 0 && configuration::automatic_headless_allowed()? {
         let _capture_idle = configuration::capture_idle_for_change()?;
+        // A physical display can return while waiting for the lock or capture release.
+        if !crate::server::display_service::no_displays(&scrap::Display::all()?) {
+            return Ok(());
+        }
         configure_count(1, &[])?;
     }
     Ok(())

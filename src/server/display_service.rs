@@ -944,7 +944,7 @@ pub fn get_primary_2(all: &Vec<Display>) -> usize {
 
 #[inline]
 #[cfg(windows)]
-fn no_displays(displays: &Vec<Display>) -> bool {
+pub(crate) fn no_displays(displays: &Vec<Display>) -> bool {
     let display_len = displays.len();
     if display_len == 0 {
         true

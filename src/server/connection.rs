@@ -623,6 +623,8 @@ impl Connection {
                                 conn.keyboard = enabled;
                                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                                 if !enabled {
+                                    #[cfg(windows)]
+                                    conn.tx_input.send(MessageInput::BlockOff).ok();
                                     conn.release_mouse_buttons();
                                     conn.release_pressed_modifiers();
                                 }
@@ -658,6 +660,10 @@ impl Connection {
                                 conn.send_permission(Permission::Restart, enabled).await;
                             } else if &name == "block_input" {
                                 conn.block_input = enabled;
+                                #[cfg(windows)]
+                                if !enabled {
+                                    conn.tx_input.send(MessageInput::BlockOff).ok();
+                                }
                                 conn.send_permission(Permission::BlockInput, enabled).await;
                             } else if &name == "privacy_mode" {
                                 // Keep permission state and runtime state consistent:
@@ -3093,7 +3099,7 @@ impl Connection {
             }
         }
         if let Ok(q) = o.block_input.enum_value() {
-            if self.keyboard && self.block_input {
+            if (self.keyboard && self.block_input) || (cfg!(windows) && q == BoolOption::No) {
                 match q {
                     BoolOption::Yes => {
                         self.tx_input.send(MessageInput::BlockOn).ok();
@@ -3297,6 +3303,9 @@ impl Connection {
             return;
         }
         self.closed = true;
+        // Release on the owning input thread before later privacy/display cleanup can block.
+        #[cfg(windows)]
+        self.tx_input.send(MessageInput::BlockOff).ok();
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock
             && self.lock_after_session_end
