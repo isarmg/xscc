@@ -132,6 +132,11 @@ impl ManagementPanel {
         if self.toolbar_menu != Some(ToolbarMenu::VirtualDisplays) {
             return self.render_toolbar_dropdown(ToolbarMenu::VirtualDisplays, div(), window, cx);
         }
+        let control_height = if window.is_fullscreen() {
+            theme::CONTROL_HEIGHT
+        } else {
+            28.
+        };
         let state = self
             .virtual_display_state()
             .filter(|state| state.protocol_version >= 1);
@@ -141,6 +146,7 @@ impl ManagementPanel {
                 Some(state.configured_count),
                 idle && state.configuration_step(false, self.host).is_some(),
                 idle && state.configuration_step(true, self.host).is_some(),
+                control_height,
                 theme::palette(window.appearance()),
                 cx.listener(|view, increase: &bool, _, cx| {
                     view.step_virtual_displays(*increase, cx);
@@ -152,6 +158,7 @@ impl ManagementPanel {
                 None,
                 false,
                 false,
+                control_height,
                 theme::palette(window.appearance()),
                 |_, _, _| {},
             )

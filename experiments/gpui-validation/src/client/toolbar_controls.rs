@@ -96,7 +96,11 @@ impl ManagementPanel {
             ToolbarMenu::VirtualDisplays => (
                 "session-virtual-displays-dropdown",
                 "虚拟显示器  ▾".to_owned(),
-                240_f32,
+                if fullscreen {
+                    2. * theme::CONTROL_HEIGHT + 72.
+                } else {
+                    128.
+                },
                 if self.host {
                     self.initialized
                 } else {
@@ -113,6 +117,9 @@ impl ManagementPanel {
                     .px_2()
                     .text_size(px(12.))
                     .line_height(px(18.))
+            })
+            .when(menu == ToolbarMenu::VirtualDisplays, |button| {
+                button.w(px(width))
             })
             .on_click(cx.listener(move |view, _, _, cx| {
                 let enabled = match menu {

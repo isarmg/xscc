@@ -18,6 +18,11 @@ impl ManagementPanel {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let control_height = if window.is_fullscreen() {
+            theme::CONTROL_HEIGHT
+        } else {
+            28.
+        };
         let state = &self.video_state;
         let controls = &state.media_controls;
         let idle = state.connected
@@ -29,6 +34,7 @@ impl ManagementPanel {
             controls.virtual_display_count,
             idle && !controls.virtual_display_ids.is_empty(),
             idle && controls.can_add_virtual_display,
+            control_height,
             theme::palette(window.appearance()),
             cx.listener(|view, increase: &bool, _, cx| {
                 let state = &view.video_state;

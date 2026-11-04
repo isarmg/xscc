@@ -67,6 +67,7 @@ pub fn count_controls(
     count: Option<u32>,
     can_remove: bool,
     can_add: bool,
+    control_height: f32,
     palette: theme::Palette,
     on_step: impl Fn(&bool, &mut Window, &mut App) + 'static,
 ) -> gpui::Div {
@@ -83,8 +84,9 @@ pub fn count_controls(
                 .id(id)
                 .debug_selector(move || id.into())
                 .aria_label(description)
-                .w(px(48.))
-                .h(px(48.))
+                .w(px(control_height))
+                .h(px(control_height))
+                .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -101,6 +103,8 @@ pub fn count_controls(
                 })
         };
     div()
+        .w_full()
+        .min_w_0()
         .flex()
         .items_center()
         .justify_center()
@@ -108,7 +112,8 @@ pub fn count_controls(
         .child(button(false))
         .child(
             div()
-                .min_w(px(64.))
+                .flex_1()
+                .min_w_0()
                 .text_center()
                 .child(count.map_or_else(|| "—".into(), |count| count.to_string())),
         )

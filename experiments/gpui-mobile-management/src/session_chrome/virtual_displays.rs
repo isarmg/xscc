@@ -35,6 +35,7 @@ impl SessionChrome {
             count,
             can_remove,
             can_add,
+            44.,
             crate::theme::LIGHT,
             cx.listener(|view, increase: &bool, window, cx| {
                 let model = &view.model;
