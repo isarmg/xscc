@@ -3819,7 +3819,10 @@ impl Drop for Connection {
 #[cfg(all(windows, feature = "managed", feature = "gpui-host"))]
 pub(crate) fn cleanup_orphaned_virtual_displays() {
     let state = virtual_display_manager::configuration_state();
-    if !state.persistent && state.present_count > 0 && state.status != "external_owned" {
+    if !state.persistent
+        && (state.present_count > 0 || state.configured_count > 0)
+        && state.status != "external_owned"
+    {
         raii::AuthedConnID::cleanup_last_remote_session();
     }
 }
