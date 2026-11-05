@@ -1051,18 +1051,28 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(misc::Union::SwitchDisplay(s)) => {
-                        #[cfg(feature = "mediacodec")]
-                        if s.width > 0 && s.height > 0 {
-                            if let Some(display) = self.handler.lc.write().unwrap().peer_info.as_mut()
+                        let size_changed = {
+                            let mut config = self.handler.lc.write().unwrap();
+                            if let Some(display) = config.peer_info.as_mut()
                                 .and_then(|peer| peer.displays.get_mut(s.display as usize))
                             {
-                                display.width = s.width;
-                                display.height = s.height;
+                                let changed = display.width != s.width || display.height != s.height;
+                                if s.width > 0 && s.height > 0 {
+                                    display.width = s.width;
+                                    display.height = s.height;
+                                }
+                                changed
+                            } else {
+                                true
                             }
-                        }
+                        };
                         self.handler.handle_peer_switch_display(&s);
-                        if let Some(thread) = self.video_threads.get_mut(&(s.display as usize)) {
-                            thread.video_sender.send(MediaData::Reset).ok();
+                        // Refresh-rate and layout updates can follow the new keyframe.
+                        // Preserve its parameter sets when the pixel dimensions are unchanged.
+                        if size_changed {
+                            if let Some(thread) = self.video_threads.get_mut(&(s.display as usize)) {
+                                thread.video_sender.send(MediaData::Reset).ok();
+                            }
                         }
 
                         let mut scale = 1.0;
@@ -1706,6 +1716,38 @@ mod ui_send_tests {
             false
         }
         fn handle_screenshot_resp(&self, _: String, _: String) {}
+    }
+
+    #[tokio::test]
+    async fn same_size_display_updates_preserve_decoder_parameters() {
+        let (local, _far) = tokio::io::duplex(64);
+        let stream = Stream::Tcp(FramedStream::from(local, "127.0.0.1:0".parse().unwrap()));
+        let mut peer: SessionTransport = stream.into();
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut remote = Remote::new(Session::<QuietUi>::default(), receiver, sender);
+        remote.handler.lc.write().unwrap().id = "same-size-refresh-regression".into();
+        remote.handler.lc.write().unwrap().peer_info = Some(PeerInfo {
+            displays: vec![DisplayInfo { width: 1920, height: 1080, ..Default::default() }],
+            ..Default::default()
+        });
+        let (video_sender, received) = std::sync::mpsc::channel();
+        remote.video_threads.insert(0, VideoThread {
+            video_queue: Arc::new(ArrayQueue::new(1)), video_sender,
+            decode_fps: Arc::new(RwLock::new(None)), frame_count: Arc::new(RwLock::new(0)),
+            discard_queue: Arc::new(RwLock::new(false)), fps_control: FpsControl::default(),
+        });
+        for (width, height, reset) in [(1920, 1080, false), (1280, 720, true), (1280, 720, false)] {
+            let mut misc = Misc::new();
+            misc.set_switch_display(SwitchDisplay { display: 0, width, height, ..Default::default() });
+            let mut message = Message::new();
+            message.set_misc(misc);
+            assert!(remote.handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer).await);
+            if reset {
+                assert!(matches!(received.try_recv(), Ok(MediaData::Reset)));
+            } else {
+                assert!(received.try_recv().is_err(), "same-size updates must preserve decoder parameters");
+            }
+        }
     }
 
     #[tokio::test]
