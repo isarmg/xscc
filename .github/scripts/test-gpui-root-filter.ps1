@@ -10,7 +10,10 @@ $cargoArguments = @(
     '--target', 'x86_64-pc-windows-msvc', $Filter
 )
 $listing = & cargo @cargoArguments -- --list 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Failed to list root tests for $Filter" }
+if ($LASTEXITCODE -ne 0) {
+    $listing | Write-Output
+    throw "Failed to list root tests for $Filter"
+}
 $matched = @($listing | ForEach-Object { "$_" } | Where-Object { $_ -match '^\S+: test$' })
 if ($matched.Count -eq 0) {
     $listing | Write-Output

@@ -993,3 +993,43 @@ pub fn configure_displays(config: &base::session_protocol::virtual_display::Virt
     if IDD_IMPL != IDD_IMPL_MTT_VDD { bail!("This virtual display backend does not support configuration"); }
     mtt_vdd::configure(config)
 }
+
+pub(crate) use mtt_vdd::PersistentDisplayChangeGuard;
+
+pub(crate) fn session_display_active() -> bool {
+    IDD_IMPL == IDD_IMPL_MTT_VDD && mtt_vdd::session_display_active()
+}
+
+pub(crate) fn session_display_needs_preference(name: &str) -> ResultType<bool> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(false);
+    }
+    mtt_vdd::session_display_needs_preference(name)
+}
+
+pub(crate) fn prefer_session_display(
+    name: &str,
+    idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<bool> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(false);
+    }
+    mtt_vdd::prefer_session_display(name, idle)
+}
+
+pub(crate) fn restore_session_display(
+    idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<()> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(());
+    }
+    mtt_vdd::restore_session_display(idle)
+}
+
+pub(crate) fn before_persistent_display_change() -> ResultType<Option<PersistentDisplayChangeGuard>>
+{
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(None);
+    }
+    mtt_vdd::before_persistent_display_change()
+}

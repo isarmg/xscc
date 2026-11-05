@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Capability/package regression checks without starting a listener."""
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import unittest
@@ -54,8 +55,16 @@ class PackageModeTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         GATE.check(Path('binary'), mode)
 
+    def test_managed_release_versions_preserve_bundle_identity(self):
+        with patch.dict(os.environ, XSCC_PACKAGE_MODE='managed', GITHUB_RUN_NUMBER='10000'):
+            stable = MACOS.bundle_info('host', '1.0.0')
+            beta = MACOS.bundle_info('host', '0.1.0-beta.22')
+        self.assertEqual(stable['CFBundleShortVersionString'], '1.0.0')
+        self.assertEqual(stable['CFBundleVersion'], '10000')
+        self.assertEqual(stable['CFBundleIdentifier'], beta['CFBundleIdentifier'])
+
     def test_test_mode_does_not_allow_stable_versions(self):
-        with self.assertRaises(ValueError):
+        with patch.dict(os.environ, XSCC_PACKAGE_MODE='test-lan-direct'), self.assertRaises(ValueError):
             MACOS.bundle_info('host', '1.0.0')
         result = subprocess.run(['bash', str(SCRIPTS / 'package-gpui-linux.sh'),
                                  'host', '1.0.0', '/unused', '/unused'],

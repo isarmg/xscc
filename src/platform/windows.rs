@@ -3029,6 +3029,7 @@ pub(super) fn change_resolution_directly(
     width: usize,
     height: usize,
 ) -> ResultType<()> {
+    let presentation = crate::virtual_display_manager::before_persistent_display_change()?;
     let device_name = str_to_device_name(name);
     unsafe {
         let mut dm: DEVMODEW = std::mem::zeroed();
@@ -3049,6 +3050,9 @@ pub(super) fn change_resolution_directly(
                 res,
                 io::Error::last_os_error()
             );
+        }
+        if let Some(presentation) = presentation {
+            presentation.finish()?;
         }
         Ok(())
     }

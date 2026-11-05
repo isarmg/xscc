@@ -46,7 +46,7 @@ fn display_query_error(error: anyhow::Error, problem: u32) -> anyhow::Error {
     error.context(message)
 }
 
-fn query() -> ResultType<VirtualDisplayState> {
+pub(super) fn query() -> ResultType<VirtualDisplayState> {
     let bundle = bundle_path()?;
     let folder = bundle.join("config");
     let installed = device()?.is_some();
@@ -212,14 +212,22 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         && before.present_count == config.count
         && modes_match
     {
+        if config.persistent && presentation::active() {
+            let _capture_idle = capture_idle_for_change()?;
+            presentation::suspend_locked()?;
+        }
         write_profile(&policy_path, &serde_json::to_string(config)?)?;
         return query();
     }
-    let _capture_idle = capture_idle_for_change()?;
     if config.count == 0 {
+        let _capture_idle = capture_idle_for_change()?;
+        let presentation = presentation::suspend_locked();
         // Record the requested removal before PnP notifications can trigger a late login.
-        write_profile(&policy_path, &serde_json::to_string(config)?)?;
-        configure_count_modes(0, &[])?;
+        let removal = (|| -> ResultType<()> {
+            write_profile(&policy_path, &serde_json::to_string(config)?)?;
+            configure_count_modes(0, &[])
+        })();
+        presentation::complete_removal(presentation, removal)?;
         return query();
     }
     let previous_policy = if policy_path.exists() {
@@ -228,7 +236,6 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         None
     };
     let registered = registered_path()?;
-    let snapshot = Topology::query(false)?;
     let modes: Vec<_> = config
         .modes
         .iter()
@@ -240,6 +247,19 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             Ok(mode)
         })
         .collect::<ResultType<_>>()?;
+    let _capture_idle = capture_idle_for_change()?;
+    let presentation = presentation::suspend_locked()?;
+    let snapshot = match Topology::query(false) {
+        Ok(snapshot) => snapshot,
+        Err(cause) => {
+            if let Some(target) = presentation {
+                if let Err(error) = presentation::resume_locked(target) {
+                    return Err(cause.context(format!("高刷会话布局未恢复：{error:#}")));
+                }
+            }
+            return Err(cause);
+        }
+    };
     let apply = (|| -> ResultType<VirtualDisplayState> {
         configure_count_modes(config.count, &modes)?;
         if config.count > 0 {
@@ -327,7 +347,12 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         query()
     })();
     match apply {
-        Ok(state) => Ok(state),
+        Ok(state) => {
+            if let Some(target) = presentation {
+                presentation::resume_locked(target)?;
+            }
+            Ok(state)
+        }
         Err(cause) => {
             let mut errors = Vec::new();
             let owned = ordinary_path(&folder);
@@ -356,6 +381,13 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
                 errors.push(format!("restore device/topology: {error:#}"));
             }
             if errors.is_empty() {
+                if let Some(target) = presentation {
+                    if let Err(error) = presentation::resume_locked(target) {
+                        return Err(
+                            cause.context(format!("原配置已恢复，但高刷会话布局未恢复：{error:#}"))
+                        );
+                    }
+                }
                 return Err(cause.context("虚拟屏配置未完成，原配置和显示拓扑已恢复"));
             }
             bail!(
@@ -368,6 +400,12 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
 
 pub(super) fn cleanup_session() -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
+    let presentation = presentation::suspend_locked();
+    let removal = cleanup_displays();
+    presentation::complete_removal(presentation, removal)
+}
+
+fn cleanup_displays() -> ResultType<()> {
     let state = query()?;
     if state.status == "external_owned" || state.persistent || device()?.is_none() {
         return Ok(());

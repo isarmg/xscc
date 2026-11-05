@@ -6,7 +6,10 @@ version=$2
 executable=$3
 output=$4
 case "$role" in controller|host) ;; *) echo 'Invalid package role' >&2; exit 2 ;; esac
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]] || { echo 'Expected version major.minor.patch-beta.revision' >&2; exit 2; }
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || { echo 'Expected version major.minor.patch or major.minor.patch-beta.revision' >&2; exit 2; }
+if [[ $version != *-beta.* && ${XSCC_PACKAGE_MODE:-managed} != managed ]]; then
+  echo 'Expected version major.minor.patch-beta.revision for test-only packages' >&2; exit 2
+fi
 [[ -f $executable && -x $executable ]] || { echo 'Executable is missing or not executable' >&2; exit 1; }
 file "$executable" | grep -Eq 'ELF 64-bit LSB.*x86-64' || { echo 'Expected a Linux x86_64 ELF executable' >&2; exit 1; }
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)

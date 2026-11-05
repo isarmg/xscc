@@ -377,6 +377,10 @@ pub enum Data {
 #[tokio::main(flavor = "current_thread")]
 pub async fn start(postfix: &str) -> ResultType<()> {
     let mut incoming = new_listener(postfix).await?;
+    #[cfg(all(windows, feature = "managed", feature = "gpui-host"))]
+    if postfix.is_empty() && is_server() {
+        tokio::task::spawn_blocking(crate::server::cleanup_orphaned_virtual_displays).await?;
+    }
     loop {
         if let Some(result) = incoming.next().await {
             match result {
@@ -607,8 +611,25 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::Close => {
             log::info!("Receive close message");
             if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
-                #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+                #[cfg(all(
+                    feature = "managed",
+                    not(any(target_os = "android", target_os = "ios"))
+                ))]
                 crate::management::shutdown().await;
+                #[cfg(windows)]
+                if is_server() {
+                    match tokio::task::spawn_blocking(crate::server::finish_session_display).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            log::error!(
+                                "Virtual display session restoration at exit failed: {error:#}"
+                            );
+                        }
+                        Err(error) => {
+                            log::error!("Virtual display exit task failed: {error}");
+                        }
+                    }
+                }
                 #[cfg(not(target_os = "android"))]
                 crate::server::input_service::fix_key_down_timeout_at_exit();
                 if is_server() {

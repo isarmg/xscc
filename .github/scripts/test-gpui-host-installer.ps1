@@ -11,7 +11,7 @@ $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.Wind
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'An existing elevated token is required; do not bypass UAC'
 }
-if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') { throw 'Invalid package version' }
+if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+(-beta\.\d+)?$') { throw 'Invalid package version' }
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 $installer = Join-Path $root "dist/host/xscc-host-$env:PACKAGE_VERSION-windows11-x86_64-unsigned-setup.exe"
 $installed = Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'XSCC-Host'

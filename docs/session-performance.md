@@ -1,5 +1,23 @@
 # Native session performance
 
+## 2026-11-04: Windows virtual-display content cadence
+
+On this Windows host, VSync paced native drawing near 60 FPS with a 60 Hz physical
+primary, although the owned virtual output's VBlank measured 120 Hz. Temporarily
+making that virtual output primary produced 119.5 submitted frames/s and 117.7
+DesktopDup updates/s. These are local native drawing/capture measurements, not a
+browser UFO test or Android end-to-end acceptance.
+
+The workaround may temporarily promote only XSCC-owned, nonpersistent virtual
+outputs at high refresh rates while a currently authorized session has input
+permission. It does not save this layout to the Windows display configuration
+database. The temporary primary selection is released before mode/count changes
+and re-evaluated afterward; the last disconnect, permission withdrawal, virtual
+display removal or normal process exit restores the prior primary. Worker startup
+cleans owned nonpersistent orphan outputs. Persistent virtual displays are not
+promoted automatically; physical display modes and other drivers remain outside
+this policy.
+
 ## 2026-11-02: measured Android/Windows follow-up
 
 A USB-connected Xiaomi 13 running beta.18 used the Qualcomm HEVC hardware decoder.

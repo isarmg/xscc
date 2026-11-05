@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+-beta\.\d+$') {
+if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+(-beta\.\d+)?$' -or
+    ($env:PACKAGE_VERSION -notmatch '-beta\.' -and $env:XSCC_PACKAGE_MODE -ne 'managed')) {
     throw 'Invalid candidate version'
 }
 $root = (Resolve-Path "$PSScriptRoot/../..").Path

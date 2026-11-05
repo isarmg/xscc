@@ -93,6 +93,7 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
         .ok_or_else(|| {
             hbb_common::anyhow::anyhow!("The display driver does not offer this mode")
         })?;
+    let presentation = crate::virtual_display_manager::before_persistent_display_change()?;
     let device = str_to_device_name(name);
     mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_DISPLAYORIENTATION;
     let test =
@@ -123,6 +124,9 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
             actual.height,
             actual.refresh_rate
         );
+    }
+    if let Some(presentation) = presentation {
+        presentation.finish()?;
     }
     Ok(())
 }

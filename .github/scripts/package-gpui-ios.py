@@ -113,6 +113,7 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
     (output / f'{name}.sha256').write_text(f'{digest}  {name}\n')
     (output / 'build-info.json').write_text(json.dumps({
         'source_commit': sha, 'artifact': name, 'sha256': digest,
+        'package_version': info['CFBundleShortVersionString'],
         'bundle_id': info['CFBundleIdentifier'], 'build': info['CFBundleVersion'],
         'platform': 'iOS/iPadOS 26 ARM64 physical device',
         'scope': ('GPUI interactive playback preview: direct control or view-only; software-keyboard text and control keys; foreground audio playback is opt-in per session and initially off; no microphone or clipboard; limited hardware Enter/Tab only; full hardware keyboard unsupported and Wayland non-ASCII rejected'
