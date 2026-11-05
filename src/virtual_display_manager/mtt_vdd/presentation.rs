@@ -302,7 +302,7 @@ pub(super) fn before_persistent_change() -> ResultType<Option<PersistentDisplayC
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_removal, translated_positions};
+    use super::{anyhow, complete_removal, translated_positions};
 
     #[test]
     fn removal_result_keeps_both_restore_and_removal_failures() {
