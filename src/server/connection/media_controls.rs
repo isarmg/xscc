@@ -1,6 +1,93 @@
 use super::*;
 
 impl Connection {
+    #[cfg(windows)]
+    pub(super) async fn prepare_session_display(&mut self, index: usize) -> bool {
+        if !self.media_authority_valid(true) || privacy_mode::is_in_privacy_mode() {
+            return false;
+        }
+        #[cfg(feature = "managed")]
+        let permit = self.managed_permit.clone();
+        #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
+        let test_lan = self.test_lan;
+        let result = tokio::task::spawn_blocking(move || -> ResultType<bool> {
+            let result = (|| -> ResultType<bool> {
+                #[cfg(feature = "managed")]
+                {
+                    #[cfg(feature = "test-lan-direct")]
+                    let valid = test_lan || crate::management::permits_host(permit.as_ref());
+                    #[cfg(not(feature = "test-lan-direct"))]
+                    let valid = crate::management::permits_host(permit.as_ref());
+                    if !valid {
+                        bail!("Session authorization expired");
+                    }
+                }
+                let name = {
+                    let displays = display_service::try_get_displays()?;
+                    displays
+                        .get(index)
+                        .ok_or_else(|| {
+                            hbb_common::anyhow::anyhow!("The display is no longer available")
+                        })?
+                        .name()
+                };
+                if !virtual_display_manager::session_display_needs_preference(&name)? {
+                    return Ok(false);
+                }
+                let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))
+                    .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
+                #[cfg(feature = "managed")]
+                {
+                    #[cfg(feature = "test-lan-direct")]
+                    let valid = test_lan || crate::management::permits_host(permit.as_ref());
+                    #[cfg(not(feature = "test-lan-direct"))]
+                    let valid = crate::management::permits_host(permit.as_ref());
+                    if !valid {
+                        bail!("Session authorization expired");
+                    }
+                }
+                if super::raii::AuthedConnID::remote_conn_count() == 0
+                    || privacy_mode::is_in_privacy_mode()
+                {
+                    return Ok(false);
+                }
+                let changed = virtual_display_manager::prefer_session_display(&name, &idle)?;
+                if changed {
+                    match display_service::try_get_displays() {
+                        Ok(displays) => {
+                            display_service::update_sync_displays(&displays);
+                        }
+                        Err(cause) => {
+                            return match virtual_display_manager::restore_session_display(&idle) {
+                                Ok(()) => Err(cause),
+                                Err(restoration) => Err(cause.context(format!(
+                                    "Primary restoration also failed: {restoration:#}"
+                                ))),
+                            };
+                        }
+                    }
+                }
+                Ok(changed)
+            })();
+            super::raii::AuthedConnID::cleanup_last_remote_session();
+            result
+        })
+        .await;
+        match result {
+            Ok(Ok(changed)) => changed,
+            Ok(Err(error)) => {
+                self.media_control_error("Display refresh rate", format!("{error:#}"))
+                    .await;
+                false
+            }
+            Err(error) => {
+                self.media_control_error("Display refresh rate", error.to_string())
+                    .await;
+                false
+            }
+        }
+    }
+
     fn media_authority_valid(&self, input: bool) -> bool {
         if !self.authorized
             || self.authed_conn_type() != Some(AuthConnType::Remote)
@@ -144,13 +231,18 @@ impl Connection {
         .await;
         match result {
             Ok(Ok(true)) => {
+                #[cfg(windows)]
+                self.prepare_session_display(index).await;
                 if let Some(message) =
                     video_service::make_display_changed_msg(index, None, VideoSource::Monitor)
                 {
                     self.send(message).await;
                 }
             }
-            Ok(Ok(false)) => {}
+            Ok(Ok(false)) => {
+                #[cfg(windows)]
+                self.prepare_session_display(index).await;
+            }
             Ok(Err(error)) => {
                 self.media_control_error("Display resolution", error.to_string())
                     .await

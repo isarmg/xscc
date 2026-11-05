@@ -2695,6 +2695,14 @@ impl Connection {
 
     async fn handle_switch_display(&mut self, s: SwitchDisplay) {
         let display_idx = s.display as usize;
+        #[cfg(windows)]
+        if self.prepare_session_display(display_idx).await && self.display_idx == display_idx {
+            if let Some(message) =
+                video_service::make_display_changed_msg(display_idx, None, self.video_source())
+            {
+                self.send(message).await;
+            }
+        }
         if self.display_idx != display_idx {
             if let Some(server) = self.server.upgrade() {
                 if !self.switch_display_to(display_idx, server.clone()) {
@@ -3808,6 +3816,35 @@ impl Drop for Connection {
     }
 }
 
+#[cfg(all(windows, feature = "managed", feature = "gpui-host"))]
+pub(crate) fn cleanup_orphaned_virtual_displays() {
+    let state = virtual_display_manager::configuration_state();
+    if !state.persistent && state.present_count > 0 && state.status != "external_owned" {
+        raii::AuthedConnID::cleanup_last_remote_session();
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn finish_session_display() -> ResultType<()> {
+    if !virtual_display_manager::session_display_active() {
+        return Ok(());
+    }
+    let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))
+        .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
+    let mut errors = Vec::new();
+    if let Err(error) = virtual_display_manager::restore_session_display(&idle) {
+        errors.push(format!("restore primary: {error:#}"));
+    }
+    display_service::restore_resolutions();
+    if let Err(error) = virtual_display_manager::reset_all() {
+        errors.push(format!("remove temporary displays: {error:#}"));
+    }
+    if !errors.is_empty() {
+        bail!("{}", errors.join("; "));
+    }
+    Ok(())
+}
+
 extern "C" fn connection_shutdown_hook() {
     // https://stackoverflow.com/questions/35980148/why-does-an-atexit-handler-panic-when-it-accesses-stdout
     // Please make sure there is no print in the call stack
@@ -4013,6 +4050,9 @@ mod raii {
             };
             if Self::remote_conn_count() != 0 {
                 return;
+            }
+            if let Err(error) = virtual_display_manager::restore_session_display(&_idle) {
+                log::error!("Virtual display primary restoration failed: {error:#}");
             }
             display_service::restore_resolutions();
             if let Err(error) = virtual_display_manager::reset_all() {

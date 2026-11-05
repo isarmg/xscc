@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use winapi::um::{cfgmgr32::CM_Get_Parent, wingdi::*};
 
 const QDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x40;
-const SDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x20000;
+pub(super) const SDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x20000;
 const DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE: u32 = 0x10;
 
 /// A newly enumerated PnP monitor can precede its Windows desktop path.
@@ -30,7 +30,7 @@ unsafe extern "system" {
         topology: *mut u32,
     ) -> i32;
     fn DisplayConfigGetDeviceInfo(header: *mut DISPLAYCONFIG_DEVICE_INFO_HEADER) -> i32;
-    fn SetDisplayConfig(
+    pub(super) fn SetDisplayConfig(
         paths: u32,
         path_info: *const DISPLAYCONFIG_PATH_INFO,
         modes: u32,
@@ -127,8 +127,8 @@ pub(super) fn monitor_ids() -> ResultType<Vec<String>> {
 
 #[derive(Clone)]
 pub(super) struct Topology {
-    paths: Vec<DISPLAYCONFIG_PATH_INFO>,
-    modes: Vec<DISPLAYCONFIG_MODE_INFO>,
+    pub(super) paths: Vec<DISPLAYCONFIG_PATH_INFO>,
+    pub(super) modes: Vec<DISPLAYCONFIG_MODE_INFO>,
 }
 
 impl Topology {
@@ -175,7 +175,7 @@ impl Topology {
         bail!("Windows display topology kept changing; retry the operation")
     }
 
-    fn source_name(path: &DISPLAYCONFIG_PATH_INFO) -> ResultType<String> {
+    pub(super) fn source_name(path: &DISPLAYCONFIG_PATH_INFO) -> ResultType<String> {
         let mut name: DISPLAYCONFIG_SOURCE_DEVICE_NAME = unsafe { std::mem::zeroed() };
         name.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
             _type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
@@ -189,7 +189,7 @@ impl Topology {
         }
         Ok(text(&name.viewGdiDeviceName))
     }
-    fn target_name(path: &DISPLAYCONFIG_PATH_INFO) -> ResultType<String> {
+    pub(super) fn target_name(path: &DISPLAYCONFIG_PATH_INFO) -> ResultType<String> {
         let mut name: DISPLAYCONFIG_TARGET_DEVICE_NAME = unsafe { std::mem::zeroed() };
         name.header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
             _type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
@@ -203,7 +203,10 @@ impl Topology {
         }
         Ok(text(&name.monitorDevicePath))
     }
-    fn owned_id(path: &DISPLAYCONFIG_PATH_INFO, ids: &[String]) -> ResultType<Option<String>> {
+    pub(super) fn owned_id(
+        path: &DISPLAYCONFIG_PATH_INFO,
+        ids: &[String],
+    ) -> ResultType<Option<String>> {
         let target = Self::target_name(path)?;
         Ok(ids.iter().find(|id| matches_id(&target, id)).cloned())
     }
@@ -502,7 +505,7 @@ fn resize_source(
     Ok(())
 }
 
-fn active_refresh_rate(
+pub(super) fn active_refresh_rate(
     path: &DISPLAYCONFIG_PATH_INFO,
     signal: &DISPLAYCONFIG_VIDEO_SIGNAL_INFO,
 ) -> ResultType<u32> {

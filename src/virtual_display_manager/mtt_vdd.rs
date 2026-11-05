@@ -1,10 +1,13 @@
 #[path = "mtt_vdd/configuration.rs"]
 mod configuration;
+#[path = "mtt_vdd/presentation.rs"]
+mod presentation;
 #[path = "mtt_vdd/profile.rs"]
 mod profile;
 #[path = "mtt_vdd/topology.rs"]
 mod topology;
 pub(super) use configuration::{configure, prepare, state};
+pub(crate) use presentation::PersistentDisplayChangeGuard;
 
 use super::windows;
 use crate::platform::{self, win_device};
@@ -643,7 +646,12 @@ pub(super) fn plug_in_monitor(modes: &[virtual_display::MonitorMode]) -> ResultT
     let count = u32::try_from(get_monitor_count())?
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("VDD monitor count overflow"))?;
-    configure_count(count, modes)
+    let presentation = presentation::suspend_locked()?;
+    configure_count(count, modes)?;
+    if let Some(target) = presentation {
+        presentation::resume_locked(target)?;
+    }
+    Ok(())
 }
 
 pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
@@ -660,11 +668,50 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
         bail!("The only remaining display cannot be removed");
     }
     let _capture_idle = configuration::capture_idle_for_change()?;
-    configure_count(u32::try_from(target)?, &[])
+    let presentation = presentation::suspend_locked();
+    if target == 0 {
+        let removal = configure_count(0, &[]);
+        return presentation::complete_removal(presentation, removal);
+    }
+    let presentation = presentation?;
+    configure_count(u32::try_from(target)?, &[])?;
+    if let Some(target) = presentation {
+        presentation::resume_locked(target)?;
+    }
+    Ok(())
 }
 
 pub(super) fn reset_all() -> ResultType<()> {
     configuration::cleanup_session()
+}
+
+pub(super) fn session_display_active() -> bool {
+    presentation::active()
+}
+
+pub(super) fn session_display_needs_preference(name: &str) -> ResultType<bool> {
+    let _guard = LOCK.lock().unwrap();
+    presentation::needs_preference(name)
+}
+
+pub(super) fn prefer_session_display(
+    name: &str,
+    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<bool> {
+    let _guard = LOCK.lock().unwrap();
+    presentation::prefer_locked(name)
+}
+
+pub(super) fn restore_session_display(
+    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<()> {
+    let _guard = LOCK.lock().unwrap();
+    presentation::suspend_locked().map(|_| ())
+}
+
+pub(super) fn before_persistent_display_change() -> ResultType<Option<PersistentDisplayChangeGuard>>
+{
+    presentation::before_persistent_change()
 }
 
 #[cfg(test)]

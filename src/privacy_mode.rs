@@ -249,6 +249,16 @@ async fn turn_on_privacy_async(impl_key: String, conn_id: i32) -> Option<ResultT
 }
 
 fn turn_on_privacy_sync(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>> {
+    #[cfg(windows)]
+    {
+        let owner = get_privacy_mode_conn_id().unwrap_or(INVALID_PRIVACY_MODE_CONN_ID);
+        if owner == INVALID_PRIVACY_MODE_CONN_ID || owner == conn_id {
+            match crate::virtual_display_manager::before_persistent_display_change() {
+                Ok(presentation) => drop(presentation),
+                Err(error) => return Some(Err(error)),
+            }
+        }
+    }
     // Check if privacy mode is already on or occupied by another one
     let mut privacy_mode_lock = PRIVACY_MODE.lock().unwrap();
 
