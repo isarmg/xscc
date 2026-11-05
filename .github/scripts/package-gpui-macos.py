@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare an unsigned, relocatable Apple Silicon GPUI application on macOS."""
 import argparse
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -15,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def bundle_info(role, version):
     if role not in ("controller", "host"):
         raise ValueError("Expected controller or host")
-    match = re.fullmatch(r"(\d+\.\d+\.\d+)-beta\.(\d+)", version)
-    if not match:
-        raise ValueError("Expected a version such as 0.1.0-beta.1")
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-beta\.(\d+))?", version)
+    if not match or (match[2] is None and os.environ.get("XSCC_PACKAGE_MODE", "managed") != "managed"):
+        raise ValueError("Expected a managed release version or a beta version for test-only packages")
     name = f"XSCC {role.title()}"
     info = {
         "CFBundleDevelopmentRegion": "en",
@@ -28,7 +29,7 @@ def bundle_info(role, version):
         "CFBundleDisplayName": name,
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": match[1],
-        "CFBundleVersion": str(int(match[2]) + 1),
+        "CFBundleVersion": str(int(match[2]) + 1) if match[2] is not None else os.environ.get("GITHUB_RUN_NUMBER", "1"),
         "LSMinimumSystemVersion": "26.0",
         "LSArchitecturePriority": ["arm64"],
         "NSHighResolutionCapable": True,

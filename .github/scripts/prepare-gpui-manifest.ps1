@@ -36,11 +36,12 @@ if ($levels.Count -ne 1 -or $levels[0].GetAttribute('level') -ne 'asInvoker' -or
     throw 'Expected exactly one upstream asInvoker/uiAccess=false execution level'
 }
 # GPUI supplies dependency identities, but omits the required application identity.
-# Map the beta package version to the four unsigned 16-bit assembly components.
-if ($env:PACKAGE_VERSION -notmatch '^(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') {
-    throw 'Expected a numeric major.minor.patch-beta.revision package version'
+# Map the package version to the four unsigned 16-bit assembly components.
+if ($env:PACKAGE_VERSION -notmatch '^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$') {
+    throw 'Expected a numeric major.minor.patch or major.minor.patch-beta.revision package version'
 }
-$versionParts = @(1..4 | ForEach-Object { [uint64]$Matches[$_] })
+$versionParts = @(1..3 | ForEach-Object { [uint64]$Matches[$_] })
+$versionParts += if ($Matches.ContainsKey(4)) { [uint64]$Matches[4] } else { [uint64]0 }
 if (@($versionParts | Where-Object { $_ -gt 65535 }).Count -ne 0) {
     throw 'Application manifest version components must be between 0 and 65535'
 }

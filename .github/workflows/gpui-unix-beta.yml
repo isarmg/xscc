@@ -25,7 +25,7 @@ on:
       package_version:
         description: 'Unsigned beta candidate version (no release publication)'
         required: true
-        default: '0.1.0-beta.16'
+        default: '1.0.0'
         type: string
 permissions:
   contents: read
@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: false
 env:
   XSCC_PACKAGE_MODE: managed
-  PACKAGE_VERSION: ${{ inputs.package_version || '0.1.0-beta.16' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
   VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
 jobs:
   linux:
@@ -77,7 +77,7 @@ jobs:
       - name: Test package capability and beta-only gates
         run: python3 .github/scripts/test-gpui-package-mode.py
       - name: Validate candidate label
-        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]'
+        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]'
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: 1.99.0
@@ -161,7 +161,7 @@ jobs:
       - name: Record candidate provenance and validation limits
         run: |
           printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'x86_64-unknown-linux-gnu' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
-          printf 'package_mode=%s\n' "$XSCC_PACKAGE_MODE" >> dist/build-manifest.txt
+          printf 'package_mode=%s\nversion=%s\n' "$XSCC_PACKAGE_MODE" "$PACKAGE_VERSION" >> dist/build-manifest.txt
           if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated unrestricted IP direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
           echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -198,7 +198,7 @@ jobs:
       - name: Test package capability and beta-only gates
         run: python3 .github/scripts/test-gpui-package-mode.py
       - name: Validate candidate label
-        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]'
+        run: '[[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]'
       - name: Verify native Apple Silicon and macOS 26 SDK
         run: |
           [[ "$(uname -m)" == arm64 ]]
@@ -254,7 +254,7 @@ jobs:
       - name: Record candidate provenance and validation limits
         run: |
           printf 'source=%s\nrole=%s\ntarget=%s\nrust=1.99.0\nvcpkg=%s\nrun=%s/%s/actions/runs/%s\n' "$GITHUB_SHA" '${{ matrix.role }}' 'aarch64-apple-darwin' "$VCPKG_COMMIT_ID" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > dist/build-manifest.txt
-          printf 'package_mode=%s\n' "$XSCC_PACKAGE_MODE" >> dist/build-manifest.txt
+          printf 'package_mode=%s\nversion=%s\n' "$XSCC_PACKAGE_MODE" "$PACKAGE_VERSION" >> dist/build-manifest.txt
           if [[ $XSCC_PACKAGE_MODE == test-lan-direct ]]; then echo 'TEST ONLY: unauthenticated unrestricted IP direct capability; never promote to production.' | tee dist/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"; fi
           echo 'Native build, unit tests and packaged CLI checked. GUI, physical GPU, capture, permissions, service lifecycle and live remote sessions require physical-device acceptance. No signing or installation performed.' | tee -a dist/build-manifest.txt >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

@@ -128,6 +128,25 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.verify_metadata(directory, 'windows', 'a' * 40, '0.1.0-beta.2')
 
+    def test_stable_metadata_rejects_other_package_versions(self):
+        sha = 'a' * 40
+        for kind in ('unix', 'ios', 'android'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                if kind == 'unix':
+                    (directory / 'build-manifest.txt').write_text(
+                        f'source={sha}\npackage_mode=managed\nversion=1.0.0\n')
+                elif kind == 'ios':
+                    (directory / 'build-info.json').write_text(json.dumps({
+                        'source_commit': sha, 'test_lan_direct': False, 'package_version': '1.0.0'}))
+                else:
+                    (directory / 'BUILD-INFO.txt').write_text(f'commit={sha}\ntest_lan_direct=false\n')
+                    (directory / 'manifest-badging.txt').write_text(
+                        "package: name='org.sarmg.xscc.gpui.preview' versionCode='10000' versionName='1.0.0'\n")
+                release.verify_metadata(directory, kind, sha, '1.0.0')
+                with self.assertRaises(ValueError):
+                    release.verify_metadata(directory, kind, sha, '0.1.0-beta.22')
+
     def test_corrupt_or_incomplete_assets_fail_checksum_validation(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

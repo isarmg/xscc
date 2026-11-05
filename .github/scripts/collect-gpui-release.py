@@ -145,12 +145,19 @@ def verify_metadata(directory, kind, sha, version):
         valid = info['source_sha'] == sha and info['package_version'] == version and info['package_mode'] == 'managed'
     elif kind == 'ios':
         info = json.loads((directory / 'build-info.json').read_text())
-        valid = info['source_commit'] == sha and info['test_lan_direct'] is False
+        valid = (info['source_commit'] == sha and info['test_lan_direct'] is False
+                 and info.get('package_version') == version)
     else:
         file = 'build-manifest.txt' if kind == 'unix' else 'BUILD-INFO.txt'
         info = dict(line.split('=', 1) for line in (directory / file).read_text().splitlines() if '=' in line)
-        valid = (info.get('source') == sha and info.get('package_mode') == 'managed') if kind == 'unix' else (
-            info.get('commit') == sha and info.get('test_lan_direct') == 'false')
+        if kind == 'unix':
+            valid = (info.get('source') == sha and info.get('package_mode') == 'managed'
+                     and info.get('version') == version)
+        else:
+            badging = (directory / 'manifest-badging.txt').read_text()
+            package = re.search(r"^package: .*\bversionName='([^']+)'", badging, re.M)
+            valid = (info.get('commit') == sha and info.get('test_lan_direct') == 'false'
+                     and package is not None and package[1] == version)
     if not valid:
         raise ValueError(f'Wrong source revision or test-only capability in {kind} candidate')
 
@@ -233,6 +240,6 @@ if __name__ == '__main__':
     parser.add_argument('--version', required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    if not re.fullmatch('[0-9a-f]{40}', args.sha) or not re.fullmatch(r'\d+\.\d+\.\d+-beta\.\d+', args.version):
-        parser.error('Expected a complete commit SHA and a beta package version')
+    if not re.fullmatch('[0-9a-f]{40}', args.sha) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-beta\.\d+)?', args.version):
+        parser.error('Expected a complete commit SHA and a release or beta package version')
     collect(os.environ['GITHUB_REPOSITORY'], args.sha, args.version, args.output)
