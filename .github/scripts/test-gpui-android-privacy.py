@@ -11,6 +11,16 @@ spec.loader.exec_module(privacy)
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_high_refresh_requires_real_surface_and_display_mode_calls(self):
+        methods = {
+            ("Landroid/view/Surface;", "setFrameRate", "(FI)V"),
+            ("Landroid/view/Display$Mode;", "getModeId", "()I"),
+        }
+        privacy.check_high_refresh_api(methods)
+        for missing in methods:
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "high-refresh"):
+                privacy.check_high_refresh_api(methods - {missing})
+
     def test_playback_jni_requires_every_registered_entry(self):
         bridge = "Lorg/xscc/gpui/AndroidPlaybackAudio;"
         members = {

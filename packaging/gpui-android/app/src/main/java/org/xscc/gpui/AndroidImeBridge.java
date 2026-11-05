@@ -7,6 +7,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
 import android.view.KeyEvent;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.inputmethod.CompletionInfo;
 import android.view.inputmethod.CorrectionInfo;
@@ -60,6 +61,10 @@ public class AndroidImeBridge extends GameActivity {
     @Override
     protected InputEnabledSurfaceView createSurfaceView() {
         imeSurface = new ImeSurfaceView();
+        return imeSurface;
+    }
+
+    SurfaceView remoteSessionSurfaceView() {
         return imeSurface;
     }
 

@@ -15,6 +15,10 @@ impl Presentation {
         }
     }
 
+    pub(crate) fn reapply(&self) {
+        self.set_enabled(self.requested.get());
+    }
+
     pub(crate) fn set_enabled(&self, enabled: bool) {
         let previous = self.requested.replace(enabled);
         if !enabled && !previous {
