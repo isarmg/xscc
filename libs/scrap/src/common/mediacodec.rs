@@ -1,4 +1,7 @@
-use hbb_common::{anyhow::Error, bail, log, ResultType};
+use hbb_common::{
+    anyhow::{Context, Error},
+    bail, log, ResultType,
+};
 use ndk::media::{
     media_codec::{MediaCodec, MediaCodecDirection, MediaFormat},
     NdkMediaError,
@@ -22,7 +25,7 @@ pub static H265_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
 pub struct MediaCodecDecoder {
     decoder: MediaCodec,
     mime: &'static str,
-    size: Option<(i32, i32)>,
+    configuration: Option<(i32, i32, i32)>,
 }
 
 impl MediaCodecDecoder {
@@ -42,21 +45,35 @@ impl MediaCodecDecoder {
                 return Some(Self {
                     decoder,
                     mime,
-                    size: None,
+                    configuration: None,
                 });
             }
         }
         None
     }
 
-    pub fn set_video_size(&mut self, width: i32, height: i32) -> ResultType<()> {
+    pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
         if width <= 0 || height <= 0 {
             bail!("Invalid MediaCodec input dimensions: {width}x{height}");
         }
-        if self.size == Some((width, height)) {
-            return Ok(());
+        if !(1..=base::session_protocol::MAX_SESSION_FPS as i32).contains(&fps) {
+            bail!("Invalid MediaCodec frame rate: {fps}");
         }
-        if self.size.take().is_some() {
+        if let Some((old_width, old_height, old_fps)) = self.configuration {
+            if (old_width, old_height) == (width, height) {
+                if old_fps != fps {
+                    // Keep parameter sets and queued frames when only the rate changes.
+                    let parameters = MediaFormat::new();
+                    parameters.set_f32("operating-rate", fps as f32);
+                    self.decoder.set_parameters(parameters).with_context(|| {
+                        format!("Update MediaCodec operating rate to {fps} fps")
+                    })?;
+                    self.configuration = Some((width, height, fps));
+                }
+                return Ok(());
+            }
+        }
+        if self.configuration.take().is_some() {
             self.decoder.stop()?;
         }
         let format = MediaFormat::new();
@@ -64,15 +81,22 @@ impl MediaCodecDecoder {
         format.set_i32("width", width);
         format.set_i32("height", height);
         format.set_i32("color-format", COLOR_YUV420_SEMIPLANAR);
+        format.set_i32("frame-rate", fps);
+        format.set_f32("operating-rate", fps as f32);
+        format.set_i32("priority", 0);
+        format.set_i32("low-latency", 1);
         self.decoder
-            .configure(&format, None, MediaCodecDirection::Decoder)?;
+            .configure(&format, None, MediaCodecDirection::Decoder)
+            .with_context(|| {
+                format!("Configure realtime MediaCodec {width}x{height} at {fps} fps")
+            })?;
         self.decoder.start()?;
-        self.size = Some((width, height));
+        self.configuration = Some((width, height, fps));
         Ok(())
     }
 
     pub fn decode(&mut self, data: &[u8], rgb: &mut ImageRgb) -> ResultType<bool> {
-        if self.size.is_none() {
+        if self.configuration.is_none() {
             bail!("MediaCodec input dimensions are not configured");
         }
         let decoder = &self.decoder;

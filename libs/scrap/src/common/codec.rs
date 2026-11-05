@@ -699,13 +699,13 @@ impl Decoder {
     }
 
     #[cfg(feature = "mediacodec")]
-    pub fn set_video_size(&mut self, width: i32, height: i32) -> ResultType<()> {
+    pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
         if let Some(decoder) = self
             .h264_media_codec
             .as_mut()
             .or(self.h265_media_codec.as_mut())
         {
-            if let Err(error) = decoder.set_video_size(width, height) {
+            if let Err(error) = decoder.set_video_size(width, height, fps) {
                 self.valid = false;
                 return Err(error);
             }

@@ -2057,11 +2057,15 @@ pub fn start_video_thread<F, T>(
                                     handler.reset(Some(format));
                                 }
                                 if matches!(format, CodecFormat::H264 | CodecFormat::H265) {
-                                    let size = session.lc.read().unwrap().peer_info.as_ref()
-                                        .and_then(|peer| peer.displays.get(display))
-                                        .map(|display| (display.width, display.height));
+                                    let (size, fps) = {
+                                        let lc = session.lc.read().unwrap();
+                                        let size = lc.peer_info.as_ref()
+                                            .and_then(|peer| peer.displays.get(display))
+                                            .map(|display| (display.width, display.height));
+                                        (size, lc.streaming_target_fps())
+                                    };
                                     let (width, height) = size.ok_or_else(|| anyhow!("Missing remote display size"))?;
-                                    if let Err(error) = handler.decoder.set_video_size(width, height) {
+                                    if let Err(error) = handler.decoder.set_video_size(width, height, fps) {
                                         handler.fail_counter = MAX_DECODE_FAIL_COUNTER;
                                         return Err(error);
                                     }
