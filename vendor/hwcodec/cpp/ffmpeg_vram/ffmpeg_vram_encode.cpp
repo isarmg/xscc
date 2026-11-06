@@ -603,7 +603,12 @@ int ffmpeg_vram_test_encode(int64_t *outLuids, int32_t *outVendors, int32_t maxD
           int32_t key_obj = 0;
           auto start = util::now();
           bool succ = ffmpeg_vram_encode(e, e->native_->GetCurrentTexture(), util_encode::vram_encode_test_callback,
-                                 &key_obj, 0) == 0 && key_obj == 1;
+                                 &key_obj, 0) == 0;
+          while (succ && e->amf_pipeline_ && key_obj == 0 && util::elapsed_ms(start) < TEST_TIMEOUT_MS) {
+            succ = e->poll(util_encode::vram_encode_test_callback, &key_obj) == 0;
+            av_usleep(1000);
+          }
+          succ = succ && key_obj == 1;
           int64_t elapsed = util::elapsed_ms(start);
           if (succ && elapsed < TEST_TIMEOUT_MS) {
             outLuids[count] = currentLuid;
