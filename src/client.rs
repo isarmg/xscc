@@ -2011,13 +2011,79 @@ pub fn start_video_thread<F, T>(
         #[cfg(windows)]
         base::platform::windows::start_cpu_performance_monitor();
         get_hwcodec_config();
-        let mut video_handler = None;
+        let mut video_handler: Option<VideoHandler> = None;
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
         let mut last_presented: Option<std::time::Instant> = None;
         loop {
-            if let Ok(data) = video_receiver.recv() {
+            #[cfg(feature = "mediacodec")]
+            let message = match video_handler.as_mut() {
+                Some(handler) if handler.decoder.has_pending_mediacodec_output() => {
+                    match video_receiver.recv_timeout(Duration::from_millis(4)) {
+                        Ok(data) => Ok(data),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // A static desktop still needs the last asynchronous decoded frame.
+                            let started = std::time::Instant::now();
+                            match handler.decoder.poll_mediacodec_output(&mut handler.rgb) {
+                                Ok(true) => {
+                                    handler.fail_counter = 0;
+                                    handler.first_frame = false;
+                                    #[cfg(feature = "gpui-session")]
+                                    session
+                                        .ui_handler
+                                        .on_video_decoded(display, started.elapsed());
+                                    let presentation_fps = {
+                                        let lc = session.lc.read().unwrap();
+                                        lc.streaming_enabled().then(|| lc.streaming_target_fps())
+                                    };
+                                    let present = presentation_fps.map_or(true, |fps| {
+                                        presentation::should_present(
+                                            true,
+                                            video_queue.len(),
+                                            last_presented.map(|instant| instant.elapsed()),
+                                            Duration::from_secs_f64(1.0 / fps as f64),
+                                        )
+                                    });
+                                    if present {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            std::ptr::null_mut(),
+                                            true,
+                                        );
+                                        last_presented = Some(std::time::Instant::now());
+                                    }
+                                    fps_calculate(
+                                        &mut skip_beginning,
+                                        &fps,
+                                        false,
+                                        started.elapsed(),
+                                        &mut count,
+                                        &mut duration,
+                                    );
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    hbb_common::throttled_log!(
+                                        Duration::from_secs(1),
+                                        error,
+                                        "Poll MediaCodec output failed: {error:#}"
+                                    );
+                                    handler.reset(None);
+                                    session.refresh_video(display as _);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                _ => video_receiver.recv(),
+            };
+            #[cfg(not(feature = "mediacodec"))]
+            let message = video_receiver.recv();
+            if let Ok(data) = message {
                 match data {
                     MediaData::VideoFrame(_) | MediaData::VideoQueue => {
                         let vf = match data {

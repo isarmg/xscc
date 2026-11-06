@@ -718,6 +718,26 @@ impl Decoder {
         Ok(())
     }
 
+    #[cfg(feature = "mediacodec")]
+    pub fn has_pending_mediacodec_output(&self) -> bool {
+        self.h264_media_codec
+            .as_ref()
+            .or(self.h265_media_codec.as_ref())
+            .is_some_and(MediaCodecDecoder::has_pending_output)
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn poll_mediacodec_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
+        match self
+            .h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+        {
+            Some(decoder) => decoder.poll_output(rgb),
+            None => Ok(false),
+        }
+    }
+
     pub fn format(&self) -> CodecFormat {
         self.format
     }

@@ -26,6 +26,7 @@ pub struct MediaCodecDecoder {
     decoder: MediaCodec,
     mime: &'static str,
     configuration: Option<(i32, i32, i32)>,
+    pending_output: usize,
 }
 
 impl MediaCodecDecoder {
@@ -46,6 +47,7 @@ impl MediaCodecDecoder {
                     decoder,
                     mime,
                     configuration: None,
+                    pending_output: 0,
                 });
             }
         }
@@ -76,6 +78,7 @@ impl MediaCodecDecoder {
         if self.configuration.take().is_some() {
             self.decoder.stop()?;
         }
+        self.pending_output = 0;
         let format = MediaFormat::new();
         format.set_str("mime", self.mime);
         format.set_i32("width", width);
@@ -109,14 +112,19 @@ impl MediaCodecDecoder {
         }
         input.buffer_mut()[..data.len()].copy_from_slice(data);
         decoder.queue_input_buffer(input, 0, data.len(), 0, 0)?;
+        self.pending_output += 1;
+        self.poll_output(rgb)
+    }
 
+    pub fn has_pending_output(&self) -> bool {
+        self.pending_output > 0
+    }
+
+    pub fn poll_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
+        let decoder = &self.decoder;
         let mut decoded = false;
         loop {
-            let output = match decoder.dequeue_output_buffer(if decoded {
-                Duration::ZERO
-            } else {
-                Duration::from_millis(100)
-            }) {
+            let output = match decoder.dequeue_output_buffer(Duration::ZERO) {
                 Ok(Some(output)) => output,
                 Ok(None) => return Ok(decoded),
                 // ndk 0.7 returns these normal format/buffer notifications as errors.
@@ -127,6 +135,7 @@ impl MediaCodecDecoder {
             };
             let converted = convert_output(&output.format(), output.buffer(), rgb);
             decoder.release_output_buffer(output, false)?;
+            self.pending_output = self.pending_output.saturating_sub(1);
             converted?;
             decoded = true;
         }
