@@ -79,6 +79,7 @@ public:
   int32_t gop_;
   bool amf_pipeline_ = false;
   unsigned int pending_frames_ = 0;
+  std::unique_ptr<void, decltype(&CloseHandle)> amf_poll_timer_{nullptr, &CloseHandle};
   std::unique_ptr<NativeDevice> amf_device_;
   ComPtr<ID3D11Texture2D> amf_capture_input_, amf_encoder_input_;
   ComPtr<IDXGIKeyedMutex> amf_capture_mutex_, amf_encoder_mutex_;
@@ -141,6 +142,13 @@ public:
     }
     amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF && framerate_ > 60;
     if (amf_pipeline_) {
+      amf_poll_timer_.reset(CreateWaitableTimerExW(
+          nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+          TIMER_MODIFY_STATE | SYNCHRONIZE));
+      if (!amf_poll_timer_) {
+        LOG_ERROR(std::string("AMF poll timer creation failed: ") + std::to_string(GetLastError()));
+        return false;
+      }
       // Keep AMF's asynchronous D3D work off DesktopDup's immediate context.
       amf_device_ = std::make_unique<NativeDevice>();
       if (!amf_device_->Init(luid_, nullptr))
@@ -425,7 +433,18 @@ private:
           return 0;
         if (util::elapsed_ms(start) >= ENCODE_TIMEOUT_MS)
           return AVERROR(ETIMEDOUT);
-        av_usleep(1000);
+        // Sleep(1) can consume a high-rate frame budget on Windows.
+        LARGE_INTEGER due{};
+        due.QuadPart = -10000;
+        if (!SetWaitableTimerEx(amf_poll_timer_.get(), &due, 0, nullptr, nullptr, nullptr, 0)) {
+          LOG_ERROR(std::string("AMF poll timer arm failed: ") + std::to_string(GetLastError()));
+          return AVERROR(EIO);
+        }
+        const DWORD waited = WaitForSingleObject(amf_poll_timer_.get(), ENCODE_TIMEOUT_MS);
+        if (waited != WAIT_OBJECT_0) {
+          LOG_ERROR(std::string("AMF poll wait failed: ") + std::to_string(waited == WAIT_FAILED ? GetLastError() : waited));
+          return AVERROR(waited == WAIT_TIMEOUT ? ETIMEDOUT : EIO);
+        }
         continue;
       }
       if (ret < 0)
