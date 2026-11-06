@@ -4,6 +4,7 @@ extern "C" {
 #include <libavutil/imgutils.h>
 #include <libavutil/log.h>
 #include <libavutil/opt.h>
+#include <libavutil/time.h>
 }
 
 #ifdef _WIN32
@@ -76,6 +77,8 @@ public:
   int32_t kbs_;
   int32_t framerate_;
   int32_t gop_;
+  bool amf_pipeline_ = false;
+  unsigned int pending_frames_ = 0;
 
   const int align_ = 0;
   const bool full_range_ = false;
@@ -132,6 +135,11 @@ public:
     util_encode::set_av_codec_ctx(c_, encoder_->name_, kbs_, gop_, framerate_);
     if (!util_encode::set_lantency_free(c_->priv_data, encoder_->name_)) {
       return false;
+    }
+    amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF && framerate_ > 60;
+    if (amf_pipeline_) {
+      if ((ret = av_opt_set_int(c_->priv_data, "query_timeout", 0, 0)) < 0)
+        return false;
     }
     // util_encode::set_quality(c_->priv_data, encoder_->name_, Quality_Default);
     util_encode::set_rate_control(c_, encoder_->name_, RC_CBR, -1);
@@ -224,11 +232,35 @@ public:
   }
 
   int encode(void *texture, EncodeCallback callback, void *obj, int64_t ms) {
+    if (amf_pipeline_) {
+      int ret = receive_pending(callback, obj, pending_frames_ >= 2);
+      if (ret < 0)
+        return ret;
+      if (!av_frame_is_writable(frame_)) {
+        // FFmpeg retains the previous texture until its encoded packet is released.
+        av_frame_unref(frame_);
+        frame_->format = c_->pix_fmt;
+        frame_->width = c_->width;
+        frame_->height = c_->height;
+        frame_->color_range = c_->color_range;
+        frame_->color_primaries = c_->color_primaries;
+        frame_->color_trc = c_->color_trc;
+        frame_->colorspace = c_->colorspace;
+        frame_->chroma_location = c_->chroma_sample_location;
+        if ((ret = av_hwframe_get_buffer(c_->hw_frames_ctx, frame_, 0)) < 0)
+          return ret;
+        encode_texture_ = (ID3D11Texture2D *)frame_->data[0];
+      }
+    }
 
     if (!convert(texture))
       return -1;
 
     return do_encode(callback, obj, ms);
+  }
+
+  int poll(EncodeCallback callback, void *obj) {
+    return amf_pipeline_ ? receive_pending(callback, obj, false) : 0;
   }
 
   void destroy() {
@@ -311,6 +343,32 @@ private:
     }
     return false;
   }
+  int receive_pending(EncodeCallback callback, const void *obj, bool wait) {
+    const auto start = util::now();
+    while (pending_frames_ > 0) {
+      const int ret = avcodec_receive_packet(c_, pkt_);
+      if (ret == AVERROR(EAGAIN)) {
+        if (!wait || pending_frames_ < 2)
+          return 0;
+        if (util::elapsed_ms(start) >= ENCODE_TIMEOUT_MS)
+          return AVERROR(ETIMEDOUT);
+        av_usleep(1000);
+        continue;
+      }
+      if (ret < 0)
+        return ret;
+      --pending_frames_;
+      if (!pkt_->data || pkt_->size <= 0) {
+        av_packet_unref(pkt_);
+        return AVERROR_INVALIDDATA;
+      }
+      if (callback)
+        callback(pkt_->data, pkt_->size, pkt_->flags & AV_PKT_FLAG_KEY, obj, pkt_->pts);
+      av_packet_unref(pkt_);
+    }
+    return 0;
+  }
+
   int do_encode(EncodeCallback callback, const void *obj, int64_t ms) {
     int ret;
     bool encoded = false;
@@ -318,6 +376,11 @@ private:
     if ((ret = avcodec_send_frame(c_, frame_)) < 0) {
       LOG_ERROR(std::string("avcodec_send_frame failed, ret = ") + av_err2str(ret));
       return ret;
+    }
+
+    if (amf_pipeline_) {
+      ++pending_frames_;
+      return receive_pending(callback, obj, pending_frames_ >= 2);
     }
 
     auto start = util::now();
@@ -400,7 +463,7 @@ private:
     frames_ctx->height = height_;
     frames_ctx->initial_pool_size = 0;
     if (encoder_->device_type_ == AV_HWDEVICE_TYPE_D3D11VA) {
-      frames_ctx->initial_pool_size = 1;
+      frames_ctx->initial_pool_size = amf_pipeline_ ? 0 : 1;
       AVD3D11VAFramesContext *frames_hwctx =
           (AVD3D11VAFramesContext *)frames_ctx->hwctx;
       frames_hwctx->BindFlags = D3D11_BIND_RENDER_TARGET;
@@ -472,6 +535,16 @@ void ffmpeg_vram_destroy_encoder(FFmpegVRamEncoder *encoder) {
     encoder = NULL;
   } catch (const std::exception &e) {
     LOG_ERROR(std::string("free encoder failed, ") + std::string(e.what()));
+  }
+}
+
+int ffmpeg_vram_poll(FFmpegVRamEncoder *encoder, EncodeCallback callback, void *obj) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  try {
+    return encoder->poll(callback, obj);
+  } catch (const std::exception &) {
+    return AVERROR_EXTERNAL;
   }
 }
 

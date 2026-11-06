@@ -100,6 +100,11 @@ pub trait EncoderApi {
 
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame>;
 
+    #[cfg(all(windows, feature = "vram"))]
+    fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
+        Ok(None)
+    }
+
     fn yuvfmt(&self) -> EncodeYuvFormat;
 
     #[cfg(feature = "vram")]

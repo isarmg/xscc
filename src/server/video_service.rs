@@ -981,6 +981,20 @@ fn run_encoder(
 
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
+                #[cfg(all(windows, feature = "vram"))]
+                if let Some(mut frame) = encoder.poll_video_frame()? {
+                    frame.display = display_idx as _;
+                    let mut message = Message::new();
+                    message.set_video_frame(frame);
+                    #[cfg(feature = "gpui-host")]
+                    let enqueue_started = Instant::now();
+                    let ids = sp.send_video_frame(message);
+                    #[cfg(feature = "gpui-host")]
+                    stages.enqueue_time(enqueue_started.elapsed());
+                    frame_controller.set_send(now, ids);
+                    encoder_warmed_up = true;
+                    send_counter += 1;
+                }
                 #[cfg(windows)]
                 if dxgi_recovery_started
                     .map(|started| started.elapsed() >= DXGI_RECOVERY_FRAME_GRACE)
@@ -995,7 +1009,7 @@ fn run_encoder(
                         try_gdi += 1;
                     }
                 }
-                if !encoder.latency_free() && !cached.yuv.is_empty() {
+                if !encoder.latency_free() && !cached.texture && !cached.yuv.is_empty() {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
@@ -1369,6 +1383,9 @@ fn handle_one_frame(
     stages.encode_time(encode_started.elapsed());
     match encoded {
         Ok(mut vf) => {
+            if vf.union.is_none() {
+                return Ok(send_conn_ids);
+            }
             *encode_fail_counter = 0;
             *encoder_warmed_up = true;
             vf.display = display as _;
