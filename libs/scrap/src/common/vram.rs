@@ -451,13 +451,14 @@ impl VRamEncoder {
     }
 
     pub fn encode(&mut self, texture: *mut c_void, ms: i64) -> ResultType<Vec<EncodeFrame>> {
+        let amf_pipeline = self.amf_pipeline();
         match self.encoder.encode(texture, ms) {
             Ok(v) => {
                 let mut data = Vec::<EncodeFrame>::new();
                 data.append(v);
                 Ok(data)
             }
-            Err(error) if self.amf_pipeline() => bail!("AMD pipeline encode failed: {error}"),
+            Err(error) if amf_pipeline => bail!("AMD pipeline encode failed: {error}"),
             Err(_) => Ok(Vec::<EncodeFrame>::new()),
         }
     }
