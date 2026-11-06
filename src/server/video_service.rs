@@ -25,6 +25,8 @@ pub(super) use capture_lifecycle::begin_connection;
 #[cfg(windows)]
 pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
 
+#[cfg(any(all(windows, feature = "vram"), test))]
+mod frame_pacing;
 #[cfg(feature = "gpui-host")]
 mod metrics;
 
@@ -979,6 +981,9 @@ fn run_encoder(
             }
         };
 
+        #[cfg(all(windows, feature = "vram"))]
+        let capture_would_block = matches!(&res, Err(error) if error.kind() == WouldBlock);
+
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
                 #[cfg(all(windows, feature = "vram"))]
@@ -1090,6 +1095,14 @@ fn run_encoder(
             }
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
+
+        #[cfg(all(windows, feature = "vram"))]
+        // Cursor-only updates carry no encodable image and must not spend a high-rate frame slot.
+        if try_gdi == 0
+            && !frame_pacing::should_pace_capture(spf, encoder.input_texture(), capture_would_block)
+        {
+            continue;
+        }
 
         let elapsed = now.elapsed();
         // may need to enable frame(timeout)

@@ -200,6 +200,9 @@ jobs:
       - name: Test connection modifier ownership
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::input_service::modifier_keys::tests::"
+      - name: Test cursor-only high-refresh pacing
+        if: matrix.role == 'host' && !inputs.build_only
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_service::frame_pacing::tests::"
       - name: Test virtual display protocol and pipelined DXGI readback
         if: matrix.role == 'host' && !inputs.build_only
         run: |
