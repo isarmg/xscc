@@ -3829,7 +3829,9 @@ pub(crate) fn cleanup_orphaned_virtual_displays() {
 
 #[cfg(windows)]
 pub(crate) fn finish_session_display() -> ResultType<()> {
-    if !virtual_display_manager::session_display_active() {
+    if !virtual_display_manager::session_display_active()
+        && !virtual_display_manager::session_display_cleanup_required()?
+    {
         return Ok(());
     }
     let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))

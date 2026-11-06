@@ -6,7 +6,7 @@ mod presentation;
 mod profile;
 #[path = "mtt_vdd/topology.rs"]
 mod topology;
-pub(super) use configuration::{configure, prepare, state};
+pub(super) use configuration::{cleanup_required_at_exit, configure, prepare, state};
 pub(crate) use presentation::PersistentDisplayChangeGuard;
 
 use super::windows;

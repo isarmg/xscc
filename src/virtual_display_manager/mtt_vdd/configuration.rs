@@ -398,6 +398,21 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
     }
 }
 
+fn temporary_displays_need_cleanup(state: &VirtualDisplayState) -> bool {
+    state.status != "external_owned"
+        && !state.persistent
+        && (state.configured_count > 0 || state.present_count > 0)
+}
+
+pub(crate) fn cleanup_required_at_exit() -> ResultType<bool> {
+    let _guard = LOCK.lock().unwrap();
+    if device()?.is_none() {
+        return Ok(false);
+    }
+    let state = query()?;
+    Ok(temporary_displays_need_cleanup(&state))
+}
+
 pub(super) fn cleanup_session() -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
     let presentation = presentation::suspend_locked();
@@ -446,6 +461,36 @@ fn restart_required() -> ResultType<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temporary_displays_need_exit_cleanup_without_primary_preference() {
+        for (configured_count, present_count) in [(1, 1), (1, 0), (0, 1)] {
+            let state = VirtualDisplayState {
+                configured_count,
+                present_count,
+                ..Default::default()
+            };
+            assert!(temporary_displays_need_cleanup(&state));
+        }
+    }
+
+    #[test]
+    fn exit_cleanup_preserves_persistent_external_and_empty_displays() {
+        let mut state = VirtualDisplayState {
+            configured_count: 1,
+            present_count: 1,
+            persistent: true,
+            ..Default::default()
+        };
+        assert!(!temporary_displays_need_cleanup(&state));
+        state.persistent = false;
+        state.status = "external_owned".into();
+        assert!(!temporary_displays_need_cleanup(&state));
+        state.status = "disabled".into();
+        state.configured_count = 0;
+        state.present_count = 0;
+        assert!(!temporary_displays_need_cleanup(&state));
+    }
 
     #[test]
     fn display_query_failure_retains_the_observed_problem_and_original_cause() {
