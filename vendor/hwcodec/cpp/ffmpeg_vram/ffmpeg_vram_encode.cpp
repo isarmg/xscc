@@ -79,6 +79,9 @@ public:
   int32_t gop_;
   bool amf_pipeline_ = false;
   unsigned int pending_frames_ = 0;
+  std::unique_ptr<NativeDevice> amf_device_;
+  ComPtr<ID3D11Texture2D> amf_capture_input_, amf_encoder_input_;
+  ComPtr<IDXGIKeyedMutex> amf_capture_mutex_, amf_encoder_mutex_;
 
   const int align_ = 0;
   const bool full_range_ = false;
@@ -138,6 +141,16 @@ public:
     }
     amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF && framerate_ > 60;
     if (amf_pipeline_) {
+      // Keep AMF's asynchronous D3D work off DesktopDup's immediate context.
+      amf_device_ = std::make_unique<NativeDevice>();
+      if (!amf_device_->Init(luid_, nullptr))
+        return false;
+      d3d11Device_->Release();
+      d3d11DeviceContext_->Release();
+      d3d11Device_ = amf_device_->device_.Get();
+      d3d11Device_->AddRef();
+      d3d11DeviceContext_ = amf_device_->context_.Get();
+      d3d11DeviceContext_->AddRef();
       if ((ret = av_opt_set_int(c_->priv_data, "query_timeout", 0, 0)) < 0)
         return false;
     }
@@ -288,12 +301,72 @@ public:
   }
 
   int set_framerate(int framerate) {
+    // Recreate AMF when a high-rate target changes, including its device/pool.
+    if (encoder_->driver_ == EncoderDriver::AMF &&
+        (amf_pipeline_ || framerate > 60) && framerate != framerate_)
+      return -1;
     c_->time_base = av_make_q(1, framerate);
     c_->framerate = av_inv_q(c_->time_base);
     return 0;
   }
 
 private:
+  bool convert_amf_input(ID3D11Texture2D *input, ID3D11Texture2D *output,
+                         DXGI_COLOR_SPACE_TYPE color_in,
+                         DXGI_COLOR_SPACE_TYPE color_out) {
+    D3D11_TEXTURE2D_DESC desc{};
+    input->GetDesc(&desc);
+    if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) {
+      LOG_ERROR(std::string("Unsupported AMF capture texture layout"));
+      return false;
+    }
+    D3D11_TEXTURE2D_DESC previous{};
+    if (amf_capture_input_)
+      amf_capture_input_->GetDesc(&previous);
+    if (!amf_capture_input_ || previous.Width != desc.Width ||
+        previous.Height != desc.Height || previous.Format != desc.Format) {
+      ComPtr<ID3D11Texture2D> capture_input, encoder_input;
+      ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
+      desc.Usage = D3D11_USAGE_DEFAULT;
+      desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+      desc.CPUAccessFlags = 0;
+      desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+      HRB(native_->device_->CreateTexture2D(&desc, nullptr, &capture_input));
+      ComPtr<IDXGIResource> resource;
+      HRB(capture_input.As(&resource));
+      HANDLE shared = nullptr;
+      HRB(resource->GetSharedHandle(&shared));
+      HRB(amf_device_->device_->OpenSharedResource(
+          shared, IID_PPV_ARGS(&encoder_input)));
+      HRB(capture_input.As(&capture_mutex));
+      HRB(encoder_input.As(&encoder_mutex));
+      amf_capture_input_ = std::move(capture_input);
+      amf_encoder_input_ = std::move(encoder_input);
+      amf_capture_mutex_ = std::move(capture_mutex);
+      amf_encoder_mutex_ = std::move(encoder_mutex);
+    }
+    // Keyed mutexes order GPU work across devices; neither side reads a live
+    // DesktopDup surface after this call, and AMF retains only its own NV12 frames.
+    HRESULT locked = amf_capture_mutex_->AcquireSync(0, ENCODE_TIMEOUT_MS);
+    if (locked != S_OK) {
+      LOG_ERROR(std::string("AMF capture texture lock failed: ") + std::to_string(locked));
+      return false;
+    }
+    native_->context_->CopyResource(amf_capture_input_.Get(), input);
+    native_->context_->Flush();
+    HRB(amf_capture_mutex_->ReleaseSync(1));
+    locked = amf_encoder_mutex_->AcquireSync(1, ENCODE_TIMEOUT_MS);
+    if (locked != S_OK) {
+      LOG_ERROR(std::string("AMF encoder texture lock failed: ") + std::to_string(locked));
+      return false;
+    }
+    const bool converted = amf_device_->BgraToNv12(
+        amf_encoder_input_.Get(), output, width_, height_, color_in, color_out);
+    amf_device_->context_->Flush();
+    HRB(amf_encoder_mutex_->ReleaseSync(0));
+    return converted;
+  }
+
   bool choose_encoder(AdapterVendor vendor) {
     if (ADAPTER_VENDOR_NVIDIA == vendor) {
       const char *name = nullptr;
@@ -433,8 +506,12 @@ private:
           colorSpace_out = DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601;
         }
       }
-      if (!native_->BgraToNv12((ID3D11Texture2D *)texture, texture2D, width_,
-                               height_, colorSpace_in, colorSpace_out)) {
+      const bool converted = amf_pipeline_
+          ? convert_amf_input((ID3D11Texture2D *)texture, texture2D,
+                              colorSpace_in, colorSpace_out)
+          : native_->BgraToNv12((ID3D11Texture2D *)texture, texture2D, width_,
+                                height_, colorSpace_in, colorSpace_out);
+      if (!converted) {
         LOG_ERROR(std::string("convert: BgraToNv12 failed"));
         return false;
       }
