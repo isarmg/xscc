@@ -727,6 +727,14 @@ impl Decoder {
     }
 
     #[cfg(feature = "mediacodec")]
+    pub fn take_mediacodec_output_count(&mut self) -> Option<usize> {
+        self.h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+            .map(MediaCodecDecoder::take_decoded_output_count)
+    }
+
+    #[cfg(feature = "mediacodec")]
     pub fn poll_mediacodec_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
         match self
             .h264_media_codec

@@ -143,6 +143,11 @@ jobs:
           "$RUNNER_TEMP/gpui-android-geometry-tests"
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/text_state.rs -o "$RUNNER_TEMP/gpui-android-text-state-tests"
           "$RUNNER_TEMP/gpui-android-text-state-tests"
+          printf '#[path = "%s/src/gpui_session/metrics.rs"] mod metrics;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-metrics-tests.rs"
+          rustc --edition 2024 --test "$RUNNER_TEMP/gpui-metrics-tests.rs" -o "$RUNNER_TEMP/gpui-metrics-tests"
+          metric_test=metrics::tests::decoded_batches_count_outputs_independently_of_ui_submissions
+          "$RUNNER_TEMP/gpui-metrics-tests" --list | grep -Fx "$metric_test: test"
+          "$RUNNER_TEMP/gpui-metrics-tests" --exact "$metric_test"
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:

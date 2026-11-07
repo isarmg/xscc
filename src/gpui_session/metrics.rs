@@ -83,6 +83,12 @@ impl Metrics {
         self.decoded = self.decoded.saturating_add(1);
         self.decode_time.push(duration);
     }
+    #[cfg(any(test, all(target_os = "android", feature = "mediacodec")))]
+    pub fn decoded_frames(&mut self, frames: usize, duration: Duration) {
+        self.decoded = self.decoded.saturating_add(frames as u64);
+        // One work call can drain several outputs; its duration remains one batch sample.
+        self.decode_time.push(duration);
+    }
     pub fn submitted(&mut self, queue_time: Duration) {
         self.submitted = self.submitted.saturating_add(1);
         self.ui_queue_time.push(queue_time);
@@ -155,6 +161,30 @@ mod tests {
         );
         assert!(idle.decode_p95_ms.is_none());
     }
+    #[test]
+    fn decoded_batches_count_outputs_independently_of_ui_submissions() {
+        let mut m = Metrics::default();
+        let start = m.start;
+        m.received(4);
+        m.decoded_frames(2, Duration::from_millis(3));
+        m.decoded_frames(1, Duration::from_millis(5));
+        m.submitted(Duration::from_millis(1));
+        let sample = m.snapshot(start + Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            (
+                sample.received_fps,
+                sample.decoded_fps,
+                sample.submitted_fps
+            ),
+            (4, 3, 1)
+        );
+        assert_eq!(sample.decode_p50_ms, Some(3.));
+        assert_eq!(sample.decode_p95_ms, Some(5.));
+        let idle = m.snapshot(start + Duration::from_secs(2)).unwrap();
+        assert_eq!(idle.decoded_fps, 0);
+        assert!(idle.decode_p95_ms.is_none());
+    }
+
     #[test]
     fn monitor_reset_discards_old_samples_and_advances_generation() {
         let mut m = Metrics::default();

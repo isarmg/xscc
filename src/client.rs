@@ -976,6 +976,26 @@ impl VideoHandler {
         }
     }
 
+    #[cfg(all(
+        target_os = "android",
+        feature = "mediacodec",
+        feature = "gpui-session"
+    ))]
+    fn report_android_video_decoded<T: InvokeUiSession>(
+        &mut self,
+        ui: &T,
+        display: usize,
+        produced_image: bool,
+        elapsed: Duration,
+    ) {
+        match self.decoder.take_mediacodec_output_count() {
+            Some(frames) if frames > 0 => ui.on_mediacodec_decoded(display, frames, elapsed),
+            Some(_) => {}
+            None if produced_image => ui.on_video_decoded(display, elapsed),
+            None => {}
+        }
+    }
+
     /// Reset the decoder, change format if it is Some
     pub fn reset(&mut self, format: Option<CodecFormat>) {
         log::info!(
@@ -2026,11 +2046,23 @@ pub fn start_video_thread<F, T>(
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             // A static desktop still needs the last asynchronous decoded frame.
                             let started = std::time::Instant::now();
-                            match handler.decoder.poll_mediacodec_output(&mut handler.rgb) {
+                            let output_result =
+                                handler.decoder.poll_mediacodec_output(&mut handler.rgb);
+                            #[cfg(all(target_os = "android", feature = "gpui-session"))]
+                            handler.report_android_video_decoded(
+                                &session.ui_handler,
+                                display,
+                                output_result.as_ref().is_ok_and(|produced| *produced),
+                                started.elapsed(),
+                            );
+                            match output_result {
                                 Ok(true) => {
                                     handler.fail_counter = 0;
                                     handler.first_frame = false;
-                                    #[cfg(feature = "gpui-session")]
+                                    #[cfg(all(
+                                        feature = "gpui-session",
+                                        not(all(target_os = "android", feature = "mediacodec"))
+                                    ))]
                                     session
                                         .ui_handler
                                         .on_video_decoded(display, started.elapsed());
@@ -2140,9 +2172,23 @@ pub fn start_video_thread<F, T>(
                             })();
                             #[cfg(not(feature = "mediacodec"))]
                             let frame_result = handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma);
+                            #[cfg(all(
+                                target_os = "android",
+                                feature = "mediacodec",
+                                feature = "gpui-session"
+                            ))]
+                            handler.report_android_video_decoded(
+                                &session.ui_handler,
+                                display,
+                                frame_result.as_ref().is_ok_and(|produced| *produced),
+                                start.elapsed(),
+                            );
                             match frame_result {
                                 Ok(true) => {
-                                    #[cfg(feature = "gpui-session")]
+                                    #[cfg(all(
+                                        feature = "gpui-session",
+                                        not(all(target_os = "android", feature = "mediacodec"))
+                                    ))]
                                     session
                                         .ui_handler
                                         .on_video_decoded(display, start.elapsed());

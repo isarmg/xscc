@@ -27,6 +27,7 @@ pub struct MediaCodecDecoder {
     mime: &'static str,
     configuration: Option<(i32, i32, i32)>,
     pending_output: usize,
+    decoded_outputs: usize,
 }
 
 impl MediaCodecDecoder {
@@ -48,6 +49,7 @@ impl MediaCodecDecoder {
                     mime,
                     configuration: None,
                     pending_output: 0,
+                    decoded_outputs: 0,
                 });
             }
         }
@@ -79,6 +81,7 @@ impl MediaCodecDecoder {
             self.decoder.stop()?;
         }
         self.pending_output = 0;
+        self.decoded_outputs = 0;
         let format = MediaFormat::new();
         format.set_str("mime", self.mime);
         format.set_i32("width", width);
@@ -138,6 +141,10 @@ impl MediaCodecDecoder {
         self.pending_output > 0
     }
 
+    pub fn take_decoded_output_count(&mut self) -> usize {
+        std::mem::take(&mut self.decoded_outputs)
+    }
+
     pub fn poll_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
         let decoder = &self.decoder;
         let mut decoded = false;
@@ -155,6 +162,7 @@ impl MediaCodecDecoder {
             decoder.release_output_buffer(output, false)?;
             self.pending_output = self.pending_output.saturating_sub(1);
             converted?;
+            self.decoded_outputs = self.decoded_outputs.saturating_add(1);
             decoded = true;
         }
     }
