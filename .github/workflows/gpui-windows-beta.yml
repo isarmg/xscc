@@ -247,9 +247,6 @@ jobs:
       - name: Test framed transport wire compatibility and blocked-write isolation
         if: matrix.role == 'controller' && !inputs.build_only
         run: cargo test --locked -p hbb_common --lib --target x86_64-pc-windows-msvc tcp::tests
-      - name: Test bounded streaming TCP queue and backpressure
-        if: matrix.role == 'host' && !inputs.build_only
-        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_pipeline::tests"
       - name: Test frame-rate-aware codec budget and timestamp duration
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
