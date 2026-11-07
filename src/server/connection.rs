@@ -3311,6 +3311,11 @@ impl Connection {
             return;
         }
         self.closed = true;
+        #[cfg(windows)]
+        {
+            self.release_mouse_buttons();
+            self.release_pressed_modifiers();
+        }
         // Release on the owning input thread before later privacy/display cleanup can block.
         #[cfg(windows)]
         self.tx_input.send(MessageInput::BlockOff).ok();

@@ -611,6 +611,8 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::Close => {
             log::info!("Receive close message");
             if EXIT_RECV_CLOSE.load(Ordering::SeqCst) {
+                #[cfg(windows)]
+                crate::server::input_service::fix_key_down_timeout_at_exit();
                 #[cfg(all(
                     feature = "managed",
                     not(any(target_os = "android", target_os = "ios"))
@@ -630,7 +632,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                         }
                     }
                 }
-                #[cfg(not(target_os = "android"))]
+                #[cfg(not(any(target_os = "android", windows)))]
                 crate::server::input_service::fix_key_down_timeout_at_exit();
                 if is_server() {
                     let _ = privacy_mode::turn_off_privacy(0, Some(PrivacyModeState::OffByPeer));
