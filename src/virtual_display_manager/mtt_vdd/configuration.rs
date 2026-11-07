@@ -150,22 +150,30 @@ pub(crate) fn state() -> VirtualDisplayState {
 }
 
 pub(crate) fn prepare() -> ResultType<VirtualDisplayState> {
+    let started = Instant::now();
     let _guard = LOCK.lock().unwrap();
     let state = query()?;
     if state.status == "external_owned" {
         bail!("{}", state.message)
     }
-    verified_bundle()?;
+    let bundle = verified_bundle()?;
     if device()?.is_none() {
         let _capture_idle = capture_idle_for_change()?;
-        configure_count_modes(1, &[])?;
-        configure_count_modes(0, &[])?;
+        configure_count_modes_with_verified_bundle(&bundle, 1, &[], started)?;
+        configure_count_modes_with_verified_bundle(&bundle, 0, &[], started)?;
     }
     query()
 }
 
 pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<VirtualDisplayState> {
     config.validate()?;
+    let started = Instant::now();
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "vdd_config operation={started:?} count={} stage=begin",
+        config.count
+    );
     let _guard = LOCK.lock().unwrap();
     let before = query()?;
     if before.status == "external_owned" {
@@ -184,7 +192,16 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             bail!("不能删除当前仅剩的显示器，请先启用一块其他显示器");
         }
     }
+    let verification_started = Instant::now();
     let bundle = verified_bundle()?;
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "vdd_config operation={started:?} count={} stage=bundle_verified elapsed_ms={} stage_ms={}",
+        config.count,
+        started.elapsed().as_millis(),
+        verification_started.elapsed().as_millis()
+    );
     let present = device()?.is_some();
     let enabled = present && problem()? != CM_PROB_DISABLED;
     let folder = owned_folder(&bundle, present)?;
@@ -225,7 +242,7 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         // Record the requested removal before PnP notifications can trigger a late login.
         let removal = (|| -> ResultType<()> {
             write_profile(&policy_path, &serde_json::to_string(config)?)?;
-            configure_count_modes(0, &[])
+            configure_count_modes_with_verified_bundle(&bundle, 0, &[], started)
         })();
         presentation::complete_removal(presentation, removal)?;
         return query();
@@ -247,7 +264,16 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             Ok(mode)
         })
         .collect::<ResultType<_>>()?;
+    let capture_started = Instant::now();
     let _capture_idle = capture_idle_for_change()?;
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "vdd_config operation={started:?} count={} stage=capture_idle elapsed_ms={} stage_ms={}",
+        config.count,
+        started.elapsed().as_millis(),
+        capture_started.elapsed().as_millis()
+    );
     let presentation = presentation::suspend_locked()?;
     let snapshot = match Topology::query(false) {
         Ok(snapshot) => snapshot,
@@ -261,8 +287,9 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         }
     };
     let apply = (|| -> ResultType<VirtualDisplayState> {
-        configure_count_modes(config.count, &modes)?;
+        configure_count_modes_with_verified_bundle(&bundle, config.count, &modes, started)?;
         if config.count > 0 {
+            let ccd_started = Instant::now();
             let ids = topology::monitor_ids()?;
             let preferred = config
                 .modes
@@ -285,6 +312,13 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
                         })
                 })
                 .or_else(|| before.modes.first().copied());
+            hbb_common::throttled_log!(
+                Duration::from_secs(1),
+                info,
+                "vdd_config operation={started:?} count={} stage=ccd_and_index_begin elapsed_ms={}",
+                config.count,
+                started.elapsed().as_millis()
+            );
             // PnP, CCD, and capture enumerate on different Windows notifications.
             // Wait only inside this explicit operation; real topology rejections fail immediately.
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -342,6 +376,11 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count={} stage=ccd_and_index_confirmed elapsed_ms={} stage_ms={}",
+                config.count, started.elapsed().as_millis(), ccd_started.elapsed().as_millis()
+            );
         }
         write_profile(&policy_path, &serde_json::to_string(config)?)?;
         query()
@@ -351,9 +390,19 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             if let Some(target) = presentation {
                 presentation::resume_locked(target)?;
             }
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count={} stage=return_ready_for_ack elapsed_ms={}",
+                config.count, started.elapsed().as_millis()
+            );
             Ok(state)
         }
         Err(cause) => {
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), warn,
+                "vdd_config operation={started:?} count={} stage=apply_failed elapsed_ms={} error={cause:#}",
+                config.count, started.elapsed().as_millis()
+            );
             let mut errors = Vec::new();
             let owned = ordinary_path(&folder);
             let restore_path =
