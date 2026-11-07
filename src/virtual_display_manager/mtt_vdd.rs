@@ -546,9 +546,39 @@ fn configure_count_modes_with_verified_bundle(
     if count == 0 {
         // A failed removal must never restart an adapter that is being removed.
         if enabled {
-            change_device(DICS_DISABLE)?;
+            let device_started = Instant::now();
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_begin state={DICS_DISABLE} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
+            let result = change_device(DICS_DISABLE);
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_end elapsed_ms={} stage_ms={} success={}",
+                started.elapsed().as_millis(), device_started.elapsed().as_millis(), result.is_ok()
+            );
+            result?;
+        } else {
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_skipped reason=adapter_not_enabled elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
         }
-        return wait_for_count(0);
+        let wait_started = Instant::now();
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count=0 stage=wait_count_begin elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        let result = wait_for_count(0);
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count=0 stage=wait_count_end elapsed_ms={} stage_ms={} success={}",
+            started.elapsed().as_millis(), wait_started.elapsed().as_millis(), result.is_ok()
+        );
+        return result;
     }
     let profile_started = Instant::now();
     let previous = if path.exists() {
