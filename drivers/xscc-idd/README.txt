@@ -24,6 +24,24 @@ Control contract
 - Add with kNoConnector allocates an available connector atomically; Remove is
   explicit per connector and cannot remove another handle's screen.
 
+Host transport — not product backend wiring
+- control/ is an independent, dependency-free Windows x86_64 Rust library.
+- Owner::open enumerates only the fixed control GUID and requires the interface's
+  actual devnode to have both a ROOT\XSCCIDD instance ID and Root\XsccIdd hardware ID.
+  It rejects ambiguity; it never discovers or controls MTT through guessed IOCTLs.
+- Owner keeps the same control file open for Query/List/Add/Remove. Separate opens
+  use read/write sharing but create independent file leases, not shared ownership.
+- Query/List cover completed arrivals across all owners. List is not a list of
+  this handle's screens; Remove relies on the driver's same-file lease check.
+- Add accepts the selected mode table and fractional refresh without a 60 Hz cap.
+  The driver remains authoritative for timing arithmetic and actual acceptance.
+- No Drop/CloseHandle or synchronous Windows/driver call has a promised wall-clock
+  completion bound. Normal shutdown should explicitly Remove and verify inventory;
+  a failed mutating call must be reconciled, never automatically retried as a new Add.
+- CPU response-boundary tests and Windows MSVC compilation do not load a device.
+  This library is not called by the current product and does not install a driver,
+  map connector IDs to CCD paths, restore physical layouts, or switch the backend.
+
 Mode and lifecycle contract
 - Mode tables are per monitor, validated before arrival, immutable while connected.
   A new table uses an explicit remove/add of that connector.
