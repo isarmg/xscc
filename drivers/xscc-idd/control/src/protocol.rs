@@ -2,7 +2,7 @@
 use crate::{Error, Result};
 
 const VERSION: u32 = 1;
-pub(crate) const CONNECTORS: u32 = 32;
+pub(crate) const CONNECTORS: u32 = 16;
 const MAX_MODES: usize = 4096;
 pub(crate) const NO_CONNECTOR: u32 = u32::MAX;
 pub(crate) const QUERY: u32 = 0x8000_e000;
@@ -46,7 +46,7 @@ impl Mode {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Capabilities {
-    /// Protocol capacity; not a measured GPU/Windows monitor limit.
+    /// Per-adapter IddCx capacity; not a measured GPU monitor limit.
     pub connector_capacity: u32,
     /// All owners' completed arrivals, not CCD-active desktops.
     pub connected_count: u32,
@@ -216,24 +216,24 @@ mod tests {
             wire(&[1, 28, u32::MAX, 1, 3840, 2160, 2_400_000])
         );
         assert_eq!(
-            request(Some(ConnectorId::new(31).unwrap()), &[]).unwrap(),
-            wire(&[1, 16, 31, 0])
+            request(Some(ConnectorId::new(15).unwrap()), &[]).unwrap(),
+            wire(&[1, 16, 15, 0])
         );
-        assert!(ConnectorId::new(32).is_err());
+        assert!(ConnectorId::new(16).is_err());
         assert!(request(None, &[mode; MAX_MODES + 1]).is_err());
         assert!(request(None, &[Mode { width: 0, ..mode }]).is_err());
     }
 
     #[test]
     fn inventory_rejects_truncated_overlong_duplicate_and_unsupported_responses() {
-        let query = wire(&[1, 24, 32, 2, 4096, 1]);
+        let query = wire(&[1, 24, 16, 2, 4096, 1]);
         assert_eq!(capabilities(&query).unwrap().connected_count, 2);
         for length in 0..query.len() {
             assert!(capabilities(&query[..length]).is_err());
         }
-        assert!(capabilities(&wire(&[2, 24, 32, 2, 4096, 1])).is_err());
-        assert!(capabilities(&wire(&[1, 24, 32, 33, 4096, 1])).is_err());
-        assert!(capabilities(&wire(&[1, 24, 32, 2, 4096, 2])).is_err());
+        assert!(capabilities(&wire(&[2, 24, 16, 2, 4096, 1])).is_err());
+        assert!(capabilities(&wire(&[1, 24, 16, 17, 4096, 1])).is_err());
+        assert!(capabilities(&wire(&[1, 24, 16, 2, 4096, 2])).is_err());
         assert!(monitors(&wire(&[1, 16, 0, 20])).unwrap().is_empty());
         let list = wire(&[1, 36, 1, 20, 0, 1, 1920, 1080, 1_200_000]);
         assert_eq!(
@@ -261,7 +261,7 @@ mod tests {
             connector
         );
         assert!(completed(&wire(&[1, 12, 8]), Some(connector)).is_err());
-        assert!(completed(&wire(&[1, 12, 32]), None).is_err());
+        assert!(completed(&wire(&[1, 12, 16]), None).is_err());
         assert!(completed(&wire(&[1, 12, 7, 0]), None).is_err());
     }
 }

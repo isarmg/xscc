@@ -15,8 +15,8 @@ namespace xscc::protocol {
 
 inline constexpr std::uint32_t kVersion = 1;
 inline constexpr std::uint32_t kRefreshRateScale = 10000;
-// Driver connector capacity, not a GPU or Windows monitor-count limit.
-inline constexpr std::uint32_t kConnectorCapacity = 32;
+// Per-adapter IddCx capacity, not a measured GPU monitor-count limit.
+inline constexpr std::uint32_t kConnectorCapacity = 16;
 inline constexpr std::uint32_t kMaxModesPerMonitor = 4096;
 inline constexpr std::uint32_t kNoConnector = UINT32_MAX;
 inline constexpr std::uint32_t kGpuMonitorLimitUnknown = 1;

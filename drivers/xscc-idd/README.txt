@@ -49,8 +49,9 @@ Mode and lifecycle contract
   A new table uses an explicit remove/add of that connector.
 - Fractional refresh is represented in 1/10000 Hz; monitor/target dividers differ
   as required by IddCx. Pixel clocks use checked 64-bit arithmetic.
-- The prototype declares 32 connector slots and 4096 modes per screen. These are
-  implementation/message capacities, not measured GPU or Windows limits.
+- The prototype exposes 16 connector slots per adapter, matching the IddCx
+  MaxMonitorsSupported limit observed in disposable Windows CI. This is not a
+  measured GPU monitor limit. Each screen accepts up to 4096 modes.
 - Inventory is driver arrival/departure state. It is not CCD active-mode proof.
 - D3D creation/processing belongs to a dedicated worker, not Assign.
 - Cancellation is checked even while frames continuously arrive; stop has priority.
