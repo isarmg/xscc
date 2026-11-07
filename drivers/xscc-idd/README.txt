@@ -11,14 +11,16 @@ No functionality has been rolled back. The abandoned recovery worktree is separa
 
 Control contract
 - Start with zero monitors; Add is the only automatic arrival path.
-- Query/List/Add/Remove are versioned, size-checked buffered IOCTLs.
+- Query/List/OwnedList/Add/Remove are versioned, size-checked buffered IOCTLs.
 - Only System and elevated administrators may open the control device.
 - Each Add belongs to the control file handle that created it.
 - Closing/crashing that owner removes its monitors. A racing Add notices the
   closing lease and undoes its own arrival; failed cleanup terminates this UMDF
   process rather than reporting successful removal.
-- Hosts must retain a separate long-lived handle for persistent displays, and
-  use session handles for temporary displays. There is no XML auto-provisioning.
+- This prototype implements temporary control-file leases only. Device-level
+  persistent policy across host exit or driver restart is not implemented, so
+  the product persistent=true contract is not supported or wired to this driver.
+  There is no XML auto-provisioning.
 - Normal removal stops that screen's worker, then calls IddCxMonitorDeparture.
   It does not disable/restart the adapter or disturb another owner's monitors.
 - Add with kNoConnector allocates an available connector atomically; Remove is
@@ -29,10 +31,10 @@ Host transport — not product backend wiring
 - Owner::open enumerates only the fixed control GUID and requires the interface's
   actual devnode to have both a ROOT\XSCCIDD instance ID and Root\XsccIdd hardware ID.
   It rejects ambiguity; it never discovers or controls MTT through guessed IOCTLs.
-- Owner keeps the same control file open for Query/List/Add/Remove. Separate opens
+- Owner keeps the same control file open for Query/List/OwnedList/Add/Remove. Separate opens
   use read/write sharing but create independent file leases, not shared ownership.
-- Query/List cover completed arrivals across all owners. List is not a list of
-  this handle's screens; Remove relies on the driver's same-file lease check.
+- Query/List cover completed arrivals across all owners. OwnedList/Owner::owned_list()
+  returns only this handle's screens; Remove relies on the driver's same-file lease check.
 - Add accepts the selected mode table and fractional refresh without a 60 Hz cap.
   The driver remains authoritative for timing arithmetic and actual acceptance.
 - No Drop/CloseHandle or synchronous Windows/driver call has a promised wall-clock
@@ -66,11 +68,18 @@ CI builds with SignMode=Off and checks API use, INF and generated catalog integr
 Unsigned artifacts are not usable production installers. Do not reuse the original
 upstream catalog: any changed INF/DLL requires a new valid driver signature.
 
+The opt-in disposable Windows VM runtime job can use GitHub's pre-existing test
+signing boot configuration. It records enabled options without changing boot or
+code-integrity policy. Guest-only test signatures and Arrival ACK/PnP departure
+checks do not establish production-policy loading, active CCD modes, continuous
+frame delivery, or dedicated-GPU safety.
+
 Real IddCx reentry, high-rate content, repeated hotplug, owner-process crash,
 PnP restart, suspend/resume, and AMD/Intel/NVIDIA driver coexistence still require
 a signed package and dedicated hardware acceptance. Compilation is not evidence
 that the user's system hang, audible beeping, or visible 60fps limit is solved.
-No local virtual-screen tests are authorized by this source-only project.
+CI-only runtime experiments do not authorize or run virtual-screen tests on the
+user's computer.
 
 Upstream reference and license hashes are in UPSTREAM.json; LICENSE preserves
 the upstream MIT notice. The build output includes both files and this document.

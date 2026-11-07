@@ -147,6 +147,7 @@ New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
 $timings = [Collections.Generic.List[object]]::new()
 $cert = $null
 $failure = $null
+$existingBootOptions = @()
 $cleanupFailures = [Collections.Generic.List[string]]::new()
 $powershell = (Get-Process -Id $PID).Path
 
@@ -193,7 +194,7 @@ try {
     Invoke-Action 'preflight' 'Preflight'
     Invoke-Operation 'boot-configuration-read-only' (Join-Path $env:windir 'System32/bcdedit.exe') @('/enum','{current}')
     $boot = Get-Content -LiteralPath (Join-Path $OutputDirectory 'boot-configuration-read-only.stdout.log') -Raw
-    if ($boot -match '(?im)^\s*(testsigning|nointegritychecks)\s+(yes|on|true|1)\s*$') { throw 'The guest already uses a relaxed boot verification setting; this test cannot establish the requested default-policy path' }
+    $existingBootOptions = @([regex]::Matches($boot,'(?im)^\s*(testsigning|nointegritychecks)\s+(yes|on|true|1)\s*$') | ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() })
     $info = Get-Content -LiteralPath (Join-Path $PackageDirectory 'build-info.json') -Raw | ConvertFrom-Json
     if ($info.source_sha -cne $env:GITHUB_SHA -or $info.sign_mode -cne 'Off') { throw 'Unsigned build artifact does not match this workflow commit' }
     $package = Join-Path $env:RUNNER_TEMP ('xscc-idd-runtime-package-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
@@ -255,7 +256,7 @@ finally {
             } catch { $cleanupFailures.Add($_.Exception.ToString()) }
         }
     }
-    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); signing='ephemeral guest test certificate only'; production_release=$false; evidence_scope='Arrival ACK and PnP monitor-descendant departure only; no CCD-active or continuous-frame acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
+    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); signing='ephemeral guest test certificate only'; existing_boot_options=$existingBootOptions; boot_policy_changed=$false; production_policy_acceptance=$false; production_release=$false; evidence_scope='Arrival ACK and PnP monitor-descendant departure only; no CCD-active or continuous-frame acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Encoding utf8
 }
 if ($null -ne $failure -or $cleanupFailures.Count -ne 0) { throw ('Runtime smoke failed: ' + $failure + '; cleanup: ' + ($cleanupFailures -join '; ')) }
