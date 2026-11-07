@@ -8,7 +8,7 @@ use ndk::media::{
 };
 use std::{
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -102,18 +102,36 @@ impl MediaCodecDecoder {
         if self.configuration.is_none() {
             bail!("MediaCodec input dimensions are not configured");
         }
-        let decoder = &self.decoder;
-        let Some(mut input) = decoder.dequeue_input_buffer(Duration::from_millis(100))? else {
-            bail!("No MediaCodec input buffer available");
-        };
-        if data.len() > input.buffer_mut().len() {
-            decoder.queue_input_buffer(input, 0, 0, 0, 0)?;
-            bail!("Encoded frame exceeds the MediaCodec input buffer");
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let mut decoded = self.poll_output(rgb)?;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // Keep this packet borrowed until it is queued; input backpressure is not consumption.
+            let queued = if let Some(mut input) = self
+                .decoder
+                .dequeue_input_buffer(remaining.min(Duration::from_millis(1)))?
+            {
+                if data.len() > input.buffer_mut().len() {
+                    self.decoder.queue_input_buffer(input, 0, 0, 0, 0)?;
+                    bail!("Encoded frame exceeds the MediaCodec input buffer");
+                }
+                input.buffer_mut()[..data.len()].copy_from_slice(data);
+                self.decoder
+                    .queue_input_buffer(input, 0, data.len(), 0, 0)?;
+                true
+            } else {
+                false
+            };
+            if queued {
+                self.pending_output += 1;
+                decoded |= self.poll_output(rgb)?;
+                return Ok(decoded);
+            }
+            if remaining.is_zero() {
+                bail!("No MediaCodec input buffer available");
+            }
+            decoded |= self.poll_output(rgb)?;
         }
-        input.buffer_mut()[..data.len()].copy_from_slice(data);
-        decoder.queue_input_buffer(input, 0, data.len(), 0, 0)?;
-        self.pending_output += 1;
-        self.poll_output(rgb)
     }
 
     pub fn has_pending_output(&self) -> bool {
