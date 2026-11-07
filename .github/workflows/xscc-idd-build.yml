@@ -1,0 +1,35 @@
+name: XSCC IDD unsigned build
+on:
+  pull_request:
+    paths:
+      - 'drivers/xscc-idd/**'
+      - '.github/scripts/build-xscc-idd.ps1'
+      - '.github/workflows/xscc-idd-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  unsigned-driver:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up fixed NuGet CLI
+        uses: NuGet/setup-nuget@323ab0502cd38fdc493335025a96c8fdb0edc71f
+        with:
+          nuget-version: '6.11.1'
+      - name: Restore fixed kits and build unsigned driver
+        run: ./.github/scripts/build-xscc-idd.ps1
+      - name: Save unsigned driver and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-idd-x64-unsigned-${{ github.sha }}
+          path: artifacts/xscc-idd/
+          if-no-files-found: error
+          retention-days: 14
