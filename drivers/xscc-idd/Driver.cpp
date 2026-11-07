@@ -68,6 +68,7 @@ EVT_WDF_OBJECT_CONTEXT_CLEANUP AdapterCleanup;
 EVT_WDF_OBJECT_CONTEXT_CLEANUP MonitorCleanup;
 EVT_IDD_CX_ADAPTER_INIT_FINISHED AdapterInitFinished;
 EVT_IDD_CX_ADAPTER_COMMIT_MODES CommitModes;
+EVT_IDD_CX_PARSE_MONITOR_DESCRIPTION ParseMonitorDescription;
 EVT_IDD_CX_MONITOR_GET_DEFAULT_DESCRIPTION_MODES DefaultModes;
 EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES TargetModes;
 EVT_IDD_CX_MONITOR_ASSIGN_SWAPCHAIN AssignSwapChain;
@@ -108,6 +109,15 @@ static DISPLAYCONFIG_VIDEO_SIGNAL_INFO Signal(const Mode& mode, UINT divider) no
     return signal;
 }
 
+_Use_decl_annotations_
+NTSTATUS ParseMonitorDescription(const IDARG_IN_PARSEMONITORDESCRIPTION* input,
+                                 IDARG_OUT_PARSEMONITORDESCRIPTION* output) {
+    UNREFERENCED_PARAMETER(input);
+    output->MonitorModeBufferOutputCount = 0;
+    output->PreferredMonitorModeIdx = 0;
+    // Arrivals omit EDID; DefaultModes supplies each monitor's own mode table.
+    return STATUS_NOT_SUPPORTED;
+}
 _Use_decl_annotations_
 NTSTATUS DefaultModes(IDDCX_MONITOR object, const IDARG_IN_GETDEFAULTDESCRIPTIONMODES* input,
                       IDARG_OUT_GETDEFAULTDESCRIPTIONMODES* output) {
@@ -591,6 +601,7 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT initialize) {
         IDD_CX_CLIENT_CONFIG_INIT(&config);
         config.EvtIddCxAdapterInitFinished = AdapterInitFinished;
         config.EvtIddCxAdapterCommitModes = CommitModes;
+        config.EvtIddCxParseMonitorDescription = ParseMonitorDescription;
         config.EvtIddCxMonitorGetDefaultDescriptionModes = DefaultModes;
         config.EvtIddCxMonitorQueryTargetModes = TargetModes;
         config.EvtIddCxMonitorAssignSwapChain = AssignSwapChain;
