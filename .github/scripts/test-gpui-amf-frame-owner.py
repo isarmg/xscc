@@ -195,6 +195,11 @@ def main():
         [args.pkg_config, '--cflags', 'libavutil'], text=True)
     ldflags = args.ldflags if args.ldflags is not None else subprocess.check_output(
         [args.pkg_config, '--static', '--libs', 'libavutil'], text=True)
+    library_flags = shlex.split(ldflags)
+    if os.name == 'nt' and args.ldflags is None:
+        # pkgconf emits MSVC search flags; clang's driver accepts -L instead.
+        library_flags = ['-L' + flag[9:] if flag.lower().startswith(('-libpath:', '/libpath:'))
+                         else flag for flag in library_flags]
     temporary_root = Path(tempfile.gettempdir()).resolve()
     with tempfile.TemporaryDirectory(prefix='xscc-amf-owner-', dir=temporary_root) as directory:
         work = Path(directory).resolve()
@@ -208,7 +213,7 @@ def main():
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
         command = [args.cc, '-std=c11', '-Wall', '-Wextra', '-Werror', *runtime,
                    '-I' + str(work), *shlex.split(cflags), str(work / 'test.c'),
-                   *shlex.split(ldflags), '-o', str(executable)]
+                   *library_flags, '-o', str(executable)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(executable)], check=True, timeout=20)
 
