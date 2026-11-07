@@ -104,9 +104,24 @@ jobs:
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           cargo build --manifest-path drivers/xscc-idd/control/Cargo.toml --locked --offline --example ci_lease_smoke --target x86_64-pc-windows-msvc --target-dir "$env:RUNNER_TEMP/xscc-idd-runtime-control" 2>&1 | Tee-Object -FilePath artifacts/xscc-idd-runtime-build.log
           if ($LASTEXITCODE -ne 0) { throw 'CI-only lease smoke compilation failed' }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = @(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+          if ($LASTEXITCODE -ne 0 -or $vs.Count -ne 1) { throw 'A single native compiler installation is required' }
+          $devcmd = Join-Path $vs[0] 'Common7/Tools/VsDevCmd.bat'
+          $cpp = Join-Path $env:RUNNER_TEMP 'xscc-idd-runtime-control/active'
+          New-Item -ItemType Directory -Path $cpp | Out-Null
+          @"
+          @echo off
+          call "$devcmd" -no_logo -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          cl.exe /nologo /std:c++20 /EHsc /W4 /WX /O2 /DUNICODE /D_UNICODE "$env:GITHUB_WORKSPACE/drivers/xscc-idd/control/examples/ci_active_display.cpp" /Fo"$cpp/ci_active_display.obj" /Fe"$cpp/ci_active_display.exe" /link /INCREMENTAL:NO user32.lib setupapi.lib d3d11.lib dxgi.lib
+          exit /b %errorlevel%
+          "@ | Set-Content -LiteralPath (Join-Path $cpp 'compile.cmd') -Encoding ascii
+          & $env:COMSPEC /d /c (Join-Path $cpp 'compile.cmd') 2>&1 | Tee-Object -FilePath artifacts/xscc-idd-runtime-build.log -Append
+          if ($LASTEXITCODE -ne 0) { throw 'CI-only active display helper compilation failed' }
       - name: Exercise only this disposable VM's job-owned driver
         run: |
-          ./.github/scripts/test-xscc-idd-runtime.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/xscc-idd-runtime" -PackageDirectory "$env:RUNNER_TEMP/xscc-idd-runtime-input" -SmokeExecutable "$env:RUNNER_TEMP/xscc-idd-runtime-control/x86_64-pc-windows-msvc/debug/examples/ci_lease_smoke.exe"
+          ./.github/scripts/test-xscc-idd-runtime.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/xscc-idd-runtime" -PackageDirectory "$env:RUNNER_TEMP/xscc-idd-runtime-input" -SmokeExecutable "$env:RUNNER_TEMP/xscc-idd-runtime-control/x86_64-pc-windows-msvc/debug/examples/ci_lease_smoke.exe" -ActiveHelper "$env:RUNNER_TEMP/xscc-idd-runtime-control/active/ci_active_display.exe"
       - name: Save runtime diagnostics only, never test signing keys
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

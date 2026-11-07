@@ -4,7 +4,8 @@ param(
     [ValidateSet('Run','Preflight','Create','Check','Departed','Removed','PrepareDiagnostics','RestoreLogChannel','Logs')][string] $Action = 'Run',
     [Parameter(Mandatory=$true)][string] $OutputDirectory,
     [string] $PackageDirectory,
-    [string] $SmokeExecutable
+    [string] $SmokeExecutable,
+    [string] $ActiveHelper
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -172,6 +173,8 @@ $cert = $null
 $failure = $null
 $existingBootOptions = @()
 $tools = $null; $traceAttempted = $false; $decodeFailure = $null
+$activeAttempted = $false; $activeEvidenceFailure = $null
+$activePhases = @()
 $traceName = 'XsccIdd-CI-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT + '-' + [Guid]::NewGuid().ToString('N')
 $etl = Join-Path $OutputDirectory 'IddCx.etl'
 [IO.File]::WriteAllText((Join-Path $OutputDirectory 'started-utc.txt'),[DateTime]::UtcNow.ToString('o'))
@@ -256,7 +259,7 @@ try {
     Invoke-Operation 'verify-catalog' $signtool @('verify','/v','/pa','/c',(Join-Path $package 'XsccIdd.cat'),(Join-Path $package 'XsccIdd.inf'))
     Invoke-Action 'prepare-diagnostics' 'PrepareDiagnostics'
     $traceAttempted = $true
-    Invoke-Operation 'start-iddcx-wpp' (Join-Path $env:windir 'System32/logman.exe') @('create','trace',$traceName,'-o',$etl,'-ets','-ow','-mode','sequential','-p','{D92BCB52-FA78-406F-A9A5-2037509FADEA}','0x0f4','0xFF') 15
+    Invoke-Operation 'start-iddcx-wpp' (Join-Path $env:windir 'System32/logman.exe') @('create','trace',$traceName,'-o',$etl,'-ets','-ow','-mode','sequential','-p','{D92BCB52-FA78-406F-A9A5-2037509FADEA}','0x1f4','0xFF') 15
     Invoke-Action 'create-owned-root' 'Create'
     [void](Read-OwnedInstance)
     Invoke-Operation 'install-owned-driver' (Join-Path $env:windir 'System32/pnputil.exe') @('/add-driver',(Join-Path $package 'XsccIdd.inf'),'/install') 45
@@ -264,10 +267,28 @@ try {
     Invoke-Operation 'driver-lease-smoke' (Resolve-Path -LiteralPath $SmokeExecutable).Path @() 45
     $smoke = Get-Content -LiteralPath (Join-Path $OutputDirectory 'driver-lease-smoke.stdout.log') -Raw
     if ([regex]::Matches($smoke,'(?m)^XSCC_IDD_RUNTIME_SMOKE=passed\r?$').Count -ne 1) { throw 'The executable did not confirm completion of the native lease smoke' }
+    foreach ($mode in @('active','deactivate')) {
+        $activeDirectory = Join-Path $OutputDirectory ('active-' + $mode)
+        New-Item -ItemType Directory -Path $activeDirectory | Out-Null
+        $activeAttempted = $true
+        Invoke-Operation ('snapshot-original-' + $mode) $ActiveHelper @('--snapshot',$expectedId,$activeDirectory) 15
+        $phase = [ordered]@{ name=$mode; began=[DateTime]::UtcNow; ended=$null }
+        $activePhases += $phase
+        $activePhases | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'active-phases.json') -Encoding utf8
+        try { Invoke-Operation ($mode + '-driver-smoke') (Resolve-Path -LiteralPath $SmokeExecutable).Path @(('--' + $mode + '-smoke'),$ActiveHelper,$activeDirectory) 45 }
+        finally { $phase.ended=[DateTime]::UtcNow; $activePhases | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'active-phases.json') -Encoding utf8 }
+        if ([regex]::Matches((Get-Content -LiteralPath (Join-Path $OutputDirectory ($mode + '-driver-smoke.stdout.log')) -Raw),'(?m)^XSCC_IDD_ACTIVE_SMOKE=passed\r?$').Count -ne 1) { throw ('Active smoke did not complete: ' + $mode) }
+    }
     Invoke-Action 'pnp-monitor-descendants-departed' 'Departed' 15
     Invoke-Action 'pnp-started-after-zero-monitors' 'Check'
 } catch { $failure = $_.Exception.ToString() }
 finally {
+    foreach ($mode in @('active','deactivate')) {
+        $activeDirectory = Join-Path $OutputDirectory ('active-' + $mode)
+        if (Test-Path -LiteralPath (Join-Path $activeDirectory 'baseline.bin')) {
+            try { Invoke-Operation ('restore-only-helper-saved-' + $mode) $ActiveHelper @('--restore',$expectedId,$activeDirectory) 15 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+        }
+    }
     if (Test-Path -LiteralPath $ledger -PathType Leaf) {
         try {
             $id = Read-OwnedInstance
@@ -287,7 +308,7 @@ finally {
             $symbols = Join-Path $env:RUNNER_TEMP ($traceName + '-symbols')
             $tmf = Join-Path $symbols 'tmf'
             New-Item -ItemType Directory -Path $tmf | Out-Null
-            Invoke-Operation 'decode-iddcx-wpp' $tracefmt[0].FullName @($etl,'-i',($images.path -join ';'),'-r',('srv*' + $symbols + '*https://msdl.microsoft.com/download/symbols'),'-p',$tmf,'-o',(Join-Path $OutputDirectory 'IddCx-decoded.txt')) 45
+            Invoke-Operation 'decode-iddcx-wpp' $tracefmt[0].FullName @($etl,'-i',($images.path -join ';'),'-r',('srv*' + $symbols + '*https://msdl.microsoft.com/download/symbols'),'-p',$tmf,'-o',(Join-Path $OutputDirectory 'IddCx-decoded.txt'),'-utc') 45
             $decoded = Get-Content -LiteralPath (Join-Path $OutputDirectory 'IddCx-decoded.txt') -Raw
             if ([string]::IsNullOrWhiteSpace($decoded) -or $decoded -match 'No Format Information|No TMF|cannot find|failed to (load|download)') { throw 'IddCx WPP decoding did not produce complete matched-symbol messages; raw ETL retained' }
         } catch { $decodeFailure = $_.Exception.ToString() }
@@ -295,6 +316,41 @@ finally {
     try { Invoke-Action 'driver-events' 'Logs' 20 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
     if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'umdf-channel-original-enabled.txt')) {
         try { Invoke-Action 'restore-umdf-channel' 'RestoreLogChannel' 15 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+    }
+    if ($activeAttempted) {
+        try {
+            $lines = @(Get-Content -LiteralPath (Join-Path $OutputDirectory 'IddCx-decoded.txt'))
+            if ($lines -match 'critical|failfast|Throwing error') { throw 'IddCx reported a fault during the active smoke; raw trace retained' }
+            $parseUtc = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+            foreach ($callback in @('EvtIddCxAdapterCommitModes','EvtIddCxMonitorAssignSwapChain','EvtIddCxMonitorUnassignSwapChain')) {
+                if (@($lines -match ('Return successfully.*' + $callback)).Count -lt 2) { throw ('Missing successful callbacks for both active phases: ' + $callback) }
+            }
+            $frames = @($lines | Where-Object { $_ -match 'SwapChainFinishedProcessingFrame.*Exit.*(?:status|hr|result)\s*=\s*(?:STATUS_SUCCESS|S_OK|0x0\b|0\b)' })
+            $times = @($frames | ForEach-Object { if ($_ -notmatch '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { throw 'Unrecognized WPP timestamp' }; [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc) } | Sort-Object)
+            if ($activePhases.Count -ne 2) { throw 'Both active phases did not complete' }
+            $proof = @()
+            foreach ($phase in $activePhases) {
+                $phaseTimes = @($times | Where-Object { $_ -ge $phase.began -and $_ -le $phase.ended })
+                if ($phaseTimes.Count -lt 30 -or ($phaseTimes[-1] - $phaseTimes[0]).TotalSeconds -lt 3) { throw ('Insufficient successful driver frame-DDI evidence over three seconds: ' + $phase.name) }
+                $phaseLines = @($lines | Where-Object { if ($_ -match '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { $time = [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc); $time -ge $phase.began -and $time -le $phase.ended } })
+                $unassign = -1; $departure = -1
+                for ($index = 0; $index -lt $phaseLines.Count; $index++) {
+                    if ($phaseLines[$index] -match 'Return successfully.*EvtIddCxMonitorUnassignSwapChain') { $unassign = $index }
+                    if ($phaseLines[$index] -match 'MonitorDeparture.*Exit.*STATUS_SUCCESS') { $departure = $index }
+                }
+                if ($unassign -lt 0 -or $departure -le $unassign) { throw ('No successful unassign before departure: ' + $phase.name) }
+                if ($departure + 1 -lt $phaseLines.Count -and @($phaseLines[($departure+1)..($phaseLines.Count-1)] -match 'SwapChainFinishedProcessingFrame').Count -ne 0) { throw ('Frame DDI continued after monitor departure: ' + $phase.name) }
+                $proof += [ordered]@{ phase=$phase.name; successful_finished_frame_ddis=$phaseTimes.Count; span_seconds=($phaseTimes[-1]-$phaseTimes[0]).TotalSeconds; unassign_line=$unassign+1; departure_line=$departure+1 }
+            }
+            foreach ($file in @('System.events.xml','Application.events.xml','Microsoft-Windows-DriverFrameworks-UserMode-Operational.events.xml')) {
+                $path = Join-Path $OutputDirectory $file
+                if (Test-Path -LiteralPath $path) {
+                    [xml]$events = Get-Content -LiteralPath $path -Raw
+                    if (@($events.Events.Event | Where-Object { [int]$_.System.Level -le 2 -and $_.OuterXml -match 'XsccIdd|XSCCIDD|WUDFHost|IndirectKmd|0xc0000602' }).Count -ne 0) { throw ('Associated native error event present: ' + $file) }
+                } elseif ($file -like 'Microsoft-Windows-DriverFrameworks*') { throw 'UMDF event evidence was not captured' }
+            }
+            [ordered]@{ phases=$proof; scope='Active CCD plus software-VM swapchain delivery/teardown only; no visible-FPS or dedicated-GPU acceptance' } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'active-wpp-evidence.json') -Encoding utf8
+        } catch { $activeEvidenceFailure = $_.Exception.ToString() }
     }
     if ($null -ne $cert) {
         foreach ($store in @('Root','TrustedPublisher','My')) {
@@ -306,8 +362,8 @@ finally {
             } catch { $cleanupFailures.Add($_.Exception.ToString()) }
         }
     }
-    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); wpp_session=$traceName; wpp_decode_failure=$decodeFailure; signing='ephemeral guest test certificate only'; existing_boot_options=$existingBootOptions; boot_policy_changed=$false; production_policy_acceptance=$false; production_release=$false; evidence_scope='Arrival ACK and PnP monitor-descendant departure only; no CCD-active or continuous-frame acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
+    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); wpp_session=$traceName; wpp_decode_failure=$decodeFailure; active_evidence_failure=$activeEvidenceFailure; signing='ephemeral guest test certificate only'; existing_boot_options=$existingBootOptions; boot_policy_changed=$false; production_policy_acceptance=$false; production_release=$false; evidence_scope='Lease/PnP and active software-VM CCD/swapchain smoke; no visible-FPS or dedicated-GPU acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Encoding utf8
 }
-if ($null -ne $failure -or $cleanupFailures.Count -ne 0 -or $null -ne $decodeFailure) { throw ('Runtime smoke failed: ' + $failure + '; cleanup: ' + ($cleanupFailures -join '; ') + '; WPP decode: ' + $decodeFailure) }
+if ($null -ne $failure -or $cleanupFailures.Count -ne 0 -or $null -ne $decodeFailure -or $null -ne $activeEvidenceFailure) { throw ('Runtime smoke failed: ' + $failure + '; cleanup: ' + ($cleanupFailures -join '; ') + '; WPP decode: ' + $decodeFailure + '; active evidence: ' + $activeEvidenceFailure) }
 Write-Output 'XSCC_IDD_ISOLATED_RUNTIME=passed'

@@ -6,6 +6,8 @@ fn main() {
     let result = match std::env::args().nth(1).as_deref() {
         None => smoke::run(),
         Some("--owner-exit") => smoke::owner_exit(),
+        Some("--active-smoke") => smoke::active(false),
+        Some("--deactivate-smoke") => smoke::active(true),
         Some(_) => Err(std::io::Error::other("Unexpected CI smoke argument").into()),
     };
     if let Err(error) = result {
@@ -24,6 +26,7 @@ fn main() {
 mod smoke {
     use std::{
         error::Error,
+        fs,
         io::{self, Write},
         os::windows::process::CommandExt,
         process::Command,
@@ -125,6 +128,119 @@ mod smoke {
         io::stdout().flush()?;
         // Deliberately bypass Rust Drop: Windows must close this process's file.
         std::process::exit(0);
+    }
+
+    pub(super) fn active(deactivate: bool) -> Result<()> {
+        require_ci()?;
+        let helper = std::env::args()
+            .nth(2)
+            .ok_or_else(|| io::Error::other("Missing CI helper"))?;
+        let directory = std::env::args()
+            .nth(3)
+            .ok_or_else(|| io::Error::other("Missing dedicated CI directory"))?;
+        let ready = std::path::Path::new(&directory).join("active-ready.txt");
+        if ready.exists() {
+            return Err(io::Error::other("Fresh active helper readiness required").into());
+        }
+        let root = format!(
+            "ROOT\\XSCCIDD\\CI_{}_{}",
+            std::env::var("GITHUB_RUN_ID")?,
+            std::env::var("GITHUB_RUN_ATTEMPT")?
+        );
+        let mut owner = open_ready()?;
+        inventory(&mut owner, None)?;
+        let connector = owner.add(
+            None,
+            &[Mode {
+                width: 1280,
+                height: 720,
+                refresh_rate_units: 1_200_000,
+            }],
+        )?;
+        let mut child = Command::new(helper)
+            .args([
+                if deactivate { "--deactivate" } else { "--run" },
+                &root,
+                &directory,
+            ])
+            .creation_flags(0x08000000)
+            .spawn()?;
+        let result = (|| -> Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(12);
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Err(io::Error::other(format!(
+                        "active producer exited before readiness: {status}"
+                    ))
+                    .into());
+                }
+                match fs::read_to_string(&ready) {
+                    Ok(value) if value == "active-confirmed\n" => break,
+                    Ok(_) => return Err(io::Error::other("Invalid active helper readiness").into()),
+                    Err(error)
+                        if error.kind() == io::ErrorKind::NotFound && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(20))
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            if !deactivate {
+                thread::sleep(Duration::from_secs(5));
+                if let Some(status) = child.try_wait()? {
+                    return Err(io::Error::other(format!(
+                        "producer exited before active removal: {status}"
+                    ))
+                    .into());
+                }
+                println!(
+                    "phase=active_remove_requested connector={}",
+                    connector.get()
+                );
+                owner.remove(connector)?;
+                inventory(&mut owner, None)?;
+            }
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                match child.try_wait()? {
+                    Some(status) if status.success() => break,
+                    Some(status) => {
+                        return Err(io::Error::other(format!(
+                            "active producer/restore failed: {status}"
+                        ))
+                        .into())
+                    }
+                    None if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+                    None => {
+                        return Err(
+                            io::Error::other("active producer did not exit after removal").into(),
+                        )
+                    }
+                }
+            }
+            if deactivate {
+                inventory(&mut owner, Some(connector))?;
+                owned(&mut owner, Some(connector))?;
+                println!(
+                    "phase=os_deactivated_lease_still_owned connector={}",
+                    connector.get()
+                );
+                owner.remove(connector)?;
+                inventory(&mut owner, None)?;
+            }
+            println!("XSCC_IDD_ACTIVE_SMOKE=passed");
+            Ok(())
+        })();
+        if result.is_err() {
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                status => eprintln!(
+                    "own_active_child_state={status:?}; own_child_kill={:?}",
+                    child.kill()
+                ),
+            }
+        }
+        result
     }
 
     pub(super) fn run() -> Result<()> {
