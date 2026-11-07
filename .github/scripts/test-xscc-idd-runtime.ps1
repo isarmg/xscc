@@ -1,7 +1,7 @@
 # CI-only, disposable GitHub VM. No BCD/Secure Boot/code-integrity changes.
 [CmdletBinding()]
 param(
-    [ValidateSet('Run','Preflight','Create','Check','Departed','Removed','Logs')][string] $Action = 'Run',
+    [ValidateSet('Run','Preflight','Create','Check','Departed','Removed','PrepareDiagnostics','RestoreLogChannel','Logs')][string] $Action = 'Run',
     [Parameter(Mandatory=$true)][string] $OutputDirectory,
     [string] $PackageDirectory,
     [string] $SmokeExecutable
@@ -127,11 +127,34 @@ public static class XsccCiRoot {
             if ($remaining.Count -ne 0) { throw 'The job-owned devnode remains present after cleanup' }
             'Job-owned devnode is no longer present'
         }
+        'PrepareDiagnostics' {
+            $version = Get-ItemProperty -LiteralPath 'HKLM:/SOFTWARE/Microsoft/Windows NT/CurrentVersion'
+            $images = @(@('System32','System32/drivers/UMDF') | ForEach-Object {
+                $directory = Join-Path $env:windir $_
+                if (Test-Path -LiteralPath $directory) { Get-ChildItem -LiteralPath $directory -Filter 'IddCx*.dll' -File }
+            } | ForEach-Object { [ordered]@{ path=$_.FullName; version=$_.VersionInfo.FileVersion; sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } })
+            [ordered]@{ os_version=[Environment]::OSVersion.Version.ToString(); current_build=$version.CurrentBuild; ubr=$version.UBR; installed_iddcx_images=$images } |
+                ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'guest-metadata.json') -Encoding utf8
+            $channel = Get-WinEvent -ListLog 'Microsoft-Windows-DriverFrameworks-UserMode/Operational'
+            [IO.File]::WriteAllText((Join-Path $OutputDirectory 'umdf-channel-original-enabled.txt'),[string]$channel.IsEnabled)
+            if (-not $channel.IsEnabled) { $channel.IsEnabled = $true; $channel.SaveChanges() }
+        }
+        'RestoreLogChannel' {
+            $state = [IO.File]::ReadAllText((Join-Path $OutputDirectory 'umdf-channel-original-enabled.txt'))
+            if ($state -cne 'True' -and $state -cne 'False') { throw 'Invalid original UMDF channel state' }
+            $channel = Get-WinEvent -ListLog 'Microsoft-Windows-DriverFrameworks-UserMode/Operational'
+            $channel.IsEnabled = [bool]::Parse($state); $channel.SaveChanges()
+        }
         'Logs' {
-            foreach ($name in @('System','Microsoft-Windows-DriverFrameworks-UserMode/Operational')) {
+            $start = [DateTime]::ParseExact([IO.File]::ReadAllText((Join-Path $OutputDirectory 'started-utc.txt')),'o',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind)
+            foreach ($name in @('System','Application','Microsoft-Windows-DriverFrameworks-UserMode/Operational')) {
                 try {
-                    Get-WinEvent -LogName $name -MaxEvents 200 | Where-Object { $_.Message -match 'XsccIdd|XSCCIDD|IndirectKmd' } |
-                        Select-Object TimeCreated,ProviderName,Id,LevelDisplayName,Message | ConvertTo-Json -Depth 5
+                    $filter = @{ LogName=$name; StartTime=$start }
+                    if ($name -eq 'System') { $filter.Level = @(1,2,3) }
+                    $events = @(Get-WinEvent -FilterHashtable $filter -ErrorAction Stop)
+                    @('<Events>') + @($events | ForEach-Object { $_.ToXml() }) + @('</Events>') |
+                        Set-Content -LiteralPath (Join-Path $OutputDirectory ($name.Replace('/','-') + '.events.xml')) -Encoding utf8
+                    $events | Select-Object TimeCreated,ProviderName,Id,RecordId,LevelDisplayName,Message | ConvertTo-Json -Depth 5
                 } catch { Write-Output ($name + ': ' + $_.Exception.ToString()) }
             }
             $setupLog = Join-Path $env:windir 'INF/setupapi.dev.log'
@@ -148,6 +171,10 @@ $timings = [Collections.Generic.List[object]]::new()
 $cert = $null
 $failure = $null
 $existingBootOptions = @()
+$tools = $null; $traceAttempted = $false; $decodeFailure = $null
+$traceName = 'XsccIdd-CI-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT + '-' + [Guid]::NewGuid().ToString('N')
+$etl = Join-Path $OutputDirectory 'IddCx.etl'
+[IO.File]::WriteAllText((Join-Path $OutputDirectory 'started-utc.txt'),[DateTime]::UtcNow.ToString('o'))
 $cleanupFailures = [Collections.Generic.List[string]]::new()
 $powershell = (Get-Process -Id $PID).Path
 
@@ -227,6 +254,9 @@ try {
     Invoke-Operation 'sign-catalog' $signtool @('sign','/v','/fd','SHA256','/sm','/s','My','/sha1',$cert.Thumbprint,(Join-Path $package 'XsccIdd.cat'))
     Invoke-Operation 'verify-umdf-authenticode' $signtool @('verify','/v','/pa',(Join-Path $package 'XsccIdd.dll'))
     Invoke-Operation 'verify-catalog' $signtool @('verify','/v','/pa','/c',(Join-Path $package 'XsccIdd.cat'),(Join-Path $package 'XsccIdd.inf'))
+    Invoke-Action 'prepare-diagnostics' 'PrepareDiagnostics'
+    $traceAttempted = $true
+    Invoke-Operation 'start-iddcx-wpp' (Join-Path $env:windir 'System32/logman.exe') @('create','trace',$traceName,'-o',$etl,'-ets','-ow','-mode','sequential','-p','{D92BCB52-FA78-406F-A9A5-2037509FADEA}','0x0f4','0xFF') 15
     Invoke-Action 'create-owned-root' 'Create'
     [void](Read-OwnedInstance)
     Invoke-Operation 'install-owned-driver' (Join-Path $env:windir 'System32/pnputil.exe') @('/add-driver',(Join-Path $package 'XsccIdd.inf'),'/install') 45
@@ -245,7 +275,27 @@ finally {
             Invoke-Action 'verify-owned-instance-removed' 'Removed'
         } catch { $cleanupFailures.Add($_.Exception.ToString()) }
     }
-    try { Invoke-Action 'driver-events' 'Logs' 15 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+    if ($traceAttempted) {
+        try { Invoke-Operation 'stop-iddcx-wpp' (Join-Path $env:windir 'System32/logman.exe') @('stop',$traceName,'-ets') 15 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+        try {
+            $roots = @((Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'))
+            if ($null -ne $tools) { $roots += $tools }
+            $tracefmt = @($roots | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter 'tracefmt.exe' -Recurse -File } | Where-Object { $_.Directory.Name -eq 'x64' } | Sort-Object FullName -Descending)
+            if ($tracefmt.Count -eq 0) { throw 'No x64 Tracefmt is available in the installed SDK or verified WDK package' }
+            $images = @((Get-Content -LiteralPath (Join-Path $OutputDirectory 'guest-metadata.json') -Raw | ConvertFrom-Json).installed_iddcx_images)
+            if ($images.Count -eq 0) { throw 'No installed IddCx image was found for matched-symbol decoding' }
+            $symbols = Join-Path $env:RUNNER_TEMP ($traceName + '-symbols')
+            $tmf = Join-Path $symbols 'tmf'
+            New-Item -ItemType Directory -Path $tmf | Out-Null
+            Invoke-Operation 'decode-iddcx-wpp' $tracefmt[0].FullName @($etl,'-i',($images.path -join ';'),'-r',('srv*' + $symbols + '*https://msdl.microsoft.com/download/symbols'),'-p',$tmf,'-o',(Join-Path $OutputDirectory 'IddCx-decoded.txt')) 45
+            $decoded = Get-Content -LiteralPath (Join-Path $OutputDirectory 'IddCx-decoded.txt') -Raw
+            if ([string]::IsNullOrWhiteSpace($decoded) -or $decoded -match 'No Format Information|No TMF|cannot find|failed to (load|download)') { throw 'IddCx WPP decoding did not produce complete matched-symbol messages; raw ETL retained' }
+        } catch { $decodeFailure = $_.Exception.ToString() }
+    }
+    try { Invoke-Action 'driver-events' 'Logs' 20 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+    if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'umdf-channel-original-enabled.txt')) {
+        try { Invoke-Action 'restore-umdf-channel' 'RestoreLogChannel' 15 } catch { $cleanupFailures.Add($_.Exception.ToString()) }
+    }
     if ($null -ne $cert) {
         foreach ($store in @('Root','TrustedPublisher','My')) {
             try {
@@ -256,8 +306,8 @@ finally {
             } catch { $cleanupFailures.Add($_.Exception.ToString()) }
         }
     }
-    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); signing='ephemeral guest test certificate only'; existing_boot_options=$existingBootOptions; boot_policy_changed=$false; production_policy_acceptance=$false; production_release=$false; evidence_scope='Arrival ACK and PnP monitor-descendant departure only; no CCD-active or continuous-frame acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
+    [ordered]@{ source=$env:GITHUB_SHA; run=$env:GITHUB_RUN_ID; expected_instance=$expectedId; failure=$failure; cleanup_failures=$cleanupFailures.ToArray(); operations=$timings.ToArray(); wpp_session=$traceName; wpp_decode_failure=$decodeFailure; signing='ephemeral guest test certificate only'; existing_boot_options=$existingBootOptions; boot_policy_changed=$false; production_policy_acceptance=$false; production_release=$false; evidence_scope='Arrival ACK and PnP monitor-descendant departure only; no CCD-active or continuous-frame acceptance'; native_wall_clock_bound='not established by process/WaitForExit guards' } |
         ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'result.json') -Encoding utf8
 }
-if ($null -ne $failure -or $cleanupFailures.Count -ne 0) { throw ('Runtime smoke failed: ' + $failure + '; cleanup: ' + ($cleanupFailures -join '; ')) }
+if ($null -ne $failure -or $cleanupFailures.Count -ne 0 -or $null -ne $decodeFailure) { throw ('Runtime smoke failed: ' + $failure + '; cleanup: ' + ($cleanupFailures -join '; ') + '; WPP decode: ' + $decodeFailure) }
 Write-Output 'XSCC_IDD_ISOLATED_RUNTIME=passed'
