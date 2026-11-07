@@ -52,7 +52,7 @@
       <Optimization>MaxSpeed</Optimization>
       <ExceptionHandling>Sync</ExceptionHandling>
       <WarningLevel>Level4</WarningLevel>
-      <ExternalWarningLevel>Level0</ExternalWarningLevel>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/external:I"$(XsccPackagesRoot)Microsoft.Windows.WDK.x64.10.0.26100.6584\c\Include" /external:I"$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.10.0.26100.6584\c\Include" /external:templates- %(AdditionalOptions)</AdditionalOptions>
