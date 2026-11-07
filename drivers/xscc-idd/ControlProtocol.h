@@ -33,6 +33,7 @@ inline constexpr std::uint32_t kIoctlQuery = ControlCode(0x800);
 inline constexpr std::uint32_t kIoctlList = ControlCode(0x801);
 inline constexpr std::uint32_t kIoctlAdd = ControlCode(0x802);
 inline constexpr std::uint32_t kIoctlRemove = ControlCode(0x803);
+inline constexpr std::uint32_t kIoctlOwnedList = ControlCode(0x804);
 
 #ifdef _WIN32
 inline constexpr GUID kControlInterfaceGuid = {
@@ -47,7 +48,7 @@ struct Mode {
 };
 
 // METHOD_BUFFERED input is this header followed by modeCount inline Mode values.
-// Query, List and Remove require zero modes; Add requires at least one.
+// Query, List, OwnedList and Remove require zero modes; Add requires at least one.
 struct RequestHeader {
     std::uint32_t version;
     std::uint32_t size;
@@ -94,6 +95,7 @@ static_assert(sizeof(OperationResponse) == 12);
 static_assert(std::is_standard_layout_v<Mode> && std::is_trivially_copyable_v<Mode>);
 static_assert(std::is_standard_layout_v<RequestHeader> && std::is_trivially_copyable_v<RequestHeader>);
 static_assert(kIoctlQuery == 0x8000e000 && kIoctlRemove == 0x8000e00c);
+static_assert(kIoctlOwnedList == 0x8000e010);
 
 constexpr bool RequestSizeForModes(std::uint32_t count, std::uint32_t& size) noexcept {
     if (count > kMaxModesPerMonitor) {

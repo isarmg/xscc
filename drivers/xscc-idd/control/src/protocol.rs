@@ -9,6 +9,7 @@ pub(crate) const QUERY: u32 = 0x8000_e000;
 pub(crate) const LIST: u32 = 0x8000_e004;
 pub(crate) const ADD: u32 = 0x8000_e008;
 pub(crate) const REMOVE: u32 = 0x8000_e00c;
+pub(crate) const OWNED_LIST: u32 = 0x8000_e010;
 pub(crate) const MAX_LIST_BYTES: usize = 16 + CONNECTORS as usize * 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,9 +196,16 @@ mod tests {
     #[test]
     fn requests_match_the_driver_contract_without_limiting_high_refresh() {
         assert_eq!(
-            [QUERY, LIST, ADD, REMOVE],
-            [0x8000_e000, 0x8000_e004, 0x8000_e008, 0x8000_e00c]
+            [QUERY, LIST, ADD, REMOVE, OWNED_LIST],
+            [
+                0x8000_e000,
+                0x8000_e004,
+                0x8000_e008,
+                0x8000_e00c,
+                0x8000_e010
+            ]
         );
+        assert_eq!(request(None, &[]).unwrap(), wire(&[1, 16, u32::MAX, 0]));
         let mode = Mode {
             width: 3840,
             height: 2160,
@@ -226,6 +234,7 @@ mod tests {
         assert!(capabilities(&wire(&[2, 24, 32, 2, 4096, 1])).is_err());
         assert!(capabilities(&wire(&[1, 24, 32, 33, 4096, 1])).is_err());
         assert!(capabilities(&wire(&[1, 24, 32, 2, 4096, 2])).is_err());
+        assert!(monitors(&wire(&[1, 16, 0, 20])).unwrap().is_empty());
         let list = wire(&[1, 36, 1, 20, 0, 1, 1920, 1080, 1_200_000]);
         assert_eq!(
             monitors(&list).unwrap()[0]

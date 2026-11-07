@@ -431,6 +431,17 @@ impl Owner {
         )?)
     }
 
+    /// Lists only this file lease's completed arrivals, not CCD-active desktops.
+    pub fn owned_list(&mut self) -> Result<Vec<Monitor>> {
+        let input = protocol::request(None, &[])?;
+        protocol::monitors(&self.exchange(
+            "list this XsccIdd owner's monitors",
+            protocol::OWNED_LIST,
+            &input,
+            protocol::MAX_LIST_BYTES,
+        )?)
+    }
+
     /// Adds one monitor owned by this file. None asks the driver to allocate a connector.
     /// An error does not authorize blindly retrying a mutation; reconcile inventory first.
     pub fn add(&mut self, connector: Option<ConnectorId>, modes: &[Mode]) -> Result<ConnectorId> {

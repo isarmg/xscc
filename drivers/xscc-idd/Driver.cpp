@@ -191,9 +191,9 @@ void MonitorCleanup(WDFOBJECT object) {
             Fatal(nullptr, STATUS_INVALID_DEVICE_STATE);
         monitor->current.reset();
     }
-    monitor->phase.store(MonitorPhase::Departed);
     {
         std::lock_guard lock(monitor->owner->monitorsMutex);
+        monitor->phase.store(MonitorPhase::Departed);
         auto found = monitor->owner->monitors.find(monitor->connector);
         if (found != monitor->owner->monitors.end() && found->second == monitor)
             monitor->owner->monitors.erase(found);
@@ -369,20 +369,21 @@ static NTSTATUS HandleControl(const std::shared_ptr<DeviceData>& device, WDFREQU
     RequestHeader header{};
     if (!ReadRequestHeader(input, inputLength, header)) return STATUS_INVALID_PARAMETER;
     const bool add = code == kIoctlAdd;
+    const bool list = code == kIoctlList || code == kIoctlOwnedList;
     if ((add && (header.modeCount == 0 ||
                  (header.connectorId >= kConnectorCapacity && header.connectorId != kNoConnector))) ||
         (!add && header.modeCount != 0))
         return STATUS_INVALID_PARAMETER;
-    if ((code == kIoctlQuery || code == kIoctlList) && header.connectorId != kNoConnector)
+    if ((code == kIoctlQuery || list) && header.connectorId != kNoConnector)
         return STATUS_INVALID_PARAMETER;
     if (code == kIoctlRemove && header.connectorId >= kConnectorCapacity)
         return STATUS_INVALID_PARAMETER;
-    if (code != kIoctlQuery && code != kIoctlList && code != kIoctlAdd && code != kIoctlRemove)
+    if (code != kIoctlQuery && !list && code != kIoctlAdd && code != kIoctlRemove)
         return STATUS_INVALID_DEVICE_REQUEST;
     if (!device->ready.load() || device->closing.load()) return STATUS_DEVICE_NOT_READY;
 
     const auto needed = (code == kIoctlQuery) ? sizeof(QueryResponse) :
-                        (code == kIoctlList) ? sizeof(ListResponse) : sizeof(OperationResponse);
+                        list ? sizeof(ListResponse) : sizeof(OperationResponse);
     void* output = nullptr;
     status = WdfRequestRetrieveOutputBuffer(request, needed, &output, nullptr);
     if (!NT_SUCCESS(status)) return status;
@@ -396,11 +397,15 @@ static NTSTATUS HandleControl(const std::shared_ptr<DeviceData>& device, WDFREQU
         written = sizeof(value);
         return STATUS_SUCCESS;
     }
-    if (code == kIoctlList) {
+    if (list) {
         std::lock_guard lock(device->monitorsMutex);
+        const auto visible = [&](const auto& monitor) {
+            return monitor->phase.load() == MonitorPhase::Connected &&
+                   (code != kIoctlOwnedList || monitor->lease == lease);
+        };
         const auto count = static_cast<std::uint32_t>(std::count_if(
             device->monitors.begin(), device->monitors.end(),
-            [](const auto& entry) { return entry.second->phase.load() == MonitorPhase::Connected; }));
+            [&](const auto& entry) { return visible(entry.second); }));
         std::uint32_t total{};
         if (!ListSizeForMonitors(count, total)) return STATUS_INVALID_PARAMETER;
         if (outputLength < total) return STATUS_BUFFER_TOO_SMALL;
@@ -408,7 +413,7 @@ static NTSTATUS HandleControl(const std::shared_ptr<DeviceData>& device, WDFREQU
         std::memcpy(output, &value, sizeof(value));
         auto* position = static_cast<std::uint8_t*>(output) + sizeof(value);
         for (const auto& [id, monitor] : device->monitors) {
-            if (monitor->phase.load() != MonitorPhase::Connected) continue;
+            if (!visible(monitor)) continue;
             const MonitorRecord record{id, static_cast<std::uint32_t>(monitor->modes.size()),
                                        monitor->modes.front()};
             std::memcpy(position, &record, sizeof(record));

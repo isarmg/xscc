@@ -1,11 +1,20 @@
 name: XSCC IDD unsigned build
 on:
+  push:
+    branches: [ci/owned-idd-runtime-20261107]
   pull_request:
     paths:
       - 'drivers/xscc-idd/**'
       - '.github/scripts/build-xscc-idd.ps1'
+      - '.github/scripts/test-xscc-idd-runtime.ps1'
       - '.github/workflows/xscc-idd-build.yml'
   workflow_dispatch:
+    inputs:
+      runtime_smoke:
+        description: Explicitly test only a disposable Windows 2025 VM with a guest-only test certificate
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 jobs:
@@ -64,3 +73,47 @@ jobs:
           path: artifacts/xscc-idd/
           if-no-files-found: error
           retention-days: 14
+
+  runtime-smoke:
+    if: (github.event_name == 'workflow_dispatch' && inputs.runtime_smoke) || (github.event_name == 'push' && github.ref == 'refs/heads/ci/owned-idd-runtime-20261107')
+    needs: [control-transport, unsigned-driver]
+    runs-on: windows-2025
+    timeout-minutes: 10
+    env:
+      XSCC_IDD_CI_RUNTIME_SMOKE: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.99.0'
+          targets: x86_64-pc-windows-msvc
+      - uses: NuGet/setup-nuget@323ab0502cd38fdc493335025a96c8fdb0edc71f
+        with:
+          nuget-version: '6.11.1'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: xscc-idd-x64-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/xscc-idd-runtime-input
+      - name: Compile CI-only lease smoke entry point
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          cargo build --manifest-path drivers/xscc-idd/control/Cargo.toml --locked --offline --example ci_lease_smoke --target x86_64-pc-windows-msvc --target-dir "$env:RUNNER_TEMP/xscc-idd-runtime-control" 2>&1 | Tee-Object -FilePath artifacts/xscc-idd-runtime-build.log
+          if ($LASTEXITCODE -ne 0) { throw 'CI-only lease smoke compilation failed' }
+      - name: Exercise only this disposable VM's job-owned driver
+        run: |
+          ./.github/scripts/test-xscc-idd-runtime.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/xscc-idd-runtime" -PackageDirectory "$env:RUNNER_TEMP/xscc-idd-runtime-input" -SmokeExecutable "$env:RUNNER_TEMP/xscc-idd-runtime-control/x86_64-pc-windows-msvc/debug/examples/ci_lease_smoke.exe"
+      - name: Save runtime diagnostics only, never test signing keys
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-idd-isolated-runtime-${{ github.sha }}
+          path: |
+            artifacts/xscc-idd-runtime/
+            artifacts/xscc-idd-runtime-build.log
+          if-no-files-found: warn
+          retention-days: 7
