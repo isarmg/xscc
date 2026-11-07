@@ -1,0 +1,19 @@
+{
+  "project": "XSCC IddCx driver (unsigned prototype)",
+  "upstream_repository": "https://github.com/VirtualDrivers/Virtual-Display-Driver",
+  "upstream_revision": "d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77",
+  "upstream_license": "MIT",
+  "local_implementation": [
+    "independent device identity and privileged IOCTL",
+    "per-monitor arrival/departure with zero-screen adapter",
+    "worker-owned swapchain with bounded fail-stop retirement",
+    "exact fractional virtual timing"
+  ],
+  "source_sha256": {
+    "Driver.cpp": "d320a69bb13f7ba7e79adbb03c999c41a09948c5d17ecf3e1ed55aacc1d8df0b",
+    "Driver.h": "9d62afc9c8f2678aaad68f9d9f5dfd2279cd3a4111afe737795888ba4d00ab95",
+    "LICENSE": "c2285c867ddc9b88f43b4f8fa2c77a9eec66207166c1217b37353a2ccd62ac03",
+    "MttVDD.inf": "c2e5a5b34d840b77977c82fed9a2ed9036a71dfd257ec0d7b1bb9b84516aa523",
+    "MttVDD.vcxproj": "3e1c0028a2ca9d39892a5e0f38f89e3a93e5831ff196cc670aacbc7a5b7a6a6a"
+  }
+}
