@@ -204,7 +204,8 @@ void MonitorCleanup(WDFOBJECT object) {
 _Use_decl_annotations_
 void AdapterCleanup(WDFOBJECT object) {
     auto* wrapper = GetAdapterContext(object);
-    if (wrapper && wrapper->value) {
+    if (!wrapper || !wrapper->value) return;
+    {
         const auto device = *wrapper->value;
         device->ready.store(false);
         device->closing.store(true);
