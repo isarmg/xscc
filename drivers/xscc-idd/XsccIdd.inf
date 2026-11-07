@@ -35,6 +35,8 @@ Needs=WUDFRD.NT.HW
 AddReg=XsccIdd_DeviceSettings
 
 [XsccIdd_DeviceSettings]
+HKR,,"DeviceType",0x00010001,0x00008000
+HKR,,"DeviceCharacteristics",0x00010001,0x00000100
 HKR,,"UpperFilters",0x00010000,"IndirectKmd"
 HKR,"WUDF","DeviceGroupId",0x00000000,"{E50B8DAD-043F-4D9F-AC78-049931951779}"
 HKR,,"Security",0x00000000,"D:P(A;;GA;;;SY)(A;;GA;;;BA)"

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 // IddCx setup patterns derived from MTT 25.7.23; see UPSTREAM.json.
 #define WIN32_NO_STATUS
-#include "SwapChainSession.h"
+#include <windows.h>
 #undef WIN32_NO_STATUS
 #include <ntstatus.h>
+#include "SwapChainSession.h"
 #include <initguid.h>
 #include <devpkey.h>
 #include "ControlProtocol.h"
@@ -112,16 +113,16 @@ NTSTATUS DefaultModes(IDDCX_MONITOR object, const IDARG_IN_GETDEFAULTDESCRIPTION
                       IDARG_OUT_GETDEFAULTDESCRIPTIONMODES* output) {
     const auto monitor = Monitor(object);
     const auto count = static_cast<UINT>(monitor->modes.size());
-    output->DefaultDescriptionModesCount = count;
+    output->DefaultMonitorModeBufferOutputCount = count;
     output->PreferredMonitorModeIdx = 0;
-    if (input->DefaultDescriptionModesBufferInputCount == 0) return STATUS_SUCCESS;
-    if (input->DefaultDescriptionModesBufferInputCount < count) return STATUS_BUFFER_TOO_SMALL;
+    if (input->DefaultMonitorModeBufferInputCount == 0) return STATUS_SUCCESS;
+    if (input->DefaultMonitorModeBufferInputCount < count) return STATUS_BUFFER_TOO_SMALL;
     for (UINT i = 0; i < count; ++i) {
         IDDCX_MONITOR_MODE value{};
         value.Size = sizeof(value);
         value.Origin = IDDCX_MONITOR_MODE_ORIGIN_DRIVER;
         value.MonitorVideoSignalInfo = Signal(monitor->modes[i], kMonitorVSyncDivider);
-        input->pDefaultDescriptionModes[i] = value;
+        input->pDefaultMonitorModes[i] = value;
     }
     return STATUS_SUCCESS;
 }
@@ -580,8 +581,6 @@ NTSTATUS DeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT initialize) {
         WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, FileContext);
         fileAttributes.EvtCleanupCallback = FileContextCleanup;
         WdfDeviceInitSetFileObjectConfig(initialize, &files, &fileAttributes);
-        WdfDeviceInitSetDeviceType(initialize, kDeviceType);
-        WdfDeviceInitSetCharacteristics(initialize, FILE_DEVICE_SECURE_OPEN, TRUE);
         IDD_CX_CLIENT_CONFIG config;
         IDD_CX_CLIENT_CONFIG_INIT(&config);
         config.EvtIddCxAdapterInitFinished = AdapterInitFinished;

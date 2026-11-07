@@ -54,6 +54,7 @@
       <WarningLevel>Level4</WarningLevel>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/external:I"$(XsccPackagesRoot)Microsoft.Windows.WDK.x64.10.0.26100.6584\c\Include" /external:I"$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.10.0.26100.6584\c\Include" /external:W0 /external:templates- %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WppEnabled>false</WppEnabled>
       <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;UMDF_DRIVER;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
