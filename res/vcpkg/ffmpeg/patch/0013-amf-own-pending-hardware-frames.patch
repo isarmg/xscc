@@ -1,0 +1,212 @@
+--- a/libavcodec/amfenc.c
++++ b/libavcodec/amfenc.c
+@@ -34,6 +34,7 @@
+ #include "libavutil/time.h"
+ 
+ #include "amfenc.h"
++#include "amfenc_frame_ref.h"
+ #include "encode.h"
+ #include "internal.h"
+ #include "libavutil/mastering_display_metadata.h"
+@@ -614,6 +615,44 @@
+     return res;
+ }
+ 
++// Interface properties release their payload even when AMF discards queued output.
++static AMF_RESULT amf_attach_frame_owner(AMFSurface *surface, const AVFrame *frame)
++{
++    AMFInterface *owner = amf_frame_owner_create(frame);
++    AMFVariantStruct value = {0};
++    AMF_RESULT res;
++    if (!owner)
++        return AMF_OUT_OF_MEMORY;
++    res = AMFVariantAssignInterface(&value, owner);
++    if (res == AMF_OK)
++        res = surface->pVtbl->SetProperty(surface, AMF_FRAME_OWNER_PROPERTY, value);
++    AMFVariantClear(&value);
++    owner->pVtbl->Release(owner);
++    return res;
++}
++
++static AMF_RESULT amf_release_frame_owner(AMFData *data)
++{
++    AMFVariantStruct value = {0};
++    AMFInterface *owner = NULL;
++    AMF_RESULT res = data->pVtbl->GetProperty(data, AMF_FRAME_OWNER_PROPERTY, &value);
++    if (res == AMF_OK) {
++        if (value.type != AMF_VARIANT_INTERFACE || !AMFVariantInterface(&value)) {
++            res = AMF_INVALID_DATA_TYPE;
++        } else {
++            AMFInterface *iface = AMFVariantInterface(&value);
++            res = iface->pVtbl->QueryInterface(iface, &amf_frame_owner_iid, (void **)&owner);
++            if (res == AMF_OK) {
++                // This local strong reference excludes final Release during pool return.
++                amf_frame_owner_release_frame(owner);
++                owner->pVtbl->Release(owner);
++            }
++        }
++    }
++    AMFVariantClear(&value);
++    return res;
++}
++
+ static AMFBuffer *amf_create_buffer_with_frame_ref(const AVFrame *frame, AMFContext *context)
+ {
+     AVFrame *frame_ref;
+@@ -753,13 +792,21 @@
+             // input HW surfaces can be vertically aligned by 16; tell AMF the real size
+             surface->pVtbl->SetCrop(surface, 0, 0, frame->width, frame->height);
+ 
+-            frame_ref_storage_buffer = amf_create_buffer_with_frame_ref(frame, ctx->context);
+-            AMF_RETURN_IF_FALSE(ctx, frame_ref_storage_buffer != NULL, AVERROR(ENOMEM), "create_buffer_with_frame_ref() returned NULL\n");
+-
+-            res = amf_set_property_buffer(surface, L"av_frame_ref", frame_ref_storage_buffer);
+-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "SetProperty failed for \"av_frame_ref\" with error %d\n", res);
+-            ctx->hwsurfaces_in_queue++;
+-            frame_ref_storage_buffer->pVtbl->Release(frame_ref_storage_buffer);
++            if (ctx->query_timeout == 0) {
++                res = amf_attach_frame_owner(surface, frame);
++                if (res != AMF_OK)
++                    surface->pVtbl->Release(surface);
++                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, res == AMF_OUT_OF_MEMORY ? AVERROR(ENOMEM) : AVERROR_UNKNOWN, "Attach frame owner failed with error %d\n", res);
++                ctx->hwsurfaces_in_queue++;
++            } else {
++                frame_ref_storage_buffer = amf_create_buffer_with_frame_ref(frame, ctx->context);
++                AMF_RETURN_IF_FALSE(ctx, frame_ref_storage_buffer != NULL, AVERROR(ENOMEM), "create_buffer_with_frame_ref() returned NULL\n");
++
++                res = amf_set_property_buffer(surface, L"av_frame_ref", frame_ref_storage_buffer);
++                AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "SetProperty failed for \"av_frame_ref\" with error %d\n", res);
++                ctx->hwsurfaces_in_queue++;
++                frame_ref_storage_buffer->pVtbl->Release(frame_ref_storage_buffer);
++            }
+         }
+ 
+         // HDR10 metadata
+@@ -778,6 +825,10 @@
+                         AMF_ASSIGN_PROPERTY_INTERFACE(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_INPUT_HDR_METADATA, hdrmeta_buffer); break;
+                     }
+                     res = amf_set_property_buffer(surface, L"av_frame_hdrmeta", hdrmeta_buffer);
++                    if (res != AMF_OK && hw_surface && ctx->query_timeout == 0) {
++                        hdrmeta_buffer->pVtbl->Release(hdrmeta_buffer);
++                        surface->pVtbl->Release(surface);
++                    }
+                     AMF_RETURN_IF_FALSE(avctx, res == AMF_OK, AVERROR_UNKNOWN, "SetProperty failed for \"av_frame_hdrmeta\" with error %d\n", res);
+                 }
+                 hdrmeta_buffer->pVtbl->Release(hdrmeta_buffer);
+@@ -833,7 +884,13 @@
+ 
+                 buffer->pVtbl->Release(buffer);
+ 
+-                if (data->pVtbl->HasProperty(data, L"av_frame_ref")) {
++                if (data->pVtbl->HasProperty(data, AMF_FRAME_OWNER_PROPERTY)) {
++                    res = amf_release_frame_owner(data);
++                    if (res != AMF_OK)
++                        data->pVtbl->Release(data);
++                    AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "Release frame owner failed with error %d\n", res);
++                    ctx->hwsurfaces_in_queue--;
++                } else if (data->pVtbl->HasProperty(data, L"av_frame_ref")) {
+                     AMFBuffer* frame_ref_storage_buffer;
+                     res = amf_get_property_buffer(data, L"av_frame_ref", &frame_ref_storage_buffer);
+                     AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "GetProperty failed for \"av_frame_ref\" with error %d\n", res);
+--- /dev/null
++++ b/libavcodec/amfenc_frame_ref.h
+@@ -0,0 +1,99 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVCODEC_AMFENC_FRAME_REF_H
++#define AVCODEC_AMFENC_FRAME_REF_H
++
++#include <stdatomic.h>
++#include <string.h>
++
++#include <AMF/core/Interface.h>
++#include "libavutil/frame.h"
++#include "libavutil/mem.h"
++
++#define AMF_FRAME_OWNER_PROPERTY L"av_frame_owner"
++
++static const AMFGuid amf_frame_owner_iid = {
++    0x8a4b7d20, 0xb6a8, 0x48e0, 0x91, 0x75, 0x9e, 0xd4, 0x30, 0x4f, 0x63, 0x13
++};
++
++typedef struct AmfFrameOwner {
++    AMFInterface iface;
++    atomic_int references;
++    AVFrame *frame;
++} AmfFrameOwner;
++
++static void amf_frame_owner_release_frame(AMFInterface *iface)
++{
++    AmfFrameOwner *owner = (AmfFrameOwner *)iface;
++    av_frame_free(&owner->frame);
++}
++
++static amf_long AMF_STD_CALL amf_frame_owner_acquire(AMFInterface *iface)
++{
++    AmfFrameOwner *owner = (AmfFrameOwner *)iface;
++    return (amf_long)atomic_fetch_add_explicit(&owner->references, 1, memory_order_relaxed) + 1;
++}
++
++static amf_long AMF_STD_CALL amf_frame_owner_release(AMFInterface *iface)
++{
++    AmfFrameOwner *owner = (AmfFrameOwner *)iface;
++    amf_long remaining = (amf_long)atomic_fetch_sub_explicit(&owner->references, 1, memory_order_acq_rel) - 1;
++    if (!remaining) {
++        amf_frame_owner_release_frame(iface);
++        av_free(owner);
++    }
++    return remaining;
++}
++
++static AMF_RESULT AMF_STD_CALL amf_frame_owner_query(AMFInterface *iface,
++                                                  const AMFGuid *iid, void **result)
++{
++    AMFGuid base_iid = IID_AMFInterface();
++    if (!result || !iid)
++        return AMF_INVALID_POINTER;
++    *result = NULL;
++    if (memcmp(iid, &base_iid, sizeof(*iid)) && memcmp(iid, &amf_frame_owner_iid, sizeof(*iid)))
++        return AMF_NO_INTERFACE;
++    iface->pVtbl->Acquire(iface);
++    *result = iface;
++    return AMF_OK;
++}
++
++static const AMFInterfaceVtbl amf_frame_owner_vtable = {
++    .Acquire = amf_frame_owner_acquire,
++    .Release = amf_frame_owner_release,
++    .QueryInterface = amf_frame_owner_query,
++};
++
++static AMFInterface *amf_frame_owner_create(const AVFrame *frame)
++{
++    AmfFrameOwner *owner = av_mallocz(sizeof(*owner));
++    if (!owner)
++        return NULL;
++    owner->frame = av_frame_clone(frame);
++    if (!owner->frame) {
++        av_free(owner);
++        return NULL;
++    }
++    owner->iface.pVtbl = &amf_frame_owner_vtable;
++    atomic_init(&owner->references, 1);
++    return &owner->iface;
++}
++
++#endif
