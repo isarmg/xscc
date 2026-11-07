@@ -322,25 +322,50 @@ finally {
             $lines = @(Get-Content -LiteralPath (Join-Path $OutputDirectory 'IddCx-decoded.txt'))
             if ($lines -match 'critical|failfast|Throwing error') { throw 'IddCx reported a fault during the active smoke; raw trace retained' }
             $parseUtc = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
-            foreach ($callback in @('EvtIddCxAdapterCommitModes','EvtIddCxMonitorAssignSwapChain','EvtIddCxMonitorUnassignSwapChain')) {
-                if (@($lines -match ('(?:Return successfully from ' + $callback + ' DDI(?:\s|$)|Return from ' + $callback + ' DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))')).Count -lt 2) { throw ('Missing successful callbacks for both active phases: ' + $callback) }
+            [xml]$umdf = Get-Content -LiteralPath (Join-Path $OutputDirectory 'Microsoft-Windows-DriverFrameworks-UserMode-Operational.events.xml') -Raw
+            $hostPids = @($umdf.Events.Event | Where-Object {
+                $module = $_.SelectSingleNode("*[local-name()='UserData']/*[local-name()='UMDFHostModuleLoad']")
+                $null -ne $module -and $module.InstanceId -ieq $expectedId -and [IO.Path]::GetFileName($module.ModulePath) -ieq 'xsccidd.dll'
+            } | ForEach-Object { [uint32]$_.System.Execution.ProcessID } | Sort-Object -Unique)
+            if ($hostPids.Count -ne 1) { throw 'No unique UMDF host PID is linked to this exact job-owned XsccIdd instance' }
+            $records = @(for ($index = 0; $index -lt $lines.Count; $index++) {
+                if ($lines[$index] -match '^\[\d+\]([0-9a-f]+)\.([0-9a-f]+)::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3}) (.*)$') {
+                    [PSCustomObject]@{ line=$index+1; pid=[Convert]::ToUInt32($Matches[1],16); tid=[Convert]::ToUInt32($Matches[2],16); time=[DateTime]::ParseExact($Matches[3],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc); message=$Matches[4] }
+                }
+            })
+            foreach ($callback in @('EvtIddCxAdapterCommitModes','EvtIddCxMonitorAssignSwapChain')) {
+                if (@($records | Where-Object { $_.pid -eq $hostPids[0] -and $_.message -match ('(?:Return successfully from ' + $callback + ' DDI(?:\s|$)|Return from ' + $callback + ' DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))') }).Count -lt 2) { throw ('Missing own-host successful callbacks for both phases: ' + $callback) }
             }
-            $frames = @($lines | Where-Object { $_ -match 'SwapChainFinishedProcessingFrame.*Exit.*(?:status|hr|result)\s*=\s*(?:STATUS_SUCCESS|S_OK|0x0\b|0\b)' })
-            $times = @($frames | ForEach-Object { if ($_ -notmatch '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { throw 'Unrecognized WPP timestamp' }; [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc) } | Sort-Object)
             if ($activePhases.Count -ne 2) { throw 'Both active phases did not complete' }
             $proof = @()
             foreach ($phase in $activePhases) {
-                $phaseTimes = @($times | Where-Object { $_ -ge $phase.began -and $_ -le $phase.ended })
-                if ($phaseTimes.Count -lt 30 -or ($phaseTimes[-1] - $phaseTimes[0]).TotalSeconds -lt 3) { throw ('Insufficient successful driver frame-DDI evidence over three seconds: ' + $phase.name) }
-                $phaseLines = @($lines | Where-Object { if ($_ -match '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { $time = [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc); $time -ge $phase.began -and $time -le $phase.ended } })
-                $unassign = -1; $departure = -1
-                for ($index = 0; $index -lt $phaseLines.Count; $index++) {
-                    if ($phaseLines[$index] -match '(?:Return successfully from EvtIddCxMonitorUnassignSwapChain DDI(?:\s|$)|Return from EvtIddCxMonitorUnassignSwapChain DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))') { $unassign = $index }
-                    if ($phaseLines[$index] -match 'MonitorDeparture.*Exit.*STATUS_SUCCESS') { $departure = $index }
+                $phaseRecords = @($records | Where-Object { $_.pid -eq $hostPids[0] -and $_.time -ge $phase.began -and $_.time -le $phase.ended })
+                $workers = @($phaseRecords | Where-Object { $_.message -match 'IddCxImplSwapChainFinishProcessingFrame: Exit,\s*hr=S_OK(?:\s|$)' } | Group-Object tid | Where-Object { $_.Count -ge 30 -and ($_.Group[-1].time - $_.Group[0].time).TotalSeconds -ge 3 })
+                if ($workers.Count -ne 1) { throw ('No unique own-host worker with successful FinishProcessingFrame evidence over three seconds: ' + $phase.name) }
+                $finished = @($workers[0].Group)
+                $worker = $finished[0].tid
+                $chains = @($phaseRecords | Where-Object { $_.tid -eq $worker -and $_.message -match 'ReleaseAndAcquireInternal.*Swapchain (0x[0-9a-f]+), Frame number' } | ForEach-Object { [void]($_.message -match 'Swapchain 0x([0-9a-f]+),'); [Convert]::ToUInt64($Matches[1],16) } | Sort-Object -Unique)
+                if ($chains.Count -ne 1) { throw ('Successful frame worker does not map to exactly one stable chain: ' + $phase.name) }
+                $chain = '0x0*' + $chains[0].ToString('x')
+                $cleaned = @($phaseRecords | Where-Object { $_.tid -eq $worker -and $_.line -gt $finished[-1].line -and $_.message -match ('IddSwapChain ' + $chain + ' cleanup,.*IddMonitor 0x[0-9a-f]+') })
+                if ($cleaned.Count -ne 1) { throw ('No unique current-chain cleanup after its last successful frame: ' + $phase.name) }
+                [void]($cleaned[0].message -match 'IddMonitor 0x([0-9a-f]+)')
+                $monitor = '0x0*' + ([Convert]::ToUInt64($Matches[1],16)).ToString('x')
+                $deleted = @($phaseRecords | Where-Object { $_.tid -eq $worker -and $_.line -gt $cleaned[0].line -and $_.message -match ('IddSwapChain ' + $chain + ' deleted,.*IddMonitor ' + $monitor + '(?:\s|$)') })
+                if ($deleted.Count -ne 1) { throw ('Current chain was not deleted by its worker: ' + $phase.name) }
+                $monitorGone = @($phaseRecords | Where-Object { $_.line -gt $deleted[0].line -and $_.message -match ('IddMonitor ' + $monitor + ' deleted,') })
+                if ($monitorGone.Count -ne 1) { throw ('The same monitor was not deleted after its current chain: ' + $phase.name) }
+                $departure = @($phaseRecords | Where-Object { $_.tid -eq $monitorGone[0].tid -and $_.line -gt $monitorGone[0].line -and $_.message -match 'IddCxImplMonitorDeparture: Exit,\s*status=STATUS_SUCCESS(?:\s|$)' })
+                if ($departure.Count -ne 1) { throw ('No same-thread successful monitor departure after its deletion: ' + $phase.name) }
+                $unassignCall = $null; $unassignReturn = $null
+                if ($phase.name -eq 'deactivate') {
+                    $calls = @($phaseRecords | Where-Object { $_.tid -ne $worker -and $_.line -gt $finished[-1].line -and $_.line -lt $cleaned[0].line -and $_.message -match ('Calling EvtIddCxMonitorUnassignSwapChain DDI, IddMonitor ' + $monitor + '(?:\s|$)') })
+                    if ($calls.Count -ne 1) { throw 'No OS Unassign callback encloses the current stable chain cleanup' }
+                    $returns = @($phaseRecords | Where-Object { $_.tid -eq $calls[0].tid -and $_.line -gt $deleted[0].line -and $_.line -lt $departure[0].line -and $_.message -match '(?:Return successfully from EvtIddCxMonitorUnassignSwapChain DDI(?:\s|$)|Return from EvtIddCxMonitorUnassignSwapChain DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))' })
+                    if ($returns.Count -ne 1) { throw 'No successful OS Unassign return after its current chain deletion' }
+                    $unassignCall = $calls[0].line; $unassignReturn = $returns[0].line
                 }
-                if ($unassign -lt 0 -or $departure -le $unassign) { throw ('No successful unassign before departure: ' + $phase.name) }
-                if ($departure + 1 -lt $phaseLines.Count -and @($phaseLines[($departure+1)..($phaseLines.Count-1)] -match 'SwapChainFinishedProcessingFrame').Count -ne 0) { throw ('Frame DDI continued after monitor departure: ' + $phase.name) }
-                $proof += [ordered]@{ phase=$phase.name; successful_finished_frame_ddis=$phaseTimes.Count; span_seconds=($phaseTimes[-1]-$phaseTimes[0]).TotalSeconds; unassign_line=$unassign+1; departure_line=$departure+1 }
+                $proof += [ordered]@{ phase=$phase.name; host_pid=$hostPids[0]; worker_tid=$worker; chain=('0x'+$chains[0].ToString('x')); successful_finished_frame_ddis=$finished.Count; span_seconds=($finished[-1].time-$finished[0].time).TotalSeconds; last_finish_line=$finished[-1].line; cleanup_line=$cleaned[0].line; chain_delete_line=$deleted[0].line; unassign_call_line=$unassignCall; unassign_return_line=$unassignReturn; departure_line=$departure[0].line }
             }
             foreach ($file in @('System.events.xml','Application.events.xml','Microsoft-Windows-DriverFrameworks-UserMode-Operational.events.xml')) {
                 $path = Join-Path $OutputDirectory $file

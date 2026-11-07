@@ -48,6 +48,7 @@ HRESULT ConsumeFrames(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
 
     while (!Stopping(stopEvent, adapter)) {
         Microsoft::WRL::ComPtr<IDXGIResource> surface;
+        UINT frameNumber = 0;
         if (IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2)) {
             IDARG_IN_RELEASEANDACQUIREBUFFER2 input = {};
             input.Size = sizeof(input);
@@ -55,12 +56,14 @@ HRESULT ConsumeFrames(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
             result = IddCxSwapChainReleaseAndAcquireBuffer2(chain, &input, &output);
             if (SUCCEEDED(result)) {
                 surface.Attach(output.MetaData.pSurface);
+                frameNumber = output.MetaData.PresentationFrameNumber;
             }
         } else {
             IDARG_OUT_RELEASEANDACQUIREBUFFER output = {};
             result = IddCxSwapChainReleaseAndAcquireBuffer(chain, &output);
             if (SUCCEEDED(result)) {
                 surface.Attach(output.MetaData.pSurface);
+                frameNumber = output.MetaData.PresentationFrameNumber;
             }
         }
         if (result == E_PENDING) {
@@ -75,8 +78,15 @@ HRESULT ConsumeFrames(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
             }
             Fatal(adapter, WaitFailure);
         }
-        if (FAILED(result) || Stopping(stopEvent, adapter)) {
+        if (FAILED(result)) {
             return result;
+        }
+        LARGE_INTEGER acquired{};
+        if (!QueryPerformanceCounter(&acquired)) {
+            return E_FAIL;
+        }
+        if (Stopping(stopEvent, adapter)) {
+            return S_OK;
         }
         surface.Reset();
         if (Stopping(stopEvent, adapter)) {
@@ -85,6 +95,17 @@ HRESULT ConsumeFrames(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
         result = IddCxSwapChainFinishedProcessingFrame(chain);
         if (FAILED(result)) {
             return result;
+        }
+        IDARG_IN_REPORTFRAMESTATISTICS report{};
+        report.FrameStatistics.Size = sizeof(report.FrameStatistics);
+        report.FrameStatistics.PresentationFrameNumber = frameNumber;
+        // This local sink discards frames; it neither encodes nor transmits them.
+        report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_DROPPED;
+        report.FrameStatistics.FrameSliceTotal = 1;
+        report.FrameStatistics.FrameAcquireQpcTime = static_cast<UINT64>(acquired.QuadPart);
+        const NTSTATUS status = IddCxSwapChainReportFrameStatistics(chain, &report);
+        if (!NT_SUCCESS(status)) {
+            return HRESULT_FROM_NT(status);
         }
     }
     return S_OK;
