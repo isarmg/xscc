@@ -323,7 +323,7 @@ finally {
             if ($lines -match 'critical|failfast|Throwing error') { throw 'IddCx reported a fault during the active smoke; raw trace retained' }
             $parseUtc = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
             foreach ($callback in @('EvtIddCxAdapterCommitModes','EvtIddCxMonitorAssignSwapChain','EvtIddCxMonitorUnassignSwapChain')) {
-                if (@($lines -match ('Return successfully.*' + $callback)).Count -lt 2) { throw ('Missing successful callbacks for both active phases: ' + $callback) }
+                if (@($lines -match ('(?:Return successfully from ' + $callback + ' DDI(?:\s|$)|Return from ' + $callback + ' DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))')).Count -lt 2) { throw ('Missing successful callbacks for both active phases: ' + $callback) }
             }
             $frames = @($lines | Where-Object { $_ -match 'SwapChainFinishedProcessingFrame.*Exit.*(?:status|hr|result)\s*=\s*(?:STATUS_SUCCESS|S_OK|0x0\b|0\b)' })
             $times = @($frames | ForEach-Object { if ($_ -notmatch '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { throw 'Unrecognized WPP timestamp' }; [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc) } | Sort-Object)
@@ -335,7 +335,7 @@ finally {
                 $phaseLines = @($lines | Where-Object { if ($_ -match '::(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})') { $time = [DateTime]::ParseExact($Matches[1],'MM/dd/yyyy-HH:mm:ss.fff',[Globalization.CultureInfo]::InvariantCulture,$parseUtc); $time -ge $phase.began -and $time -le $phase.ended } })
                 $unassign = -1; $departure = -1
                 for ($index = 0; $index -lt $phaseLines.Count; $index++) {
-                    if ($phaseLines[$index] -match 'Return successfully.*EvtIddCxMonitorUnassignSwapChain') { $unassign = $index }
+                    if ($phaseLines[$index] -match '(?:Return successfully from EvtIddCxMonitorUnassignSwapChain DDI(?:\s|$)|Return from EvtIddCxMonitorUnassignSwapChain DDI,\s*status\s*=\s*STATUS_SUCCESS(?:\s|$))') { $unassign = $index }
                     if ($phaseLines[$index] -match 'MonitorDeparture.*Exit.*STATUS_SUCCESS') { $departure = $index }
                 }
                 if ($unassign -lt 0 -or $departure -le $unassign) { throw ('No successful unassign before departure: ' + $phase.name) }

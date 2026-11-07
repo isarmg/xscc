@@ -227,7 +227,7 @@ void Render(const std::wstring& id, const std::filesystem::path& directory, cons
         if (FAILED(result)) { if (!Active(Query(QDC_ONLY_ACTIVE_PATHS), id)) { departed = true; break; } CheckHr(result, "Present producer frame"); }
         ++presents;
         if (presents == 1) {
-            std::ofstream ready(directory / L"ready.tmp"); ready << "active-confirmed\n"; ready.close();
+            std::ofstream ready(directory / L"ready.tmp", std::ios::binary); ready << "active-confirmed\n"; ready.close();
             if (!ready || !MoveFileExW((directory / L"ready.tmp").c_str(), (directory / L"active-ready.txt").c_str(), 0)) throw std::runtime_error("Failed to publish active readiness");
         }
     }
