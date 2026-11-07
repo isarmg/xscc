@@ -6,6 +6,7 @@ on:
       - 'experiments/gpui-validation/**'
       - 'vendor/gpui/**'
       - 'vendor/hwcodec/**'
+      - 'res/vcpkg/ffmpeg/**'
       - 'experiments/shared/**'
       - 'src/gpui*'
       - 'src/gpui_session/**'
@@ -135,6 +136,12 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/vcpkg-binary-cache" | Out-Null
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT/installed"
           if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
+      - name: Test AMF hardware frame ownership without a GPU
+        if: matrix.role == 'host' && !inputs.build_only
+        run: |
+          $env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT/installed/x64-windows-static/lib/pkgconfig"
+          python ./.github/scripts/test-gpui-amf-frame-owner.py --cc "$env:ProgramFiles/LLVM/bin/clang.exe" --pkg-config "$env:VCPKG_ROOT/installed/x64-windows-static/tools/pkgconf/pkgconf.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'AMF CPU ownership regression failed' }
       - name: Save successful native dependency binary archives
         # One writer per matrix; GitHub cache entries are immutable if another run saved first.
         if: matrix.role == 'controller' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
@@ -200,6 +207,9 @@ jobs:
       - name: Test connection modifier ownership
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::input_service::modifier_keys::tests::"
+      - name: Test cursor-only high-refresh pacing
+        if: matrix.role == 'host' && !inputs.build_only
+        run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_service::frame_pacing::tests::"
       - name: Test virtual display protocol and pipelined DXGI readback
         if: matrix.role == 'host' && !inputs.build_only
         run: |
@@ -229,6 +239,7 @@ jobs:
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::configuration::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::topology::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::presentation::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::display_service::session_resolution_cleanup_tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "platform::win_device::install_parameters::tests"
       - name: Test encrypted management handshake and connection-close errors
         if: ${{ !inputs.build_only }}
@@ -353,6 +364,14 @@ jobs:
         env:
           XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER: ${{ inputs.validate_virtual_display_driver }}
         run: ./.github/scripts/test-gpui-host-installer.ps1 -ApprovedDisposableRunner
+      - name: Save disposable-driver diagnostics
+        if: always() && matrix.role == 'host' && inputs.validate_virtual_display_driver && !inputs.build_only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xscc-host-vdd-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/xscc-vdd-diagnostics/driver-check.log
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: xscc-${{ matrix.role }}-${{ inputs.package_version || '1.0.0' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned

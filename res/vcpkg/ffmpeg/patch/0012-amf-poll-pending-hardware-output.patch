@@ -1,0 +1,24 @@
+--- a/libavcodec/amfenc.c
++++ b/libavcodec/amfenc.c
+@@ -658,8 +658,12 @@
+
+     if (!frame->buf[0]) {
+         ret = ff_encode_get_frame(avctx, frame);
+-        if (ret < 0 && ret != AVERROR_EOF)
++        if (ret < 0 && ret != AVERROR_EOF) {
++            if (ret == AVERROR(EAGAIN) && ctx->query_timeout == 0 &&
++                ctx->hwsurfaces_in_queue > 0)
++                goto query_output;
+             return ret;
++        }
+     }
+
+     if (!frame->buf[0]) { // submit drain
+@@ -793,6 +797,7 @@
+     }
+
+
++query_output:
+     do {
+         block_and_wait = 0;
+         // poll data

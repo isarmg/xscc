@@ -3311,6 +3311,11 @@ impl Connection {
             return;
         }
         self.closed = true;
+        #[cfg(windows)]
+        {
+            self.release_mouse_buttons();
+            self.release_pressed_modifiers();
+        }
         // Release on the owning input thread before later privacy/display cleanup can block.
         #[cfg(windows)]
         self.tx_input.send(MessageInput::BlockOff).ok();
@@ -3829,19 +3834,35 @@ pub(crate) fn cleanup_orphaned_virtual_displays() {
 
 #[cfg(windows)]
 pub(crate) fn finish_session_display() -> ResultType<()> {
-    if !virtual_display_manager::session_display_active() {
+    if !virtual_display_manager::session_display_active()
+        && !virtual_display_manager::session_display_cleanup_required()?
+    {
         return Ok(());
     }
+    let started = Instant::now();
+    hbb_common::throttled_log!(
+        Duration::from_secs(1), info, "session_display_cleanup path=host_exit stage=begin"
+    );
     let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))
         .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
+    hbb_common::throttled_log!(
+        Duration::from_secs(1), info,
+        "session_display_cleanup path=host_exit stage=capture_idle elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
     let mut errors = Vec::new();
     if let Err(error) = virtual_display_manager::restore_session_display(&idle) {
         errors.push(format!("restore primary: {error:#}"));
     }
-    display_service::restore_resolutions();
+    display_service::restore_session_resolutions();
     if let Err(error) = virtual_display_manager::reset_all() {
         errors.push(format!("remove temporary displays: {error:#}"));
     }
+    hbb_common::throttled_log!(
+        Duration::from_secs(1), info,
+        "session_display_cleanup path=host_exit stage=end elapsed_ms={} primary_and_removal_success={}",
+        started.elapsed().as_millis(), errors.is_empty()
+    );
     if !errors.is_empty() {
         bail!("{}", errors.join("; "));
     }
@@ -4040,6 +4061,10 @@ mod raii {
             if Self::remote_conn_count() != 0 {
                 return;
             }
+            let started = Instant::now();
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info, "session_display_cleanup path=disconnect stage=begin"
+            );
             let _idle = match video_service::wait_for_capture_idle(Duration::from_secs(5)) {
                 Ok(idle) => idle,
                 Err(error) => {
@@ -4054,11 +4079,22 @@ mod raii {
             if Self::remote_conn_count() != 0 {
                 return;
             }
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "session_display_cleanup path=disconnect stage=capture_idle elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
             if let Err(error) = virtual_display_manager::restore_session_display(&_idle) {
                 log::error!("Virtual display primary restoration failed: {error:#}");
             }
-            display_service::restore_resolutions();
-            if let Err(error) = virtual_display_manager::reset_all() {
+            display_service::restore_session_resolutions();
+            let removal = virtual_display_manager::reset_all();
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "session_display_cleanup path=disconnect stage=removal_end elapsed_ms={} success={}",
+                started.elapsed().as_millis(), removal.is_ok()
+            );
+            if let Err(error) = removal {
                 log::error!("Virtual display session cleanup failed: {error:#}");
             }
         }

@@ -152,9 +152,45 @@ impl EncoderApi for VRamEncoder {
                 _ => bail!("{:?} not supported", self.format),
             }
             Ok(vf)
+        } else if self.amf_pipeline() {
+            Ok(vf)
         } else {
             Err(anyhow!("no valid frame"))
         }
+    }
+
+    #[cfg(windows)]
+    fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
+        if !self.amf_pipeline() {
+            return Ok(None);
+        }
+        let format = self.format;
+        let frames = self
+            .encoder
+            .poll()
+            .map_err(|error| anyhow!("Poll AMD encoded output failed: {error}"))?;
+        if frames.is_empty() {
+            return Ok(None);
+        }
+        let frames = EncodedVideoFrames {
+            frames: frames
+                .drain(..)
+                .map(|frame| EncodedVideoFrame {
+                    data: Bytes::from(frame.data),
+                    pts: frame.pts,
+                    key: frame.key == 1,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut video = VideoFrame::new();
+        match format {
+            DataFormat::H264 => video.set_h264s(frames),
+            DataFormat::H265 => video.set_h265s(frames),
+            _ => bail!("Unsupported pipelined format: {format:?}"),
+        }
+        Ok(Some(video))
     }
 
     fn yuvfmt(&self) -> EncodeYuvFormat {
@@ -291,7 +327,7 @@ impl EncoderApi for VRamEncoder {
     }
 
     fn latency_free(&self) -> bool {
-        true
+        !self.amf_pipeline()
     }
 
     fn is_hardware(&self) -> bool {
@@ -304,6 +340,12 @@ impl EncoderApi for VRamEncoder {
 }
 
 impl VRamEncoder {
+    fn amf_pipeline(&self) -> bool {
+        self.ctx.f.driver == Driver::FFMPEG
+            && self.ctx.f.vendor == Driver::AMF
+            && self.streaming_fps.is_some_and(|fps| fps > 60)
+    }
+
     fn create(cfg: EncoderCfg, _i444: bool, streaming_fps: Option<u32>) -> ResultType<Self> {
         match cfg {
             EncoderCfg::VRAM(config) => {
@@ -409,12 +451,14 @@ impl VRamEncoder {
     }
 
     pub fn encode(&mut self, texture: *mut c_void, ms: i64) -> ResultType<Vec<EncodeFrame>> {
+        let amf_pipeline = self.amf_pipeline();
         match self.encoder.encode(texture, ms) {
             Ok(v) => {
                 let mut data = Vec::<EncodeFrame>::new();
                 data.append(v);
                 Ok(data)
             }
+            Err(error) if amf_pipeline => bail!("AMD pipeline encode failed: {error}"),
             Err(_) => Ok(Vec::<EncodeFrame>::new()),
         }
     }

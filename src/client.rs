@@ -976,6 +976,28 @@ impl VideoHandler {
         }
     }
 
+    #[cfg(all(
+        target_os = "android",
+        feature = "mediacodec",
+        feature = "gpui-session"
+    ))]
+    fn report_android_video_decoded<T: InvokeUiSession>(
+        &mut self,
+        ui: &T,
+        display: usize,
+        produced_image: bool,
+        elapsed: Duration,
+    ) -> Option<usize> {
+        let outputs = self.decoder.take_mediacodec_output_count();
+        match outputs {
+            Some(frames) if frames > 0 => ui.on_mediacodec_decoded(display, frames, elapsed),
+            Some(_) => {}
+            None if produced_image => ui.on_video_decoded(display, elapsed),
+            None => {}
+        }
+        outputs
+    }
+
     /// Reset the decoder, change format if it is Some
     pub fn reset(&mut self, format: Option<CodecFormat>) {
         log::info!(
@@ -2011,13 +2033,121 @@ pub fn start_video_thread<F, T>(
         #[cfg(windows)]
         base::platform::windows::start_cpu_performance_monitor();
         get_hwcodec_config();
-        let mut video_handler = None;
+        let mut video_handler: Option<VideoHandler> = None;
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
         let mut last_presented: Option<std::time::Instant> = None;
         loop {
-            if let Ok(data) = video_receiver.recv() {
+            #[cfg(feature = "mediacodec")]
+            let message = match video_handler.as_mut() {
+                Some(handler) if handler.decoder.has_pending_mediacodec_output() => {
+                    match video_receiver.recv_timeout(Duration::from_millis(4)) {
+                        Ok(data) => Ok(data),
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // A static desktop still needs the last asynchronous decoded frame.
+                            let started = std::time::Instant::now();
+                            let output_result =
+                                handler.decoder.poll_mediacodec_output(&mut handler.rgb);
+                            #[cfg(all(target_os = "android", feature = "gpui-session"))]
+                            let decoded_outputs = {
+                                let elapsed = started.elapsed();
+                                let outputs = handler.report_android_video_decoded(
+                                    &session.ui_handler,
+                                    display,
+                                    output_result.as_ref().is_ok_and(|produced| *produced),
+                                    elapsed,
+                                );
+                                if let Some(outputs) = outputs.filter(|outputs| *outputs > 0) {
+                                    fps_calculate(
+                                        &mut skip_beginning,
+                                        &fps,
+                                        false,
+                                        elapsed,
+                                        &mut count,
+                                        &mut duration,
+                                        outputs,
+                                    );
+                                }
+                                outputs
+                            };
+                            match output_result {
+                                Ok(true) => {
+                                    handler.fail_counter = 0;
+                                    handler.first_frame = false;
+                                    #[cfg(all(
+                                        feature = "gpui-session",
+                                        not(all(target_os = "android", feature = "mediacodec"))
+                                    ))]
+                                    session
+                                        .ui_handler
+                                        .on_video_decoded(display, started.elapsed());
+                                    let presentation_fps = {
+                                        let lc = session.lc.read().unwrap();
+                                        lc.streaming_enabled().then(|| lc.streaming_target_fps())
+                                    };
+                                    let present = presentation_fps.map_or(true, |fps| {
+                                        presentation::should_present(
+                                            true,
+                                            video_queue.len(),
+                                            last_presented.map(|instant| instant.elapsed()),
+                                            Duration::from_secs_f64(1.0 / fps as f64),
+                                        )
+                                    });
+                                    if present {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            std::ptr::null_mut(),
+                                            true,
+                                        );
+                                        last_presented = Some(std::time::Instant::now());
+                                    }
+                                    #[cfg(all(
+                                        target_os = "android",
+                                        feature = "mediacodec",
+                                        feature = "gpui-session"
+                                    ))]
+                                    let needs_legacy_capacity = decoded_outputs.is_none();
+                                    #[cfg(not(all(
+                                        target_os = "android",
+                                        feature = "mediacodec",
+                                        feature = "gpui-session"
+                                    )))]
+                                    let needs_legacy_capacity = true;
+                                    if needs_legacy_capacity {
+                                        fps_calculate(
+                                            &mut skip_beginning,
+                                            &fps,
+                                            false,
+                                            started.elapsed(),
+                                            &mut count,
+                                            &mut duration,
+                                            1,
+                                        );
+                                    }
+                                }
+                                Ok(false) => {}
+                                Err(error) => {
+                                    hbb_common::throttled_log!(
+                                        Duration::from_secs(1),
+                                        error,
+                                        "Poll MediaCodec output failed: {error:#}"
+                                    );
+                                    handler.reset(None);
+                                    session.refresh_video(display as _);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                _ => video_receiver.recv(),
+            };
+            #[cfg(not(feature = "mediacodec"))]
+            let message = video_receiver.recv();
+            if let Ok(data) = message {
                 match data {
                     MediaData::VideoFrame(_) | MediaData::VideoQueue => {
                         let vf = match data {
@@ -2057,11 +2187,15 @@ pub fn start_video_thread<F, T>(
                                     handler.reset(Some(format));
                                 }
                                 if matches!(format, CodecFormat::H264 | CodecFormat::H265) {
-                                    let size = session.lc.read().unwrap().peer_info.as_ref()
-                                        .and_then(|peer| peer.displays.get(display))
-                                        .map(|display| (display.width, display.height));
+                                    let (size, fps) = {
+                                        let lc = session.lc.read().unwrap();
+                                        let size = lc.peer_info.as_ref()
+                                            .and_then(|peer| peer.displays.get(display))
+                                            .map(|display| (display.width, display.height));
+                                        (size, lc.streaming_target_fps())
+                                    };
                                     let (width, height) = size.ok_or_else(|| anyhow!("Missing remote display size"))?;
-                                    if let Err(error) = handler.decoder.set_video_size(width, height) {
+                                    if let Err(error) = handler.decoder.set_video_size(width, height, fps) {
                                         handler.fail_counter = MAX_DECODE_FAIL_COUNTER;
                                         return Err(error);
                                     }
@@ -2070,9 +2204,38 @@ pub fn start_video_thread<F, T>(
                             })();
                             #[cfg(not(feature = "mediacodec"))]
                             let frame_result = handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma);
+                            #[cfg(all(
+                                target_os = "android",
+                                feature = "mediacodec",
+                                feature = "gpui-session"
+                            ))]
+                            let decoded_outputs = {
+                                let elapsed = start.elapsed();
+                                let outputs = handler.report_android_video_decoded(
+                                    &session.ui_handler,
+                                    display,
+                                    frame_result.as_ref().is_ok_and(|produced| *produced),
+                                    elapsed,
+                                );
+                                if let Some(outputs) = outputs {
+                                    fps_calculate(
+                                        &mut skip_beginning,
+                                        &fps,
+                                        format_changed,
+                                        elapsed,
+                                        &mut count,
+                                        &mut duration,
+                                        outputs,
+                                    );
+                                }
+                                outputs
+                            };
                             match frame_result {
                                 Ok(true) => {
-                                    #[cfg(feature = "gpui-session")]
+                                    #[cfg(all(
+                                        feature = "gpui-session",
+                                        not(all(target_os = "android", feature = "mediacodec"))
+                                    ))]
                                     session
                                         .ui_handler
                                         .on_video_decoded(display, start.elapsed());
@@ -2105,14 +2268,29 @@ pub fn start_video_thread<F, T>(
                                     }
 
                                     // fps calculation
-                                    fps_calculate(
-                                        &mut skip_beginning,
-                                        &fps,
-                                        format_changed,
-                                        start.elapsed(),
-                                        &mut count,
-                                        &mut duration,
-                                    );
+                                    #[cfg(all(
+                                        target_os = "android",
+                                        feature = "mediacodec",
+                                        feature = "gpui-session"
+                                    ))]
+                                    let needs_legacy_capacity = decoded_outputs.is_none();
+                                    #[cfg(not(all(
+                                        target_os = "android",
+                                        feature = "mediacodec",
+                                        feature = "gpui-session"
+                                    )))]
+                                    let needs_legacy_capacity = true;
+                                    if needs_legacy_capacity {
+                                        fps_calculate(
+                                            &mut skip_beginning,
+                                            &fps,
+                                            format_changed,
+                                            start.elapsed(),
+                                            &mut count,
+                                            &mut duration,
+                                            1,
+                                        );
+                                    }
                                 }
                                 Err(e) => {
                                     // This is a simple workaround.
@@ -2213,6 +2391,7 @@ fn fps_calculate(
     elapsed: std::time::Duration,
     count: &mut usize,
     duration: &mut std::time::Duration,
+    frames: usize,
 ) {
     if format_changed {
         *count = 0;
@@ -2221,19 +2400,111 @@ fn fps_calculate(
     }
     // // The first frame will be very slow
     if *skip_beginning < 3 {
-        *skip_beginning += 1;
+        *skip_beginning += frames;
         return;
     }
     *duration += elapsed;
-    *count += 1;
+    let previous = *count;
+    *count += frames;
     let ms = duration.as_millis();
-    if *count % 10 == 0 && ms > 0 {
+    if *count / 10 > previous / 10 && ms > 0 {
         *fps.write().unwrap() = Some((*count as usize) * 1000 / (ms as usize));
     }
     // Clear to get real-time fps
     if *count >= 30 {
         *count = 0;
         *duration = Duration::ZERO;
+    }
+}
+
+#[cfg(test)]
+mod mediacodec_capacity_tests {
+    use super::fps_calculate;
+    use std::{
+        sync::{Arc, RwLock},
+        time::Duration,
+    };
+
+    #[test]
+    fn batched_outputs_report_the_actual_decode_capacity() {
+        let fps = Arc::new(RwLock::new(None));
+        let (mut warmup, mut count, mut duration) = (3, 0, Duration::ZERO);
+        fps_calculate(
+            &mut warmup,
+            &fps,
+            false,
+            Duration::from_millis(60),
+            &mut count,
+            &mut duration,
+            12,
+        );
+        assert_eq!(*fps.read().unwrap(), Some(200));
+        fps_calculate(
+            &mut warmup,
+            &fps,
+            false,
+            Duration::from_millis(90),
+            &mut count,
+            &mut duration,
+            18,
+        );
+        assert_eq!(*fps.read().unwrap(), Some(200));
+        assert_eq!((count, duration), (0, Duration::ZERO));
+    }
+
+    #[test]
+    fn empty_input_submission_counts_work_without_inventing_frames() {
+        let fps = Arc::new(RwLock::new(None));
+        let (mut warmup, mut count, mut duration) = (3, 0, Duration::ZERO);
+        fps_calculate(
+            &mut warmup,
+            &fps,
+            false,
+            Duration::from_millis(50),
+            &mut count,
+            &mut duration,
+            0,
+        );
+        assert_eq!(*fps.read().unwrap(), None);
+        fps_calculate(
+            &mut warmup,
+            &fps,
+            false,
+            Duration::from_millis(50),
+            &mut count,
+            &mut duration,
+            10,
+        );
+        assert_eq!(*fps.read().unwrap(), Some(100));
+    }
+
+    #[test]
+    fn single_output_capacity_keeps_the_existing_warmup() {
+        let fps = Arc::new(RwLock::new(None));
+        let (mut warmup, mut count, mut duration) = (0, 0, Duration::ZERO);
+        for _ in 0..3 {
+            fps_calculate(
+                &mut warmup,
+                &fps,
+                false,
+                Duration::from_millis(100),
+                &mut count,
+                &mut duration,
+                1,
+            );
+        }
+        for _ in 0..10 {
+            fps_calculate(
+                &mut warmup,
+                &fps,
+                false,
+                Duration::from_millis(5),
+                &mut count,
+                &mut duration,
+                1,
+            );
+        }
+        assert_eq!(*fps.read().unwrap(), Some(200));
     }
 }
 

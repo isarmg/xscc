@@ -1,11 +1,13 @@
 package org.xscc.gpui;
 
-import android.app.Activity;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Looper;
 import android.util.Log;
 import android.view.Display;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
@@ -16,11 +18,11 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
 /** A reversible presentation request, separate from the Activity's text input. */
-public final class RemoteSessionPresentation {
-    private final Activity activity;
+public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
+    private final AndroidImeBridge activity;
     private Snapshot original;
 
-    public RemoteSessionPresentation(Activity activity) {
+    public RemoteSessionPresentation(AndroidImeBridge activity) {
         this.activity = activity;
     }
 
@@ -38,7 +40,10 @@ public final class RemoteSessionPresentation {
         try {
             original = new Snapshot(activity);
             activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            requestHighRefreshRate(activity.getWindow());
+            if (original.surfaceHolder != null) {
+                original.surfaceHolder.addCallback(this);
+            }
+            requestHighRefreshRate();
             activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
             WindowInsetsControllerCompat controller = original.controller;
             controller.setSystemBarsBehavior(
@@ -51,7 +56,11 @@ public final class RemoteSessionPresentation {
         }
     }
 
-    private static void requestHighRefreshRate(Window window) {
+    private void requestHighRefreshRate() {
+        if (original == null) {
+            return;
+        }
+        Window window = activity.getWindow();
         try {
             Display display = window.getDecorView().getDisplay();
             if (display == null) {
@@ -59,22 +68,47 @@ public final class RemoteSessionPresentation {
                 return;
             }
             Display.Mode current = display.getMode();
-            float refreshRate = current.getRefreshRate();
+            Display.Mode preferred = current;
             for (Display.Mode mode : display.getSupportedModes()) {
                 if (mode.getPhysicalWidth() == current.getPhysicalWidth()
                         && mode.getPhysicalHeight() == current.getPhysicalHeight()
-                        && mode.getRefreshRate() > refreshRate) {
-                    refreshRate = mode.getRefreshRate();
+                        && mode.getRefreshRate() > preferred.getRefreshRate()) {
+                    preferred = mode;
                 }
             }
             WindowManager.LayoutParams attributes = window.getAttributes();
-            // A mode ID takes precedence over the rate-only hint.
-            attributes.preferredDisplayModeId = 0;
+            float refreshRate = preferred.getRefreshRate();
+            attributes.preferredDisplayModeId = preferred.getModeId();
             attributes.preferredRefreshRate = refreshRate;
             window.setAttributes(attributes);
+            setSurfaceFrameRate(original.surfaceHolder, refreshRate);
         } catch (RuntimeException error) {
             Log.w("GPUI", "Cannot request remote session refresh rate", error);
         }
+    }
+
+    private static void setSurfaceFrameRate(SurfaceHolder holder, float refreshRate) {
+        if (Build.VERSION.SDK_INT >= 30 && holder != null) {
+            Surface surface = holder.getSurface();
+            if (surface.isValid()) {
+                surface.setFrameRate(refreshRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+            }
+        }
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        requestHighRefreshRate();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        requestHighRefreshRate();
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // A destroyed surface has no frame-rate vote to clear.
     }
 
     @SuppressWarnings("deprecation") // API29 keeps its original decor visibility flags.
@@ -84,6 +118,15 @@ public final class RemoteSessionPresentation {
             return;
         }
         boolean restored = true;
+        try {
+            if (saved.surfaceHolder != null) {
+                saved.surfaceHolder.removeCallback(this);
+            }
+            setSurfaceFrameRate(saved.surfaceHolder, 0);
+        } catch (RuntimeException error) {
+            restored = false;
+            Log.w("GPUI", "Cannot clear session surface refresh preference", error);
+        }
         try {
             activity.setRequestedOrientation(saved.orientation);
         } catch (RuntimeException error) {
@@ -132,6 +175,7 @@ public final class RemoteSessionPresentation {
     }
 
     private static final class Snapshot {
+        final SurfaceHolder surfaceHolder;
         final int orientation;
         final boolean keepScreenOn;
         final int preferredDisplayModeId;
@@ -143,7 +187,9 @@ public final class RemoteSessionPresentation {
         final WindowInsetsControllerCompat controller;
 
         @SuppressWarnings("deprecation")
-        Snapshot(Activity activity) {
+        Snapshot(AndroidImeBridge activity) {
+            SurfaceView surface = activity.remoteSessionSurfaceView();
+            surfaceHolder = surface != null ? surface.getHolder() : null;
             orientation = activity.getRequestedOrientation();
             Window window = activity.getWindow();
             WindowManager.LayoutParams attributes = window.getAttributes();

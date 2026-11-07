@@ -102,6 +102,7 @@ struct MediaQueues {
     recovering: HashMap<usize, u64>,
     last_refresh: Option<Instant>,
     progress: u64,
+    dropped_video_messages: u64,
     closed: bool,
 }
 
@@ -189,6 +190,7 @@ impl VideoWriter {
             queues.audio.push_back(packet);
         } else if let Some((display, key)) = packet_video(&packet) {
             if queues.recovering.contains_key(&display) && !key {
+                queues.dropped_video_messages += 1;
                 discard_media(packet);
                 return Ok(());
             }
@@ -201,6 +203,7 @@ impl VideoWriter {
                 }
                 let progress = queues.progress;
                 queues.recovering.entry(display).or_insert(progress);
+                queues.dropped_video_messages += 1;
                 discard_media(packet);
                 drop(queues);
                 self.refresh.notify_one();
@@ -535,6 +538,11 @@ fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -
     let writer_timeout = send_timeout.clone();
     let task = tokio::spawn(async move {
         let receiver = media_receiver;
+        let stats_started = Instant::now();
+        let mut last_stats = stats_started;
+        let mut completed_video_messages = 0u64;
+        let mut completed_video_write_us = 0u128;
+        let mut max_completed_video_write_us = 0u128;
         loop {
             let packet = loop {
                 let notified = writer_available.notified();
@@ -567,6 +575,7 @@ fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -
             writer.set_send_timeout(writer_timeout.load(Ordering::Acquire));
             let terminal = matches!(&packet.payload, Payload::Terminal(_))
                 || matches!(&packet.payload, Payload::Message(message) if terminal_message(message));
+            let video_write_started = packet_video(&packet).map(|_| Instant::now());
             let mut result = match packet.payload {
                 Payload::Message(message) | Payload::Terminal(message) => {
                     writer.send(message.as_ref()).await
@@ -578,13 +587,33 @@ fn split_transport(reader: FramedStreamReader, mut writer: FramedStreamWriter) -
                 result = writer.close().await.map_err(|error| error.to_string());
             }
             if result.is_ok() {
-                let recovering = {
+                if let Some(started) = video_write_started {
+                    let elapsed_us = started.elapsed().as_micros();
+                    completed_video_messages += 1;
+                    completed_video_write_us += elapsed_us;
+                    max_completed_video_write_us = max_completed_video_write_us.max(elapsed_us);
+                }
+                let (recovering, dropped_video_messages) = {
                     let mut queues = receiver.queues.lock().unwrap();
                     queues.progress = queues.progress.wrapping_add(1);
-                    !queues.recovering.is_empty()
+                    (!queues.recovering.is_empty(), queues.dropped_video_messages)
                 };
                 if recovering {
                     receiver.refresh.notify_one();
+                }
+                let now = Instant::now();
+                if now.duration_since(last_stats) >= Duration::from_secs(1) {
+                    last_stats = now;
+                    // Cumulative message/batch counts, not frames or peer acknowledgements.
+                    // Includes serialization/encryption/sink time; a blocked sink emits no sample.
+                    hbb_common::log::info!(
+                        "video_writer_local_sink {{\"schema\":1,\"elapsed_ms\":{},\"completed_video_messages\":{},\"dropped_video_messages\":{},\"completed_video_message_write_us_total\":{},\"completed_video_message_write_us_max\":{}}}",
+                        now.duration_since(stats_started).as_millis(),
+                        completed_video_messages,
+                        dropped_video_messages,
+                        completed_video_write_us,
+                        max_completed_video_write_us,
+                    );
                 }
             }
             if let Some(completed) = packet.completed {

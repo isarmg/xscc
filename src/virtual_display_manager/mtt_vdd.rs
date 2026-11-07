@@ -6,7 +6,7 @@ mod presentation;
 mod profile;
 #[path = "mtt_vdd/topology.rs"]
 mod topology;
-pub(super) use configuration::{configure, prepare, state};
+pub(super) use configuration::{cleanup_required_at_exit, configure, prepare, state};
 pub(crate) use presentation::PersistentDisplayChangeGuard;
 
 use super::windows;
@@ -517,23 +517,70 @@ fn configure_count(count: u32, requested: &[virtual_display::MonitorMode]) -> Re
 }
 
 fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
+    let started = Instant::now();
+    let bundle = verified_bundle()?;
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "vdd_config operation={started:?} count={count} stage=bundle_verified elapsed_ms={}",
+        started.elapsed().as_millis()
+    );
+    configure_count_modes_with_verified_bundle(&bundle, count, requested, started)
+}
+
+fn configure_count_modes_with_verified_bundle(
+    bundle: &Path,
+    count: u32,
+    requested: &[Mode],
+    started: Instant,
+) -> ResultType<()> {
     for mode in requested {
         mode.validate_driver_arithmetic().map_err(anyhow::Error::msg)?;
     }
-    let bundle = verified_bundle()?;
     let present = device()?.is_some();
     let enabled = present && problem()? != CM_PROB_DISABLED;
     let previous_count = configuration::present_count()?;
     let registered = registered_path()?;
-    let folder = owned_folder(&bundle, present)?;
+    let folder = owned_folder(bundle, present)?;
     let path = folder.join("vdd_settings.xml");
     if count == 0 {
         // A failed removal must never restart an adapter that is being removed.
         if enabled {
-            change_device(DICS_DISABLE)?;
+            let device_started = Instant::now();
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_begin state={DICS_DISABLE} elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
+            let result = change_device(DICS_DISABLE);
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_end elapsed_ms={} stage_ms={} success={}",
+                started.elapsed().as_millis(), device_started.elapsed().as_millis(), result.is_ok()
+            );
+            result?;
+        } else {
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count=0 stage=device_call_skipped reason=adapter_not_enabled elapsed_ms={}",
+                started.elapsed().as_millis()
+            );
         }
-        return wait_for_count(0);
+        let wait_started = Instant::now();
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count=0 stage=wait_count_begin elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        let result = wait_for_count(0);
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count=0 stage=wait_count_end elapsed_ms={} stage_ms={} success={}",
+            started.elapsed().as_millis(), wait_started.elapsed().as_millis(), result.is_ok()
+        );
+        return result;
     }
+    let profile_started = Instant::now();
     let previous = if path.exists() {
         Some(bounded(&path, 1024 * 1024)?)
     } else {
@@ -550,7 +597,13 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
         // Preserve physical capabilities, but do not newly import unsafe VDD entries.
         modes.retain(|mode| mode.validate_driver_arithmetic().is_ok());
         modes.extend(requested.iter().copied());
-        Some(profile.render(count, modes).map_err(anyhow::Error::msg)?)
+        let xml = profile.render(count, modes).map_err(anyhow::Error::msg)?;
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count={count} stage=profile_ready elapsed_ms={} stage_ms={} xml_bytes={}",
+            started.elapsed().as_millis(), profile_started.elapsed().as_millis(), xml.len()
+        );
+        Some(xml)
     } else {
         None
     };
@@ -567,10 +620,16 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
     }
     let apply = (|| -> ResultType<()> {
         if let Some(xml) = xml {
+            let write_started = Instant::now();
             write_profile(&path, &xml)?;
             let (key, _) = RegKey::predef(HKEY_LOCAL_MACHINE)
                 .create_subkey_with_flags(REGISTRY, KEY_READ | KEY_WRITE)?;
             key.set_value("VDDPATH", &ordinary_path(&folder))?;
+            hbb_common::throttled_log!(
+                Duration::from_secs(1), info,
+                "vdd_config operation={started:?} count={count} stage=profile_written elapsed_ms={} stage_ms={}",
+                started.elapsed().as_millis(), write_started.elapsed().as_millis()
+            );
             if !present {
                 let mut reboot = false;
                 unsafe {
@@ -587,12 +646,38 @@ fn configure_count_modes(count: u32, requested: &[Mode]) -> ResultType<()> {
                 }
             }
             if present {
-                change_device(profile_activation_state(enabled))?;
+                let state = profile_activation_state(enabled);
+                let device_started = Instant::now();
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1), info,
+                    "vdd_config operation={started:?} count={count} stage=device_call_begin state={state} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                let result = change_device(state);
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1), info,
+                    "vdd_config operation={started:?} count={count} stage=device_call_end elapsed_ms={} stage_ms={} success={}",
+                    started.elapsed().as_millis(), device_started.elapsed().as_millis(), result.is_ok()
+                );
+                result?;
             }
         } else if present {
             change_device(DICS_DISABLE)?;
         }
-        wait_for_count(count as usize)
+        let wait_started = Instant::now();
+        hbb_common::throttled_log!(
+            Duration::from_secs(1),
+            info,
+            "vdd_config operation={started:?} count={count} stage=wait_count_begin elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
+        let result = wait_for_count(count as usize);
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "vdd_config operation={started:?} count={count} stage=wait_count_end elapsed_ms={} stage_ms={} success={}",
+            started.elapsed().as_millis(), wait_started.elapsed().as_millis(), result.is_ok()
+        );
+        result
     })();
     if let Err(cause) = apply {
         // An adapter registered by this attempt stays disabled on failure. Keep

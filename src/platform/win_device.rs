@@ -120,6 +120,7 @@ pub unsafe fn install_driver(
         .encode_wide()
         .chain(Some(0).into_iter())
         .collect::<Vec<u16>>();
+    let install_flags = install_parameters::install_flags(hardware_id);
     let hardware_id = install_parameters::hardware_id_multi_sz(hardware_id);
 
     let mut class_guid: GUID = std::mem::zeroed();
@@ -179,7 +180,7 @@ pub unsafe fn install_driver(
         null_mut(),
         hardware_id.as_ptr(),
         driver_inf_path.as_ptr(),
-        1,
+        install_flags,
         &mut reboot_required_,
     ) == FALSE
     {

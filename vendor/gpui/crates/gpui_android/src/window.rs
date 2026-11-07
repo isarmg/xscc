@@ -180,6 +180,9 @@ impl WindowState {
     }
     pub fn set_visible(&self, visible: bool) {
         if self.visible.replace(visible) != visible {
+            if visible {
+                self.presentation.reapply();
+            }
             self.visibility_changed.with(|f| {
                 f(if visible {
                     WindowVisibility::Visible

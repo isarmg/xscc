@@ -1,11 +1,14 @@
-use hbb_common::{anyhow::Error, bail, log, ResultType};
+use hbb_common::{
+    anyhow::{Context, Error},
+    bail, log, ResultType,
+};
 use ndk::media::{
     media_codec::{MediaCodec, MediaCodecDirection, MediaFormat},
     NdkMediaError,
 };
 use std::{
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -22,7 +25,9 @@ pub static H265_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
 pub struct MediaCodecDecoder {
     decoder: MediaCodec,
     mime: &'static str,
-    size: Option<(i32, i32)>,
+    configuration: Option<(i32, i32, i32)>,
+    pending_output: usize,
+    decoded_outputs: usize,
 }
 
 impl MediaCodecDecoder {
@@ -42,57 +47,109 @@ impl MediaCodecDecoder {
                 return Some(Self {
                     decoder,
                     mime,
-                    size: None,
+                    configuration: None,
+                    pending_output: 0,
+                    decoded_outputs: 0,
                 });
             }
         }
         None
     }
 
-    pub fn set_video_size(&mut self, width: i32, height: i32) -> ResultType<()> {
+    pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
         if width <= 0 || height <= 0 {
             bail!("Invalid MediaCodec input dimensions: {width}x{height}");
         }
-        if self.size == Some((width, height)) {
-            return Ok(());
+        if !(1..=base::session_protocol::MAX_SESSION_FPS as i32).contains(&fps) {
+            bail!("Invalid MediaCodec frame rate: {fps}");
         }
-        if self.size.take().is_some() {
+        if let Some((old_width, old_height, old_fps)) = self.configuration {
+            if (old_width, old_height) == (width, height) {
+                if old_fps != fps {
+                    // Keep parameter sets and queued frames when only the rate changes.
+                    let parameters = MediaFormat::new();
+                    parameters.set_f32("operating-rate", fps as f32);
+                    self.decoder.set_parameters(parameters).with_context(|| {
+                        format!("Update MediaCodec operating rate to {fps} fps")
+                    })?;
+                    self.configuration = Some((width, height, fps));
+                }
+                return Ok(());
+            }
+        }
+        if self.configuration.take().is_some() {
             self.decoder.stop()?;
         }
+        self.pending_output = 0;
+        self.decoded_outputs = 0;
         let format = MediaFormat::new();
         format.set_str("mime", self.mime);
         format.set_i32("width", width);
         format.set_i32("height", height);
         format.set_i32("color-format", COLOR_YUV420_SEMIPLANAR);
+        format.set_i32("frame-rate", fps);
+        format.set_f32("operating-rate", fps as f32);
+        format.set_i32("priority", 0);
+        format.set_i32("low-latency", 1);
         self.decoder
-            .configure(&format, None, MediaCodecDirection::Decoder)?;
+            .configure(&format, None, MediaCodecDirection::Decoder)
+            .with_context(|| {
+                format!("Configure realtime MediaCodec {width}x{height} at {fps} fps")
+            })?;
         self.decoder.start()?;
-        self.size = Some((width, height));
+        self.configuration = Some((width, height, fps));
         Ok(())
     }
 
     pub fn decode(&mut self, data: &[u8], rgb: &mut ImageRgb) -> ResultType<bool> {
-        if self.size.is_none() {
+        if self.configuration.is_none() {
             bail!("MediaCodec input dimensions are not configured");
         }
-        let decoder = &self.decoder;
-        let Some(mut input) = decoder.dequeue_input_buffer(Duration::from_millis(100))? else {
-            bail!("No MediaCodec input buffer available");
-        };
-        if data.len() > input.buffer_mut().len() {
-            decoder.queue_input_buffer(input, 0, 0, 0, 0)?;
-            bail!("Encoded frame exceeds the MediaCodec input buffer");
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let mut decoded = self.poll_output(rgb)?;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // Keep this packet borrowed until it is queued; input backpressure is not consumption.
+            let queued = if let Some(mut input) = self
+                .decoder
+                .dequeue_input_buffer(remaining.min(Duration::from_millis(1)))?
+            {
+                if data.len() > input.buffer_mut().len() {
+                    self.decoder.queue_input_buffer(input, 0, 0, 0, 0)?;
+                    bail!("Encoded frame exceeds the MediaCodec input buffer");
+                }
+                input.buffer_mut()[..data.len()].copy_from_slice(data);
+                self.decoder
+                    .queue_input_buffer(input, 0, data.len(), 0, 0)?;
+                true
+            } else {
+                false
+            };
+            if queued {
+                self.pending_output += 1;
+                decoded |= self.poll_output(rgb)?;
+                return Ok(decoded);
+            }
+            if remaining.is_zero() {
+                bail!("No MediaCodec input buffer available");
+            }
+            decoded |= self.poll_output(rgb)?;
         }
-        input.buffer_mut()[..data.len()].copy_from_slice(data);
-        decoder.queue_input_buffer(input, 0, data.len(), 0, 0)?;
+    }
 
+    pub fn has_pending_output(&self) -> bool {
+        self.pending_output > 0
+    }
+
+    pub fn take_decoded_output_count(&mut self) -> usize {
+        std::mem::take(&mut self.decoded_outputs)
+    }
+
+    pub fn poll_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
+        let decoder = &self.decoder;
         let mut decoded = false;
         loop {
-            let output = match decoder.dequeue_output_buffer(if decoded {
-                Duration::ZERO
-            } else {
-                Duration::from_millis(100)
-            }) {
+            let output = match decoder.dequeue_output_buffer(Duration::ZERO) {
                 Ok(Some(output)) => output,
                 Ok(None) => return Ok(decoded),
                 // ndk 0.7 returns these normal format/buffer notifications as errors.
@@ -103,7 +160,9 @@ impl MediaCodecDecoder {
             };
             let converted = convert_output(&output.format(), output.buffer(), rgb);
             decoder.release_output_buffer(output, false)?;
+            self.pending_output = self.pending_output.saturating_sub(1);
             converted?;
+            self.decoded_outputs = self.decoded_outputs.saturating_add(1);
             decoded = true;
         }
     }
