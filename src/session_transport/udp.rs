@@ -993,6 +993,15 @@ mod tests {
         host.set_key(Key([11; 32]));
         (client, host, listener)
     }
+    fn backpressured_streams() -> (Stream, Stream) {
+        let (client, host) = tokio::io::duplex(8192);
+        let local = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
+        let mut client = Stream::Tcp(FramedStream::from(client, local));
+        let mut host = Stream::Tcp(FramedStream::from(host, local));
+        client.set_key(Key([11; 32]));
+        host.set_key(Key([11; 32]));
+        (client, host)
+    }
     fn video(key: bool, bytes: usize) -> Message {
         let mut video = VideoFrame::new();
         video.set_h264s(EncodedVideoFrames {
@@ -1214,18 +1223,19 @@ mod tests {
         assert!(transport.deliver(frame(1, true)).unwrap().is_none());
     }
     #[tokio::test]
-    async fn blocked_bulk_tcp_does_not_stop_udp_delta_frames() {
+    async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
         let _guard = crate::udp_host::TEST_LISTENER_LOCK.lock().await;
-        let (mut client, host, listener) = streams().await;
-        let _udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+        let (mut client, host) = backpressured_streams();
+        let _udp = udp_host::bind(0).unwrap();
+        let endpoint =
+            std::net::SocketAddr::from(([127, 0, 0, 1], _udp.local_addr().unwrap().port()));
         let mut host: SessionTransport = host.into();
         let offer = host.offer_host().await.unwrap().unwrap();
         let seed = client.udp_media_seed().unwrap().unwrap();
-        let mut pending =
-            crate::client::udp_media::associate(&offer, seed, listener.local_addr().unwrap())
-                .await
-                .unwrap();
-        // Read Ready while retaining the real TCP stream, then deliberately stop reading bulk data.
+        let mut pending = crate::client::udp_media::associate(&offer, seed, endpoint)
+            .await
+            .unwrap();
+        // Retain the encrypted reliable reader without draining its bounded duplex byte stream.
         timeout(Duration::from_secs(3), client.next())
             .await
             .unwrap()
@@ -1243,7 +1253,7 @@ mod tests {
                         let mut message = Message::new();
                         message.set_clipboard(Clipboard { content: vec![7; RELIABLE_BYTES / 2].into(), ..Default::default() });
                         host.send(&message).await.unwrap();
-                        // This audio epoch cannot be ACKed while the earlier bulk TCP message is unread.
+                        // This audio epoch cannot be ACKed while the earlier bulk reliable message is unread.
                         let mut misc = Misc::new(); misc.set_audio_format(AudioFormat { channels: 2, sample_rate: 48_000, ..Default::default() });
                         let mut message = Message::new(); message.set_misc(misc); host.send(&message).await.unwrap();
                         let mut message = Message::new(); message.set_audio_frame(AudioFrame { data: vec![3; 100].into(), ..Default::default() }); host.send(&message).await.unwrap();
@@ -1252,16 +1262,19 @@ mod tests {
                     _ = timer.tick(), if sending => host.send(&video(false, 32 * 1024)).await.unwrap(),
                     _ = finish.recv() => {
                         let SessionTransport::Hybrid(transport) = host else { unreachable!() };
-                        assert!(transport.writer.budget.bytes.load(Ordering::Acquire) >= RELIABLE_BYTES / 2,
-                            "the large real TCP write must still be pending");
-                        assert!(transport.failure.borrow().is_none());
+                        let failure = transport.failure.borrow().clone();
+                        let pending_bytes = transport.writer.budget.bytes.load(Ordering::Acquire);
+                        eprintln!("actual bounded duplex stall capacity=8192 pending_bytes={pending_bytes} failure={failure:?}");
+                        assert!(failure.is_none(), "Reliable/UDP worker failed before pending check: {failure:?}");
+                        assert!(pending_bytes >= RELIABLE_BYTES / 2,
+                            "the large encrypted duplex write must still be pending, pending_bytes={pending_bytes}");
                         return;
                     }
                     bytes = host.next() => { bytes.unwrap().unwrap(); }
                 }
             }
         });
-        // Acknowledge the format generation before exercising TCP backpressure.
+        // Acknowledge the format generation before exercising reliable-write backpressure.
         loop {
             let bytes = timeout(Duration::from_secs(3), client.next())
                 .await
@@ -1355,13 +1368,13 @@ mod tests {
         }).await.unwrap();
         assert!(
             count >= 20,
-            "UDP must advance despite blocked bulk TCP, received {count}"
+            "UDP must advance despite the blocked reliable writer, received {count}"
         );
         assert!(
             retransmitted_key,
             "NACK recovery must advance while new delta frames remain queued"
         );
-        eprintln!("actual blocked TCP bulk_bytes={} UDP_datagrams={count} keyframe_retransmitted={retransmitted_key} unacked_audio_did_not_block_video=true elapsed_ms={}", RELIABLE_BYTES / 2, started.elapsed().as_millis());
+        eprintln!("actual bounded duplex capacity=8192 bulk_bytes={} UDP_datagrams={count} keyframe_retransmitted={retransmitted_key} unacked_audio_did_not_block_video=true elapsed_ms={}", RELIABLE_BYTES / 2, started.elapsed().as_millis());
         stop.send(()).await.unwrap();
         timeout(Duration::from_secs(3), serving)
             .await

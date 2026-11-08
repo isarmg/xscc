@@ -17,8 +17,13 @@ grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$pointer_tests" || { echo
 scroll_tests=$(cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target" input::tests::scroll_position_matches_pointer_coordinates_and_keeps_delta 2>&1) || { printf '%s\n' "$scroll_tests"; exit 1; }
 printf '%s\n' "$scroll_tests"
 grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$scroll_tests" || { echo 'Scroll position regression did not run' >&2; exit 1; }
-# Test the same native role feature set that ships.
-cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
+# Test the same native role feature set that ships. Keep every test enabled.
+if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    # Identify the last native test if the process exits through a signal rather than a Rust panic.
+    RUST_BACKTRACE=1 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" -- --test-threads=1 --nocapture
+else
+    cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
+fi
 modifier_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" server::input_service::modifier_keys::tests:: 2>&1) || { printf '%s\n' "$modifier_tests"; exit 1; }
 printf '%s\n' "$modifier_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$modifier_tests" || { echo 'Modifier ownership regressions did not run all three tests' >&2; exit 1; }
