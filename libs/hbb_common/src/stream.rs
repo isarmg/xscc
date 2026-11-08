@@ -132,15 +132,44 @@ impl Stream {
         }
     }
 
+    pub fn udp_media_seed(&self) -> ResultType<Option<[u8; 32]>> {
+        match self {
+            Self::Tcp(stream) => stream.udp_media_seed(),
+            Self::WebSocket(_) => Ok(None),
+        }
+    }
+
+    pub fn peer_addr(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Tcp(stream) => stream.peer_addr(),
+            Self::WebSocket(_) => None,
+        }
+    }
+
     #[inline]
     pub fn from(stream: TcpStream, stream_addr: SocketAddr) -> Self {
-        Self::Tcp(tcp::FramedStream::from(stream, stream_addr))
+        Self::Tcp(tcp::FramedStream::from_connected(stream, stream_addr))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn udp_media_peer_addr_comes_from_the_connected_tcp_socket() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = Stream::Tcp(tcp::FramedStream::new(address, None, 3000).await.unwrap());
+        let (accepted, _) = listener.accept().await.unwrap();
+        let local = accepted.local_addr().unwrap();
+        let host = Stream::from(accepted, local);
+        assert_eq!(client.peer_addr(), Some(address));
+        assert_eq!(host.peer_addr(), Some(client.local_addr()));
+        assert_eq!(host.local_addr(), address);
+        assert_ne!(host.peer_addr(), Some(host.local_addr()));
+        assert_eq!(client.udp_media_seed().unwrap(), None);
+    }
 
     #[tokio::test]
     async fn test_set_negotiated_key_refuses_unknown_versions() {

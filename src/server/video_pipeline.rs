@@ -407,6 +407,14 @@ impl ConnectionTransport {
         let Self::Legacy(stream) = std::mem::replace(self, Self::Vacant) else {
             return None;
         };
+        #[cfg(feature = "udp-media")]
+        let stream = match stream {
+            SessionTransport::Legacy(stream) => *stream,
+            stream @ (SessionTransport::Hybrid(_) | SessionTransport::Closed) => {
+                *self = Self::Legacy(stream);
+                return None;
+            }
+        };
         #[cfg(feature = "experimental-quic")]
         let stream = match stream {
             SessionTransport::Legacy(stream) => *stream,
@@ -428,6 +436,31 @@ impl ConnectionTransport {
         let handle = transport.writer.clone();
         *self = Self::Split(Box::new(transport));
         Some(handle)
+    }
+
+    #[cfg(feature = "udp-media")]
+    pub(super) fn revoke_media(&mut self) {
+        if let Self::Legacy(stream) = self {
+            stream.revoke_media();
+        }
+    }
+
+    #[cfg(feature = "udp-media")]
+    pub(super) fn set_media_bitrate_limit(&mut self, kbps: u32) -> ResultType<()> {
+        match self {
+            Self::Legacy(stream) => stream.set_media_bitrate_limit(kbps),
+            Self::Split(_) => Ok(()),
+            Self::Vacant => Err(anyhow!("connection transport unavailable")),
+        }
+    }
+
+    #[cfg(feature = "udp-media")]
+    pub(super) async fn offer_udp(&mut self) -> ResultType<Option<base::message_proto::UdpMediaOffer>> {
+        match self {
+            Self::Legacy(stream) => stream.offer_host().await,
+            Self::Split(_) => Ok(None),
+            Self::Vacant => Err(anyhow!("connection transport unavailable")),
+        }
     }
 
     pub(super) fn set_send_timeout(&mut self, milliseconds: u64) {

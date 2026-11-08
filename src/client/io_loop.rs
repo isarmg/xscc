@@ -142,7 +142,7 @@ impl<T: InvokeUiSession> Remote<T> {
         let (result, managed_permit) = match crate::management::connect(
             &self.handler.get_id(), conn_type, self.handler.clone(),
         ).await {
-            Ok((stream, key, kind, permit)) => (Ok((stream, key, kind)), permit),
+            Ok((stream, key, kind, permit)) => (Ok((SessionTransport::from(stream), key, kind)), permit),
             Err(error) => (Err(error), None),
         };
         #[cfg(not(feature = "managed"))]
@@ -161,6 +161,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     .unwrap()
                     .set_connected();
                 let is_secured = peer.is_secured();
+                #[cfg(feature = "udp-media")]
+                let mut reported_protocol = stream_type.to_owned();
                 self.handler
                     .set_connection_type(is_secured, direct, stream_type); // flutter -> connection_ready
                 #[cfg(feature = "managed")]
@@ -198,6 +200,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                         break;
                                     }
                                     Ok(ref bytes) => {
+                                        #[cfg(feature = "udp-media")]
+                                        if reported_protocol != peer.protocol() {
+                                            reported_protocol = peer.protocol().to_owned();
+                                            self.handler.set_connection_type(is_secured, direct, peer.protocol());
+                                        }
                                         last_recv_time = Instant::now();
                                         if !received {
                                             received = true;
@@ -828,6 +835,13 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(login_response::Union::PeerInfo(pi)) => {
+                        #[cfg(feature = "udp-media")]
+                        if let Some(offer) = pi.udp_media.as_ref() {
+                            if let Err(error) = peer.enable_client(offer).await {
+                                self.handler.on_establish_connection_error(format!("UDP media association failed: {error:#}"));
+                                return false;
+                            }
+                        }
                         let peer_version = pi.version.clone();
                         let peer_platform = pi.platform.clone();
                         self.set_peer_info(&pi);
@@ -1755,9 +1769,9 @@ mod ui_send_tests {
         let (local, _stopped_reader) = tokio::io::duplex(64);
         let mut stream = Stream::Tcp(FramedStream::from(local, "127.0.0.1:0".parse().unwrap()));
         stream.set_key(Key([0x43; 32]));
-        #[cfg(feature = "experimental-quic")]
+        #[cfg(any(feature = "experimental-quic", feature = "udp-media"))]
         let mut peer: SessionTransport = stream.into();
-        #[cfg(not(feature = "experimental-quic"))]
+        #[cfg(not(any(feature = "experimental-quic", feature = "udp-media")))]
         let mut peer = stream;
         peer.set_send_timeout(30);
         let (sender, receiver) = mpsc::unbounded_channel();

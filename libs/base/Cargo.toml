@@ -9,6 +9,7 @@ edition = "2018"
 
 [features]
 default = []
+udp-media = []
 experimental-quic = ["dep:quinn", "dep:rustls"]
 # The isolated Wayland socket-probe fallback (src/platform/linux/wayland_probe.rs).
 # Off by default so the base Wayland enumeration is untouched; the DRM login-screen

@@ -68,6 +68,8 @@ def check():
         pending.extend(features.get(feature, ()))
     if 'gpui-session' not in enabled:
         raise ValueError('Cargo defaults must select the native GPUI session')
+    if 'udp-media' not in enabled or 'experimental-quic' in enabled:
+        raise ValueError('Product defaults must use TCP control and UDP media without QUIC')
     legacy = subprocess.run(
         [sys.executable, str(ROOT / 'build.py'), '--flutter', '--dry-run'],
         cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,

@@ -41,6 +41,10 @@ pub mod gpui_host;
 pub mod gpui_management;
 #[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
 mod test_lan;
+#[cfg(all(feature = "udp-media", feature = "experimental-quic"))]
+compile_error!("UDP media and the archived QUIC experiment are mutually exclusive");
+#[cfg(all(feature = "udp-media", not(any(target_os = "android", target_os = "ios"))))]
+mod udp_host;
 mod client;
 pub(crate) mod session_transport;
 #[cfg(all(feature = "experimental-quic", not(any(target_os = "android", target_os = "ios"))))]

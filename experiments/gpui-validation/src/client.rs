@@ -841,6 +841,9 @@ fn session_statistics(state: &VideoState, mode: Statistics) -> String {
     }
     let quality = &state.quality;
     let mut details = Vec::new();
+    if let Some(protocol) = &state.transport {
+        details.push(protocol.clone());
+    }
     if mode == Statistics::Detailed {
         details.push(format!(
             "屏幕 {} · 目标 {} FPS",
@@ -1483,6 +1486,7 @@ mod tests {
             pending_media: None,
             virtual_display_pending: false,
             notice: String::new(),
+            transport: Some("TCP+UDP".into()),
             quality: librustdesk::gpui_session::SessionQuality {
                 received_fps: Some(60),
                 submitted_fps: Some(58),
@@ -1498,6 +1502,7 @@ mod tests {
             },
         };
         let compact = super::session_statistics(&state, super::Statistics::Compact);
+        assert!(compact.starts_with("TCP+UDP · "));
         assert!(compact.contains("接收 60 FPS") && compact.contains("提交 58 FPS"));
         assert!(compact.contains("10.24 Mbps") && compact.contains("12 ms"));
         let detailed = super::session_statistics(&state, super::Statistics::Detailed);

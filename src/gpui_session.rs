@@ -216,6 +216,7 @@ struct Monitors {
 pub enum SessionEvent {
     Connecting,
     Connected,
+    Transport(String),
     Disconnected,
     Error(String),
     Permission {
@@ -1030,7 +1031,9 @@ impl InvokeUiSession for Handler {
             },
         });
     }
-    fn set_connection_type(&self, _: bool, _: bool, _: &str) {}
+    fn set_connection_type(&self, _: bool, _: bool, protocol: &str) {
+        self.event(SessionEvent::Transport(protocol.to_owned()));
+    }
     fn set_fingerprint(&self, _: String) {}
     fn update_block_input_state(&self, _: bool) {}
     fn adapt_size(&self) {}
@@ -1090,6 +1093,16 @@ mod tests {
 
     use super::*;
     use base::message_proto::option_message::BoolOption;
+    #[test]
+    fn connection_type_reports_the_actual_transport() {
+        let handler = Handler::default();
+        for protocol in ["TCP", "TCP+UDP"] {
+            InvokeUiSession::set_connection_type(&handler, true, true, protocol);
+            assert!(matches!(handler.0.drain_events().as_slice(),
+                [SessionEvent::Transport(value)] if value == protocol));
+        }
+    }
+
     #[test]
     fn disconnect_discards_queued_and_late_decoder_frames() {
         let handle = SessionHandle {

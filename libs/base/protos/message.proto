@@ -78,6 +78,29 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  // Media remains on TCP for older peers that do not advertise this capability.
+  bool supports_udp_media = 18;
+}
+
+// Public nonce only. Keys are derived locally from the authenticated TCP session.
+// UDP uses the connected TCP peer's numeric port, including an external NAT port.
+message UdpMediaOffer {
+  uint32 version = 1;
+  bytes session_id = 2;
+  uint32 mtu = 3;
+}
+
+// Small authenticated recovery/configuration messages, carried only by TCP.
+// Media payloads (including reference frames) never use these fields.
+message UdpMediaControl {
+  bytes session_id = 1;
+  oneof union {
+    bool ready = 2;
+    bytes notice = 3;
+    bytes nack = 4;
+    bytes complete = 5;
+    bytes epoch = 6;
+  }
 }
 
 message Terminal {}
@@ -126,6 +149,7 @@ message PeerInfo {
   // NOTE: Only support one-level dictionaries (for peer to update), and the key is of type string.
   string platform_additions = 12;
   WindowsSessions windows_sessions = 13;
+  UdpMediaOffer udp_media = 14;
 }
 
 message WindowsSession {  
@@ -659,6 +683,7 @@ message Misc {
     uint64 request_cursor_data = 39;
     VirtualDisplayConfig virtual_display_config = 40;
     VirtualDisplayResult virtual_display_result = 41;
+    UdpMediaControl udp_media = 42;
   }
 }
 

@@ -22,7 +22,7 @@ SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\XSCC-Host"
-!define MUI_WELCOMEPAGE_TEXT "This unsigned beta installs XSCC Host and registers a LocalSystem Windows service. The host UI requires administrator approval. Signed virtual display driver files are included; the driver is installed on demand for an authorized virtual display request or headless session. No firewall/security changes are made. Close the host UI before upgrade or removal. Host identity and configuration are preserved on uninstall."
+!define MUI_WELCOMEPAGE_TEXT "This unsigned beta installs XSCC Host and registers a LocalSystem Windows service. The host UI requires administrator approval. Signed virtual display driver files are included; the driver is installed on demand for an authorized virtual display request or headless session. Program-scoped inbound TCP and UDP firewall rules are installed and removed with the host. Close the host UI before upgrade or removal. Host identity and configuration are preserved on uninstall."
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${PAYLOAD_DIR}\LICENCE"
 !insertmacro MUI_PAGE_INSTFILES
@@ -95,6 +95,28 @@ Section "XSCC Host"
     SetErrorLevel 1
     Abort
   ${EndIf}
+  ; The configured direct port can change, so scope by this executable, not a fixed port.
+  ClearErrors
+  StrCpy $0 -1
+  ExecWait '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="XSCC Host TCP" dir=in action=allow program="$INSTDIR\xscc-host.exe" protocol=TCP enable=yes profile=any' $0
+  ${If} ${Errors}
+    StrCpy $0 -1
+  ${EndIf}
+  ${If} $0 != 0
+    SetErrorLevel 1
+    Abort "Could not install the program-scoped TCP firewall rule. Uninstall before retrying."
+  ${EndIf}
+  ClearErrors
+  StrCpy $0 -1
+  ExecWait '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="XSCC Host UDP" dir=in action=allow program="$INSTDIR\xscc-host.exe" protocol=UDP enable=yes profile=any' $0
+  ${If} ${Errors}
+    StrCpy $0 -1
+  ${EndIf}
+  ${If} $0 != 0
+    ExecWait '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="XSCC Host TCP" program="$INSTDIR\xscc-host.exe" protocol=TCP' $1
+    SetErrorLevel 1
+    Abort "Could not install the program-scoped UDP firewall rule. Uninstall before retrying."
+  ${EndIf}
   CreateDirectory "$SMPROGRAMS\XSCC Host"
   CreateShortcut "$SMPROGRAMS\XSCC Host\XSCC Host.lnk" "$INSTDIR\xscc-host.exe"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "XSCC Host Beta (unsigned)"
@@ -113,6 +135,24 @@ Section "Uninstall"
     MessageBox MB_ICONSTOP "Host service removal failed (code $0). Files and configuration have been retained."
     SetErrorLevel 1
     Abort
+  ${EndIf}
+  ClearErrors
+  ExecWait '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="XSCC Host TCP" program="$INSTDIR\xscc-host.exe" protocol=TCP' $1
+  ${If} ${Errors}
+    SetErrorLevel 1
+    Abort "Could not launch firewall cleanup. Package files have been retained; retry uninstall."
+  ${EndIf}
+  ${If} $1 != 0
+    DetailPrint "TCP firewall cleanup returned $1 (the rule may already be absent)."
+  ${EndIf}
+  ClearErrors
+  ExecWait '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="XSCC Host UDP" program="$INSTDIR\xscc-host.exe" protocol=UDP' $1
+  ${If} ${Errors}
+    SetErrorLevel 1
+    Abort "Could not launch firewall cleanup. Package files have been retained; retry uninstall."
+  ${EndIf}
+  ${If} $1 != 0
+    DetailPrint "UDP firewall cleanup returned $1 (the rule may already be absent)."
   ${EndIf}
   Delete "$SMPROGRAMS\XSCC Host\XSCC Host.lnk"
   RMDir "$SMPROGRAMS\XSCC Host"

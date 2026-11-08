@@ -21,7 +21,16 @@ use tokio::{
 use tokio_util::codec::{Framed, FramedParts};
 
 pub trait TcpStreamTrait: AsyncRead + AsyncWrite + Unpin {}
-pub struct DynTcpStream(pub Box<dyn TcpStreamTrait + Send + Sync>);
+pub struct DynTcpStream(
+    pub Box<dyn TcpStreamTrait + Send + Sync>,
+    Option<SocketAddr>,
+);
+
+impl DynTcpStream {
+    pub fn new(stream: impl TcpStreamTrait + Send + Sync + 'static) -> Self {
+        Self(Box::new(stream), None)
+    }
+}
 
 /// The newest key exchange version this build speaks. Version 0 is the original scheme, and
 /// what an absent field means: one key for both directions. Version 1 splits the exchanged key
@@ -150,12 +159,7 @@ impl FramedStream {
                 {
                     stream.set_nodelay(true).ok();
                     let addr = stream.local_addr()?;
-                    return Ok(Self(
-                        Framed::new(DynTcpStream(Box::new(stream)), BytesCodec::new()),
-                        addr,
-                        None,
-                        0,
-                    ));
+                    return Ok(Self::from_connected(stream, addr));
                 }
             }
         }
@@ -166,17 +170,33 @@ impl FramedStream {
         self.1
     }
 
+    /// The connected socket peer, unavailable for generic streams.
+    pub fn peer_addr(&self) -> Option<SocketAddr> {
+        self.0.get_ref().1
+    }
+
+    pub fn udp_media_seed(&self) -> ResultType<Option<[u8; 32]>> {
+        self.2.as_ref().map(Encrypt::udp_media_seed).transpose()
+    }
+
     pub fn set_send_timeout(&mut self, ms: u64) {
         self.3 = ms;
     }
 
     pub fn from(stream: impl TcpStreamTrait + Send + Sync + 'static, addr: SocketAddr) -> Self {
         Self(
-            Framed::new(DynTcpStream(Box::new(stream)), BytesCodec::new()),
+            Framed::new(DynTcpStream::new(stream), BytesCodec::new()),
             addr,
             None,
             0,
         )
+    }
+
+    pub fn from_connected(stream: tokio::net::TcpStream, addr: SocketAddr) -> Self {
+        let peer_addr = stream.peer_addr().ok();
+        let mut framed = Self::from(stream, addr);
+        framed.0.get_mut().1 = peer_addr;
+        framed
     }
 
     pub fn set_raw(&mut self) {
@@ -458,6 +478,23 @@ impl Encrypt {
         Self(key, 0, 0, None)
     }
 
+    fn udp_media_seed(&self) -> ResultType<[u8; 32]> {
+        let receive = self.3.as_ref().unwrap_or(&self.0);
+        let (first, second) = if self.0 .0 <= receive.0 {
+            (&self.0, receive)
+        } else {
+            (receive, &self.0)
+        };
+        let failed = |_| anyhow::anyhow!("UDP media key derivation failed");
+        let mut h = generichash::State::new(Some(32), Some(&first.0)).map_err(failed)?;
+        h.update(b"xscc/udp-media-seed/v1\0").map_err(failed)?;
+        h.update(&[u8::from(self.3.is_some())]).map_err(failed)?;
+        h.update(&second.0).map_err(failed)?;
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(h.finalize().map_err(failed)?.as_ref());
+        Ok(seed)
+    }
+
     /// Version 1: the initiator, the side that sent the sealed key, sends under one subkey and
     /// receives under the other; the responder the reverse.
     pub fn new_split(key: Key, is_initiator: bool, t: &KxTranscript) -> ResultType<Self> {
@@ -604,7 +641,11 @@ mod tests {
         let key = Key([0x41; secretbox::KEYBYTES]);
         let mut sender = Encrypt::new(key.clone());
         let mut receiver = Encrypt::new(key.clone());
-        for (sequence, len) in [0, 1, 1024, 64 * 1024, 1024 * 1024].iter().copied().enumerate() {
+        for (sequence, len) in [0, 1, 1024, 64 * 1024, 1024 * 1024]
+            .iter()
+            .copied()
+            .enumerate()
+        {
             let plaintext = vec![0x7b; len];
             let expected = secretbox::seal(
                 &plaintext,
@@ -642,11 +683,47 @@ mod tests {
 
     fn duplex_connection(stream: tokio::io::DuplexStream) -> FramedStream {
         FramedStream(
-            Framed::new(DynTcpStream(Box::new(stream)), BytesCodec::new()),
+            Framed::new(DynTcpStream::new(stream), BytesCodec::new()),
             "127.0.0.1:0".parse().unwrap(),
             None,
             0,
         )
+    }
+
+    #[tokio::test]
+    async fn udp_media_seed_agrees_across_directions_and_survives_tcp_traffic() {
+        let (left, right) = tokio::io::duplex(4096);
+        let mut client = duplex_connection(left);
+        let mut host = duplex_connection(right);
+        assert_eq!(client.udp_media_seed().unwrap(), None);
+        assert_eq!(client.peer_addr(), None);
+        let key = Key([0x51; secretbox::KEYBYTES]);
+        let transcript = KxTranscript {
+            initiator_pk: &[1; box_::PUBLICKEYBYTES],
+            responder_pk: &[2; box_::PUBLICKEYBYTES],
+            advertised: 1,
+            picked: 1,
+        };
+        client
+            .set_key_split(key.clone(), true, &transcript)
+            .unwrap();
+        host.set_key_split(key.clone(), false, &transcript).unwrap();
+        let seed = client.udp_media_seed().unwrap().unwrap();
+        assert_eq!(Some(seed), host.udp_media_seed().unwrap());
+        assert_ne!(seed, key.0);
+        client.send_raw(b"client message".to_vec()).await.unwrap();
+        assert_eq!(&host.next().await.unwrap().unwrap()[..], b"client message");
+        host.send_raw(b"host message".to_vec()).await.unwrap();
+        assert_eq!(&client.next().await.unwrap().unwrap()[..], b"host message");
+        assert_eq!(Some(seed), client.udp_media_seed().unwrap());
+        assert_eq!(Some(seed), host.udp_media_seed().unwrap());
+        client.set_key(key.clone());
+        host.set_key(key);
+        let legacy_seed = client.udp_media_seed().unwrap().unwrap();
+        assert_eq!(Some(legacy_seed), host.udp_media_seed().unwrap());
+        assert_ne!(legacy_seed, seed);
+        client.set_key(Key([0x52; secretbox::KEYBYTES]));
+        assert_ne!(Some(legacy_seed), client.udp_media_seed().unwrap());
     }
 
     #[tokio::test]
@@ -715,7 +792,10 @@ mod tests {
             peer.next_timeout(1000).await.unwrap().unwrap().as_ref(),
             b"pending write"
         );
-        assert_eq!(peer.next_timeout(1000).await.unwrap().unwrap().as_ref(), b"after split");
+        assert_eq!(
+            peer.next_timeout(1000).await.unwrap().unwrap().as_ref(),
+            b"after split"
+        );
         peer.send_raw(b"input after split".to_vec()).await.unwrap();
         assert_eq!(
             reader.next_timeout(1000).await.unwrap().unwrap().as_ref(),
