@@ -463,9 +463,9 @@ bool NativeDevice::Process(ID3D11Texture2D *in, ID3D11Texture2D *out, int width,
   OutputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
   OutputViewDesc.Texture2D.MipSlice = 0;
   ComPtr<ID3D11VideoProcessorOutputView> outputView = nullptr;
-  video_device_->CreateVideoProcessorOutputView(
+  HRB(video_device_->CreateVideoProcessorOutputView(
       out, video_processor_enumerator_.Get(), &OutputViewDesc,
-      outputView.ReleaseAndGetAddressOf());
+      outputView.ReleaseAndGetAddressOf()));
 
   D3D11_VIDEO_PROCESSOR_STREAM StreamData;
   ZeroMemory(&StreamData, sizeof(StreamData));

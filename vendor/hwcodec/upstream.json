@@ -15,6 +15,7 @@
     "cpp/mfx/bitrate_limit.h",
     "src/ffmpeg_ram/decode.rs",
     "cpp/common/util.cpp",
+    "cpp/common/platform/win/win.cpp",
     "cpp/ffmpeg_vram/ffmpeg_vram_encode.cpp",
     "cpp/ffmpeg_vram/ffmpeg_vram_ffi.h"
   ],
