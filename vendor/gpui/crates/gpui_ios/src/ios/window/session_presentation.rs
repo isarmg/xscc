@@ -1,9 +1,9 @@
 use super::IosWindowState;
 use block2::RcBlock;
-use objc2::AnyThread;
+use objc2::{AnyThread, MainThreadOnly};
 use objc2_foundation::NSError;
 use objc2_ui_kit::{
-    UIInterfaceOrientation, UIInterfaceOrientationMask, UIWindowSceneGeometryPreferencesIOS,
+    UIInterfaceOrientation, UIInterfaceOrientationMask, UIView, UIWindowSceneGeometryPreferencesIOS,
 };
 use std::ptr::NonNull;
 
@@ -50,30 +50,33 @@ pub(super) fn set_enabled(window: &IosWindowState, enabled: bool) {
     if let Some(platform) = window.platform.upgrade() {
         platform.application.update_session_frame_rate();
     }
-    window.view_controller.setNeedsStatusBarAppearanceUpdate();
-    window
-        .view_controller
-        .setNeedsUpdateOfHomeIndicatorAutoHidden();
-    window
-        .view_controller
-        .setNeedsUpdateOfSupportedInterfaceOrientations();
-    if let Some(scene) = scene {
-        let preferences = UIWindowSceneGeometryPreferencesIOS::initWithInterfaceOrientations(
-            UIWindowSceneGeometryPreferencesIOS::alloc(),
-            orientation,
-        );
-        let on_error = RcBlock::new(move |error: NonNull<NSError>| {
-            // iPad multitasking may decline orientation changes; keep the actual scene's bounds.
-            let error = unsafe { error.as_ref() };
-            log::warn!(
-                "iOS declined session presentation geometry (enabled={enabled}, code={})",
-                error.code()
+    let update_geometry = RcBlock::new(|| {
+        window.view_controller.setNeedsStatusBarAppearanceUpdate();
+        window
+            .view_controller
+            .setNeedsUpdateOfHomeIndicatorAutoHidden();
+        window
+            .view_controller
+            .setNeedsUpdateOfSupportedInterfaceOrientations();
+        if let Some(scene) = scene.as_ref() {
+            let preferences = UIWindowSceneGeometryPreferencesIOS::initWithInterfaceOrientations(
+                UIWindowSceneGeometryPreferencesIOS::alloc(),
+                orientation,
             );
-        });
-        scene.requestGeometryUpdateWithPreferences_errorHandler(&preferences, Some(&on_error));
-    } else {
-        log::warn!("Cannot request iOS session orientation without a window scene");
-    }
+            let on_error = RcBlock::new(move |error: NonNull<NSError>| {
+                // iPad multitasking may decline orientation changes; keep the actual scene's bounds.
+                let error = unsafe { error.as_ref() };
+                log::warn!(
+                    "iOS declined session presentation geometry (enabled={enabled}, code={})",
+                    error.code()
+                );
+            });
+            scene.requestGeometryUpdateWithPreferences_errorHandler(&preferences, Some(&on_error));
+        } else {
+            log::warn!("Cannot request iOS session orientation without a window scene");
+        }
+    });
+    UIView::performWithoutAnimation(&update_geometry, window.window.mtm());
     window.force_next_frame.set(true);
     window.view.setNeedsLayout();
 }

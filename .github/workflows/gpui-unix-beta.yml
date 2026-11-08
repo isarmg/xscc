@@ -19,6 +19,8 @@ on:
       - 'packaging/gpui-*/**'
       - '.github/scripts/*gpui*'
       - '.github/workflows/gpui-unix-beta.yml'
+      - '.github/scripts/*pinned*'
+      - '.github/scripts/pinned-assets/**'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -84,10 +86,12 @@ jobs:
           targets: x86_64-unknown-linux-gnu
           components: rustfmt,clippy
       - name: Set up pinned native codec dependencies
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/test-pinned-asset-download.py
+          python3 .github/scripts/test-setup-pinned-vcpkg.py
+          python3 .github/scripts/setup-pinned-vcpkg.py --root "$GITHUB_WORKSPACE/vcpkg"
       - name: Restore native dependency archives
         id: native-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
@@ -97,7 +101,10 @@ jobs:
       - name: Build pinned native dependencies
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
+          GH_TOKEN: ${{ github.token }}
+          VCPKG_KEEP_ENV_VARS: GH_TOKEN
         run: |
+          export X_VCPKG_ASSET_SOURCES="x-script,python3 \"$GITHUB_WORKSPACE/.github/scripts/pinned_asset_download.py\" --url {url} --sha512 {sha512} --output {dst}"
           mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
           "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
       - name: Save successful native dependency archives
@@ -218,10 +225,12 @@ jobs:
           targets: aarch64-apple-darwin
           components: rustfmt,clippy
       - name: Set up pinned native codec dependencies
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/test-pinned-asset-download.py
+          python3 .github/scripts/test-setup-pinned-vcpkg.py
+          python3 .github/scripts/setup-pinned-vcpkg.py --root "$GITHUB_WORKSPACE/vcpkg"
       - name: Restore native dependency archives
         id: native-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
@@ -231,7 +240,10 @@ jobs:
       - name: Build pinned native dependencies
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
+          GH_TOKEN: ${{ github.token }}
+          VCPKG_KEEP_ENV_VARS: GH_TOKEN
         run: |
+          export X_VCPKG_ASSET_SOURCES="x-script,python3 \"$GITHUB_WORKSPACE/.github/scripts/pinned_asset_download.py\" --url {url} --sha512 {sha512} --output {dst}"
           mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
           "$VCPKG_ROOT/vcpkg" install --triplet arm64-osx --x-install-root="$VCPKG_ROOT/installed"
       - name: Save successful native dependency archives

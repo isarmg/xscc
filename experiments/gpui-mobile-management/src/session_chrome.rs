@@ -258,19 +258,16 @@ impl SessionChrome {
                 .aria_label("展开操控栏")
                 .aria_expanded(false)
                 .rounded(px(12.))
-                .bg(rgb(RAISED))
+                .bg(rgb(PAGE))
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(0xffffff))
                 .flex()
                 .flex_col()
                 .items_center()
                 .justify_center()
-                .text_size(px(10.))
-                .line_height(px(12.))
                 .occlude()
                 .cursor_pointer()
-                .child(glyph(Glyph::Expand, TEXT))
-                .child("展开")
+                .child(glyph(Glyph::Expand, 0xffffff))
                 .on_click(cx.listener(|_, _, _, cx| {
                     cx.emit(ChromeAction::ToggleRail);
                     cx.stop_propagation();
@@ -278,6 +275,9 @@ impl SessionChrome {
         }
         let mut rail = at(model.layout.rail)
             .id("session-control-rail")
+            .rounded(px(18.))
+            .border_1()
+            .border_color(rgb(0xffffff))
             .bg(rgb(PAGE))
             .flex()
             .flex_col()
@@ -347,25 +347,29 @@ impl SessionChrome {
         state: (bool, bool),
         action: ChromeAction,
     ) -> Stateful<Div> {
-        self.button(cx, id, "", state.0, state.1, action)
+        div()
+            .id(id)
             .role(Role::Button)
             .aria_label(label.to_owned())
+            .aria_selected(state.0)
             .w(px(44.))
             .h(px(44.))
-            .px_0()
             .flex_shrink_0()
-            .flex_col()
-            .text_size(px(10.))
-            .line_height(px(12.))
-            .child(glyph(
-                icon,
-                if state.0 {
-                    crate::theme::LIGHT.on_accent
-                } else {
-                    TEXT
-                },
-            ))
-            .child(label.to_owned())
+            .flex()
+            .items_center()
+            .justify_center()
+            .opacity(if state.1 { 1. } else { 0.42 })
+            .child(glyph(icon, 0xffffff))
+            .when(state.1, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.8))
+                    .active(|style| style.opacity(0.6))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(action);
+                        cx.stop_propagation();
+                    }))
+            })
     }
 
     fn screen_list(&self, cx: &mut Context<Self>) -> Div {
@@ -821,18 +825,56 @@ fn glyph(shape: Glyph, color: u32) -> impl IntoElement {
         move |bounds, _, window, _| {
             let scale =
                 (f32::from(bounds.size.width) / 24.).min(f32::from(bounds.size.height) / 24.);
-            let mut path = PathBuilder::stroke(px(1.6));
+            let mut path = PathBuilder::stroke(px(1.8 * scale));
+            let position = |(x, y): (f32, f32)| bounds.origin + point(px(x * scale), px(y * scale));
             for stroke in strokes(shape) {
                 if let Some((first, rest)) = stroke.split_first() {
-                    path.move_to(bounds.origin + point(px(first.0 * scale), px(first.1 * scale)));
-                    for (x, y) in rest {
-                        path.line_to(bounds.origin + point(px(x * scale), px(y * scale)));
+                    path.move_to(position(*first));
+                    for (index, &(x, y)) in rest.iter().enumerate() {
+                        if let Some(&(next_x, next_y)) = rest.get(index + 1) {
+                            let (previous_x, previous_y) = stroke[index];
+                            let before = (x - previous_x, y - previous_y);
+                            let after = (next_x - x, next_y - y);
+                            let before_length = before.0.hypot(before.1);
+                            let after_length = after.0.hypot(after.1);
+                            let radius = 2_f32.min(before_length / 2.).min(after_length / 2.);
+                            if radius > 0. {
+                                path.line_to(position((
+                                    x - before.0 / before_length * radius,
+                                    y - before.1 / before_length * radius,
+                                )));
+                                path.curve_to(
+                                    position((
+                                        x + after.0 / after_length * radius,
+                                        y + after.1 / after_length * radius,
+                                    )),
+                                    position((x, y)),
+                                );
+                            }
+                        } else {
+                            path.line_to(position((x, y)));
+                        }
                     }
                 }
             }
             match path.build() {
                 Ok(path) => window.paint_path(path, rgb(color)),
                 Err(_) => window.paint_quad(gpui::fill(bounds.inset(px(8.)), rgb(color))),
+            }
+            for stroke in strokes(shape) {
+                for endpoint in [stroke.first(), stroke.last()].into_iter().flatten() {
+                    let radius = px(0.9 * scale);
+                    window.paint_quad(
+                        gpui::fill(
+                            gpui::Bounds::new(
+                                position(*endpoint) - point(radius, radius),
+                                gpui::size(radius * 2., radius * 2.),
+                            ),
+                            rgb(color),
+                        )
+                        .corner_radii(radius),
+                    );
+                }
             }
         },
     )
@@ -852,7 +894,14 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             &[(10., 15.), (10., 21.)],
         ],
         Glyph::Keyboard => &[
-            &[(3., 6.), (21., 6.), (21., 19.), (3., 19.), (3., 6.)],
+            &[
+                (12., 6.),
+                (21., 6.),
+                (21., 19.),
+                (3., 19.),
+                (3., 6.),
+                (12., 6.),
+            ],
             &[(6., 10.), (8., 10.)],
             &[(11., 10.), (13., 10.)],
             &[(16., 10.), (18., 10.)],
@@ -862,7 +911,14 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             &[(8., 17.), (16., 17.)],
         ],
         Glyph::Display => &[
-            &[(3., 4.), (21., 4.), (21., 17.), (3., 17.), (3., 4.)],
+            &[
+                (12., 4.),
+                (21., 4.),
+                (21., 17.),
+                (3., 17.),
+                (3., 4.),
+                (12., 4.),
+            ],
             &[(12., 17.), (12., 21.)],
             &[(7., 21.), (17., 21.)],
         ],

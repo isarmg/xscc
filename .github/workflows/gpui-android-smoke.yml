@@ -19,6 +19,8 @@ on:
       - 'vendor/gpui/**'
       - 'packaging/gpui-android/**'
       - '.github/workflows/gpui-android-smoke.yml'
+      - '.github/scripts/*pinned*'
+      - '.github/scripts/pinned-assets/**'
       - '.github/scripts/*gpui-android*'
       - '.github/scripts/*gpui-game-activity*'
       - '.github/scripts/*gpui*mobile*'
@@ -103,11 +105,12 @@ jobs:
 
       - name: Setup pinned management codec dependencies
         if: matrix.flavor != 'smoke'
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgDirectory: /opt/artifacts/vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/test-pinned-asset-download.py
+          python3 .github/scripts/test-setup-pinned-vcpkg.py
+          python3 .github/scripts/setup-pinned-vcpkg.py --root /opt/artifacts/vcpkg
 
       - name: Restore native dependency binary archives
         if: matrix.flavor != 'smoke'
@@ -122,7 +125,11 @@ jobs:
         id: native-dependencies
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-        run: bash .github/scripts/build-gpui-android-native-deps.sh arm64-v8a
+          GH_TOKEN: ${{ github.token }}
+          VCPKG_KEEP_ENV_VARS: GH_TOKEN
+        run: |
+          export X_VCPKG_ASSET_SOURCES="x-script,python3 \"$GITHUB_WORKSPACE/.github/scripts/pinned_asset_download.py\" --url {url} --sha512 {sha512} --output {dst}"
+          bash .github/scripts/build-gpui-android-native-deps.sh arm64-v8a
 
       - name: Save successful native dependency binary archives
         if: matrix.flavor != 'smoke' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
@@ -217,10 +224,22 @@ jobs:
           fi
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI_LIBS/arm64-v8a/"
 
+      - name: Download pinned Temurin 27 archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/pinned_asset_download.py \
+            --url "https://github.com/adoptium/temurin27-binaries/releases/download/jdk-27.0.1.0.2%2B1/OpenJDK27U-jdk_x64_linux_hotspot_27.0.1.0.2_1.tar.gz" \
+            --output "$RUNNER_TEMP/temurin-27.tar.gz" \
+            --sha256 30cb129f6cf299c852cec0feca9ea2a596d2ee9f26d8605d3a253951f6c8b20f \
+            --size 142729023
+
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
         with:
-          distribution: temurin
-          java-version: '27'
+          distribution: jdkfile
+          java-version: '27.0.1'
+          jdk-file: ${{ runner.temp }}/temurin-27.tar.gz
+          force-download: true
 
       - name: Test Java IME generation and single-line editor actions on the host
         if: ${{ !inputs.build_only }}
@@ -229,10 +248,11 @@ jobs:
           python3 .github/scripts/test-gpui-android-editor-action.py
 
       - name: Install pinned Gradle and Android SDK components
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3             "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -o "$RUNNER_TEMP/gradle.zip"
-          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum --check
+          python3 .github/scripts/pinned_asset_download.py --url "https://github.com/gradle/gradle-distributions/releases/download/v${GRADLE_VERSION}/gradle-${GRADLE_VERSION}-bin.zip" --output "$RUNNER_TEMP/gradle.zip" --sha256 "$GRADLE_SHA256"
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'

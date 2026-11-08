@@ -140,3 +140,5 @@ so application scene regressions can inspect actual image bounds, clipping and
 texture UV mapping. This is a test observation interface; it does not change
 the production renderer, layout engine or `Img` behavior. It does not establish
 test completion, physical GPU output or mobile-device acceptance.
+
+Remote-session entry uses a non-rotating native orientation update so the application can reveal its stable video viewport with a short curtain animation. Android restores its original fullscreen/rotation policy and limits the temporary fullscreen entry override to supported non-multiwindow transitions; API29 keeps its IME resize fallback. UIKit uses the public per-update non-animation API, without changing global animation settings.
