@@ -133,12 +133,15 @@ def download_asset(url, destination, expected_digest, algorithm='sha512', expect
     if expected_size is not None and (type(expected_size) is not int or expected_size < 0):
         raise DownloadError('Expected size must be a nonnegative integer')
     release = _github_release(url)
+    bundled = Path(__file__).with_name('pinned-assets') / f'{algorithm}-{expected_digest}'
+    if not bundled.is_file():
+        bundled = None
     deadline = time.monotonic() + TOTAL_TIMEOUT
     temporary = None
     phase = 'GitHub release metadata' if release else 'HTTPS asset download'
     try:
         api_size, api_digest = None, None
-        if release:
+        if release and bundled is None:
             url, api_size, api_digest = _github_asset(release, deadline)
             if expected_size is not None and expected_size != api_size:
                 raise DownloadError('GitHub asset size disagrees with the caller pin')
@@ -154,7 +157,8 @@ def download_asset(url, destination, expected_digest, algorithm='sha512', expect
         with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.',
                                          suffix='.part', delete=False) as output:
             temporary = Path(output.name)
-            with _open(url, 'application/octet-stream', deadline) as response:
+            with (bundled.open('rb') if bundled is not None
+                  else _open(url, 'application/octet-stream', deadline)) as response:
                 while True:
                     _remaining(deadline)
                     chunk = response.read1(CHUNK_SIZE)

@@ -31,6 +31,15 @@ class PinnedAssetDownloadTests(unittest.TestCase):
                                           hashlib.sha256(payload).hexdigest(), 'sha256', len(payload))
             self.assertEqual(destination.read_bytes(), payload)
             self.assertEqual(list(Path(directory).iterdir()), [destination])
+            mfx_pin = ('5d2ffc4ec2ba0e5859d01d2e072f75436ebc3e62e0f6580b5bb8b9f82fe588e7'
+                       '558a46a1fdfa0297a782c0eeb8f50322258d0dd9e41d927cc9be496727b61e44')
+            with mock.patch.object(downloader, '_open', side_effect=AssertionError('Network used')):
+                downloader.download_asset(
+                    'https://github.com/lu-zero/mfx_dispatch/commit/'
+                    'd6241243f85a0d947bdfe813006686a930edef24.patch?full_index=1',
+                    destination, mfx_pin, expected_size=2816)
+            self.assertEqual(hashlib.sha512(destination.read_bytes()).hexdigest(), mfx_pin)
+            self.assertEqual(list(Path(directory).iterdir()), [destination])
 
     def test_release_url_boundary_and_encoded_tag(self):
         self.assertEqual(downloader._github_release(

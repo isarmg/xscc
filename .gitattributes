@@ -2,3 +2,4 @@
 /packaging/gpui-windows/VDD-LICENSE-MIT.txt text eol=lf
 /res/vcpkg/ffmpeg/patch/0012-amf-poll-pending-hardware-output.patch text eol=lf
 /res/vcpkg/ffmpeg/patch/0013-amf-own-pending-hardware-frames.patch text eol=lf
+/.github/scripts/pinned-assets/sha512-* -text whitespace=-blank-at-eol

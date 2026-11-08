@@ -37,6 +37,7 @@ on:
       - 'packaging/gpui-windows/**'
       - '.github/workflows/gpui-windows-beta.yml'
       - '.github/scripts/*pinned*'
+      - '.github/scripts/pinned-assets/**'
       - '.github/scripts/*gpui*'
   pull_request:
   workflow_dispatch:
