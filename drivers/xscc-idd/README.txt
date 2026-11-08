@@ -58,7 +58,8 @@ Mode and lifecycle contract
 - One owner deletes each accepted swapchain. Explicit Remove and worker errors
   retain the worker-owned path. Assign/Unassign may claim callback ownership before
   requesting stop: after the last frame DDI/surface access, that callback deletes
-  the chain without waiting for the worker's D3D/DXGI release tail.
+  the chain without waiting for the worker's D3D/DXGI release tail. The worker
+  retains local DXGI/D3D references until the sole Delete API returns.
 - Frame quiescence, DeleteReturned and native thread exit are separate conditions.
   DeleteReturned means the sole WdfObjectDelete call returned; WDF object destruction
   and native GPU cleanup may still be pending. The registry retains the session

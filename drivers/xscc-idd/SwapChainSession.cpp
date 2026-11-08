@@ -337,6 +337,11 @@ void SwapChainSession::RunWorker() noexcept {
         }
         if (ownsDelete) {
             DeleteChainOnCurrentThread();
+        } else {
+            const DWORD wait = WaitForSingleObject(delete_returned_event_.value, StopBudgetMs);
+            if (wait != WAIT_OBJECT_0) {
+                Fatal(nullptr, wait == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
+            }
         }
     }
     if (task) {
