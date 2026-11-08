@@ -55,6 +55,18 @@ class PinnedAssetDownloadTests(unittest.TestCase):
             with self.subTest(url=url), self.assertRaises(downloader.DownloadError):
                 downloader._github_release(url)
 
+        for url, mapped in (
+                ('https://github.com/libjpeg-turbo/libjpeg-turbo/archive/3.2.0.tar.gz',
+                 'https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/tar.gz/3.2.0'),
+                ('https://github.com/owner/repo/archive/refs/tags/v1.zip',
+                 'https://codeload.github.com/owner/repo/zip/refs/tags/v1')):
+            self.assertEqual(downloader._github_archive(url), mapped)
+        for url in ('https://github.com.evil.invalid/a/b/archive/v1.tar.gz',
+                    'https://github.com/a/b/archive/v1.tar.gz?download=1',
+                    'https://github.com/a/b/archive/v1.zip#fragment',
+                    'https://github.com/a/b/releases/download/v1/file.zip'):
+            self.assertIsNone(downloader._github_archive(url))
+
     def test_auth_is_only_sent_to_github_api_and_removed_on_storage_redirect(self):
         with mock.patch.dict(os.environ, {'GH_TOKEN': 'unit-test-token'}):
             api = downloader._request('https://api.github.com/repos/a/b/releases/assets/1',

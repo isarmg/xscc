@@ -55,6 +55,25 @@ def _github_release(url):
     return owner, repo, tag, name
 
 
+def _github_archive(url):
+    parts = _https_url(url)
+    if (parts.hostname.lower() != 'github.com' or parts.port not in (None, 443)
+            or parts.query or parts.fragment):
+        return None
+    pieces = parts.path.split('/')
+    if len(pieces) < 5 or pieces[3] != 'archive':
+        return None
+    owner, repo = pieces[1:3]
+    if not all(re.fullmatch(r'[A-Za-z0-9_.-]+', value)
+               and value not in ('.', '..') for value in (owner, repo)):
+        raise DownloadError('Invalid GitHub repository in archive URL')
+    archive = '/'.join(pieces[4:])
+    for suffix, kind in (('.tar.gz', 'tar.gz'), ('.zip', 'zip')):
+        if archive.endswith(suffix) and archive[:-len(suffix)]:
+            return f'https://codeload.github.com/{owner}/{repo}/{kind}/{archive[:-len(suffix)]}'
+    return None
+
+
 class _SafeRedirect(request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         parts = _https_url(newurl)
@@ -133,6 +152,7 @@ def download_asset(url, destination, expected_digest, algorithm='sha512', expect
     if expected_size is not None and (type(expected_size) is not int or expected_size < 0):
         raise DownloadError('Expected size must be a nonnegative integer')
     release = _github_release(url)
+    url = _github_archive(url) or url
     bundled = Path(__file__).with_name('pinned-assets') / f'{algorithm}-{expected_digest}'
     if not bundled.is_file():
         bundled = None
