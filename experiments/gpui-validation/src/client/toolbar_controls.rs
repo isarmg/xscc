@@ -199,7 +199,7 @@ impl ManagementPanel {
                                         .on_key_down(cx.listener(Self::toolbar_menu_key_down))
                                         .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                                         .on_mouse_down_out(cx.listener(
-                                            move |view, event, _, cx| {
+                                            move |view, event: &gpui::MouseDownEvent, _, cx| {
                                                 // Let the trigger's click toggle its own open menu.
                                                 if trigger_bounds.get().is_some_and(|bounds| {
                                                     bounds.contains(&event.position)

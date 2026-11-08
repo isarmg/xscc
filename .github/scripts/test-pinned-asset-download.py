@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+import hashlib
+import importlib.util
+import io
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+
+spec = importlib.util.spec_from_file_location(
+    'pinned_asset_download', Path(__file__).with_name('pinned_asset_download.py'))
+downloader = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(downloader)
+
+
+class PinnedAssetDownloadTests(unittest.TestCase):
+    def test_bad_pin_preserves_existing_destination_and_cleans_partial(self):
+        payload = b'new asset bytes'
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / 'asset.zip'
+            destination.write_bytes(b'previous verified asset')
+            with mock.patch.object(downloader, '_open', return_value=io.BytesIO(payload)):
+                with self.assertRaisesRegex(downloader.DownloadError, 'mandatory SHA512 pin'):
+                    downloader.download_asset('https://example.org/asset.zip', destination, '0' * 128)
+            self.assertEqual(destination.read_bytes(), b'previous verified asset')
+            self.assertEqual(list(Path(directory).iterdir()), [destination])
+            with mock.patch.object(downloader, '_open', return_value=io.BytesIO(payload)):
+                downloader.download_asset('https://example.org/asset.zip', destination,
+                                          hashlib.sha256(payload).hexdigest(), 'sha256', len(payload))
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(list(Path(directory).iterdir()), [destination])
+
+    def test_release_url_boundary_and_encoded_tag(self):
+        self.assertEqual(downloader._github_release(
+            'https://github.com/Kitware/CMake/releases/download/v4%2F4/cmake%20file.zip'),
+            ('Kitware', 'CMake', 'v4/4', 'cmake file.zip'))
+        for url in ('https://github.com.evil.invalid/a/b/releases/download/v1/file',
+                    'https://github.com/a/b/archive/v1.tar.gz'):
+            self.assertIsNone(downloader._github_release(url))
+        for url in ('http://github.com/a/b/releases/download/v1/file',
+                    'https://secret@github.com/a/b/releases/download/v1/file',
+                    'https://github.com/a/b/releases/download/v1',
+                    'https://github.com/a/b/releases/download/v1/file%2Fother'):
+            with self.subTest(url=url), self.assertRaises(downloader.DownloadError):
+                downloader._github_release(url)
+
+    def test_auth_is_only_sent_to_github_api_and_removed_on_storage_redirect(self):
+        with mock.patch.dict(os.environ, {'GH_TOKEN': 'unit-test-token'}):
+            api = downloader._request('https://api.github.com/repos/a/b/releases/assets/1',
+                                      'application/octet-stream')
+            self.assertEqual(api.get_header('Authorization'), 'Bearer unit-test-token')
+            self.assertIsNone(downloader._request('https://github.com/a/b', '*/*')
+                              .get_header('Authorization'))
+            redirected = downloader._SafeRedirect().redirect_request(
+                api, None, 302, 'Found', {},
+                'https://release-assets.githubusercontent.com/example?token=not-for-logs')
+            self.assertIsNone(redirected.get_header('Authorization'))
+            with self.assertRaises(downloader.DownloadError):
+                downloader._SafeRedirect().redirect_request(
+                    api, None, 302, 'Found', {}, 'http://release-assets.githubusercontent.com/example')
+
+
+if __name__ == '__main__':
+    unittest.main()

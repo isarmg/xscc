@@ -36,6 +36,7 @@ on:
       - 'Cargo.lock'
       - 'packaging/gpui-windows/**'
       - '.github/workflows/gpui-windows-beta.yml'
+      - '.github/scripts/*pinned*'
       - '.github/scripts/*gpui*'
   pull_request:
   workflow_dispatch:
@@ -113,11 +114,15 @@ jobs:
           targets: x86_64-pc-windows-msvc
           components: rustfmt,clippy
       - name: Set up pinned native codec dependencies
-        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: 9e593bb18ea69cc5095e012465dcd675a822ed0d
-          doNotCache: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/test-pinned-asset-download.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned asset download regression failed' }
+          python .github/scripts/test-setup-pinned-vcpkg.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned native setup regression failed' }
+          python .github/scripts/setup-pinned-vcpkg.py --root C:\vcpkg
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned native tool setup failed' }
       - name: Record hosted native toolchain image
         id: native-toolchain
         run: |
@@ -136,7 +141,12 @@ jobs:
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
           VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
+          GH_TOKEN: ${{ github.token }}
+          VCPKG_KEEP_ENV_VARS: GH_TOKEN
         run: |
+          $assetDownloader = (Resolve-Path '.github/scripts/pinned_asset_download.py').Path
+          $assetCommand = '"{0}" "{1}" --url {{url}} --sha512 {{sha512}} --output {{dst}}' -f (Get-Command python).Source, $assetDownloader
+          $env:X_VCPKG_ASSET_SOURCES = 'x-script,' + $assetCommand.Replace('`', '``').Replace(',', '`,').Replace(';', '`;')
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/vcpkg-binary-cache" | Out-Null
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT/installed"
           if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
