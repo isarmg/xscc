@@ -175,7 +175,7 @@ pub fn layout(
                 stage,
                 stage,
                 width,
-                stage.height,
+                stage.height.min(panel_bottom),
             )
         } else {
             (
@@ -317,13 +317,21 @@ mod tests {
             Panel::Keyboard,
         ] {
             for expanded in [false, true] {
-                let layout = layout(393., 873., expanded, panel, false, 360.);
+                let layout = layout(393., 873., expanded, panel, true, 360.);
                 assert_eq!(layout.stage.x, 0.);
                 assert_eq!(layout.stage.width, baseline.stage.width);
                 assert_eq!(layout.viewport, layout.stage);
                 assert_eq!(layout.video, layout.stage);
                 if expanded {
                     assert!(layout.rail.width > layout.rail.height);
+                }
+                if let Some(mouse) = layout.mouse {
+                    for button in [mouse.left, mouse.middle, mouse.right, mouse.wheel] {
+                        assert!(!overlaps(button, layout.rail));
+                        if let Some(bottom) = layout.panel {
+                            assert!(!overlaps(button, bottom));
+                        }
+                    }
                 }
                 if let Some(bottom) = layout.panel.or(layout.keyboard) {
                     assert!(!overlaps(bottom, layout.rail));
