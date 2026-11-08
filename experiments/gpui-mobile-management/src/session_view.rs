@@ -16,9 +16,9 @@ use base::{
     session_protocol::input,
 };
 use gpui::{
-    AppContext, AppLifecyclePhase, Bounds, Context, Entity, EventEmitter, FocusHandle,
-    HitboxBehavior, IntoElement, Pixels, Render, StyleRefinement, Subscription, TouchEvent,
-    TouchPhase, Window, canvas, div, prelude::*, px, rgb,
+    Animation, AnimationExt, AppContext, AppLifecyclePhase, Bounds, Context, Entity, EventEmitter,
+    FocusHandle, HitboxBehavior, IntoElement, Pixels, Render, StyleRefinement, Subscription,
+    TouchEvent, TouchPhase, Window, canvas, div, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::{
     self, BitrateMode, InputCommand, Monitor, ResolutionMode, SessionEvent, SessionHandle,
@@ -28,7 +28,7 @@ use std::{
     cell::Cell,
     rc::Rc,
     sync::{Arc, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use xscc_native_management::manager::NativeManager;
 
@@ -62,6 +62,7 @@ pub struct SessionView {
     keyboard_page: KeyboardPage,
     controls_idle: Option<gpui::Task<()>>,
     presentation_active: bool,
+    entry_pending: Option<(Instant, gpui::Size<Pixels>)>,
     interactive_session: bool,
     target_fps: Option<TargetFps>,
     quality: SessionQuality,
@@ -209,6 +210,7 @@ impl SessionView {
             keyboard_page: KeyboardPage::Input,
             controls_idle: None,
             presentation_active: false,
+            entry_pending: None,
             interactive_session: false,
             target_fps: None,
             quality: SessionQuality::default(),
@@ -256,6 +258,7 @@ impl SessionView {
         self.connected = false;
         self.interactive_session = false;
         self.controls_idle.take();
+        self.entry_pending = None;
         self.panel = Panel::None;
         self.rail_expanded = true;
         self.prepared_cursor = PreparedCursor::default();
@@ -306,6 +309,7 @@ impl SessionView {
             cx.notify();
             return;
         }
+        self.entry_pending = Some((Instant::now(), gpui::Size::default()));
         let generation = self.generation;
         let sender = self.sender.clone();
         let wake = self.wake.clone();
@@ -1399,6 +1403,17 @@ impl Drop for SessionView {
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let visible = window.fully_visible_bounds().size;
+        let mut entry_ready = true;
+        if let Some((started, previous)) = self.entry_pending {
+            let settled = previous == visible && visible.width >= visible.height;
+            if cx.reduce_motion() || settled || started.elapsed() >= Duration::from_millis(500) {
+                self.entry_pending = None;
+            } else {
+                self.entry_pending = Some((started, visible));
+                entry_ready = false;
+                window.request_animation_frame();
+            }
+        }
         let keyboard_height = match self.keyboard_page {
             KeyboardPage::Input => 88.,
             KeyboardPage::Keys => 176.,
@@ -1565,6 +1580,30 @@ impl Render for SessionView {
                             .children(self.keyboard.clone()),
                     ),
             );
+        }
+        if self.selected.is_some() && !cx.reduce_motion() {
+            let curtain = div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(visible.width)
+                .h(visible.height)
+                .bg(rgb(0x000000))
+                .occlude();
+            if entry_ready {
+                let width = f32::from(visible.width);
+                root = root.child(curtain.with_animation(
+                    ("session-entry-curtain", self.generation),
+                    Animation::new(Duration::from_millis(180)).with_easing(gpui::ease_out_quint()),
+                    move |curtain, progress| {
+                        curtain
+                            .left(px(width * progress))
+                            .w(px(width * (1. - progress)))
+                    },
+                ));
+            } else {
+                root = root.child(curtain);
+            }
         }
         root
     }

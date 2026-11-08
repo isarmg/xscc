@@ -1,10 +1,11 @@
 use super::ManagementPanel;
 use crate::{dashboard as ui, remote_video::MediaRequest, theme};
 use gpui::{
-    Anchor, AnchoredPositionMode, Context, Div, Focusable, KeyDownEvent, Window, anchored,
-    deferred, div, point, prelude::*, px, rgb,
+    Anchor, AnchoredPositionMode, Bounds, Context, Div, Focusable, KeyDownEvent, Pixels, Window,
+    anchored, deferred, div, point, prelude::*, px, rgb,
 };
 use librustdesk::gpui_session::ResolutionMode;
+use std::{cell::Cell, rc::Rc};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolbarMenu {
@@ -13,6 +14,12 @@ pub(super) enum ToolbarMenu {
     RefreshRate,
     Bitrate,
     VirtualDisplays,
+}
+
+impl ToolbarMenu {
+    fn toggle(self, current: Option<Self>) -> Option<Self> {
+        (current != Some(self)).then_some(self)
+    }
 }
 
 impl ManagementPanel {
@@ -42,6 +49,8 @@ impl ManagementPanel {
         let palette = theme::palette(window.appearance());
         let fullscreen = window.is_fullscreen();
         let open = self.toolbar_menu == Some(menu);
+        let trigger_bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+        let measured_trigger_bounds = trigger_bounds.clone();
         let (id, label, width, enabled) = match menu {
             ToolbarMenu::Display => (
                 "session-display-dropdown",
@@ -139,8 +148,8 @@ impl ManagementPanel {
                     }
                 };
                 if enabled {
-                    view.toolbar_menu = Some(menu);
-                    if menu == ToolbarMenu::VirtualDisplays {
+                    view.toolbar_menu = menu.toggle(view.toolbar_menu);
+                    if view.toolbar_menu == Some(ToolbarMenu::VirtualDisplays) {
                         view.query_virtual_displays(cx);
                     }
                     cx.notify();
@@ -151,6 +160,9 @@ impl ManagementPanel {
             .relative()
             .flex_shrink_0()
             .on_key_down(cx.listener(Self::toolbar_menu_key_down))
+            .on_children_prepainted(move |bounds, _, _| {
+                measured_trigger_bounds.set(bounds.first().copied());
+            })
             .child(trigger)
             .when(open, |wrapper| {
                 wrapper.child(
@@ -186,12 +198,20 @@ impl ManagementPanel {
                                         .occlude()
                                         .on_key_down(cx.listener(Self::toolbar_menu_key_down))
                                         .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                                        .on_mouse_down_out(cx.listener(move |view, _, _, cx| {
-                                            if view.toolbar_menu == Some(menu) {
-                                                view.toolbar_menu = None;
-                                                cx.notify();
-                                            }
-                                        }))
+                                        .on_mouse_down_out(cx.listener(
+                                            move |view, event, _, cx| {
+                                                // Let the trigger's click toggle its own open menu.
+                                                if trigger_bounds.get().is_some_and(|bounds| {
+                                                    bounds.contains(&event.position)
+                                                }) {
+                                                    return;
+                                                }
+                                                if view.toolbar_menu == Some(menu) {
+                                                    view.toolbar_menu = None;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ))
                                         .child(theme::surface(
                                             rgb(palette.panel),
                                             Some(rgb(palette.border)),
@@ -340,6 +360,39 @@ fn refresh_modes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_toolbar_menu_toggles_open_closed_open() {
+        for menu in [
+            ToolbarMenu::Display,
+            ToolbarMenu::Resolution,
+            ToolbarMenu::RefreshRate,
+            ToolbarMenu::Bitrate,
+            ToolbarMenu::VirtualDisplays,
+        ] {
+            let open = menu.toggle(None);
+            assert!(open == Some(menu));
+            let closed = menu.toggle(open);
+            assert!(closed.is_none());
+            assert!(menu.toggle(closed) == Some(menu));
+        }
+    }
+
+    #[test]
+    fn activating_a_different_menu_switches_the_open_menu() {
+        let mut open = None;
+        for menu in [
+            ToolbarMenu::Display,
+            ToolbarMenu::Resolution,
+            ToolbarMenu::RefreshRate,
+            ToolbarMenu::Bitrate,
+            ToolbarMenu::VirtualDisplays,
+            ToolbarMenu::Display,
+        ] {
+            open = menu.toggle(open);
+            assert!(open == Some(menu));
+        }
+    }
 
     #[test]
     fn refresh_menu_uses_only_reported_hz_for_the_current_size_and_requires_known_current_hz() {
