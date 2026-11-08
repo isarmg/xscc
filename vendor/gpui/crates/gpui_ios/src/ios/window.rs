@@ -109,8 +109,8 @@ define_class!(
 
         #[unsafe(method(supportedInterfaceOrientations))]
         fn supported_interface_orientations(&self) -> UIInterfaceOrientationMask {
-            if self.ivars().with_window(|window| window.session_presentation.get().is_some()).unwrap_or(false) {
-                UIInterfaceOrientationMask::Landscape
+            if let Some(orientation) = self.ivars().with_window(IosWindowState::session_orientation).flatten() {
+                orientation
             } else {
                 unsafe { msg_send![super(self), supportedInterfaceOrientations] }
             }
@@ -260,7 +260,7 @@ pub(crate) struct IosWindowState {
     /// Callback for active status changes
     active_status_callback: CallbackSlot<Box<dyn FnMut(bool)>>,
     visibility: Cell<WindowVisibility>,
-    session_presentation: Cell<Option<UIInterfaceOrientationMask>>,
+    session_presentation: Cell<Option<session_presentation::Presentation>>,
     visibility_callback: CallbackSlot<Box<dyn FnMut(WindowVisibility)>>,
     /// Callback for hover status changes (not really applicable on iOS)
     hover_status_callback: CallbackSlot<Box<dyn FnMut(bool)>>,
@@ -835,6 +835,10 @@ impl PlatformWindow for IosWindow {
 
     fn set_remote_session_presentation(&self, enabled: bool) {
         session_presentation::set_enabled(&self.state, enabled);
+    }
+
+    fn rotate_remote_session(&self) {
+        session_presentation::rotate(&self.state);
     }
 
     fn is_fullscreen(&self) -> bool {

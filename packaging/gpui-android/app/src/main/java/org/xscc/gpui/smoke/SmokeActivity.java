@@ -13,6 +13,10 @@ public final class SmokeActivity extends AndroidImeBridge {
         sessionPresentation.setEnabled(enabled);
     }
 
+    public final void rotateRemoteSession() {
+        sessionPresentation.rotate();
+    }
+
     @Override
     protected void onStop() {
         sessionPresentation.setEnabled(false);

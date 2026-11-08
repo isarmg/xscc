@@ -529,6 +529,7 @@ impl SessionView {
                         key.press = true;
                         key.modifiers.push(ControlKey::Control.into());
                     }
+                    Command::Chord(event) => key = event.clone(),
                     Command::Key(control) => {
                         key.set_control_key(*control);
                         key.press = true;
@@ -1236,6 +1237,10 @@ impl SessionView {
                     self.panel = Panel::None;
                 }
             }
+            ChromeAction::RotateScreen => {
+                self.hide_keyboard(window, cx);
+                window.rotate_remote_session();
+            }
             ChromeAction::OpenPanel(panel) => {
                 if panel == Panel::Keyboard && !self.input_allowed() {
                     return;
@@ -1416,8 +1421,14 @@ impl Render for SessionView {
         }
         let keyboard_height = match self.keyboard_page {
             KeyboardPage::Input => 88.,
-            KeyboardPage::Keys => 176.,
-            KeyboardPage::Shortcuts => 132.,
+            KeyboardPage::Keys => {
+                if visible.width < visible.height {
+                    (f32::from(visible.height) * 0.42).min(440.)
+                } else {
+                    (f32::from(visible.height) * 0.60).min(360.)
+                }
+            }
+            KeyboardPage::Shortcuts => (f32::from(visible.height) * 0.46).min(300.),
         };
         let layout = session_layout::layout(
             visible.width.into(),
@@ -1511,7 +1522,7 @@ impl Render for SessionView {
                 .flex_shrink_0()
                 .flex()
                 .items_center()
-                .gap_1()
+                .bg(rgb(0x292a30))
                 .px_1();
             for (id, label, page) in [
                 ("session-keyboard-input", "输入法", KeyboardPage::Input),
@@ -1520,7 +1531,7 @@ impl Render for SessionView {
                     "快捷键",
                     KeyboardPage::Shortcuts,
                 ),
-                ("session-keyboard-keys", "控制键", KeyboardPage::Keys),
+                ("session-keyboard-keys", "电脑键盘", KeyboardPage::Keys),
             ] {
                 header = header.child(
                     div()
@@ -1531,17 +1542,23 @@ impl Render for SessionView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(10.))
-                        .bg(rgb(if self.keyboard_page == page {
-                            crate::theme::LIGHT.accent
-                        } else {
-                            crate::theme::LIGHT.accent_soft
-                        }))
+                        .relative()
                         .text_color(rgb(if self.keyboard_page == page {
-                            crate::theme::LIGHT.on_accent
+                            0x4d88fa
                         } else {
-                            crate::theme::LIGHT.text
+                            0xe7e7eb
                         }))
+                        .when(self.keyboard_page == page, |tab| {
+                            tab.child(
+                                div()
+                                    .absolute()
+                                    .bottom_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h(px(2.))
+                                    .bg(rgb(0x4d88fa)),
+                            )
+                        })
                         .text_size(px(13.))
                         .child(label)
                         .on_click(cx.listener(move |view, _, window, cx| {
@@ -1558,7 +1575,8 @@ impl Render for SessionView {
                     .items_center()
                     .justify_center()
                     .rounded(px(10.))
-                    .text_color(rgb(crate::theme::LIGHT.text))
+                    .text_color(rgb(0xe7e7eb))
+                    .text_size(px(24.))
                     .child("×")
                     .on_click(cx.listener(|view, _, window, cx| {
                         view.chrome_action(ChromeAction::ClosePanel, window, cx);
@@ -1567,7 +1585,7 @@ impl Render for SessionView {
             root = root.child(
                 at(keyboard_bounds)
                     .occlude()
-                    .bg(rgb(crate::theme::LIGHT.panel))
+                    .bg(rgb(0x111214))
                     .flex()
                     .flex_col()
                     .overflow_hidden()
