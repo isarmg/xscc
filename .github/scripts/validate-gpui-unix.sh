@@ -21,6 +21,23 @@ grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$scroll_tests" || { echo 
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
     # Identify the last native test if the process exits through a signal rather than a Rust panic.
     RUST_BACKTRACE=1 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" -- --test-threads=1 --nocapture
+    # Keep the original parallel coverage and Cargo's dynamic-library environment.
+    # Trace only the test child; retain ASLR and the runner's existing ptrace policy.
+    command -v gdb >/dev/null
+    xscc_gdb_commands=$(mktemp /tmp/xscc-root-tests.XXXXXX)
+    trap 'rm -f -- "$xscc_gdb_commands"' EXIT
+    cat > "$xscc_gdb_commands" <<'GDB'
+set disable-randomization off
+set print thread-events off
+set follow-fork-mode parent
+set detach-on-fork on
+run
+thread apply all bt
+quit
+GDB
+    timeout --preserve-status --kill-after=10s 10m env RUST_BACKTRACE=1 \
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="gdb -nx -batch --return-child-result -x $xscc_gdb_commands --args" \
+        cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" -- --nocapture
 else
     cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target"
 fi

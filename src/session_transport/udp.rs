@@ -1077,26 +1077,43 @@ mod tests {
             ..Default::default()
         });
         host.send(&message).await.unwrap();
+        let SessionTransport::Hybrid(host_transport) = &host else {
+            unreachable!()
+        };
+        let host_failure = host_transport.failure.clone();
+        let host_ready = host_transport.ready.clone();
         let serving = tokio::spawn(async move {
+            let mut audio = Message::new();
+            audio.set_audio_frame(AudioFrame {
+                data: vec![3; 100].into(),
+                ..Default::default()
+            });
+            let mut audio_tick = interval(Duration::from_millis(20));
+            audio_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
-                let bytes = host.next().await.unwrap().unwrap();
-                if matches!(Message::parse_from_bytes(&bytes).unwrap().union,
-                    Some(message::Union::Misc(misc)) if matches!(misc.union, Some(misc::Union::CloseReason(_))))
-                {
-                    break;
+                tokio::select! {
+                    _ = audio_tick.tick() => host.send(&audio).await.unwrap(),
+                    bytes = host.next() => {
+                        let bytes = bytes.unwrap().unwrap();
+                        if matches!(Message::parse_from_bytes(&bytes).unwrap().union,
+                            Some(message::Union::Misc(misc)) if matches!(misc.union, Some(misc::Union::CloseReason(_))))
+                        { break; }
+                    }
                 }
             }
         });
         let mut audio = false;
         let mut clipboard = false;
         let mut received_video = false;
-        timeout(Duration::from_secs(20), async {
+        let result = timeout(Duration::from_secs(20), async {
             while !(audio && clipboard && received_video) {
                 let bytes = client.next().await.unwrap().unwrap();
                 match Message::parse_from_bytes(&bytes).unwrap().union {
                     Some(message::Union::AudioFrame(frame)) => {
                         assert_eq!(frame.data.len(), 100);
-                        assert!(!received_video, "audio must preempt a large video transfer");
+                        if !audio {
+                            assert!(!received_video, "audio must preempt a large video transfer");
+                        }
                         audio = true;
                     }
                     Some(message::Union::Clipboard(frame)) => {
@@ -1111,8 +1128,21 @@ mod tests {
                 }
             }
         })
-        .await
-        .unwrap();
+        .await;
+        let client_failure = match &client {
+            SessionTransport::Hybrid(transport) => transport.failure.borrow().clone(),
+            _ => None,
+        };
+        let host_protocol = if host_ready.load(Ordering::Acquire) {
+            "TCP+UDP"
+        } else {
+            "TCP"
+        };
+        eprintln!("actual hybrid receive result={result:?} audio={audio} clipboard={clipboard} video={received_video} host_protocol={host_protocol} host_failure={:?} host_task_finished={} client_protocol={} client_failure={client_failure:?}",
+            *host_failure.borrow(), serving.is_finished(), client.protocol());
+        result.expect(
+            "hybrid video/audio/control must arrive within the existing 20-second deadline",
+        );
         let elapsed = started.elapsed();
         eprintln!(
             "actual UDP fragmented payload_bytes={payload_size} elapsed_ms={} payload_mbps={:.3}",
