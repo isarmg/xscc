@@ -58,8 +58,17 @@ pub fn direct_server_running() -> bool {
 
 async fn direct_server(server: ServerPtr) {
     let mut listener = None;
+    #[cfg(feature = "udp-media")]
+    let mut _udp_listener = None;
     let mut port = 0;
     loop {
+        #[cfg(feature = "udp-media")]
+        if _udp_listener.as_ref().is_some_and(crate::udp_host::HostListener::is_finished) {
+            log::warn!("Restarting direct listener after UDP media receive task stopped");
+            listener = None;
+            _udp_listener = None;
+            DIRECT_SERVER_RUNNING.store(false, Ordering::Release);
+        }
         let disabled = config::is_outgoing_only()
             || config::is_disable_tcp_listen()
             || Config::get_bool_option("stop-service")
@@ -68,6 +77,8 @@ async fn direct_server(server: ServerPtr) {
         let restarted = RESTART_REQUESTED.swap(false, Ordering::SeqCst);
         if disabled || port != requested_port || restarted {
             listener = None;
+            #[cfg(feature = "udp-media")]
+            { _udp_listener = None; }
             DIRECT_SERVER_RUNNING.store(false, Ordering::Release);
         }
         if disabled {
@@ -79,6 +90,26 @@ async fn direct_server(server: ServerPtr) {
             port = requested_port;
             match hbb_common::tcp::listen_any(port).await {
                 Ok(bound) => {
+                    #[cfg(feature = "udp-media")]
+                    match crate::udp_host::bind(port) {
+                        Ok(udp) => {
+                            match udp.local_addr() {
+                                Ok(address) => log::info!("Encrypted UDP media listening on {address}"),
+                                Err(error) => log::warn!("Unable to inspect UDP listener address: {error}"),
+                            }
+                            _udp_listener = Some(udp);
+                        },
+                        Err(error) => {
+                            hbb_common::throttled_log!(
+                                std::time::Duration::from_secs(60),
+                                error,
+                                "Unable to bind authenticated UDP media on port {port}: {error}"
+                            );
+                            drop(bound);
+                            sleep(1.).await;
+                            continue;
+                        }
+                    }
                     log::info!("Direct server listening on port {}", port);
                     listener = Some(bound);
                     DIRECT_SERVER_RUNNING.store(true, Ordering::Release);

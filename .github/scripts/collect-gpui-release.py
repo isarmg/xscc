@@ -55,6 +55,7 @@ def required_native_jobs(workflow):
             'candidate (controller, live-session, use_dasp,gpui-session,hwcodec)': common + (
                 'Test FFmpeg decoded-plane reuse with native bindings',
                 'Test framed transport wire compatibility and blocked-write isolation',
+                'Test TCP control and encrypted UDP streaming',
                 'Test frame-rate-aware codec budget and timestamp duration',
                 'Test high-refresh session FPS transport and adaptation',
                 'Test Enigo parse error formatting',
@@ -85,10 +86,10 @@ def required_native_jobs(workflow):
                     steps += ('Verify native Apple Silicon and macOS 26 SDK', 'Test macOS packaging validation')
                 elif role == 'controller':
                     steps += ('Verify Linux native prerequisites',
-                              'Test opt-in QUIC transport and media framing',
+                              'Test encrypted UDP media and TCP session binding',
                               'Test mobile management header touch actions',
                               'Test mobile audio queue and mute lifecycle',
-                              'Test opt-in QUIC session integration')
+                              'Test TCP control and UDP streaming integration')
                 else:
                     steps += ('Verify Linux native prerequisites',
                               'Compile optional Linux DRM capture and wake paths')

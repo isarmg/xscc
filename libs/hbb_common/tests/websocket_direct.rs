@@ -67,9 +67,9 @@ async fn direct_round_trip(wss: bool) {
     upsert_tls_cache(&url, TlsType::Rustls, true);
     let server = tokio::spawn(async move {
         let (stream, client_addr) = listener.accept().await.unwrap();
-        let mut stream = DynTcpStream(Box::new(stream));
+        let mut stream = DynTcpStream::new(stream);
         if wss {
-            stream = DynTcpStream(Box::new(tls_identity().0.accept(stream).await.unwrap()));
+            stream = DynTcpStream::new(tls_identity().0.accept(stream).await.unwrap());
         }
         echo(stream, "/ws/id", &addr.to_string()).await;
         client_addr
@@ -121,7 +121,7 @@ async fn direct_wss_accepts_explicitly_trusted_certificate() {
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let stream = acceptor.accept(stream).await.unwrap();
-        echo(DynTcpStream(Box::new(stream)), "/", &addr.to_string()).await;
+        echo(DynTcpStream::new(stream), "/", &addr.to_string()).await;
     });
     let mut roots = rustls::RootCertStore::empty();
     roots.add(cert).unwrap();

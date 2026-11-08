@@ -162,7 +162,8 @@ library is available; actual clean Windows 11 startup remains a release gate.
 Both packages check x86_64 architecture and OS build >= 22000. Supported runtime
 is Windows 11; the installer smoke runner is not a supported end-user target.
 Both application installers are unsigned and preserve identity/configuration on removal.
-They make no firewall, security-policy or update-feed modifications. The host bundles the
+The controller makes no firewall changes. The host adds executable-scoped inbound TCP
+and UDP rules, removed on uninstall; it makes no security-policy or update-feed modifications. The host bundles the
 signed virtual display driver files described below; driver registration is deferred until
 an authorized session explicitly requests a virtual display or needs headless provisioning.
 

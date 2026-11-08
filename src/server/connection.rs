@@ -1368,6 +1368,28 @@ impl Connection {
                             .unwrap_or_default())
                             .into();
                     }
+                    #[cfg(feature = "udp-media")]
+                    if self.lr.supports_udp_media {
+                        match self.stream.offer_udp().await {
+                            Ok(Some(offer)) => {
+                                let limit = self.lr.option.as_ref()
+                                    .and_then(|option| option.bitrate_limit_kbps).unwrap_or(0);
+                                if let Err(error) = self.stream.set_media_bitrate_limit(limit) {
+                                    self.send_login_error(&format!("UDP bitrate setup failed: {error:#}")).await;
+                                    return false;
+                                }
+                                pi.udp_media = Some(offer).into();
+                            },
+                            Ok(None) => {
+                                self.send_login_error("UDP media is not available on this authenticated connection").await;
+                                return false;
+                            },
+                            Err(error) => {
+                                self.send_login_error(&format!("UDP media setup failed: {error:#}")).await;
+                                return false;
+                            }
+                        }
+                    }
                     res.set_peer_info(pi);
                     sub_service = true;
 
@@ -3311,6 +3333,9 @@ impl Connection {
             return;
         }
         self.closed = true;
+        // Revoke UDP authorization independently of later native display teardown.
+        #[cfg(feature = "udp-media")]
+        self.stream.revoke_media();
         #[cfg(windows)]
         {
             self.release_mouse_buttons();

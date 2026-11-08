@@ -65,6 +65,7 @@ pub struct SessionView {
     interactive_session: bool,
     target_fps: Option<TargetFps>,
     quality: SessionQuality,
+    transport: Option<String>,
     view_only: bool,
     extent: (u32, u32),
     origin: (i32, i32),
@@ -211,6 +212,7 @@ impl SessionView {
             interactive_session: false,
             target_fps: None,
             quality: SessionQuality::default(),
+            transport: None,
             view_only: false,
             extent: (0, 0),
             origin: (0, 0),
@@ -259,6 +261,7 @@ impl SessionView {
         self.prepared_cursor = PreparedCursor::default();
         self.target_fps = None;
         self.quality = SessionQuality::default();
+        self.transport = None;
         self.extent = (0, 0);
         self.origin = (0, 0);
         self.generation = self.generation.wrapping_add(1);
@@ -712,6 +715,7 @@ impl SessionView {
         changed |= !events.is_empty();
         for event in events {
             match event {
+                SessionEvent::Transport(protocol) => self.transport = Some(protocol),
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接，等待首帧…".into();
@@ -1067,7 +1071,8 @@ impl SessionView {
                 })
                 .collect(),
             quality: format!(
-                "接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
+                "{} · 接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
+                self.transport.as_deref().unwrap_or("—"),
                 self.quality
                     .received_fps
                     .map(|v| v.to_string())

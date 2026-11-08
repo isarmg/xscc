@@ -23,6 +23,10 @@ $identity = Join-Path $state 'installation.uuid'
 $sentinel = Join-Path $installed 'preserve-smoke-test.txt'
 $servicesBefore = @(Get-CimInstance Win32_Service | Select-Object -ExpandProperty Name)
 $driversBefore = @(Get-CimInstance Win32_SystemDriver | Select-Object -ExpandProperty Name)
+$firewallNames = @('XSCC Host TCP', 'XSCC Host UDP')
+if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object DisplayName -in $firewallNames).Count -gt 0) {
+    throw 'Refusing to test over existing XSCC Host TCP/UDP firewall rules'
+}
 if ('XSCC Host' -in $servicesBefore -or (Test-Path $installed) -or (Test-Path $key) -or (Test-Path $state)) {
     throw 'Refusing to test over an existing host installation or management identity'
 }
@@ -53,6 +57,18 @@ try {
     Write-Host 'HOST_CI_STAGE=install'
     Invoke-Installer $installer
     Write-Host 'HOST_CI_STAGE=verify-service'
+    foreach ($protocol in @('TCP', 'UDP')) {
+        $rules = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object DisplayName -eq "XSCC Host $protocol")
+        if ($rules.Count -ne 1 -or $rules[0].Direction -ne 'Inbound' -or
+            $rules[0].Action -ne 'Allow' -or $rules[0].Enabled -ne 'True') {
+            throw "Missing or incorrect executable-scoped $protocol firewall rule"
+        }
+        $application = $rules[0] | Get-NetFirewallApplicationFilter -ErrorAction Stop
+        $portFilter = $rules[0] | Get-NetFirewallPortFilter -ErrorAction Stop
+        if ($application.Program -ine $exe -or $portFilter.Protocol -ne $protocol) {
+            throw "Firewall rule is not scoped to this Host executable and $protocol"
+        }
+    }
     $fontLicense = Join-Path $installed 'MAPLE-FONT-OFL.txt'
     if (-not (Test-Path $fontLicense) -or
         (Get-FileHash $fontLicense -Algorithm SHA256).Hash -ne
@@ -152,6 +168,9 @@ while (((Get-HostService) -or (Test-Path $exe) -or (Test-Path $key)) -and (Get-D
     Start-Sleep -Milliseconds 250
 }
 if ((Get-HostService) -or (Test-Path $key)) { throw 'Service/uninstall registration remains after uninstall' }
+if (@(Get-NetFirewallRule -ErrorAction Stop | Where-Object DisplayName -in $firewallNames).Count -gt 0) {
+    throw 'Installer-owned TCP/UDP firewall rules remain after uninstall'
+}
 foreach ($name in @('xscc-host.exe', 'Uninstall.exe', 'LICENCE', 'README.txt', 'build-info.json', 'dependencies.txt', 'THIRD_PARTY_NOTICES.txt', 'GPUI-LICENSE-APACHE.txt', 'MAPLE-FONT-OFL.txt')) {
     if (Test-Path (Join-Path $installed $name)) { throw "Known package file was not removed: $name" }
 }

@@ -14,6 +14,10 @@ on:
       - 'src/test_lan/**'
       - 'src/client.rs'
       - 'src/client/**'
+      - 'src/session_transport.rs'
+      - 'src/session_transport/**'
+      - 'src/udp_host.rs'
+      - 'src/direct_server.rs'
       - 'src/ipc.rs'
       - 'src/server.rs'
       - 'src/server/**'
@@ -247,6 +251,22 @@ jobs:
       - name: Test framed transport wire compatibility and blocked-write isolation
         if: matrix.role == 'controller' && !inputs.build_only
         run: cargo test --locked -p hbb_common --lib --target x86_64-pc-windows-msvc tcp::tests
+      - name: Test TCP control and encrypted UDP streaming
+        if: matrix.role == 'controller' && !inputs.build_only
+        run: |
+          foreach ($case in @(@('hbb_common', 'udp'), @('base', 'direct_transport::udp_media::tests'))) {
+            $argsForCase = @('test', '--locked', '-p', $case[0], '--lib', '--target', 'x86_64-pc-windows-msvc')
+            if ($case[0] -eq 'base') { $argsForCase += @('--features', 'udp-media') }
+            $results = & cargo @argsForCase $case[1] 2>&1
+            $code = $LASTEXITCODE
+            $results | Write-Output
+            if ($code -ne 0 -or ($results | Out-String) -notmatch '(?m)^test result: ok\. [1-9][0-9]* passed;') {
+              throw "UDP test failed or matched zero tests: $($case[1])"
+            }
+          }
+          foreach ($filter in @('client::udp_media::tests', 'udp_host::tests', 'session_transport::udp::tests', 'gpui_session::tests::connection_type_reports_the_actual_transport')) {
+            ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter $filter
+          }
       - name: Test frame-rate-aware codec budget and timestamp duration
         if: matrix.role == 'controller' && !inputs.build_only
         run: |

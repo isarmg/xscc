@@ -36,6 +36,7 @@ pub struct VideoState {
     pub pending_media: Option<MediaRequest>,
     pub virtual_display_pending: bool,
     pub quality: SessionQuality,
+    pub transport: Option<String>,
     pub notice: String,
 }
 
@@ -63,6 +64,7 @@ pub struct RemoteVideo {
     pending_media: Option<media_controls::PendingMedia>,
     pending_virtual: Option<media_controls::PendingVirtual>,
     quality: SessionQuality,
+    transport: Option<String>,
     notice: String,
     focus: FocusHandle,
     bounds: Rc<Cell<Bounds<Pixels>>>,
@@ -136,6 +138,7 @@ impl RemoteVideo {
             pending_media: None,
             pending_virtual: None,
             quality: SessionQuality::default(),
+            transport: None,
             notice: String::new(),
             focus,
             bounds: Rc::new(Cell::new(Bounds::default())),
@@ -164,6 +167,7 @@ impl RemoteVideo {
             pending_media: self.pending_media.as_ref().map(|pending| pending.request),
             virtual_display_pending: self.pending_virtual.is_some(),
             quality: self.quality.clone(),
+            transport: self.transport.clone(),
             notice: self.notice.clone(),
         }
     }
@@ -285,6 +289,7 @@ impl RemoteVideo {
         self.pending_media = None;
         self.pending_virtual = None;
         self.quality = SessionQuality::default();
+        self.transport = None;
         self.keyboard_allowed = false;
         self.scroll_remainder = (0.0, 0.0);
         self.extent = (0, 0);
@@ -341,6 +346,7 @@ impl RemoteVideo {
         for event in events {
             match event {
                 SessionEvent::Connecting => self.notice = "正在连接…".into(),
+                SessionEvent::Transport(protocol) => self.transport = Some(protocol),
                 SessionEvent::Connected => {
                     self.connected = true;
                     self.notice = "已连接；点击画面后发送键鼠。切换窗口会释放已按下的键。".into();
