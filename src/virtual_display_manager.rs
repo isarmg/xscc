@@ -1040,3 +1040,10 @@ pub(crate) fn before_persistent_display_change() -> ResultType<Option<Persistent
     }
     mtt_vdd::before_persistent_display_change()
 }
+
+pub(crate) fn before_display_mode_change() -> ResultType<Option<PersistentDisplayChangeGuard>> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(None);
+    }
+    mtt_vdd::before_display_mode_change()
+}

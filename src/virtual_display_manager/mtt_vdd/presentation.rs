@@ -311,6 +311,17 @@ pub(super) fn before_persistent_change() -> ResultType<Option<PersistentDisplayC
     }))
 }
 
+pub(super) fn before_mode_change() -> ResultType<Option<PersistentDisplayChangeGuard>> {
+    let lock = LOCK.lock().unwrap();
+    let idle = wait_for_capture_idle(Duration::from_secs(5)).map_err(anyhow::Error::msg)?;
+    let preferred = suspend_locked()?;
+    Ok(Some(PersistentDisplayChangeGuard {
+        preferred,
+        _lock: lock,
+        _idle: idle,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{anyhow, complete_removal, translated_positions};

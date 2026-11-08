@@ -242,7 +242,7 @@ struct Epoch {
     format: Option<Vec<u8>>,
 }
 enum Command {
-    Epoch(Epoch, Option<oneshot::Sender<()>>),
+    Epoch(Epoch),
     Notice(FrameNotice),
     Nack(KeyframeNack),
     Complete(KeyframeComplete),
@@ -624,7 +624,7 @@ impl HybridTransport {
             udp_media_control::Union::Epoch(serde_json::to_vec(&epoch)?.into()),
             true,
         )?;
-        self.command(Command::Epoch(epoch.clone(), None))?;
+        self.command(Command::Epoch(epoch.clone()))?;
         Ok(epoch.epoch)
     }
     async fn send(&mut self, message: &Message) -> ResultType<()> {
@@ -712,7 +712,7 @@ impl HybridTransport {
     fn notice(&self, notice: FrameNotice) -> ResultType<()> {
         self.writer.notice(self.session_id, notice)
     }
-    async fn control(&mut self, control: UdpMediaControl) -> ResultType<Option<BytesMut>> {
+    fn control(&mut self, control: UdpMediaControl) -> ResultType<Option<BytesMut>> {
         if control.session_id.as_ref() != self.session_id.0 {
             bail!("UDP media control session mismatch");
         }
@@ -739,7 +739,7 @@ impl HybridTransport {
                     if !epoch.ack || epoch.format.is_some() {
                         bail!("Expected UDP media epoch acknowledgement");
                     }
-                    self.command(Command::Epoch(epoch, None))?;
+                    self.command(Command::Epoch(epoch))?;
                 } else {
                     if epoch.ack {
                         bail!("Unexpected UDP media epoch acknowledgement");
@@ -759,12 +759,9 @@ impl HybridTransport {
                     if let Some(format) = &epoch.format {
                         validate_format(&Message::parse_from_bytes(format)?, &epoch)?;
                     }
-                    let (done, received) = oneshot::channel();
-                    self.command(Command::Epoch(epoch.clone(), Some(done)))?;
-                    timeout(Duration::from_millis(CONNECT_TIMEOUT), received)
-                        .await
-                        .context("UDP epoch update timed out")?
-                        .context("UDP media receiver stopped")?;
+                    // The worker consumes queued commands before receiving UDP packets.
+                    // Queue the epoch before its ACK without yielding to a cancellable caller.
+                    self.command(Command::Epoch(epoch.clone()))?;
                     self.receiving.insert(
                         (epoch.kind, epoch.display),
                         ReceiveStream {
@@ -830,7 +827,7 @@ impl HybridTransport {
                     };
                     if let Some(control) = control {
                         let ready = matches!(control.union, Some(udp_media_control::Union::Ready(_)));
-                        if let Some(format) = self.control(control).await? { return Ok(format); }
+                        if let Some(format) = self.control(control)? { return Ok(format); }
                         if ready { return Ok(bytes); }
                         continue;
                     }
@@ -1036,6 +1033,74 @@ mod tests {
         assert_eq!(Message::parse_from_bytes(&bytes).unwrap(), message);
         assert_eq!(client.protocol(), "TCP");
     }
+    #[tokio::test]
+    async fn format_epoch_survives_a_competing_ui_cancel_and_is_delivered_once() {
+        let (client, mut host) = backpressured_streams();
+        let sid = SessionId([17; 16]);
+        let (mut client, mut channels) = HybridTransport::new(client, sid, false).unwrap();
+        let mut format = Misc::new();
+        format.set_switch_display(base::message_proto::SwitchDisplay {
+            width: 2560,
+            height: 1440,
+            ..Default::default()
+        });
+        let mut expected = Message::new();
+        expected.set_misc(format);
+        let epoch = Epoch {
+            kind: MediaKind::Video,
+            display: 0,
+            epoch: 1,
+            ack: false,
+            format: Some(expected.write_to_bytes().unwrap()),
+        };
+        let mut control = Misc::new();
+        control.set_udp_media(UdpMediaControl {
+            session_id: sid.0.to_vec().into(),
+            union: Some(udp_media_control::Union::Epoch(
+                serde_json::to_vec(&epoch).unwrap().into(),
+            )),
+            ..Default::default()
+        });
+        let mut message = Message::new();
+        message.set_misc(control);
+        host.send(&message).await.unwrap();
+        host.send(&close()).await.unwrap();
+
+        // A queued worker command makes the competing branch ready before an async ACK wait.
+        let delivered = timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                biased;
+                packet = client.next() => packet.unwrap(),
+                _ = channels.commands.recv() => client.next().await.unwrap(),
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(Message::parse_from_bytes(&delivered).unwrap(), expected);
+        assert_eq!(
+            Message::parse_from_bytes(&client.next().await.unwrap()).unwrap(),
+            close()
+        );
+        let acknowledgement = host.next().await.unwrap().unwrap();
+        let acknowledgement = Message::parse_from_bytes(&acknowledgement).unwrap();
+        let Some(message::Union::Misc(misc)) = acknowledgement.union else {
+            panic!("expected epoch acknowledgement");
+        };
+        let Some(misc::Union::UdpMedia(control)) = misc.union else {
+            panic!("expected UDP epoch control");
+        };
+        let Some(udp_media_control::Union::Epoch(bytes)) = control.union else {
+            panic!("expected epoch acknowledgement");
+        };
+        let acknowledgement: Epoch = bounded_json(&bytes).unwrap();
+        assert!(acknowledgement.ack);
+        assert_eq!(acknowledgement.epoch, 1);
+        assert!(acknowledgement.format.is_none());
+        assert!(timeout(Duration::from_millis(10), host.next())
+            .await
+            .is_err());
+    }
+
     #[tokio::test]
     async fn hybrid_fragmented_video_audio_and_control_use_real_sockets() {
         let _guard = crate::udp_host::TEST_LISTENER_LOCK.lock().await;
@@ -1635,9 +1700,8 @@ async fn client_media(
                 biased;
                 changed = closing.changed() => { changed.context("UDP TCP owner stopped")?; if closing.borrow().is_some() { return Ok(()); } }
                 command = commands.recv() => match command.context("UDP media command owner stopped")? {
-                    Command::Epoch(epoch, done) => {
+                    Command::Epoch(epoch) => {
                         reassembler.set_epoch(epoch.kind, epoch.display, epoch.epoch)?;
-                        if let Some(done) = done { let _ = done.send(()); }
                     }
                     Command::Notice(notice) => match reassembler.note_notice(notice, Instant::now()) {
                         Ok(outcome) => recovery(&writer, pending.session_id, outcome, &completed, &mut refreshes)?,
@@ -1758,7 +1822,7 @@ async fn host_media(
                 biased;
                 changed = closing.changed() => { changed.context("UDP TCP owner stopped")?; if closing.borrow().is_some() { return Ok(()); } }
                 command = commands.recv() => match command.context("UDP media command owner stopped")? {
-                    Command::Epoch(epoch, _) => {
+                    Command::Epoch(epoch) => {
                         let key = (epoch.kind, epoch.display);
                         if epoch.ack {
                             if let Some((generation, acknowledged)) = epochs.get_mut(&key) {

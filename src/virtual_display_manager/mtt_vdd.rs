@@ -799,6 +799,10 @@ pub(super) fn before_persistent_display_change() -> ResultType<Option<Persistent
     presentation::before_persistent_change()
 }
 
+pub(super) fn before_display_mode_change() -> ResultType<Option<PersistentDisplayChangeGuard>> {
+    presentation::before_mode_change()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

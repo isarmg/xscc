@@ -169,11 +169,21 @@ impl Connection {
                     bail!("Session authorization expired");
                 }
             }
-            let displays = display_service::try_get_displays()?;
-            let display = displays
-                .get(index)
-                .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
-            let name = display.name();
+            let (name, original) = {
+                let displays = display_service::try_get_displays()?;
+                let display = displays
+                    .get(index)
+                    .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
+                #[cfg(target_os = "macos")]
+                let scale = display.scale();
+                #[cfg(not(target_os = "macos"))]
+                let scale = 1.0;
+                let original = (
+                    ((display.width() as f64) / scale).round() as i32,
+                    ((display.height() as f64) / scale).round() as i32,
+                );
+                (display.name(), original)
+            };
             #[cfg(not(windows))]
             if mode.refresh_rate != 0 {
                 bail!("The host does not support refresh rate changes");
@@ -200,14 +210,6 @@ impl Connection {
                     return Ok(false);
                 }
             }
-            #[cfg(target_os = "macos")]
-            let scale = display.scale();
-            #[cfg(not(target_os = "macos"))]
-            let scale = 1.0;
-            let original = (
-                ((display.width() as f64) / scale).round() as i32,
-                ((display.height() as f64) / scale).round() as i32,
-            );
             if mode.refresh_rate == 0 {
                 crate::platform::change_resolution(&name, mode.width as _, mode.height as _)?;
             }
