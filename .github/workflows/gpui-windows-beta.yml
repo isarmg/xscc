@@ -121,7 +121,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pinned asset download regression failed' }
           python .github/scripts/test-setup-pinned-vcpkg.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned native setup regression failed' }
-          python .github/scripts/setup-pinned-vcpkg.py --root C:\vcpkg
+          python .github/scripts/setup-pinned-vcpkg.py --root "$env:RUNNER_TEMP/xscc-vcpkg"
           if ($LASTEXITCODE -ne 0) { throw 'Pinned native tool setup failed' }
       - name: Record hosted native toolchain image
         id: native-toolchain
