@@ -192,6 +192,16 @@ def check_playback_jni(classes, definitions):
                          repr(sorted(required - definitions)))
 
 
+def check_high_refresh_api(methods):
+    required = {
+        ("Landroid/view/Surface;", "setFrameRate", "(FI)V"),
+        ("Landroid/view/Display$Mode;", "getModeId", "()I"),
+    }
+    if required - methods:
+        raise ValueError("Required Android high-refresh API calls missing: " +
+                         repr(sorted(required - methods)))
+
+
 def check_game_abi(expected_classes, expected_members, classes, definitions):
     if expected_classes - classes or expected_members - definitions:
         raise ValueError("GameActivity JNI classes/members removed or renamed: " +
@@ -200,7 +210,7 @@ def check_game_abi(expected_classes, expected_members, classes, definitions):
 
 
 def verify(apk, aar, management=False):
-    classes, definitions = set(), set()
+    classes, definitions, referenced_methods = set(), set(), set()
     dex_count = 0
     with zipfile.ZipFile(apk) as archive:
         for name in archive.namelist():
@@ -208,6 +218,7 @@ def verify(apk, aar, management=False):
                 dex_count += 1
                 strings, methods, found_classes, found_definitions = dex_symbols(archive.read(name))
                 check_privacy(strings, methods)
+                referenced_methods.update(methods)
                 classes.update(found_classes)
                 definitions.update(found_definitions)
     if not dex_count:
@@ -228,6 +239,7 @@ def verify(apk, aar, management=False):
     check_jni(classes, definitions)
     if management:
         check_playback_jni(classes, definitions)
+        check_high_refresh_api(referenced_methods)
     return len(expected_classes), len(expected_members)
 
 

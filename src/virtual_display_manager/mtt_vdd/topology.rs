@@ -711,6 +711,7 @@ mod tests {
                 bail!("Hardware check requires an explicitly enabled disposable Windows runner");
             }
         }
+        println!("VDD_CI_STAGE=inspect-original-desktop");
         let original = Topology::query(false)?;
         if original.paths.is_empty() || device()?.is_some() || registered_path()?.is_some() {
             bail!("Refusing hardware check without an existing desktop or over an existing VDD");
@@ -728,14 +729,17 @@ mod tests {
             for (step, hz) in [120, 240, 120, 240].into_iter().enumerate() {
                 config.modes[0].refresh_rate_units = hz * 10000;
                 let state = if step < 2 {
+                    println!("VDD_CI_STAGE=configure-display step={step} hz={hz}");
                     configuration::configure(&config)?
                 } else {
+                    println!("VDD_CI_STAGE=inspect-active-display step={step} hz={hz}");
                     let name = configuration::state()
                         .displays
                         .into_iter()
                         .find(|screen| screen.active)
                         .ok_or_else(|| anyhow::anyhow!("No active VDD for the refresh menu check"))?
                         .name;
+                    println!("VDD_CI_STAGE=inspect-supported-modes step={step} hz={hz}");
                     let mode = crate::platform::windows::display_modes::supported(&name)
                         .resolutions
                         .into_iter()
@@ -745,7 +749,9 @@ mod tests {
                         .ok_or_else(|| {
                             anyhow::anyhow!("The menu does not offer the declared {hz} Hz mode")
                         })?;
+                    println!("VDD_CI_STAGE=change-refresh step={step} hz={hz}");
                     crate::platform::windows::display_modes::change(&name, &mode)?;
+                    println!("VDD_CI_STAGE=inspect-changed-display step={step} hz={hz}");
                     configuration::state()
                 };
                 if state.active_count != 1
@@ -759,6 +765,7 @@ mod tests {
                         state.message
                     );
                 }
+                println!("VDD_CI_STAGE=verify-current-mode step={step} hz={hz}");
                 for screen in &state.displays {
                     let name = wide(OsStr::new(&screen.name));
                     let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
@@ -777,6 +784,7 @@ mod tests {
             Ok(())
         })();
         config.count = 0;
+        println!("VDD_CI_STAGE=remove-display");
         let cleanup = configuration::configure(&config);
         let state = cleanup?;
         check?;

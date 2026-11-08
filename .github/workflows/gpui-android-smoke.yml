@@ -143,6 +143,24 @@ jobs:
           "$RUNNER_TEMP/gpui-android-geometry-tests"
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/text_state.rs -o "$RUNNER_TEMP/gpui-android-text-state-tests"
           "$RUNNER_TEMP/gpui-android-text-state-tests"
+          printf '#[path = "%s/src/gpui_session/metrics.rs"] mod metrics;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-metrics-tests.rs"
+          rustc --edition 2024 --test "$RUNNER_TEMP/gpui-metrics-tests.rs" -o "$RUNNER_TEMP/gpui-metrics-tests"
+          metric_test=metrics::tests::decoded_batches_count_outputs_independently_of_ui_submissions
+          "$RUNNER_TEMP/gpui-metrics-tests" --list | grep -Fx "$metric_test: test"
+          "$RUNNER_TEMP/gpui-metrics-tests" --exact "$metric_test"
+          python3 - "$RUNNER_TEMP/gpui-decode-capacity-tests.rs" <<'PY'
+          import pathlib, sys
+          source = pathlib.Path("src/client.rs").read_text()
+          start = source.index("#[inline]\nfn fps_calculate(")
+          end = source.index("\npub(crate) fn get_hwcodec_config()", start)
+          pathlib.Path(sys.argv[1]).write_text("use std::{sync::{Arc, RwLock}, time::Duration};\n" + source[start:end])
+          PY
+          rustc --edition 2024 --test "$RUNNER_TEMP/gpui-decode-capacity-tests.rs" -o "$RUNNER_TEMP/gpui-decode-capacity-tests"
+          for capacity_test in batched_outputs_report_the_actual_decode_capacity empty_input_submission_counts_work_without_inventing_frames single_output_capacity_keeps_the_existing_warmup; do
+            name="mediacodec_capacity_tests::$capacity_test"
+            "$RUNNER_TEMP/gpui-decode-capacity-tests" --list | grep -Fx "$name: test"
+            "$RUNNER_TEMP/gpui-decode-capacity-tests" --exact "$name"
+          done
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:

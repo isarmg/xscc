@@ -508,11 +508,11 @@ impl VideoQoS {
         let Some(user) = self.users.get_mut(&id) else {
             return;
         };
-        let was_enabled = user.streaming_target_fps.is_some();
-        user.streaming_target_fps = enabled.then(|| user.fps_cap());
-        if was_enabled == enabled {
+        let target = enabled.then(|| user.fps_cap());
+        if user.streaming_target_fps == target {
             return;
         }
+        user.streaming_target_fps = target;
         if enabled {
             // Explicit streaming starts at its requested cap. Repeated options and
             // adaptive FPS updates must not erase evidence of congestion.

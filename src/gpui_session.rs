@@ -762,6 +762,20 @@ impl InvokeUiSession for Handler {
             self.0.metrics.lock().unwrap().decoded(elapsed);
         }
     }
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    fn on_mediacodec_decoded(&self, display: usize, frames: usize, elapsed: Duration) {
+        let monitors = self.0.monitors.read().unwrap();
+        if !self.0.closed.load(Ordering::Acquire)
+            && monitors.pending.is_none()
+            && monitors.current == display
+        {
+            self.0
+                .metrics
+                .lock()
+                .unwrap()
+                .decoded_frames(frames, elapsed);
+        }
+    }
     fn on_rgba(&self, display: usize, image: &mut scrap::ImageRgb) {
         if self.0.closed.load(Ordering::Acquire) {
             return;
@@ -978,7 +992,7 @@ impl InvokeUiSession for Handler {
         let index = monitors.current;
         let sample = self.0.metrics.lock().unwrap().snapshot(Instant::now());
         drop(monitors);
-        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+        #[cfg(not(target_os = "ios"))]
         if let Some(sample) = sample.as_ref() {
             hbb_common::log::info!(
                 target: "xscc::session_metrics",

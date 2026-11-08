@@ -100,6 +100,11 @@ pub trait EncoderApi {
 
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame>;
 
+    #[cfg(all(windows, feature = "vram"))]
+    fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
+        Ok(None)
+    }
+
     fn yuvfmt(&self) -> EncodeYuvFormat;
 
     #[cfg(feature = "vram")]
@@ -699,18 +704,46 @@ impl Decoder {
     }
 
     #[cfg(feature = "mediacodec")]
-    pub fn set_video_size(&mut self, width: i32, height: i32) -> ResultType<()> {
+    pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
         if let Some(decoder) = self
             .h264_media_codec
             .as_mut()
             .or(self.h265_media_codec.as_mut())
         {
-            if let Err(error) = decoder.set_video_size(width, height) {
+            if let Err(error) = decoder.set_video_size(width, height, fps) {
                 self.valid = false;
                 return Err(error);
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn has_pending_mediacodec_output(&self) -> bool {
+        self.h264_media_codec
+            .as_ref()
+            .or(self.h265_media_codec.as_ref())
+            .is_some_and(MediaCodecDecoder::has_pending_output)
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn take_mediacodec_output_count(&mut self) -> Option<usize> {
+        self.h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+            .map(MediaCodecDecoder::take_decoded_output_count)
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn poll_mediacodec_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
+        match self
+            .h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+        {
+            Some(decoder) => decoder.poll_output(rgb),
+            None => Ok(false),
+        }
     }
 
     pub fn format(&self) -> CodecFormat {

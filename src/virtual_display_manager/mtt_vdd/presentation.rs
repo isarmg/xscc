@@ -240,7 +240,18 @@ pub(super) fn suspend_locked() -> ResultType<Option<String>> {
         *PREFERENCE.lock().unwrap() = None;
         return Ok(None);
     }
-    apply_primary(topology, &previous.original_primary)?;
+    let started = std::time::Instant::now();
+    hbb_common::throttled_log!(
+        Duration::from_secs(1), info,
+        "session_display_cleanup stage=primary_restore_begin"
+    );
+    let result = apply_primary(topology, &previous.original_primary);
+    hbb_common::throttled_log!(
+        Duration::from_secs(1), info,
+        "session_display_cleanup stage=primary_restore_end elapsed_ms={} success={}",
+        started.elapsed().as_millis(), result.is_ok()
+    );
+    result?;
     *PREFERENCE.lock().unwrap() = None;
     Ok(Some(previous.preferred))
 }

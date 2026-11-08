@@ -102,11 +102,16 @@ try {
         if (Test-Path $releaseBackup) { throw 'Refusing to overwrite an existing host backup' }
         $releaseHash = (Get-FileHash $exe -Algorithm SHA256).Hash
         Copy-Item -LiteralPath $exe -Destination $releaseBackup -ErrorAction Stop
+        $driverLogDirectory = Join-Path $env:RUNNER_TEMP 'xscc-vdd-diagnostics'
+        New-Item -ItemType Directory -Path $driverLogDirectory -Force | Out-Null
+        $driverLog = Join-Path $driverLogDirectory 'driver-check.log'
+        Set-Content -LiteralPath $driverLog -Value '' -NoNewline -Encoding utf8
+        Write-Host "VDD_CI_DRIVER_LOG=$driverLog"
         try {
             # Keep the production Program Files check intact while exercising this build's backend.
             Copy-Item -LiteralPath $testArtifacts[0].executable -Destination $exe -Force -ErrorAction Stop
             Write-Host 'VDD_CI_STAGE=run-driver-check'
-            $driverCheck = & $exe 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' --exact --ignored --nocapture 2>&1
+            & $exe 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' --exact --ignored --nocapture 2>&1 | Tee-Object -FilePath $driverLog -Append
             $driverExit = $LASTEXITCODE
         } finally {
             Write-Host 'VDD_CI_STAGE=restore-host'
@@ -115,8 +120,7 @@ try {
             Start-Service -Name 'XSCC Host' -ErrorAction Stop
             (Get-Service -Name 'XSCC Host').WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
         }
-        $driverCheck | Write-Output
-        $driverOutput = $driverCheck | Out-String
+        $driverOutput = Get-Content -LiteralPath $driverLog -Raw
         if ($driverExit -ne 0 -or $driverOutput -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;' -or
             $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=120' -or $driverOutput -notmatch 'VDD_CI_DESKTOP_HZ=240' -or
             $driverOutput -notmatch 'VDD_CI_REMOVED=0') {
