@@ -88,10 +88,37 @@ static bool StopMonitor(const std::shared_ptr<MonitorData>& monitor) noexcept {
     }
     if (!session) return true;
     session->StopAndWait();
-    if (!session->Finished()) return false; // Same-worker deletion reentry retains ownership.
+    if (!session->DeleteReturned() || !session->Finished()) return false; // Deletion reentry retains ownership.
     std::lock_guard lock(monitor->sessionMutex);
     if (monitor->current == session) monitor->current.reset();
     return true;
+}
+static bool StopMonitorFromCallback(const std::shared_ptr<MonitorData>& monitor) noexcept {
+    std::shared_ptr<SwapChainSession> session;
+    {
+        std::lock_guard lock(monitor->sessionMutex);
+        session = monitor->current;
+    }
+    if (!session) return true;
+    session->RetireFromCallback();
+    if (!session->DeleteReturned()) return false; // Same-thread deletion reentry retains ownership.
+    std::lock_guard lock(monitor->sessionMutex);
+    if (monitor->current == session) monitor->current.reset();
+    return true;
+}
+static void WaitForSessionsToExit(const std::shared_ptr<DeviceData>& device) noexcept {
+    std::vector<std::shared_ptr<SwapChainSession>> sessions;
+    try {
+        std::lock_guard lock(device->sessionsMutex);
+        sessions = device->sessions;
+    } catch (const std::bad_alloc&) {
+        Fatal(nullptr, STATUS_INSUFFICIENT_RESOURCES);
+    }
+    for (const auto& session : sessions) session->WaitForExit();
+    std::lock_guard lock(device->sessionsMutex);
+    std::erase_if(device->sessions, [&](const auto& session) {
+        return std::find(sessions.begin(), sessions.end(), session) != sessions.end();
+    });
 }
 static DISPLAYCONFIG_VIDEO_SIGNAL_INFO Signal(const Mode& mode, UINT divider) noexcept {
     ModeTiming timing{};
@@ -164,20 +191,26 @@ _Use_decl_annotations_
 NTSTATUS AssignSwapChain(IDDCX_MONITOR object, const IDARG_IN_SETSWAPCHAIN* input) {
     const auto monitor = Monitor(object);
     const auto device = monitor->owner;
-    if (!StopMonitor(monitor)) Fatal(device->adapter, STATUS_INVALID_DEVICE_STATE);
+    if (!StopMonitorFromCallback(monitor)) Fatal(device->adapter, STATUS_INVALID_DEVICE_STATE);
     try {
         std::lock_guard monitorLock(monitor->sessionMutex);
-        if (monitor->current && !monitor->current->Finished())
+        if (monitor->current &&
+            (!monitor->current->DeleteReturned() || !monitor->current->Finished()))
             Fatal(device->adapter, STATUS_INVALID_DEVICE_STATE);
         if (device->closing.load() || monitor->phase.load() == MonitorPhase::Removing ||
             monitor->phase.load() == MonitorPhase::Departed)
             return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
         // Reserve before starting: accepted workers must never face a later allocation failure.
         std::lock_guard registryLock(device->sessionsMutex);
-        std::erase_if(device->sessions, [](const auto& value) { return value->Finished(); });
+        const auto adapter = device->adapter.load();
+        if (device->closing.load() || !device->ready.load() || !adapter)
+            return STATUS_GRAPHICS_INDIRECT_DISPLAY_ABANDON_SWAPCHAIN;
+        std::erase_if(device->sessions, [](const auto& value) {
+            return value->DeleteReturned() && value->Finished();
+        });
         device->sessions.reserve(device->sessions.size() + 1);
         auto session = SwapChainSession::Start(
-            device->adapter, input->hSwapChain, input->RenderAdapterLuid, input->hNextSurfaceAvailable);
+            adapter, input->hSwapChain, input->RenderAdapterLuid, input->hNextSurfaceAvailable);
         device->sessions.push_back(session);
         monitor->current = std::move(session);
         return STATUS_SUCCESS;
@@ -187,7 +220,7 @@ NTSTATUS AssignSwapChain(IDDCX_MONITOR object, const IDARG_IN_SETSWAPCHAIN* inpu
 }
 _Use_decl_annotations_
 NTSTATUS UnassignSwapChain(IDDCX_MONITOR object) {
-    StopMonitor(Monitor(object));
+    StopMonitorFromCallback(Monitor(object));
     return STATUS_SUCCESS;
 }
 _Use_decl_annotations_
@@ -197,7 +230,7 @@ void MonitorCleanup(WDFOBJECT object) {
     const auto monitor = *wrapper->value;
     {
         std::lock_guard lock(monitor->sessionMutex);
-        if (monitor->current && !monitor->current->Finished())
+        if (monitor->current && !monitor->current->ReadyForMonitorCleanup())
             Fatal(nullptr, STATUS_INVALID_DEVICE_STATE);
         monitor->current.reset();
     }
@@ -219,10 +252,7 @@ void AdapterCleanup(WDFOBJECT object) {
         const auto device = *wrapper->value;
         device->ready.store(false);
         device->closing.store(true);
-        std::lock_guard lock(device->sessionsMutex);
-        for (const auto& session : device->sessions)
-            if (!session->Finished()) Fatal(nullptr, STATUS_INVALID_DEVICE_STATE);
-        device->sessions.clear();
+        WaitForSessionsToExit(device);
         {
             std::lock_guard monitorsLock(device->monitorsMutex);
             for (const auto& entry : device->monitors)
@@ -242,12 +272,7 @@ void DeviceCleanup(WDFOBJECT object) {
     const auto device = *wrapper->value;
     device->closing.store(true);
     device->ready.store(false);
-    {
-        std::lock_guard lock(device->sessionsMutex);
-        for (const auto& session : device->sessions)
-            if (!session->Finished()) Fatal(nullptr, STATUS_INVALID_DEVICE_STATE);
-        device->sessions.clear();
-    }
+    WaitForSessionsToExit(device);
     {
         std::lock_guard lock(device->monitorsMutex);
         device->monitors.clear();

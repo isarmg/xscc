@@ -34,6 +34,14 @@ bool Stopping(HANDLE stopEvent, IDDCX_ADAPTER adapter) noexcept {
     return false;
 }
 
+bool Signaled(HANDLE event) noexcept {
+    const DWORD result = WaitForSingleObject(event, 0);
+    if (result != WAIT_OBJECT_0 && result != WAIT_TIMEOUT) {
+        Fatal(nullptr, WaitFailure);
+    }
+    return result == WAIT_OBJECT_0;
+}
+
 HRESULT ConsumeFrames(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
                       IDXGIDevice* device, HANDLE stopEvent, HANDLE frameEvent) noexcept {
     if (Stopping(stopEvent, adapter)) {
@@ -140,6 +148,14 @@ SwapChainSession::SwapChainSession(IDDCX_ADAPTER adapter, IDDCX_SWAPCHAIN chain,
     if (!stop_event_.value) {
         ThrowLastError("CreateEventW(stop)");
     }
+    frame_quiesced_event_.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!frame_quiesced_event_.value) {
+        ThrowLastError("CreateEventW(frame-quiesced)");
+    }
+    delete_returned_event_.value = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!delete_returned_event_.value) {
+        ThrowLastError("CreateEventW(delete-returned)");
+    }
     const HANDLE process = GetCurrentProcess();
     if (!DuplicateHandle(process, frameEvent, process, &frame_event_.value,
                          0, FALSE, DUPLICATE_SAME_ACCESS)) {
@@ -162,8 +178,8 @@ std::shared_ptr<SwapChainSession> SwapChainSession::Start(
 }
 
 SwapChainSession::~SwapChainSession() noexcept {
-    if (thread_.value && !Finished()) {
-        // The device registry must retain this session until the native thread actually exits.
+    if (thread_.value && (!DeleteReturned() || !Finished())) {
+        // Both the deleting caller and the native worker must have retired.
         Fatal(nullptr, InvalidSessionState);
     }
 }
@@ -182,30 +198,87 @@ bool SwapChainSession::Finished() const noexcept {
     return false;
 }
 
+bool SwapChainSession::DeleteReturned() const noexcept {
+    return Signaled(delete_returned_event_.value);
+}
+
+bool SwapChainSession::DeletingOnCurrentThread() const noexcept {
+    const DWORD thread = deleting_thread_id_.load(std::memory_order_acquire);
+    return thread != 0 && thread == GetCurrentThreadId();
+}
+
+bool SwapChainSession::ReadyForMonitorCleanup() const noexcept {
+    return Signaled(frame_quiesced_event_.value) &&
+           (DeleteReturned() || DeletingOnCurrentThread());
+}
+
+void SwapChainSession::WaitForDeletionAndExit(IDDCX_ADAPTER adapter) const noexcept {
+    const ULONGLONG started = GetTickCount64();
+    DWORD result = WaitForSingleObject(delete_returned_event_.value, StopBudgetMs);
+    if (result != WAIT_OBJECT_0) {
+        Fatal(adapter, result == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
+    }
+    const ULONGLONG elapsed = GetTickCount64() - started;
+    const DWORD remaining = elapsed < StopBudgetMs ?
+        static_cast<DWORD>(StopBudgetMs - elapsed) : 0;
+    result = WaitForSingleObject(thread_.value, remaining);
+    if (result != WAIT_OBJECT_0) {
+        Fatal(adapter, result == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
+    }
+}
+
 void SwapChainSession::StopAndWait(bool adapterValid) noexcept {
     const IDDCX_ADAPTER adapter = adapterValid ? adapter_ : nullptr;
     if (!SetEvent(stop_event_.value)) {
         Fatal(adapter, WaitFailure);
     }
-    if (worker_id_.load(std::memory_order_acquire) == GetCurrentThreadId()) {
-        // WdfObjectDelete may reenter an unassign/cleanup callback on its owning worker.
-        // Deletion is already in progress; this worker will make no further swap-chain DDI calls.
-        const Phase phase = phase_.load(std::memory_order_acquire);
-        if (phase == Phase::Deleting) {
-            return;
-        }
-        // Windows can reuse the thread id after the original worker has exited.
-        if (phase == Phase::Finished && Finished()) {
-            return;
-        }
+    if (DeletingOnCurrentThread()) {
+        // Only synchronous reentry on this deleting thread may bypass its own wait.
+        return;
+    }
+    if (worker_id_.load(std::memory_order_acquire) == GetCurrentThreadId() && !Finished()) {
         Fatal(adapter, InvalidSessionState);
     }
     if (!adapterValid && !Finished()) {
         Fatal(nullptr, InvalidSessionState);
     }
+    WaitForDeletionAndExit(adapter);
+}
+
+void SwapChainSession::RetireFromCallback() noexcept {
+    DeleteOwner expected = DeleteOwner::Unclaimed;
+    if (!delete_owner_.compare_exchange_strong(expected, DeleteOwner::Callback,
+                                              std::memory_order_acq_rel)) {
+        StopAndWait();
+        return;
+    }
+    if (!SetEvent(stop_event_.value)) {
+        Fatal(adapter_, WaitFailure);
+    }
+    const DWORD result = WaitForSingleObject(frame_quiesced_event_.value, StopBudgetMs);
+    if (result != WAIT_OBJECT_0) {
+        Fatal(adapter_, result == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
+    }
+    DeleteChainOnCurrentThread();
+}
+
+void SwapChainSession::DeleteChainOnCurrentThread() noexcept {
+    deleting_thread_id_.store(GetCurrentThreadId(), std::memory_order_release);
+    WdfObjectDelete(reinterpret_cast<WDFOBJECT>(chain_));
+    chain_ = nullptr;
+    if (!SetEvent(delete_returned_event_.value)) {
+        Fatal(nullptr, WaitFailure);
+    }
+    deleting_thread_id_.store(0, std::memory_order_release);
+}
+
+void SwapChainSession::WaitForExit() const noexcept {
+    if (!DeleteReturned() || !Signaled(frame_quiesced_event_.value)) {
+        Fatal(nullptr, InvalidSessionState);
+    }
     const DWORD result = WaitForSingleObject(thread_.value, StopBudgetMs);
     if (result != WAIT_OBJECT_0) {
-        Fatal(adapter, result == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
+        Fatal(nullptr, result == WAIT_TIMEOUT ? StopTimeout : WaitFailure);
     }
 }
 
@@ -256,14 +329,19 @@ void SwapChainSession::RunWorker() noexcept {
                 Fatal(adapter_, WaitFailure);
             }
         }
-        phase_.store(Phase::Deleting, std::memory_order_release);
-        WdfObjectDelete(reinterpret_cast<WDFOBJECT>(chain_));
-        chain_ = nullptr;
+        DeleteOwner expected = DeleteOwner::Unclaimed;
+        const bool ownsDelete = delete_owner_.compare_exchange_strong(
+            expected, DeleteOwner::Worker, std::memory_order_acq_rel);
+        if (!SetEvent(frame_quiesced_event_.value)) {
+            Fatal(adapter_, WaitFailure);
+        }
+        if (ownsDelete) {
+            DeleteChainOnCurrentThread();
+        }
     }
     if (task) {
         AvRevertMmThreadCharacteristics(task);
     }
-    phase_.store(Phase::Finished, std::memory_order_release);
 }
 
 } // namespace xscc

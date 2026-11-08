@@ -55,7 +55,21 @@ Mode and lifecycle contract
 - Inventory is driver arrival/departure state. It is not CCD active-mode proof.
 - D3D creation/processing belongs to a dedicated worker, not Assign.
 - Cancellation is checked even while frames continuously arrive; stop has priority.
-- Exactly one worker owns and deletes its accepted swapchain.
+- One owner deletes each accepted swapchain. Explicit Remove and worker errors
+  retain the worker-owned path. Assign/Unassign may claim callback ownership before
+  requesting stop: after the last frame DDI/surface access, that callback deletes
+  the chain without waiting for the worker's D3D/DXGI release tail.
+- Frame quiescence, DeleteReturned and native thread exit are separate conditions.
+  DeleteReturned means the sole WdfObjectDelete call returned; WDF object destruction
+  and native GPU cleanup may still be pending. The registry retains the session
+  until DeleteReturned and the actual native thread handle are both signaled.
+- A callback that loses ownership to a worker retains the bounded wait/fail-stop
+  path. A deletion claim or a retained WDF reference does not permit early return
+  or a second public Delete. Device/adapter cleanup still waits for real workers
+  outside registry locks before permitting driver code to retire.
+- The local consume/discard sink reports actual presentation numbers and acquisition
+  QPC as DROPPED and checks IddCx frame-statistics results. It does not claim remote
+  encoding/transmission or invent those timing fields.
 - An explicit stop wait is limited to 1500 ms. Timeout is an unrecoverable error,
   not successful removal. IddCx critical-error reporting/fail-fast may terminate
   the UMDF process and disconnect its virtual screens.
@@ -71,9 +85,12 @@ upstream catalog: any changed INF/DLL requires a new valid driver signature.
 
 The opt-in disposable Windows VM runtime job can use GitHub's pre-existing test
 signing boot configuration. It records enabled options without changing boot or
-code-integrity policy. Guest-only test signatures and Arrival ACK/PnP departure
-checks do not establish production-policy loading, active CCD modes, continuous
-frame delivery, or dedicated-GPU safety.
+code-integrity policy. In addition to lease/PnP checks, active phases verify real
+CCD 1280x720@120/1 and continuous successful frame/statistics DDIs before explicit
+Remove or OS deactivation. Exact-root UMDF PID/current-chain WPP evidence and saved
+layout restoration are required. Guest-only signatures, CCD mode and software-VM
+frame calls do not establish production-policy loading, visible 120 FPS or
+dedicated-GPU safety. See the run matching the exact source commit for results.
 
 Real IddCx reentry, high-rate content, repeated hotplug, owner-process crash,
 PnP restart, suspend/resume, and AMD/Intel/NVIDIA driver coexistence still require
