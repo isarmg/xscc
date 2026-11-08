@@ -176,6 +176,11 @@ impl RemoteKeyboard {
                 for (label, key) in keys {
                     line = line.child(self.computer_key(label, *key, height, cx));
                 }
+                if !landscape && self.computer_second_page {
+                    for _ in keys.len()..columns {
+                        line = line.child(div().flex_1().min_w_0());
+                    }
+                }
                 body = body.child(line);
             }
         }
