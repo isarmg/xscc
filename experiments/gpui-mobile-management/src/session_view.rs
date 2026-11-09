@@ -1250,7 +1250,7 @@ impl SessionView {
                 self.hide_keyboard(window, cx);
                 self.panel = panel;
                 if panel == Panel::Keyboard {
-                    self.keyboard_page(self.keyboard_page, window, cx);
+                    self.keyboard_page(KeyboardPage::Input, window, cx);
                 }
             }
             ChromeAction::ClosePanel => {
@@ -1405,9 +1405,22 @@ impl Drop for SessionView {
     }
 }
 
+pub fn visible_bounds(window: &Window) -> Bounds<Pixels> {
+    let mut visible = window.fully_visible_bounds();
+    // A one-sided cutout must not shift the remote image and its input coordinates.
+    let (left, width) = session_layout::centered_horizontal_bounds(
+        window.viewport_size().width.into(),
+        visible.origin.x.into(),
+        visible.size.width.into(),
+    );
+    visible.origin.x = px(left);
+    visible.size.width = px(width);
+    visible
+}
+
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let visible = window.fully_visible_bounds().size;
+        let visible = visible_bounds(window).size;
         let mut entry_ready = true;
         if let Some((started, previous)) = self.entry_pending {
             let settled = previous == visible && visible.width >= visible.height;
@@ -1517,8 +1530,13 @@ impl Render for SessionView {
                 ),
             );
         if let Some(keyboard_bounds) = layout.keyboard {
+            let key_height = if visible.width < visible.height {
+                38.
+            } else {
+                30.
+            };
             let mut header = div()
-                .h(px(44.))
+                .h(px(key_height))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -1536,7 +1554,7 @@ impl Render for SessionView {
                 header = header.child(
                     div()
                         .id(id)
-                        .h(px(44.))
+                        .h(px(key_height))
                         .flex_1()
                         .min_w_0()
                         .flex()
@@ -1569,7 +1587,7 @@ impl Render for SessionView {
             header = header.child(
                 div()
                     .id("session-keyboard-close")
-                    .size(px(44.))
+                    .size(px(key_height))
                     .flex_shrink_0()
                     .flex()
                     .items_center()

@@ -356,22 +356,9 @@ impl Render for RemoteKeyboard {
                     "目标仅支持可打印 ASCII，暂不支持中文"
                 };
                 div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        key_button("open-remote-keyboard", "打开输入法", enabled)
-                            .w_full()
-                            .on_click(cx.listener(|view, _, window, cx| {
-                                view.show(KeyboardPage::Input, window, cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_size(gpui::px(12.))
-                            .text_color(rgb(0xb0b1b8))
-                            .child(status.to_owned()),
-                    )
+                    .text_size(gpui::px(12.))
+                    .text_color(rgb(0xb0b1b8))
+                    .child(status.to_owned())
             }
             KeyboardPage::Keys => self.computer_keyboard(window, cx),
             KeyboardPage::Shortcuts => self.shortcut_keyboard(window, cx),
@@ -430,26 +417,4 @@ impl Render for RemoteKeyboard {
                 )
             })
     }
-}
-
-fn key_button(id: &'static str, label: &str, enabled: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .h(gpui::px(36.))
-        .min_w(gpui::px(44.))
-        .px_2()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(gpui::px(6.))
-        .bg(rgb(computer::KEY))
-        .text_color(rgb(computer::FOREGROUND))
-        .text_size(gpui::px(14.))
-        .opacity(if enabled { 1. } else { 0.45 })
-        .child(label.to_owned())
-        .when(enabled, |button| {
-            button
-                .cursor_pointer()
-                .active(|style| style.bg(rgb(0x41434c)))
-        })
 }

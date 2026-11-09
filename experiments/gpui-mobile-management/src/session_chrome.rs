@@ -842,6 +842,29 @@ fn glyph(shape: Glyph, color: u32) -> impl IntoElement {
                 (f32::from(bounds.size.width) / 24.).min(f32::from(bounds.size.height) / 24.);
             let mut path = PathBuilder::stroke(px(1.8 * scale));
             let position = |(x, y): (f32, f32)| bounds.origin + point(px(x * scale), px(y * scale));
+            if matches!(shape, Glyph::Rotate) {
+                for (start, end) in [((7., 4.6), (20.5, 12.)), ((17., 19.4), (3.5, 12.))] {
+                    path.move_to(position(start));
+                    path.arc_to(
+                        point(px(8.5 * scale), px(8.5 * scale)),
+                        px(0.),
+                        false,
+                        true,
+                        position(end),
+                    );
+                    let radius = px(0.9 * scale);
+                    window.paint_quad(
+                        gpui::fill(
+                            gpui::Bounds::new(
+                                position(start) - point(radius, radius),
+                                gpui::size(radius * 2., radius * 2.),
+                            ),
+                            rgb(color),
+                        )
+                        .corner_radii(radius),
+                    );
+                }
+            }
             for stroke in strokes(shape) {
                 if let Some((first, rest)) = stroke.split_first() {
                     path.move_to(position(*first));
@@ -938,10 +961,10 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             &[(7., 21.), (17., 21.)],
         ],
         Glyph::Rotate => &[
-            &[(8., 3.), (15., 3.), (21., 9.), (21., 16.)],
-            &[(17., 12.), (21., 16.), (23., 12.)],
-            &[(16., 21.), (9., 21.), (3., 15.), (3., 8.)],
-            &[(1., 12.), (3., 8.), (7., 12.)],
+            &[(17., 9.), (20.5, 12.)],
+            &[(20.5, 12.), (23., 8.)],
+            &[(7., 15.), (3.5, 12.)],
+            &[(3.5, 12.), (1., 16.)],
             &[(9., 8.), (15., 8.), (15., 16.), (9., 16.), (9., 8.)],
         ],
         Glyph::Exit => &[
