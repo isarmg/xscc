@@ -21,6 +21,8 @@
 #[cfg(any(windows, test))]
 mod capture_lifecycle;
 #[cfg(windows)]
+mod encoder_retirement;
+#[cfg(windows)]
 pub(super) use capture_lifecycle::begin_connection;
 #[cfg(windows)]
 pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
@@ -532,8 +534,11 @@ fn get_capturer(
 fn run(vs: VideoService) -> ResultType<()> {
     // Registered first so the acknowledgement follows every encoder/capturer destructor.
     #[cfg(windows)]
-    let _capture_lifetime = capture_lifecycle::begin_capture();
-    let mut raii = Raii::new(vs.idx, vs.sp.name());
+    let _capture_lifetime =
+        capture_lifecycle::begin_capture().map_err(hbb_common::anyhow::Error::msg)?;
+    let raii = Raii::new(vs.idx, vs.sp.name());
+    #[cfg(not(windows))]
+    let mut raii = raii;
     // Wayland only support one video capturer for now. It is ok to call ensure_inited() here.
     //
     // ensure_inited() is needed because clear() may be called.
@@ -587,6 +592,10 @@ fn run(vs: VideoService) -> ResultType<()> {
         log::info!("disable dxgi with option, fall back to gdi");
         c.set_gdi();
     }
+    #[cfg(windows)]
+    let mut capture_owner = encoder_retirement::CaptureOwner::new(c, raii, _capture_lifetime);
+    #[cfg(windows)]
+    let (mut c, mut raii, retirement_failed) = capture_owner.parts();
     let mut cached = CaptureFrameCache::default();
     loop {
         let result = run_encoder(
@@ -600,7 +609,15 @@ fn run(vs: VideoService) -> ResultType<()> {
             dxgi_recovery_started,
             #[cfg(windows)]
             &dxgi_recovery_state,
+            #[cfg(windows)]
+            retirement_failed,
         );
+        #[cfg(windows)]
+        if retirement_failed.get() {
+            return Err(anyhow!(
+                "GPU retirement failed; capture and virtual displays were preserved; restart Host"
+            ));
+        }
         if let Err(error) = &result {
             if let Some(reason) = error.downcast_ref::<VideoRestart>() {
                 if reason.reuse_capture() {
@@ -643,6 +660,7 @@ fn run_encoder(
     last_portable_service_running: bool,
     #[cfg(windows)] dxgi_recovery_started: Option<Instant>,
     #[cfg(windows)] dxgi_recovery_state: &Arc<Mutex<DxgiRecoveryState>>,
+    #[cfg(windows)] retirement_failed: &std::cell::Cell<bool>,
 ) -> ResultType<()> {
     let display_idx = vs.idx;
     #[cfg(feature = "gpui-host")]
@@ -657,7 +675,7 @@ fn run_encoder(
     let mut quality = video_qos.ratio();
     drop(video_qos);
     let requested_codec = Encoder::negotiated_codec();
-    let (mut encoder, encoder_cfg, codec_format, use_i444) =
+    let (encoder, encoder_cfg, codec_format, use_i444) =
         match setup_encoder(&c, sp, quality, last_portable_service_running) {
             Ok(result) => result,
             Err(err) => {
@@ -677,6 +695,25 @@ fn run_encoder(
                 setup_encoder(&c, sp, quality, last_portable_service_running)?
             }
         };
+    #[cfg(not(windows))]
+    let mut encoder = encoder;
+    #[cfg(windows)]
+    let capture_device = if c.is_gdi() {
+        Some(std::ptr::null_mut())
+    } else {
+        #[cfg(feature = "vram")]
+        {
+            let device = c.device().device;
+            (!device.is_null()).then_some(device)
+        }
+        #[cfg(not(feature = "vram"))]
+        {
+            None
+        }
+    };
+    #[cfg(windows)]
+    let mut encoder =
+        encoder_retirement::EncoderOwner::new(encoder, capture_device, retirement_failed);
     #[cfg(feature = "gpui-host")]
     let (metric_backend, metric_driver) = match &encoder_cfg {
         EncoderCfg::VPX(_) => (1, 0),
@@ -804,11 +841,22 @@ fn run_encoder(
         if sp.is_option_true(OPTION_REFRESH)
             && refresh_allowed(first_frame, encoder_warmed_up, encoder.latency_free())
         {
-            if vs.source.is_monitor() {
-                let _ = try_broadcast_display_changed(&sp, display_idx, &c, true);
+            #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
+            let keyframe_requested = encoder.request_keyframe()?;
+            #[cfg(not(all(windows, feature = "gpui-host", feature = "vram")))]
+            let keyframe_requested = false;
+            if keyframe_requested {
+                // Keep capture, codec, texture pool and stream epoch. The owner
+                // thread will also replay its owned input if the desktop is idle.
+                sp.set_option_bool(OPTION_REFRESH, false);
+                log::info!("video_keyframe_request supported=true");
+            } else {
+                if vs.source.is_monitor() {
+                    let _ = try_broadcast_display_changed(&sp, display_idx, &c, true);
+                }
+                log::info!("switch to refresh");
+                bail!(VideoRestart::Refresh);
             }
-            log::info!("switch to refresh");
-            bail!(VideoRestart::Refresh);
         }
         if codec_format != Encoder::negotiated_codec() {
             log::info!(
@@ -999,7 +1047,12 @@ fn run_encoder(
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
                 #[cfg(all(windows, feature = "vram"))]
-                if let Some(mut frame) = encoder.poll_video_frame()? {
+                let pending_frame = match encoder.replay_keyframe(ms)? {
+                    Some(frame) => Some(frame),
+                    None => encoder.poll_video_frame()?,
+                };
+                #[cfg(all(windows, feature = "vram"))]
+                if let Some(mut frame) = pending_frame {
                     frame.display = display_idx as _;
                     let mut message = Message::new();
                     message.set_video_frame(frame);
@@ -1562,15 +1615,31 @@ pub fn make_display_changed_msg(
     Some(msg_out)
 }
 
+fn encoder_bitrate_limit(limit: Option<u32>) -> ResultType<Option<u32>> {
+    #[cfg(feature = "udp-media")]
+    {
+        // QoS keeps the user's wire ceiling. Only the codec receives the payload
+        // budget; comparing that same value avoids a native reset on every frame.
+        Ok(limit
+            .map(base::direct_transport::udp_media::video_payload_bitrate_limit_kbps)
+            .transpose()?)
+    }
+    #[cfg(not(feature = "udp-media"))]
+    {
+        Ok(limit)
+    }
+}
+
 fn apply_bitrate_limit(
     encoder: &mut Encoder,
     service: &GenericService,
     limit: Option<u32>,
 ) -> ResultType<()> {
-    if encoder.bitrate_limit() == limit {
+    let encoder_limit = encoder_bitrate_limit(limit)?;
+    if encoder.bitrate_limit() == encoder_limit {
         return Ok(());
     }
-    if let Err(error) = encoder.set_bitrate_limit(limit) {
+    if let Err(error) = encoder.set_bitrate_limit(encoder_limit) {
         // A driver may reject a valid target. Restore Auto rather than restarting forever.
         #[cfg(feature = "gpui-host")]
         {
@@ -1756,6 +1825,28 @@ mod tests {
         sync::{mpsc, Arc, Mutex},
         time::{Duration, Instant},
     };
+
+    #[cfg(feature = "udp-media")]
+    #[test]
+    fn gpui_encoder_budget_maps_the_wire_ceiling_once_and_keeps_auto() {
+        assert_eq!(super::encoder_bitrate_limit(None).unwrap(), None);
+        assert_eq!(super::encoder_bitrate_limit(Some(64)).unwrap(), Some(53));
+        let raw = Some(8_000);
+        let cached_encoder_limit = super::encoder_bitrate_limit(raw).unwrap();
+        assert_eq!(cached_encoder_limit, Some(6_744));
+        assert_eq!(
+            super::encoder_bitrate_limit(raw).unwrap(),
+            cached_encoder_limit
+        );
+        assert_eq!(
+            super::encoder_bitrate_limit(Some(1_000)).unwrap(),
+            Some(843)
+        );
+        assert_eq!(
+            super::encoder_bitrate_limit(Some(1_000_000)).unwrap(),
+            Some(843_000)
+        );
+    }
 
     #[test]
     fn retained_capture_frame_requires_the_exact_encoder_plane_layout() {

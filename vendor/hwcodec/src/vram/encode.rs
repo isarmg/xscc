@@ -90,6 +90,49 @@ impl Encoder {
         }
     }
 
+    pub fn retirement_supported(&self) -> bool {
+        self.ctx.f.driver == FFMPEG
+    }
+
+    pub fn retire(&mut self, capture_device: *mut c_void, timeout_ms: i32) -> Result<(), i32> {
+        if !self.retirement_supported() {
+            return Err(-1);
+        }
+        match unsafe { ffmpeg::ffmpeg_vram_retire(self.codec, capture_device, timeout_ms) } {
+            0 => Ok(()),
+            error => Err(error),
+        }
+    }
+
+    pub fn request_keyframe(&mut self) -> Result<bool, i32> {
+        if self.ctx.f.driver != FFMPEG {
+            return Ok(false);
+        }
+        match unsafe { ffmpeg::ffmpeg_vram_request_keyframe(self.codec) } {
+            1 => Ok(true),
+            0 => Ok(false),
+            error => Err(error),
+        }
+    }
+
+    pub fn replay_keyframe(&mut self, ms: i64) -> Result<&mut Vec<EncodeFrame>, i32> {
+        unsafe {
+            (&mut *self.frames).clear();
+            if self.ctx.f.driver == FFMPEG {
+                let result = ffmpeg::ffmpeg_vram_replay_keyframe(
+                    self.codec,
+                    Some(Self::callback),
+                    self.frames as *mut c_void,
+                    ms,
+                );
+                if result != 0 {
+                    return Err(result);
+                }
+            }
+            Ok(&mut *self.frames)
+        }
+    }
+
     extern "C" fn callback(data: *const u8, size: c_int, key: i32, obj: *const c_void, pts: i64) {
         unsafe {
             let frames = &mut *(obj as *mut Vec<EncodeFrame>);
@@ -138,6 +181,13 @@ impl Encoder {
                 err => Err(err),
             }
         }
+    }
+}
+
+pub fn retire_capture_device(device: *mut c_void, timeout_ms: i32) -> Result<(), i32> {
+    match unsafe { ffmpeg::ffmpeg_vram_retire_capture(device, timeout_ms) } {
+        0 => Ok(()),
+        error => Err(error),
     }
 }
 

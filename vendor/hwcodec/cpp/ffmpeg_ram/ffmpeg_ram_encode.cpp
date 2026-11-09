@@ -19,6 +19,7 @@ extern "C" {
 #include <util.h>
 #ifdef _WIN32
 #include "win.h"
+#include "gpu_retirement.h"
 #endif
 
 static int calculate_offset_length(int pix_fmt, int height, const int *linesize,
@@ -99,6 +100,13 @@ public:
   AVCodecContext *c_ = NULL;
   AVFrame *frame_ = NULL;
   AVPacket *pkt_ = NULL;
+#ifdef _WIN32
+  bool retiring_ = false;
+  bool retired_ = false;
+  bool drain_sent_ = false;
+  ComPtr<ID3D11DeviceContext> retirement_capture_context_;
+  ComPtr<ID3D11Query> retirement_capture_event_;
+#endif
   std::string name_;
   std::string mc_name_; // for mediacodec
 
@@ -268,6 +276,10 @@ public:
   }
 
   int encode(const uint8_t *data, int length, const void *obj, uint64_t ms) {
+#ifdef _WIN32
+    if (retiring_)
+      return AVERROR(EPIPE);
+#endif
     int ret;
 
     if ((ret = av_frame_make_writable(frame_)) != 0) {
@@ -289,6 +301,25 @@ public:
 
     return do_encode(tmp_frame, obj, ms);
   }
+
+#ifdef _WIN32
+  int retire(void *capture_device, int timeout_ms) {
+    retiring_ = true;
+    if (retired_)
+      return 0;
+    auto deadline = gpu_retirement_deadline(timeout_ms);
+    int ret = drain_encoder_for_retirement(c_, pkt_, drain_sent_, deadline);
+    if (ret < 0)
+      return ret;
+    ret = wait_capture_for_retirement(static_cast<ID3D11Device *>(capture_device),
+                                      retirement_capture_context_,
+                                      retirement_capture_event_, deadline);
+    if (ret < 0)
+      return ret;
+    retired_ = true;
+    return 0;
+  }
+#endif
 
   void free_encoder() {
     if (pkt_)
@@ -443,6 +474,19 @@ extern "C" int ffmpeg_ram_encode(FFmpegRamEncoder *encoder, const uint8_t *data,
   }
   return -1;
 }
+
+#ifdef _WIN32
+extern "C" int ffmpeg_ram_retire(FFmpegRamEncoder *encoder, void *capture_device,
+                                int timeout_ms) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  try {
+    return encoder->retire(capture_device, timeout_ms);
+  } catch (const std::exception &) {
+    return AVERROR_EXTERNAL;
+  }
+}
+#endif
 
 extern "C" void ffmpeg_ram_free_encoder(FFmpegRamEncoder *encoder) {
   try {

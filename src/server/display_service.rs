@@ -609,6 +609,63 @@ fn temporary_display_will_be_removed(
         })
 }
 
+// Classify while the owned temporary paths are still active. Detach changes
+// that state, so a later query cannot identify which saved modes must be ignored.
+#[cfg(windows)]
+pub(super) fn temporary_resolution_changes_before_removal() -> ResultType<Vec<String>> {
+    if CHANGED_RESOLUTIONS.read().unwrap().is_empty() {
+        return Ok(Vec::new());
+    }
+    let state = virtual_display_manager::configuration_state();
+    if state.driver == "mtt_vdd" && state.status == "error" {
+        bail!(
+            "Temporary display resolution classification failed: {}",
+            state.message
+        );
+    }
+    if state.driver != "mtt_vdd" || state.status != "ready" || state.persistent {
+        return Ok(Vec::new());
+    }
+    let total_displays = Display::all()?.len();
+    Ok(CHANGED_RESOLUTIONS
+        .read()
+        .unwrap()
+        .keys()
+        .filter(|name| temporary_display_will_be_removed(&state, total_displays, name))
+        .cloned()
+        .collect())
+}
+
+#[cfg(any(windows, test))]
+fn discard_resolution_changes_for_removed_displays(
+    changed: &mut HashMap<String, ChangedResolution>,
+    removed: &[String],
+) -> usize {
+    let before = changed.len();
+    changed.retain(|name, _| {
+        !removed.iter().any(|removed| {
+            removed
+                .trim_end_matches('\0')
+                .eq_ignore_ascii_case(name.trim_end_matches('\0'))
+        })
+    });
+    before - changed.len()
+}
+
+#[cfg(windows)]
+pub(super) fn discard_detached_resolution_changes(removed: &[String]) {
+    let skipped = discard_resolution_changes_for_removed_displays(
+        &mut CHANGED_RESOLUTIONS.write().unwrap(),
+        removed,
+    );
+    if skipped > 0 {
+        hbb_common::throttled_log!(
+            Duration::from_secs(1), info,
+            "session_display_cleanup stage=resolution_restore_skipped count={skipped} reason=detached_temporary_display"
+        );
+    }
+}
+
 #[cfg(windows)]
 pub(super) fn restore_session_resolutions() {
     if CHANGED_RESOLUTIONS.read().unwrap().is_empty() {
@@ -691,8 +748,12 @@ pub fn restore_resolutions() {
 
 #[cfg(test)]
 mod session_resolution_cleanup_tests {
-    use super::temporary_display_will_be_removed;
+    use super::{
+        discard_resolution_changes_for_removed_displays, temporary_display_will_be_removed,
+        ChangedResolution,
+    };
     use base::session_protocol::virtual_display::{VirtualDisplayScreen, VirtualDisplayState};
+    use std::collections::HashMap;
 
     #[test]
     fn exit_preserves_physical_resolution_restore_and_skips_only_current_temporary_display() {
@@ -711,6 +772,57 @@ mod session_resolution_cleanup_tests {
         assert!(!temporary_display_will_be_removed(&state, 2, r"\\.\DISPLAY1"));
         assert!(!temporary_display_will_be_removed(&state, 2, r"\\.\DISPLAY3"));
         assert!(!temporary_display_will_be_removed(&state, 1, r"\\.\DISPLAY2"));
+    }
+
+    #[test]
+    fn detached_temporary_snapshot_does_not_consume_physical_resolution_restore() {
+        let mut state = VirtualDisplayState {
+            driver: "mtt_vdd".into(),
+            status: "ready".into(),
+            active_count: 1,
+            displays: vec![VirtualDisplayScreen {
+                name: r"\\.\DISPLAY2".into(),
+                active: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut changed: HashMap<String, ChangedResolution> = HashMap::from([
+            (
+                r"\\.\DISPLAY1".into(),
+                ChangedResolution {
+                    original: (1920, 1080),
+                    changed: (1280, 720),
+                },
+            ),
+            (
+                r"\\.\display2".into(),
+                ChangedResolution {
+                    original: (1280, 720),
+                    changed: (2560, 1440),
+                },
+            ),
+        ]);
+        let temporary: Vec<_> = changed
+            .keys()
+            .filter(|name| temporary_display_will_be_removed(&state, 2, name))
+            .cloned()
+            .collect();
+        state.active_count = 0;
+        state.displays[0].active = false;
+        assert!(!temporary_display_will_be_removed(
+            &state,
+            1,
+            r"\\.\display2"
+        ));
+        assert_eq!(
+            discard_resolution_changes_for_removed_displays(&mut changed, &temporary),
+            1
+        );
+        assert_eq!(changed.len(), 1);
+        let physical = &changed[r"\\.\DISPLAY1"];
+        assert_eq!(physical.original, (1920, 1080));
+        assert_eq!(physical.changed, (1280, 720));
     }
 
     #[test]

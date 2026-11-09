@@ -1,0 +1,58 @@
+--- a/libavcodec/amfenc.c
++++ b/libavcodec/amfenc.c
+@@ -35,6 +35,7 @@
+ 
+ #include "amfenc.h"
+ #include "amfenc_frame_ref.h"
++#include "amfenc_keyframe.h"
+ #include "encode.h"
+ #include "internal.h"
+ #include "libavutil/mastering_display_metadata.h"
+@@ -850,6 +851,16 @@
+             break;
+         }
+ 
++        if (avctx->codec_id == AV_CODEC_ID_H264 || avctx->codec_id == AV_CODEC_ID_HEVC) {
++            res = amf_surface_force_idr(surface, avctx->codec_id == AV_CODEC_ID_HEVC,
++                                        frame->pict_type == AV_PICTURE_TYPE_I);
++            if (res != AMF_OK) {
++                surface->pVtbl->Release(surface);
++                av_log(avctx, AV_LOG_ERROR, "AMF IDR surface properties failed: %d\n", res);
++                return AVERROR_EXTERNAL;
++            }
++        }
++
+         // submit surface
+         res = ctx->encoder->pVtbl->SubmitInput(ctx->encoder, (AMFData*)surface);
+         if (res == AMF_INPUT_FULL) { // handle full queue
+--- /dev/null
++++ b/libavcodec/amfenc_keyframe.h
+@@ -0,0 +1,28 @@
++#ifndef AVCODEC_AMFENC_KEYFRAME_H
++#define AVCODEC_AMFENC_KEYFRAME_H
++
++// Called on the encoder owner thread before SubmitInput. These are properties
++// of this input surface, not a persistent encoder setting or an output key flag.
++static AMF_RESULT amf_surface_force_idr(AMFSurface *surface, int hevc, int force_idr)
++{
++    AMF_RESULT res = AMF_OK;
++    if (hevc) {
++        AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_HEVC_FORCE_PICTURE_TYPE,
++                                  force_idr ? AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_IDR : AMF_VIDEO_ENCODER_HEVC_PICTURE_TYPE_NONE);
++        if (res != AMF_OK)
++            return res;
++        AMF_ASSIGN_PROPERTY_BOOL(res, surface, AMF_VIDEO_ENCODER_HEVC_INSERT_HEADER, force_idr);
++    } else {
++        AMF_ASSIGN_PROPERTY_INT64(res, surface, AMF_VIDEO_ENCODER_FORCE_PICTURE_TYPE,
++                                  force_idr ? AMF_VIDEO_ENCODER_PICTURE_TYPE_IDR : AMF_VIDEO_ENCODER_PICTURE_TYPE_NONE);
++        if (res != AMF_OK)
++            return res;
++        AMF_ASSIGN_PROPERTY_BOOL(res, surface, AMF_VIDEO_ENCODER_INSERT_SPS, force_idr);
++        if (res != AMF_OK)
++            return res;
++        AMF_ASSIGN_PROPERTY_BOOL(res, surface, AMF_VIDEO_ENCODER_INSERT_PPS, force_idr);
++    }
++    return res;
++}
++
++#endif

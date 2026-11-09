@@ -104,6 +104,22 @@ impl EncoderApi for HwRamEncoder {
         }
     }
 
+    #[cfg(windows)]
+    fn retirement_supported(&self) -> bool {
+        true // All RAM hardware encoding here uses the owned FFmpeg encoder.
+    }
+
+    #[cfg(windows)]
+    fn retire_for_display_change(
+        &mut self,
+        capture_device: *mut std::ffi::c_void,
+        timeout: std::time::Duration,
+    ) -> ResultType<()> {
+        self.encoder
+            .retire(capture_device, timeout.as_millis().min(1500) as i32)
+            .map_err(|error| anyhow!("RAM GPU encoder retirement failed: code={error}"))
+    }
+
     fn yuvfmt(&self) -> crate::EncodeYuvFormat {
         let pixfmt = if self.pixfmt == AVPixelFormat::AV_PIX_FMT_NV12 {
             Pixfmt::NV12

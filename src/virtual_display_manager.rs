@@ -1033,6 +1033,15 @@ pub(crate) fn restore_session_display(
     mtt_vdd::restore_session_display(idle)
 }
 
+pub(crate) fn prepare_session_display_removal(
+    idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<()> {
+    if IDD_IMPL != IDD_IMPL_MTT_VDD {
+        return Ok(());
+    }
+    mtt_vdd::prepare_session_display_removal(idle)
+}
+
 pub(crate) fn before_persistent_display_change() -> ResultType<Option<PersistentDisplayChangeGuard>>
 {
     if IDD_IMPL != IDD_IMPL_MTT_VDD {

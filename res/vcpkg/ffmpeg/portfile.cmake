@@ -31,6 +31,8 @@ vcpkg_from_github(
     patch/0011-android-mediacodec-encode-align-64.patch
     patch/0012-amf-poll-pending-hardware-output.patch
     patch/0013-amf-own-pending-hardware-frames.patch
+    patch/0014-amf-owner-thread-idr.patch
+    patch/0015-amf-live-nonblocking-retirement.patch
 )
 
 if(SOURCE_PATH MATCHES " ")

@@ -10,3 +10,5 @@ vendor/mtt-vdd/source/** -text whitespace=-blank-at-eol
 vendor/mtt-vdd/patches/** -text
 vendor/mtt-vdd/tests/** -text
 vendor/mtt-vdd/LICENSE -text
+/res/vcpkg/ffmpeg/patch/0014-amf-owner-thread-idr.patch text eol=lf
+/res/vcpkg/ffmpeg/patch/0015-amf-live-nonblocking-retirement.patch text eol=lf

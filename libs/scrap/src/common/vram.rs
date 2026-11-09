@@ -24,6 +24,12 @@ use hwcodec::{
     },
 };
 
+#[cfg(windows)]
+pub fn retire_capture_device(device: *mut c_void, timeout: std::time::Duration) -> ResultType<()> {
+    encode::retire_capture_device(device, timeout.as_millis().min(1500) as i32)
+        .map_err(|error| anyhow!("GPU capture retirement failed: code={error}"))
+}
+
 // https://www.reddit.com/r/buildapc/comments/d2m4ny/two_graphics_cards_two_monitors/
 // https://www.reddit.com/r/techsupport/comments/t2v9u6/dual_monitor_setup_with_dual_gpu/
 // https://cybersided.com/two-monitors-two-gpus/
@@ -169,28 +175,40 @@ impl EncoderApi for VRamEncoder {
             .encoder
             .poll()
             .map_err(|error| anyhow!("Poll AMD encoded output failed: {error}"))?;
-        if frames.is_empty() {
-            return Ok(None);
-        }
-        let frames = EncodedVideoFrames {
-            frames: frames
-                .drain(..)
-                .map(|frame| EncodedVideoFrame {
-                    data: Bytes::from(frame.data),
-                    pts: frame.pts,
-                    key: frame.key == 1,
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        };
-        let mut video = VideoFrame::new();
-        match format {
-            DataFormat::H264 => video.set_h264s(frames),
-            DataFormat::H265 => video.set_h265s(frames),
-            _ => bail!("Unsupported pipelined format: {format:?}"),
-        }
-        Ok(Some(video))
+        Self::polled_video_frame(format, frames)
+    }
+
+    #[cfg(windows)]
+    fn retirement_supported(&self) -> bool {
+        self.encoder.retirement_supported()
+    }
+
+    #[cfg(windows)]
+    fn retire_for_display_change(
+        &mut self,
+        capture_device: *mut c_void,
+        timeout: std::time::Duration,
+    ) -> ResultType<()> {
+        self.encoder
+            .retire(capture_device, timeout.as_millis().min(1500) as i32)
+            .map_err(|error| anyhow!("GPU encoder retirement failed: code={error}"))
+    }
+
+    #[cfg(windows)]
+    fn request_keyframe(&mut self) -> ResultType<bool> {
+        self.encoder
+            .request_keyframe()
+            .map_err(|error| anyhow!("Request AMD keyframe failed: {error}"))
+    }
+
+    #[cfg(windows)]
+    fn replay_keyframe(&mut self, ms: i64) -> ResultType<Option<VideoFrame>> {
+        let format = self.format;
+        let frames = self
+            .encoder
+            .replay_keyframe(ms)
+            .map_err(|error| anyhow!("Replay AMD keyframe failed: {error}"))?;
+        Self::polled_video_frame(format, frames)
     }
 
     fn yuvfmt(&self) -> EncodeYuvFormat {
@@ -340,6 +358,35 @@ impl EncoderApi for VRamEncoder {
 }
 
 impl VRamEncoder {
+    #[cfg(windows)]
+    fn polled_video_frame(
+        format: DataFormat,
+        frames: &mut Vec<EncodeFrame>,
+    ) -> ResultType<Option<VideoFrame>> {
+        if frames.is_empty() {
+            return Ok(None);
+        }
+        let frames = EncodedVideoFrames {
+            frames: frames
+                .drain(..)
+                .map(|frame| EncodedVideoFrame {
+                    data: Bytes::from(frame.data),
+                    pts: frame.pts,
+                    key: frame.key == 1,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut video = VideoFrame::new();
+        match format {
+            DataFormat::H264 => video.set_h264s(frames),
+            DataFormat::H265 => video.set_h265s(frames),
+            _ => bail!("Unsupported pipelined format: {format:?}"),
+        }
+        Ok(Some(video))
+    }
+
     fn amf_pipeline(&self) -> bool {
         self.ctx.f.driver == Driver::FFMPEG
             && self.ctx.f.vendor == Driver::AMF

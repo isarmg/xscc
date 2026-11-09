@@ -100,6 +100,42 @@ pub trait EncoderApi {
 
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame>;
 
+    #[cfg(windows)]
+    fn retirement_supported(&self) -> bool {
+        !self.is_hardware()
+    }
+
+    #[cfg(windows)]
+    fn retire_for_display_change(
+        &mut self,
+        capture_device: *mut std::ffi::c_void,
+        timeout: std::time::Duration,
+    ) -> ResultType<()> {
+        if self.is_hardware() {
+            bail!("GPU retirement is unsupported by this encoder backend");
+        }
+        #[cfg(feature = "vram")]
+        return crate::vram::retire_capture_device(capture_device, timeout);
+        #[cfg(not(feature = "vram"))]
+        {
+            let _ = timeout;
+            if !capture_device.is_null() {
+                bail!("GPU capture retirement is unavailable in this build");
+            }
+            Ok(())
+        }
+    }
+
+    // Unsupported backends keep the existing encoder-restart refresh path.
+    fn request_keyframe(&mut self) -> ResultType<bool> {
+        Ok(false)
+    }
+
+    #[cfg(all(windows, feature = "vram"))]
+    fn replay_keyframe(&mut self, _ms: i64) -> ResultType<Option<VideoFrame>> {
+        Ok(None)
+    }
+
     #[cfg(all(windows, feature = "vram"))]
     fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
         Ok(None)
@@ -744,6 +780,42 @@ impl Decoder {
             Some(decoder) => decoder.poll_output(rgb),
             None => Ok(false),
         }
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn poll_mediacodec_output_with_callback(
+        &mut self,
+        rgb: &mut ImageRgb,
+        on_frame: &mut dyn FnMut(&mut ImageRgb),
+    ) -> ResultType<bool> {
+        match self
+            .h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+        {
+            Some(decoder) => decoder.poll_output_with_callback(rgb, on_frame),
+            None => Ok(false),
+        }
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn handle_mediacodec_frame_with_callback(
+        &mut self,
+        frame: &video_frame::Union,
+        rgb: &mut ImageRgb,
+        on_frame: &mut dyn FnMut(&mut ImageRgb),
+    ) -> ResultType<bool> {
+        let (decoder, frames) = match frame {
+            video_frame::Union::H264s(frames) => (self.h264_media_codec.as_mut(), frames),
+            video_frame::Union::H265s(frames) => (self.h265_media_codec.as_mut(), frames),
+            _ => bail!("Unsupported MediaCodec video frame"),
+        };
+        let decoder = decoder.ok_or_else(|| anyhow!("MediaCodec decoder is unavailable"))?;
+        let mut decoded = false;
+        for frame in &frames.frames {
+            decoded |= decoder.decode_with_callback(&frame.data, rgb, on_frame)?;
+        }
+        Ok(decoded)
     }
 
     pub fn format(&self) -> CodecFormat {

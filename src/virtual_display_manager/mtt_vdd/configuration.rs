@@ -238,13 +238,12 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
     }
     if config.count == 0 {
         let _capture_idle = capture_idle_for_change()?;
-        let presentation = presentation::suspend_locked();
         // Record the requested removal before PnP notifications can trigger a late login.
         let removal = (|| -> ResultType<()> {
             write_profile(&policy_path, &serde_json::to_string(config)?)?;
             configure_count_modes_with_verified_bundle(&bundle, 0, &[], started)
         })();
-        presentation::complete_removal(presentation, removal)?;
+        removal?;
         return query();
     }
     let previous_policy = if policy_path.exists() {
@@ -416,7 +415,14 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             }
             if let Err(error) = (|| -> ResultType<()> {
                 if device()?.is_some() {
-                    change_device(if enabled { DICS_PROPCHANGE } else { DICS_DISABLE })?;
+                    if !enabled {
+                        presentation::detach_for_removal_locked()?;
+                    }
+                    change_device(if enabled {
+                        DICS_PROPCHANGE
+                    } else {
+                        DICS_DISABLE
+                    })?;
                 }
                 snapshot.restore()?;
                 if let Some(bytes) = previous_policy {
@@ -464,9 +470,7 @@ pub(crate) fn cleanup_required_at_exit() -> ResultType<bool> {
 
 pub(super) fn cleanup_session() -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
-    let presentation = presentation::suspend_locked();
-    let removal = cleanup_displays();
-    presentation::complete_removal(presentation, removal)
+    cleanup_displays()
 }
 
 fn cleanup_displays() -> ResultType<()> {

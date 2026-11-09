@@ -20,6 +20,8 @@ extern "C" {
 #include "callback.h"
 #include "common.h"
 #include "system.h"
+#include "amf_keyframe_request.h"
+#include "gpu_retirement.h"
 
 #define LOG_MODULE "FFMPEG_VRAM_ENC"
 #include <log.h>
@@ -78,6 +80,13 @@ public:
   int32_t framerate_;
   int32_t gop_;
   bool amf_pipeline_ = false;
+  AmfKeyframeRequest keyframe_request_;
+  bool retiring_ = false;
+  bool retired_ = false;
+  bool drain_sent_ = false;
+  ComPtr<ID3D11Query> retirement_capture_event_, retirement_encode_event_,
+      retirement_extra_capture_event_;
+  ComPtr<ID3D11DeviceContext> retirement_extra_capture_context_;
   unsigned int pending_frames_ = 0;
   std::unique_ptr<void, decltype(&CloseHandle)> amf_poll_timer_{nullptr, &CloseHandle};
   std::unique_ptr<NativeDevice> amf_device_;
@@ -253,6 +262,8 @@ public:
   }
 
   int encode(void *texture, EncodeCallback callback, void *obj, int64_t ms) {
+    if (retiring_)
+      return AVERROR(EPIPE);
     if (amf_pipeline_) {
       int ret = receive_pending(callback, obj, pending_frames_ >= 2);
       if (ret < 0)
@@ -282,6 +293,48 @@ public:
 
   int poll(EncodeCallback callback, void *obj) {
     return amf_pipeline_ ? receive_pending(callback, obj, false) : 0;
+  }
+
+  int request_keyframe() {
+    // Only this path owns a replayable BGRA copy and has patched AMF IDR support.
+    return keyframe_request_.request(amf_pipeline_ && !retiring_) ? 1 : 0;
+  }
+
+  int replay_keyframe(EncodeCallback callback, void *obj, int64_t ms) {
+    if (!amf_pipeline_ || !keyframe_request_.pending() || !amf_capture_input_)
+      return 0;
+    // A null input reuses our own keyed-mutex BGRA copy, never a DesktopDup surface.
+    return encode(nullptr, callback, obj, ms);
+  }
+
+  int retire(void *capture_device, int timeout_ms) {
+    retiring_ = true; // Owner stops submissions before asking the codec to drain.
+    if (retired_)
+      return 0;
+    auto deadline = gpu_retirement_deadline(timeout_ms);
+    int ret = drain_encoder_for_retirement(c_, pkt_, drain_sent_, deadline);
+    if (ret < 0)
+      return ret;
+    pending_frames_ = 0;
+    ret = wait_context_for_retirement(native_->device_.Get(), native_->context_.Get(),
+                                      retirement_capture_event_, deadline);
+    if (ret < 0)
+      return ret;
+    if (amf_device_) {
+      ret = wait_context_for_retirement(amf_device_->device_.Get(), amf_device_->context_.Get(),
+                                        retirement_encode_event_, deadline);
+      if (ret < 0)
+        return ret;
+    }
+    if (capture_device && capture_device != native_->device_.Get()) {
+      ret = wait_capture_for_retirement(static_cast<ID3D11Device *>(capture_device),
+                                        retirement_extra_capture_context_,
+                                        retirement_extra_capture_event_, deadline);
+      if (ret < 0)
+        return ret;
+    }
+    retired_ = true;
+    return 0;
   }
 
   void destroy() {
@@ -322,36 +375,40 @@ private:
   bool convert_amf_input(ID3D11Texture2D *input, ID3D11Texture2D *output,
                          DXGI_COLOR_SPACE_TYPE color_in,
                          DXGI_COLOR_SPACE_TYPE color_out) {
-    D3D11_TEXTURE2D_DESC desc{};
-    input->GetDesc(&desc);
-    if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) {
-      LOG_ERROR(std::string("Unsupported AMF capture texture layout"));
+    if (input) {
+      D3D11_TEXTURE2D_DESC desc{};
+      input->GetDesc(&desc);
+      if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) {
+        LOG_ERROR(std::string("Unsupported AMF capture texture layout"));
+        return false;
+      }
+      D3D11_TEXTURE2D_DESC previous{};
+      if (amf_capture_input_)
+        amf_capture_input_->GetDesc(&previous);
+      if (!amf_capture_input_ || previous.Width != desc.Width ||
+          previous.Height != desc.Height || previous.Format != desc.Format) {
+        ComPtr<ID3D11Texture2D> capture_input, encoder_input;
+        ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        HRB(native_->device_->CreateTexture2D(&desc, nullptr, &capture_input));
+        ComPtr<IDXGIResource> resource;
+        HRB(capture_input.As(&resource));
+        HANDLE shared = nullptr;
+        HRB(resource->GetSharedHandle(&shared));
+        HRB(amf_device_->device_->OpenSharedResource(
+            shared, IID_PPV_ARGS(&encoder_input)));
+        HRB(capture_input.As(&capture_mutex));
+        HRB(encoder_input.As(&encoder_mutex));
+        amf_capture_input_ = std::move(capture_input);
+        amf_encoder_input_ = std::move(encoder_input);
+        amf_capture_mutex_ = std::move(capture_mutex);
+        amf_encoder_mutex_ = std::move(encoder_mutex);
+      }
+    } else if (!amf_capture_input_) {
       return false;
-    }
-    D3D11_TEXTURE2D_DESC previous{};
-    if (amf_capture_input_)
-      amf_capture_input_->GetDesc(&previous);
-    if (!amf_capture_input_ || previous.Width != desc.Width ||
-        previous.Height != desc.Height || previous.Format != desc.Format) {
-      ComPtr<ID3D11Texture2D> capture_input, encoder_input;
-      ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
-      desc.Usage = D3D11_USAGE_DEFAULT;
-      desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-      desc.CPUAccessFlags = 0;
-      desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-      HRB(native_->device_->CreateTexture2D(&desc, nullptr, &capture_input));
-      ComPtr<IDXGIResource> resource;
-      HRB(capture_input.As(&resource));
-      HANDLE shared = nullptr;
-      HRB(resource->GetSharedHandle(&shared));
-      HRB(amf_device_->device_->OpenSharedResource(
-          shared, IID_PPV_ARGS(&encoder_input)));
-      HRB(capture_input.As(&capture_mutex));
-      HRB(encoder_input.As(&encoder_mutex));
-      amf_capture_input_ = std::move(capture_input);
-      amf_encoder_input_ = std::move(encoder_input);
-      amf_capture_mutex_ = std::move(capture_mutex);
-      amf_encoder_mutex_ = std::move(encoder_mutex);
     }
     // Keyed mutexes order GPU work across devices; neither side reads a live
     // DesktopDup surface after this call, and AMF retains only its own NV12 frames.
@@ -360,7 +417,8 @@ private:
       LOG_ERROR(std::string("AMF capture texture lock failed: ") + std::to_string(locked));
       return false;
     }
-    native_->context_->CopyResource(amf_capture_input_.Get(), input);
+    if (input)
+      native_->context_->CopyResource(amf_capture_input_.Get(), input);
     native_->context_->Flush();
     HRB(amf_capture_mutex_->ReleaseSync(1));
     locked = amf_encoder_mutex_->AcquireSync(1, ENCODE_TIMEOUT_MS);
@@ -465,7 +523,15 @@ private:
     int ret;
     bool encoded = false;
     frame_->pts = ms;
-    if ((ret = avcodec_send_frame(c_, frame_)) < 0) {
+    // FFmpeg copies the frame properties on a successful send. The pinned AMF
+    // patch translates I into an actual IDR plus parameter-set headers.
+    frame_->pict_type = keyframe_request_.pending() ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    ret = avcodec_send_frame(c_, frame_);
+    frame_->pict_type = AV_PICTURE_TYPE_NONE;
+    keyframe_request_.submitted(ret);
+    if (ret < 0) {
+      if (amf_pipeline_ && ret == AVERROR(EAGAIN))
+        return receive_pending(callback, obj, false);
       LOG_ERROR(std::string("avcodec_send_frame failed, ret = ") + av_err2str(ret));
       return ret;
     }
@@ -639,6 +705,40 @@ int ffmpeg_vram_poll(FFmpegVRamEncoder *encoder, EncodeCallback callback, void *
     return AVERROR(EINVAL);
   try {
     return encoder->poll(callback, obj);
+  } catch (const std::exception &) {
+    return AVERROR_EXTERNAL;
+  }
+}
+
+int ffmpeg_vram_retire(FFmpegVRamEncoder *encoder, void *capture_device, int timeout_ms) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  try {
+    return encoder->retire(capture_device, timeout_ms);
+  } catch (const std::exception &) {
+    return AVERROR_EXTERNAL;
+  }
+}
+
+int ffmpeg_vram_retire_capture(void *device, int timeout_ms) {
+  ComPtr<ID3D11DeviceContext> context;
+  ComPtr<ID3D11Query> event;
+  return wait_capture_for_retirement(static_cast<ID3D11Device *>(device), context,
+                                     event, gpu_retirement_deadline(timeout_ms));
+}
+
+int ffmpeg_vram_request_keyframe(FFmpegVRamEncoder *encoder) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  return encoder->request_keyframe();
+}
+
+int ffmpeg_vram_replay_keyframe(FFmpegVRamEncoder *encoder, EncodeCallback callback,
+                               void *obj, int64_t ms) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  try {
+    return encoder->replay_keyframe(callback, obj, ms);
   } catch (const std::exception &) {
     return AVERROR_EXTERNAL;
   }

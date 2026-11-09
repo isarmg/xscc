@@ -807,6 +807,7 @@ impl InvokeUiSession for Handler {
                 return;
             }
         }
+        self.0.metrics.lock().unwrap().callback();
         if let Some(frame) = take_frame(display, image, &self.0) {
             let monitors = self.0.monitors.read().unwrap();
             if monitors.pending.is_some()
@@ -820,10 +821,17 @@ impl InvokeUiSession for Handler {
             }
             // Replacing an unread frame needs no second UI wake: the pending
             // render will take the newest frame from the same mailbox.
-            if self.0.frame.force_push(frame).is_none() {
+            let replaced = {
+                let mut metrics = self.0.metrics.lock().unwrap();
+                let replaced = self.0.frame.force_push(frame).is_some();
+                metrics.published();
+                if replaced {
+                    metrics.dropped();
+                }
+                replaced
+            };
+            if !replaced {
                 self.0.updates.notify_one();
-            } else {
-                self.0.metrics.lock().unwrap().dropped();
             }
         }
     }
@@ -1024,6 +1032,8 @@ impl InvokeUiSession for Handler {
                     "decode_p95_ms": sample.decode_p95_ms,
                     "ui_queue_p95_ms": sample.ui_queue_p95_ms,
                     "mailbox_dropped": sample.mailbox_dropped,
+                    "video_callback_count": sample.video_callback_count,
+                    "mailbox_publish_count": sample.mailbox_publish_count,
                     "codec": status.codec_format.as_ref().map(ToString::to_string),
                     "target_bitrate_kbps": status.target_bitrate
                         .and_then(|value| u32::try_from(value).ok())
