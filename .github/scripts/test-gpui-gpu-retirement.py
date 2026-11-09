@@ -8,6 +8,7 @@ import tempfile
 
 TEST = r"""
 #include <assert.h>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -98,7 +99,7 @@ struct ID3D11Device {
     void GetImmediateContext(ID3D11DeviceContext **out) { *out = context; }
 };
 struct ID3D11DeviceContext {
-    int delay_ms = 0, ends = 0, polls = 0, flushes = 0;
+    int delay_ms = 0, ends = 0, polls = 0, flushes = 0, pending_polls = 0;
     bool complete = false, false_forever = false;
     HRESULT poll_error = S_OK;
     std::chrono::steady_clock::time_point ready_at{};
@@ -112,12 +113,23 @@ struct ID3D11DeviceContext {
         ++polls;
         if (FAILED(poll_error))
             return poll_error;
+        if (pending_polls > 0) {
+            --pending_polls;
+            *done = TRUE; // S_FALSE leaves output undefined; TRUE still cannot prove idle.
+            return S_FALSE;
+        }
         complete = !false_forever && std::chrono::steady_clock::now() >= ready_at;
         *done = complete ? TRUE : FALSE;
         return S_OK; // S_OK alone is deliberately not a completion witness.
     }
 };
+// Windows SDK headers expose these function-like macros in the native build.
+// Include the STL first, then keep macro pollution active while parsing the real header.
+#define min(left, right) ((left) < (right) ? (left) : (right))
+#define max(left, right) ((left) > (right) ? (left) : (right))
 #include "gpu_retirement.h"
+#undef min
+#undef max
 
 static AVCodec amf{"hevc_amf"};
 static AVCodecContext codec() {
@@ -125,6 +137,16 @@ static AVCodecContext codec() {
     return value;
 }
 static void eof_is_required_and_eagain_is_retryable(void) {
+    // The production deadline must compile with SDK macros and retain both clamps.
+    auto before = std::chrono::steady_clock::now();
+    auto zero = gpu_retirement_deadline(-1);
+    auto after = std::chrono::steady_clock::now();
+    assert(zero >= before && zero <= after);
+    before = std::chrono::steady_clock::now();
+    auto capped = gpu_retirement_deadline(2000);
+    after = std::chrono::steady_clock::now();
+    assert(capped >= before + std::chrono::milliseconds(1500));
+    assert(capped <= after + std::chrono::milliseconds(1500));
     auto state = codec();
     state.priv_data = &state;
     AVPacket packet;
@@ -169,6 +191,15 @@ static void no_flush_or_sok_false_can_claim_gpu_idle(void) {
     assert(wait_context_for_retirement(&device, &context, event,
                                        gpu_retirement_deadline(3)) == AVERROR(ETIMEDOUT));
     assert(context.flushes == 1 && !context.complete && event);
+    ID3D11DeviceContext pending;
+    pending.pending_polls = 2;
+    ID3D11Device pending_device;
+    pending_device.context = &pending;
+    ComPtr<ID3D11Query> pending_event;
+    assert(wait_context_for_retirement(&pending_device, &pending, pending_event,
+                                       gpu_retirement_deadline(100)) == 0);
+    assert(pending.polls == 3 && pending.complete && pending.flushes == 1);
+    assert(pending_device.queries == 1 && pending.ends == 1);
     device.removed = static_cast<HRESULT>(0x887A0005u);
     assert(wait_context_for_retirement(&device, &context, event,
                                        gpu_retirement_deadline(10)) == device.removed);

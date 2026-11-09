@@ -10,7 +10,7 @@ using GpuRetirementDeadline = std::chrono::steady_clock::time_point;
 
 inline GpuRetirementDeadline gpu_retirement_deadline(int timeout_ms) {
   return std::chrono::steady_clock::now() +
-         std::chrono::milliseconds(std::max(0, std::min(timeout_ms, 1500)));
+         std::chrono::milliseconds((std::max)(0, (std::min)(timeout_ms, 1500)));
 }
 
 inline bool gpu_retirement_expired(GpuRetirementDeadline deadline) {
