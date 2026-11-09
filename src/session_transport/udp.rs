@@ -426,7 +426,6 @@ struct ReceiveStream {
     epoch: u64,
     last: Option<u64>,
     needs_keyframe: bool,
-    refresh: Option<Instant>,
 }
 struct QueuedFrame {
     plan: FramePlan,
@@ -458,6 +457,7 @@ pub struct HybridTransport {
     tasks: Vec<JoinHandle<()>>,
     sending: BTreeMap<StreamKey, SendStream>,
     receiving: BTreeMap<StreamKey, ReceiveStream>,
+    video_recovery: Arc<Mutex<media::VideoRecovery>>,
 }
 impl Drop for HybridTransport {
     fn drop(&mut self) {
@@ -521,6 +521,7 @@ impl HybridTransport {
                 tasks,
                 sending: BTreeMap::new(),
                 receiving: BTreeMap::new(),
+                video_recovery: Arc::new(Mutex::new(media::VideoRecovery::default())),
             },
             WorkerChannels {
                 frames,
@@ -542,6 +543,7 @@ impl HybridTransport {
             transport.writer.clone(),
             transport.ready.clone(),
             transport.receive_limit.clone(),
+            transport.video_recovery.clone(),
             channels.failed,
         )));
         Ok(transport)
@@ -632,6 +634,19 @@ impl HybridTransport {
             return self.reliable_send(message, true).await;
         }
         self.check()?;
+        // Normalize before allocating the UDP frame ID or deriving its keyframe flag.
+        let boundary = media::video_from_keyframe_boundary(message);
+        let message = boundary.as_ref().unwrap_or(message);
+        if !self.host {
+            if let Some(message::Union::Misc(misc)) = &message.union {
+                if let Some(misc::Union::Option(option)) = &misc.union {
+                    if let Some(kbps) = option.bitrate_limit_kbps {
+                        let bps = if kbps == 0 { 1_000_000_000 } else { u64::from(kbps) * 1000 };
+                        self.command(Command::Limit(bps))?;
+                    }
+                }
+            }
+        }
         if let Some((kind, display, keyframe, codec)) = media_metadata(message)? {
             if !self.host {
                 bail!("Controller media transmission is unavailable");
@@ -762,6 +777,9 @@ impl HybridTransport {
                     // The worker consumes queued commands before receiving UDP packets.
                     // Queue the epoch before its ACK without yielding to a cancellable caller.
                     self.command(Command::Epoch(epoch.clone()))?;
+                    if epoch.kind == MediaKind::Video {
+                        self.video_recovery.lock().unwrap().set_epoch(epoch.display, epoch.epoch, Instant::now())?;
+                    }
                     self.receiving.insert(
                         (epoch.kind, epoch.display),
                         ReceiveStream {
@@ -883,17 +901,14 @@ impl HybridTransport {
                 state.needs_keyframe = false;
             }
             if state.needs_keyframe {
-                if state
-                    .refresh
-                    .is_none_or(|last| last.elapsed() >= Duration::from_millis(250))
-                {
-                    state.refresh = Some(Instant::now());
+                if self.video_recovery.lock().unwrap().request(metadata, false, Instant::now()) {
                     request_refresh(&self.writer, metadata.display_id)?;
                 }
                 return Ok(None);
             }
         }
         state.last = Some(metadata.frame_id);
+        self.video_recovery.lock().unwrap().frame_delivered(metadata);
         Ok(Some(frame.payload.as_ref().into()))
     }
 }
@@ -1628,11 +1643,11 @@ fn recovery(
     sid: SessionId,
     outcome: ReceiveOutcome,
     completed: &mpsc::Sender<CompletedFrame>,
-    refreshes: &mut BTreeMap<u32, Instant>,
+    gate: &Mutex<media::VideoRecovery>,
 ) -> ResultType<()> {
     for recovery in outcome.recovery {
         match recovery {
-            Recovery::RefreshVideo(metadata) => refresh(writer, metadata.display_id, refreshes)?,
+            Recovery::RefreshVideo(metadata) => refresh(writer, metadata, metadata.keyframe, gate)?,
             Recovery::KeyframeNack(nack) => writer.control(
                 sid,
                 udp_media_control::Union::Nack(serde_json::to_vec(&nack)?.into()),
@@ -1651,7 +1666,7 @@ fn recovery(
             Err(mpsc::error::TrySendError::Full(frame))
                 if frame.metadata.kind == MediaKind::Video =>
             {
-                refresh(writer, frame.metadata.display_id, refreshes)?
+                refresh(writer, frame.metadata, frame.metadata.keyframe, gate)?
             }
             Err(mpsc::error::TrySendError::Full(_)) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => bail!("UDP media consumer stopped"),
@@ -1661,21 +1676,66 @@ fn recovery(
 }
 fn refresh(
     writer: &ReliableWriter,
-    display: u32,
-    refreshes: &mut BTreeMap<u32, Instant>,
+    metadata: FrameMetadata,
+    failed_keyframe: bool,
+    gate: &Mutex<media::VideoRecovery>,
 ) -> ResultType<()> {
-    if refreshes
-        .get(&display)
-        .is_none_or(|last| last.elapsed() >= Duration::from_millis(250))
-    {
-        if !refreshes.contains_key(&display) && refreshes.len() >= 64 {
-            bail!("Too many UDP refresh streams");
-        }
-        refreshes.insert(display, Instant::now());
-        request_refresh(writer, display)?;
+    let request = gate
+        .lock()
+        .unwrap()
+        .request(metadata, failed_keyframe, Instant::now());
+    if request {
+        request_refresh(writer, metadata.display_id)?;
     }
     Ok(())
 }
+
+/// Sample authenticated receive throughput while packets are arriving. Idle desktop
+/// gaps are excluded; the negotiated wire cap remains an independent upper bound.
+struct ReceiveRate {
+    limit: u64,
+    effective: u64,
+    started: Instant,
+    last: Instant,
+    bytes: u64,
+}
+impl ReceiveRate {
+    fn new(now: Instant) -> Self {
+        Self {
+            limit: 1_000_000_000,
+            effective: 1_000_000_000,
+            started: now,
+            last: now,
+            bytes: 0,
+        }
+    }
+    fn set_limit(&mut self, bps: u64) -> Result<u64, MediaError> {
+        if bps == 0 || bps > 1_000_000_000 {
+            return Err(MediaError::InvalidFeedback);
+        }
+        self.limit = bps;
+        self.effective = self.effective.min(bps);
+        Ok(self.effective)
+    }
+    fn received(&mut self, bytes: usize, now: Instant) -> Option<u64> {
+        if now.duration_since(self.last) > Duration::from_millis(250) {
+            self.started = now;
+            self.bytes = 0;
+        }
+        self.last = now;
+        self.bytes += bytes as u64;
+        let elapsed = now.duration_since(self.started);
+        if elapsed < Duration::from_millis(250) {
+            return None;
+        }
+        let sampled = (self.bytes as f64 * 8.0 / elapsed.as_secs_f64()) as u64;
+        self.effective = sampled.max(1).min(self.limit);
+        self.started = now;
+        self.bytes = 0;
+        Some(self.effective)
+    }
+}
+
 async fn client_media(
     mut pending: PendingAssociation,
     mut commands: mpsc::Receiver<Command>,
@@ -1683,12 +1743,14 @@ async fn client_media(
     writer: ReliableWriter,
     ready: Arc<AtomicBool>,
     receive_limit: Arc<AtomicUsize>,
+    video_recovery: Arc<Mutex<media::VideoRecovery>>,
     failed: watch::Sender<Option<String>>,
 ) {
     let mut closing = failed.subscribe();
     let result: ResultType<()> = async {
         let mut reassembler = Reassembler::default();
-        let mut refreshes = BTreeMap::new();
+        let mut receive_rate = ReceiveRate::new(Instant::now());
+        reassembler.set_effective_rate(receive_rate.effective)?;
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let started = Instant::now();
         let mut next_probe = started + Duration::from_millis(250);
@@ -1702,34 +1764,38 @@ async fn client_media(
                 command = commands.recv() => match command.context("UDP media command owner stopped")? {
                     Command::Epoch(epoch) => {
                         reassembler.set_epoch(epoch.kind, epoch.display, epoch.epoch)?;
+                        if epoch.kind == MediaKind::Video {
+                            video_recovery.lock().unwrap().set_epoch(epoch.display, epoch.epoch, Instant::now())?;
+                        }
                     }
-                    Command::Notice(notice) => match reassembler.note_notice(notice, Instant::now()) {
-                        Ok(outcome) => recovery(&writer, pending.session_id, outcome, &completed, &mut refreshes)?,
-                        Err(MediaError::WrongEpoch) => {}
-                        Err(error) => return Err(error.into()),
+                    Command::Notice(notice) => {
+                        let now = Instant::now();
+                        match reassembler.note_notice(notice, now) {
+                            Ok(outcome) => {
+                                match notice {
+                                    FrameNotice::Abandoned(metadata) if metadata.keyframe =>
+                                        video_recovery.lock().unwrap().keyframe_abandoned(metadata),
+                                    FrameNotice::Sent(descriptor) if descriptor.metadata.keyframe => {
+                                        if let Some(bytes) = reassembler.received_bytes(descriptor.metadata) {
+                                            let replaced = video_recovery.lock().unwrap().keyframe_progress(descriptor, bytes, now)?;
+                                            if let Some(metadata) = replaced { reassembler.discard(metadata); }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                recovery(&writer, pending.session_id, outcome, &completed, &video_recovery)?;
+                            }
+                            Err(MediaError::WrongEpoch) => {}
+                            Err(error) => return Err(error.into()),
+                        }
+                    }
+                    Command::Limit(bps) => {
+                        let effective = receive_rate.set_limit(bps)?;
+                        reassembler.set_effective_rate(effective)?;
+                        video_recovery.lock().unwrap().set_effective_rate(effective)?;
                     }
                     _ => bail!("Invalid controller UDP media command"),
                 },
-                count = pending.socket.recv(&mut packet) => {
-                    let count = count.context("Receive UDP media")?;
-                    if count > pending.mtu { continue; }
-                    let Ok(packet) = pending.receiver.open(&packet[..count], Instant::now()) else { continue; };
-                    match packet {
-                        AuthenticatedPacket::Probe { kind: ProbeKind::Challenge, token } => {
-                            let response = pending.sender.seal_probe(ProbeKind::Response, token)?;
-                            pending.socket.send(&response.bytes).await.context("Reply to UDP media challenge")?;
-                        }
-                        AuthenticatedPacket::Fragment(fragment) if ready.load(Ordering::Acquire) => {
-                            if fragment.descriptor.total_size as usize > receive_limit.load(Ordering::Acquire) { bail!("UDP frame exceeds application receive limit"); }
-                            match reassembler.push(fragment, Instant::now()) {
-                                Ok(outcome) => recovery(&writer, pending.session_id, outcome, &completed, &mut refreshes)?,
-                                Err(MediaError::WrongEpoch | MediaError::Capacity) => {}
-                                Err(error) => return Err(error.into()),
-                            }
-                        }
-                        _ => {}
-                    }
-                }
                 _ = timer.tick() => {
                     let now = Instant::now();
                     let path_ready = ready.load(Ordering::Acquire);
@@ -1743,8 +1809,48 @@ async fn client_media(
                         let report = pending.sender.seal_report(&report)?;
                         pending.socket.send(&report.bytes).await.context("Send UDP receive report")?;
                     }
-                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &mut refreshes)?;
+                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery)?;
+                    let tick = video_recovery.lock().unwrap().tick(now);
+                    for metadata in tick.abandon { reassembler.discard(metadata); }
+                    for metadata in tick.refresh { request_refresh(&writer, metadata.display_id)?; }
                 }
+                count = pending.socket.recv(&mut packet) => {
+                    let count = count.context("Receive UDP media")?;
+                    if count > pending.mtu { continue; }
+                    let Ok(packet) = pending.receiver.open(&packet[..count], Instant::now()) else { continue; };
+                    match packet {
+                        AuthenticatedPacket::Probe { kind: ProbeKind::Challenge, token } => {
+                            let response = pending.sender.seal_probe(ProbeKind::Response, token)?;
+                            pending.socket.send(&response.bytes).await.context("Reply to UDP media challenge")?;
+                        }
+                        AuthenticatedPacket::Fragment(fragment) if ready.load(Ordering::Acquire) => {
+                            if fragment.descriptor.total_size as usize > receive_limit.load(Ordering::Acquire) { bail!("UDP frame exceeds application receive limit"); }
+                            let now = Instant::now();
+                            let descriptor = fragment.descriptor;
+                            match reassembler.push(fragment, now) {
+                                Ok(outcome) => {
+                                    if let Some(bps) = receive_rate.received(count, now) {
+                                        reassembler.set_effective_rate(bps)?;
+                                        video_recovery.lock().unwrap().set_effective_rate(bps)?;
+                                    }
+                                    if descriptor.metadata.keyframe {
+                                        let bytes = outcome.frame.as_ref().map(|frame| frame.payload.len())
+                                            .or_else(|| reassembler.received_bytes(descriptor.metadata));
+                                        if let Some(bytes) = bytes {
+                                            let replaced = video_recovery.lock().unwrap().keyframe_progress(descriptor, bytes, now)?;
+                                            if let Some(metadata) = replaced { reassembler.discard(metadata); }
+                                        }
+                                    }
+                                    recovery(&writer, pending.session_id, outcome, &completed, &video_recovery)?;
+                                }
+                                Err(MediaError::WrongEpoch | MediaError::Capacity) => {}
+                                Err(error) => return Err(error.into()),
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
             }
         }
     }.await;

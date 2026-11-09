@@ -1,0 +1,16 @@
+4d1d7258032d908e2b70353e18eda3ff9610afd65c337f17c04a3076e1578c48  Common/Include/AdapterOption.h
+a1b4d74beb113207e1a4aa2b4cf4645819cf807492c43b47a65e2ec4d14fd7e9  Common/Include/README.md
+c2285c867ddc9b88f43b4f8fa2c77a9eec66207166c1217b37353a2ccd62ac03  LICENSE
+b849def8d88ab29cd59475a93975a39c215b273ff15ea7c686609b233f8851bb  Virtual Display Driver (HDR)/8K240HzHDR.edid
+a9a7b81fc95e5f5d8b8fe9a1ddebc08f0695f816f912c88c196c0684302d27f0  Virtual Display Driver (HDR)/CppProperties.json
+581744eed7a205dfa0269ea27b64233c4fa00eb61dc466119ed8309832d8b570  Virtual Display Driver (HDR)/MttVDD.sln
+d320a69bb13f7ba7e79adbb03c999c41a09948c5d17ecf3e1ed55aacc1d8df0b  Virtual Display Driver (HDR)/MttVDD/Driver.cpp
+9d62afc9c8f2678aaad68f9d9f5dfd2279cd3a4111afe737795888ba4d00ab95  Virtual Display Driver (HDR)/MttVDD/Driver.h
+c2e5a5b34d840b77977c82fed9a2ed9036a71dfd257ec0d7b1bb9b84516aa523  Virtual Display Driver (HDR)/MttVDD/MttVDD.inf
+33947301a2373681a3b4dd20d739fff105aaff41bc8303188e45568587567dc6  Virtual Display Driver (HDR)/MttVDD/MttVDD.sln
+3e1c0028a2ca9d39892a5e0f38f89e3a93e5831ff196cc670aacbc7a5b7a6a6a  Virtual Display Driver (HDR)/MttVDD/MttVDD.vcxproj
+ccc8f1f59012217360fd3642dc88886a5a9b252a366b01951be0a45db101e81e  Virtual Display Driver (HDR)/MttVDD/MttVDD.vcxproj.filters
+3eca4dd904e24723e6c47546d91a7eb91f2c3e06323fb5a152c74174acd0f2d1  Virtual Display Driver (HDR)/MttVDD/Trace.h
+197e53fd70228c53353ab69f25992991a8d93468ffba3bbb31d07e0e32b717e4  Virtual Display Driver (HDR)/MttVDD/readme.md
+67ebdd5ebcbd0f8b8ff5c7deff0811dcaf2c8fe40fff88b036de57fac2fd80b4  Virtual Display Driver (HDR)/option.txt
+c023e471dd760b1f2e17e38e1eb6139b05b6e5fad2952f9f34de678fda981723  Virtual Display Driver (HDR)/vdd_settings.xml

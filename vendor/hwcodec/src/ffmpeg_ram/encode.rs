@@ -130,6 +130,14 @@ impl Encoder {
         }
     }
 
+    #[cfg(windows)]
+    pub fn retire(&mut self, capture_device: *mut c_void, timeout_ms: i32) -> Result<(), i32> {
+        match unsafe { crate::ffmpeg_ram::ffmpeg_ram_retire(self.codec, capture_device, timeout_ms) } {
+            0 => Ok(()),
+            error => Err(error),
+        }
+    }
+
     extern "C" fn callback(data: *const u8, size: c_int, pts: i64, key: i32, obj: *const c_void) {
         unsafe {
             let frames = &mut *(obj as *mut Vec<EncodeFrame>);

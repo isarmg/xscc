@@ -358,21 +358,13 @@ impl SessionChrome {
     }
 
     pub(super) fn bitrate_label(&self) -> String {
-        let range = BitrateRange::for_host(self.model.max_bitrate_kbps);
-        let value = self
-            .bitrate
-            .draft
-            .preview
-            .or(self.model.bitrate_limit_kbps)
-            .unwrap_or(8_000);
-        range
-            .map(|range| {
-                format!(
-                    "码率 · {} Mbps",
-                    format_mbps(value.clamp(range.min_kbps(), range.max_kbps()))
-                )
-            })
-            .unwrap_or_else(|| "码率".into())
+        let Some(value) = self.bitrate.draft.preview.or(self.model.bitrate_limit_kbps) else {
+            return "码率 · 自动".into();
+        };
+        let value = BitrateRange::for_host(self.model.max_bitrate_kbps)
+            .map(|range| value.clamp(range.min_kbps(), range.max_kbps()))
+            .unwrap_or(value);
+        format!("码率 · {} Mbps", format_mbps(value))
     }
 
     pub(super) fn bitrate_controls(&self, cx: &mut Context<Self>) -> Div {

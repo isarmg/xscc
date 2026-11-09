@@ -152,9 +152,14 @@ jobs:
           "$RUNNER_TEMP/gpui-android-text-state-tests"
           printf '#[path = "%s/src/gpui_session/metrics.rs"] mod metrics;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-metrics-tests.rs"
           rustc --edition 2024 --test "$RUNNER_TEMP/gpui-metrics-tests.rs" -o "$RUNNER_TEMP/gpui-metrics-tests"
-          metric_test=metrics::tests::decoded_batches_count_outputs_independently_of_ui_submissions
-          "$RUNNER_TEMP/gpui-metrics-tests" --list | grep -Fx "$metric_test: test"
-          "$RUNNER_TEMP/gpui-metrics-tests" --exact "$metric_test"
+          for metric_test in decoded_batches_count_outputs_independently_of_ui_submissions callback_and_mailbox_publication_do_not_invent_ui_submissions; do
+            name="metrics::tests::$metric_test"
+            "$RUNNER_TEMP/gpui-metrics-tests" --list | grep -Fx "$name: test"
+            output=$("$RUNNER_TEMP/gpui-metrics-tests" --exact "$name")
+            printf '%s\n' "$output"
+            grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' <<< "$output" || { echo "Metric regression did not run: $name" >&2; exit 1; }
+          done
+          python3 .github/scripts/test-gpui-android-each-output.py
           python3 - "$RUNNER_TEMP/gpui-decode-capacity-tests.rs" <<'PY'
           import pathlib, sys
           source = pathlib.Path("src/client.rs").read_text()
@@ -163,11 +168,16 @@ jobs:
           pathlib.Path(sys.argv[1]).write_text("use std::{sync::{Arc, RwLock}, time::Duration};\n" + source[start:end])
           PY
           rustc --edition 2024 --test "$RUNNER_TEMP/gpui-decode-capacity-tests.rs" -o "$RUNNER_TEMP/gpui-decode-capacity-tests"
-          for capacity_test in batched_outputs_report_the_actual_decode_capacity empty_input_submission_counts_work_without_inventing_frames single_output_capacity_keeps_the_existing_warmup; do
+          for capacity_test in batched_outputs_report_the_actual_decode_capacity empty_input_submission_counts_work_without_inventing_frames single_output_capacity_keeps_the_existing_warmup pending_output_polling_respects_high_refresh_frame_budget; do
             name="mediacodec_capacity_tests::$capacity_test"
             "$RUNNER_TEMP/gpui-decode-capacity-tests" --list | grep -Fx "$name: test"
             "$RUNNER_TEMP/gpui-decode-capacity-tests" --exact "$name"
           done
+          printf '#[path = "%s/src/client/presentation.rs"] mod presentation;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-presentation-tests.rs"
+          rustc --edition 2024 --test "$RUNNER_TEMP/gpui-presentation-tests.rs" -o "$RUNNER_TEMP/gpui-presentation-tests"
+          presentation_test=presentation::tests::ui_pacing_preserves_decoded_frames_with_jitter
+          "$RUNNER_TEMP/gpui-presentation-tests" --list | grep -Fx "$presentation_test: test"
+          "$RUNNER_TEMP/gpui-presentation-tests" --exact "$presentation_test"
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:

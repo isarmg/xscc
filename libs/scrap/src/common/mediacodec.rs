@@ -102,11 +102,20 @@ impl MediaCodecDecoder {
     }
 
     pub fn decode(&mut self, data: &[u8], rgb: &mut ImageRgb) -> ResultType<bool> {
+        self.decode_with_callback(data, rgb, &mut |_| {})
+    }
+
+    pub fn decode_with_callback(
+        &mut self,
+        data: &[u8],
+        rgb: &mut ImageRgb,
+        on_frame: &mut dyn FnMut(&mut ImageRgb),
+    ) -> ResultType<bool> {
         if self.configuration.is_none() {
             bail!("MediaCodec input dimensions are not configured");
         }
         let deadline = Instant::now() + Duration::from_millis(100);
-        let mut decoded = self.poll_output(rgb)?;
+        let mut decoded = self.poll_output_with_callback(rgb, on_frame)?;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             // Keep this packet borrowed until it is queued; input backpressure is not consumption.
@@ -127,13 +136,13 @@ impl MediaCodecDecoder {
             };
             if queued {
                 self.pending_output += 1;
-                decoded |= self.poll_output(rgb)?;
+                decoded |= self.poll_output_with_callback(rgb, on_frame)?;
                 return Ok(decoded);
             }
             if remaining.is_zero() {
                 bail!("No MediaCodec input buffer available");
             }
-            decoded |= self.poll_output(rgb)?;
+            decoded |= self.poll_output_with_callback(rgb, on_frame)?;
         }
     }
 
@@ -146,6 +155,14 @@ impl MediaCodecDecoder {
     }
 
     pub fn poll_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
+        self.poll_output_with_callback(rgb, &mut |_| {})
+    }
+
+    pub fn poll_output_with_callback(
+        &mut self,
+        rgb: &mut ImageRgb,
+        on_frame: &mut dyn FnMut(&mut ImageRgb),
+    ) -> ResultType<bool> {
         let decoder = &self.decoder;
         let mut decoded = false;
         loop {
@@ -164,6 +181,9 @@ impl MediaCodecDecoder {
             converted?;
             self.decoded_outputs = self.decoded_outputs.saturating_add(1);
             decoded = true;
+            // The hardware buffer is released before the UI takes ownership of
+            // this RGB allocation. Never overwrite an output before publishing it.
+            on_frame(rgb);
         }
     }
 }

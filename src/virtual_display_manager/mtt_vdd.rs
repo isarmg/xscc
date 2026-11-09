@@ -544,6 +544,10 @@ fn configure_count_modes_with_verified_bundle(
     let folder = owned_folder(bundle, present)?;
     let path = folder.join("vdd_settings.xml");
     if count == 0 {
+        if enabled {
+            // A failed detach/primary restoration must never proceed to PnP disable.
+            presentation::detach_for_removal_locked()?;
+        }
         // A failed removal must never restart an adapter that is being removed.
         if enabled {
             let device_started = Instant::now();
@@ -662,6 +666,7 @@ fn configure_count_modes_with_verified_bundle(
                 result?;
             }
         } else if present {
+            presentation::detach_for_removal_locked()?;
             change_device(DICS_DISABLE)?;
         }
         let wait_started = Instant::now();
@@ -691,6 +696,9 @@ fn configure_count_modes_with_verified_bundle(
         let configuration = restore_configuration(&path, previous.as_deref(), restore_path);
         let device_state = (|| -> ResultType<()> {
             if device()?.is_some() {
+                if !enabled {
+                    presentation::detach_for_removal_locked()?;
+                }
                 change_device(if enabled { DICS_PROPCHANGE } else { DICS_DISABLE })?;
             }
             wait_for_count(previous_count)
@@ -753,12 +761,10 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
         bail!("The only remaining display cannot be removed");
     }
     let _capture_idle = configuration::capture_idle_for_change()?;
-    let presentation = presentation::suspend_locked();
     if target == 0 {
-        let removal = configure_count(0, &[]);
-        return presentation::complete_removal(presentation, removal);
+        return configure_count(0, &[]);
     }
-    let presentation = presentation?;
+    let presentation = presentation::suspend_locked()?;
     configure_count(u32::try_from(target)?, &[])?;
     if let Some(target) = presentation {
         presentation::resume_locked(target)?;
@@ -792,6 +798,13 @@ pub(super) fn restore_session_display(
 ) -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
     presentation::suspend_locked().map(|_| ())
+}
+
+pub(super) fn prepare_session_display_removal(
+    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<()> {
+    let _guard = LOCK.lock().unwrap();
+    presentation::detach_for_removal_locked()
 }
 
 pub(super) fn before_persistent_display_change() -> ResultType<Option<PersistentDisplayChangeGuard>>

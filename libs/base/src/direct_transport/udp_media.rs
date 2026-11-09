@@ -643,6 +643,321 @@ pub fn keyframe_deadline(size: usize, effective_bps: u64) -> Duration {
     Duration::from_millis(millis as u64)
 }
 
+/// Reserve repair/audio headroom inside the user's unchanged wire ceiling.
+pub fn video_payload_bitrate_limit_kbps(wire_limit_kbps: u32) -> Result<u32, MediaError> {
+    crate::session_protocol::validate_bitrate_limit(wire_limit_kbps)
+        .map_err(|_| MediaError::InvalidFeedback)?;
+    Ok(
+        (u64::from(wire_limit_kbps) * (DEFAULT_MTU - FRAGMENT_OVERHEAD) as u64 * 90
+            / (DEFAULT_MTU as u64 * 100)) as u32,
+    )
+}
+
+/// A codec drain can contain old deltas followed by an independently decodable IDR.
+/// Keep that boundary first so the authenticated key flag and repair cache are truthful.
+/// The original message is borrowed unchanged unless a delta prefix actually exists.
+pub fn video_from_keyframe_boundary(
+    message: &crate::message_proto::Message,
+) -> Option<crate::message_proto::Message> {
+    use crate::message_proto::{message, video_frame};
+    let Some(message::Union::VideoFrame(video)) = &message.union else {
+        return None;
+    };
+    let frames = match &video.union {
+        Some(
+            video_frame::Union::Vp8s(frames)
+            | video_frame::Union::Vp9s(frames)
+            | video_frame::Union::H264s(frames)
+            | video_frame::Union::H265s(frames)
+            | video_frame::Union::Av1s(frames),
+        ) => frames,
+        _ => return None,
+    };
+    let prefix = frames.frames.iter().position(|frame| frame.key)?;
+    if prefix == 0 {
+        return None;
+    }
+    let mut message = message.clone();
+    let Some(message::Union::VideoFrame(video)) = &mut message.union else {
+        unreachable!();
+    };
+    let frames = match &mut video.union {
+        Some(
+            video_frame::Union::Vp8s(frames)
+            | video_frame::Union::Vp9s(frames)
+            | video_frame::Union::H264s(frames)
+            | video_frame::Union::H265s(frames)
+            | video_frame::Union::Av1s(frames),
+        ) => frames,
+        _ => unreachable!(),
+    };
+    frames.frames.drain(..prefix);
+    Some(message)
+}
+
+const VIDEO_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const KEYFRAME_STALL_TIMEOUT: Duration = Duration::from_secs(1);
+
+struct PendingRecoveryKeyframe {
+    descriptor: FrameDescriptor,
+    started: Instant,
+    last_progress: Instant,
+    received_bytes: usize,
+}
+struct RecoveryStream {
+    epoch: u64,
+    last_refresh: Instant,
+    wanted: Option<FrameMetadata>,
+    pending: Option<PendingRecoveryKeyframe>,
+    delivered_frame: Option<u64>,
+    retired_keyframe: Option<u64>,
+}
+#[derive(Default)]
+pub struct RecoveryTick {
+    pub abandon: Vec<FrameMetadata>,
+    pub refresh: Vec<FrameMetadata>,
+}
+
+/// One gate shared by reassembly and application delivery; no lock is held across I/O.
+/// A receiving/repairing keyframe suppresses duplicate refresh requests, but only real
+/// new payload bytes extend its one-second stall guard. The total transfer also has
+/// a separate size/rate deadline, so duplicate fragments cannot hold a stream forever.
+pub struct VideoRecovery {
+    streams: BTreeMap<u32, RecoveryStream>,
+    effective_bps: u64,
+}
+impl Default for VideoRecovery {
+    fn default() -> Self {
+        Self {
+            streams: BTreeMap::new(),
+            effective_bps: 1_000_000_000,
+        }
+    }
+}
+impl VideoRecovery {
+    pub fn set_effective_rate(&mut self, bps: u64) -> Result<(), MediaError> {
+        if bps == 0 || bps > 1_000_000_000 {
+            return Err(MediaError::InvalidFeedback);
+        }
+        self.effective_bps = bps;
+        Ok(())
+    }
+    pub fn set_epoch(&mut self, display: u32, epoch: u64, now: Instant) -> Result<(), MediaError> {
+        if self
+            .streams
+            .get(&display)
+            .is_some_and(|stream| stream.epoch >= epoch)
+        {
+            return Ok(());
+        }
+        if !self.streams.contains_key(&display) && self.streams.len() >= 64 {
+            return Err(MediaError::Capacity);
+        }
+        self.streams.insert(
+            display,
+            RecoveryStream {
+                epoch,
+                last_refresh: now,
+                pending: None,
+                delivered_frame: None,
+                retired_keyframe: None,
+                // Also recover a wholly lost first/static frame when no UDP event follows.
+                wanted: Some(FrameMetadata {
+                    kind: MediaKind::Video,
+                    display_id: display,
+                    epoch,
+                    frame_id: 0,
+                    keyframe: false,
+                }),
+            },
+        );
+        Ok(())
+    }
+    /// Return the superseded/rejected assembly that the caller can release locally.
+    pub fn keyframe_progress(
+        &mut self,
+        descriptor: FrameDescriptor,
+        received_bytes: usize,
+        now: Instant,
+    ) -> Result<Option<FrameMetadata>, MediaError> {
+        descriptor.validate()?;
+        let metadata = descriptor.metadata;
+        if metadata.kind != MediaKind::Video
+            || !metadata.keyframe
+            || received_bytes > descriptor.total_size as usize
+        {
+            return Err(MediaError::InvalidEnvelope);
+        }
+        let Some(stream) = self.streams.get_mut(&metadata.display_id) else {
+            return Ok(None);
+        };
+        if stream.epoch != metadata.epoch
+            || stream
+                .retired_keyframe
+                .is_some_and(|last| metadata.frame_id <= last)
+            || stream
+                .delivered_frame
+                .is_some_and(|last| metadata.frame_id <= last)
+            || stream
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.descriptor.metadata.frame_id > metadata.frame_id)
+        {
+            return Ok(Some(metadata));
+        }
+        if let Some(pending) = stream
+            .pending
+            .as_mut()
+            .filter(|pending| pending.descriptor.metadata == metadata)
+        {
+            if pending.descriptor != descriptor {
+                return Err(MediaError::ConflictingFragment);
+            }
+            if received_bytes > pending.received_bytes {
+                pending.received_bytes = received_bytes;
+                pending.last_progress = now;
+            }
+            return Ok(None);
+        }
+        let replaced = stream
+            .pending
+            .take()
+            .map(|pending| pending.descriptor.metadata);
+        stream.pending = Some(PendingRecoveryKeyframe {
+            descriptor,
+            started: now,
+            last_progress: now,
+            received_bytes,
+        });
+        Ok(replaced)
+    }
+    pub fn keyframe_abandoned(&mut self, metadata: FrameMetadata) {
+        if metadata.kind != MediaKind::Video || !metadata.keyframe {
+            return;
+        }
+        if let Some(stream) = self
+            .streams
+            .get_mut(&metadata.display_id)
+            .filter(|stream| stream.epoch == metadata.epoch)
+        {
+            stream.retired_keyframe =
+                Some(stream.retired_keyframe.unwrap_or(0).max(metadata.frame_id));
+            if stream
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.descriptor.metadata == metadata)
+            {
+                stream.pending = None;
+            }
+        }
+    }
+    pub fn frame_delivered(&mut self, metadata: FrameMetadata) {
+        if metadata.kind != MediaKind::Video {
+            return;
+        }
+        let Some(stream) = self
+            .streams
+            .get_mut(&metadata.display_id)
+            .filter(|stream| stream.epoch == metadata.epoch)
+        else {
+            return;
+        };
+        stream.delivered_frame = Some(stream.delivered_frame.unwrap_or(0).max(metadata.frame_id));
+        if stream
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.descriptor.metadata.frame_id <= metadata.frame_id)
+        {
+            stream.pending = None;
+        }
+        if stream
+            .wanted
+            .is_some_and(|wanted| wanted.frame_id <= metadata.frame_id)
+        {
+            stream.wanted = None;
+        }
+    }
+    pub fn request(
+        &mut self,
+        metadata: FrameMetadata,
+        failed_keyframe: bool,
+        now: Instant,
+    ) -> bool {
+        if metadata.kind != MediaKind::Video {
+            return false;
+        }
+        let Some(stream) = self
+            .streams
+            .get_mut(&metadata.display_id)
+            .filter(|stream| stream.epoch == metadata.epoch)
+        else {
+            return false;
+        };
+        if stream
+            .delivered_frame
+            .is_some_and(|last| metadata.frame_id <= last)
+        {
+            return false;
+        }
+        if stream
+            .wanted
+            .is_none_or(|wanted| wanted.frame_id < metadata.frame_id)
+        {
+            stream.wanted = Some(metadata);
+        }
+        if failed_keyframe {
+            stream.retired_keyframe =
+                Some(stream.retired_keyframe.unwrap_or(0).max(metadata.frame_id));
+            if stream
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.descriptor.metadata == metadata)
+            {
+                stream.pending = None;
+            }
+        }
+        if stream.pending.is_some()
+            || now.duration_since(stream.last_refresh) < VIDEO_REFRESH_INTERVAL
+        {
+            return false;
+        }
+        stream.last_refresh = now;
+        true
+    }
+    pub fn tick(&mut self, now: Instant) -> RecoveryTick {
+        let mut tick = RecoveryTick::default();
+        let effective_bps = self.effective_bps;
+        for stream in self.streams.values_mut() {
+            let expired = stream.pending.as_ref().is_some_and(|pending| {
+                now.duration_since(pending.last_progress) >= KEYFRAME_STALL_TIMEOUT
+                    || now.duration_since(pending.started)
+                        >= keyframe_deadline(pending.descriptor.total_size as usize, effective_bps)
+            });
+            if expired {
+                let metadata = stream.pending.take().unwrap().descriptor.metadata;
+                stream.retired_keyframe =
+                    Some(stream.retired_keyframe.unwrap_or(0).max(metadata.frame_id));
+                tick.abandon.push(metadata);
+                if stream
+                    .wanted
+                    .is_none_or(|wanted| wanted.frame_id < metadata.frame_id)
+                {
+                    stream.wanted = Some(metadata);
+                }
+            }
+            if stream.pending.is_none()
+                && now.duration_since(stream.last_refresh) >= VIDEO_REFRESH_INTERVAL
+            {
+                if let Some(metadata) = stream.wanted {
+                    stream.last_refresh = now;
+                    tick.refresh.push(metadata);
+                }
+            }
+        }
+        tick
+    }
+}
+
 #[derive(Debug)]
 pub struct CompletedFrame {
     pub metadata: FrameMetadata,
@@ -692,6 +1007,22 @@ impl Default for Reassembler {
     }
 }
 impl Reassembler {
+    pub fn received_bytes(&self, metadata: FrameMetadata) -> Option<usize> {
+        self.pending
+            .get(&frame_key(metadata))
+            .map(|frame| frame.received)
+    }
+    /// Release a stalled/superseded assembly without changing its ordered TCP epoch.
+    pub fn discard(&mut self, metadata: FrameMetadata) {
+        self.pending.remove(&frame_key(metadata));
+        if self
+            .notices
+            .get(&stream_key(metadata))
+            .is_some_and(|(notice, _)| notice.metadata == metadata)
+        {
+            self.notices.remove(&stream_key(metadata));
+        }
+    }
     pub fn set_effective_rate(&mut self, bits_per_second: u64) -> Result<(), MediaError> {
         if bits_per_second == 0 {
             return Err(MediaError::InvalidFeedback);
@@ -1352,6 +1683,272 @@ mod tests {
             keyframe,
         }
     }
+    #[test]
+    fn recovery_mixed_codec_batch_starts_at_real_keyframe_and_preserves_order() {
+        use crate::message_proto::{
+            message, video_frame, EncodedVideoFrame, EncodedVideoFrames, Message, VideoFrame,
+        };
+        use protobuf::Message as _;
+        for codec in 0..5 {
+            let frames = EncodedVideoFrames {
+                frames: [false, false, true, false, true]
+                    .iter()
+                    .enumerate()
+                    .map(|(index, key)| EncodedVideoFrame {
+                        key: *key,
+                        data: Bytes::from(vec![index as u8]),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let mut video = VideoFrame::new();
+            video.display = 7;
+            video.union = Some(match codec {
+                0 => video_frame::Union::Vp8s(frames),
+                1 => video_frame::Union::Vp9s(frames),
+                2 => video_frame::Union::H264s(frames),
+                3 => video_frame::Union::H265s(frames),
+                _ => video_frame::Union::Av1s(frames),
+            });
+            let mut original = Message::new();
+            original.set_video_frame(video);
+            let original_bytes = original.write_to_bytes().unwrap();
+            let trimmed = video_from_keyframe_boundary(&original).unwrap();
+            // Exercise the actual wire serializer, not only a synthetic list operation.
+            let decoded = Message::parse_from_bytes(&trimmed.write_to_bytes().unwrap()).unwrap();
+            let Some(message::Union::VideoFrame(video)) = decoded.union else {
+                panic!("video");
+            };
+            assert_eq!(video.display, 7);
+            let frames = match video.union.unwrap() {
+                video_frame::Union::Vp8s(frames)
+                | video_frame::Union::Vp9s(frames)
+                | video_frame::Union::H264s(frames)
+                | video_frame::Union::H265s(frames)
+                | video_frame::Union::Av1s(frames) => frames,
+                _ => panic!("encoded frames"),
+            };
+            assert_eq!(
+                frames
+                    .frames
+                    .iter()
+                    .map(|frame| (frame.key, frame.data[0]))
+                    .collect::<Vec<_>>(),
+                vec![(true, 2), (false, 3), (true, 4)]
+            );
+            assert_eq!(original.write_to_bytes().unwrap(), original_bytes);
+            assert!(video_from_keyframe_boundary(&trimmed).is_none());
+        }
+        assert_eq!(video_payload_bitrate_limit_kbps(64).unwrap(), 53);
+        assert_eq!(video_payload_bitrate_limit_kbps(999).unwrap(), 842);
+        assert_eq!(
+            video_payload_bitrate_limit_kbps(63),
+            Err(MediaError::InvalidFeedback)
+        );
+        assert_eq!(video_payload_bitrate_limit_kbps(1_000).unwrap(), 843);
+        assert_eq!(video_payload_bitrate_limit_kbps(8_000).unwrap(), 6_744);
+        assert_eq!(
+            video_payload_bitrate_limit_kbps(1_000_000).unwrap(),
+            843_000
+        );
+        assert_eq!(
+            video_payload_bitrate_limit_kbps(0),
+            Err(MediaError::InvalidFeedback)
+        );
+        assert_eq!(
+            video_payload_bitrate_limit_kbps(1_000_001),
+            Err(MediaError::InvalidFeedback)
+        );
+    }
+
+    #[test]
+    fn recovery_shared_gate_coalesces_loss_and_retries_without_incoming_events() {
+        use std::sync::{Arc, Mutex};
+        let now = Instant::now();
+        let gate = Arc::new(Mutex::new(VideoRecovery::default()));
+        gate.lock().unwrap().set_epoch(0, 0, now).unwrap();
+        // Delivery and UDP-worker loss paths race at exactly the same time.
+        let results = std::thread::scope(|scope| {
+            let left = gate.clone();
+            let right = gate.clone();
+            let left = scope.spawn(move || {
+                left.lock().unwrap().request(
+                    metadata(1, false),
+                    false,
+                    now + Duration::from_millis(250),
+                )
+            });
+            let right = scope.spawn(move || {
+                right.lock().unwrap().request(
+                    metadata(2, false),
+                    false,
+                    now + Duration::from_millis(250),
+                )
+            });
+            [left.join().unwrap(), right.join().unwrap()]
+        });
+        assert_eq!(results.iter().filter(|requested| **requested).count(), 1);
+        let descriptor = FrameDescriptor {
+            metadata: metadata(3, true),
+            total_size: 2_000,
+            fragment_count: 2,
+        };
+        let mut gate = gate.lock().unwrap();
+        gate.keyframe_progress(descriptor, 1_000, now + Duration::from_millis(260))
+            .unwrap();
+        assert!(!gate.request(metadata(4, false), false, now + Duration::from_millis(600)));
+        // A duplicate fragment / repeated Sent does not extend the progress deadline.
+        gate.keyframe_progress(descriptor, 1_000, now + Duration::from_millis(1_000))
+            .unwrap();
+        let tick = gate.tick(now + Duration::from_millis(1_260));
+        assert_eq!(tick.abandon, vec![descriptor.metadata]);
+        assert_eq!(tick.refresh, vec![metadata(4, false)]);
+        assert!(gate
+            .tick(now + Duration::from_millis(1_400))
+            .refresh
+            .is_empty());
+        // There is no new packet, delta, notice, or application event here.
+        assert_eq!(
+            gate.tick(now + Duration::from_millis(1_510)).refresh,
+            vec![metadata(4, false)]
+        );
+        let new_key = FrameDescriptor {
+            metadata: metadata(5, true),
+            ..descriptor
+        };
+        gate.keyframe_progress(new_key, 2_000, now + Duration::from_millis(1_520))
+            .unwrap();
+        gate.frame_delivered(new_key.metadata);
+        assert!(gate.request(
+            metadata(6, false),
+            false,
+            now + Duration::from_millis(1_800)
+        ));
+        // A late but now contiguous delta resolves its prior loss without needing an IDR.
+        gate.frame_delivered(metadata(6, false));
+        assert!(!gate.request(
+            metadata(6, false),
+            false,
+            now + Duration::from_millis(1_900)
+        ));
+        assert!(gate.tick(now + Duration::from_secs(2)).refresh.is_empty());
+        // An old epoch's Abandoned/refresh cannot cancel a new epoch's in-flight key.
+        gate.set_epoch(0, 1, now + Duration::from_secs(2)).unwrap();
+        let epoch_key = FrameDescriptor {
+            metadata: FrameMetadata {
+                epoch: 1,
+                ..metadata(6, true)
+            },
+            ..descriptor
+        };
+        gate.keyframe_progress(epoch_key, 1_000, now + Duration::from_millis(2_010))
+            .unwrap();
+        gate.keyframe_abandoned(new_key.metadata);
+        assert!(!gate.request(metadata(9, false), true, now + Duration::from_millis(2_400)));
+        assert!(gate
+            .tick(now + Duration::from_millis(2_400))
+            .refresh
+            .is_empty());
+        // Same-epoch repeated control does not reset progress or forget a valid delivery.
+        gate.set_epoch(0, 1, now + Duration::from_millis(2_450))
+            .unwrap();
+        // An older queued worker command cannot roll back the already-published TCP epoch.
+        gate.set_epoch(0, 0, now + Duration::from_millis(2_450))
+            .unwrap();
+        assert!(gate
+            .tick(now + Duration::from_millis(2_500))
+            .refresh
+            .is_empty());
+        gate.frame_delivered(epoch_key.metadata);
+        assert!(gate.tick(now + Duration::from_secs(4)).refresh.is_empty());
+    }
+
+    #[test]
+    fn recovery_real_progress_has_a_total_budget_and_releases_only_matching_assembly() {
+        let now = Instant::now();
+        let mut gate = VideoRecovery::default();
+        gate.set_epoch(0, 0, now).unwrap();
+        let large = FrameDescriptor {
+            metadata: metadata(1, true),
+            total_size: MAX_VIDEO_FRAME as u32,
+            fragment_count: MAX_FRAGMENTS as u16,
+        };
+        gate.keyframe_progress(large, 1, now).unwrap();
+        for step in 1..=11 {
+            let time = now + Duration::from_millis(step * 900);
+            gate.keyframe_progress(large, step as usize + 1, time)
+                .unwrap();
+            assert!(gate.tick(time).abandon.is_empty());
+        }
+        // Even continual real progress cannot extend the independently bounded deadline.
+        let tick = gate.tick(now + Duration::from_secs(10));
+        assert_eq!(tick.abandon, vec![large.metadata]);
+        assert_eq!(tick.refresh, vec![large.metadata]);
+        // Preserve legitimate low-rate transfer time; idle time is still bounded by 1s.
+        gate.set_effective_rate(1_000_000).unwrap();
+        assert_eq!(
+            gate.keyframe_progress(large, 100, now + Duration::from_millis(10_500))
+                .unwrap(),
+            Some(large.metadata)
+        );
+        let large = FrameDescriptor {
+            metadata: metadata(2, true),
+            ..large
+        };
+        gate.keyframe_progress(large, 1, now + Duration::from_secs(11))
+            .unwrap();
+        for step in 1..=12 {
+            let time = now + Duration::from_secs(11) + Duration::from_millis(step * 900);
+            gate.keyframe_progress(large, step as usize + 1, time)
+                .unwrap();
+            assert!(gate.tick(time).abandon.is_empty());
+        }
+        assert_eq!(
+            gate.tick(now + Duration::from_millis(22_800)).abandon,
+            vec![large.metadata]
+        );
+        let mut assembler = Reassembler::default();
+        let plan = FramePlan::new(metadata(7, true), vec![7; 2_000].into(), DEFAULT_MTU).unwrap();
+        let first = Fragment {
+            descriptor: plan.descriptor(),
+            index: 0,
+            payload: plan.fragment(0).unwrap().to_vec().into(),
+        };
+        assert!(assembler.push(first, now).unwrap().frame.is_none());
+        assert_eq!(
+            assembler.received_bytes(plan.descriptor().metadata),
+            Some(DEFAULT_MTU - FRAGMENT_OVERHEAD)
+        );
+        assembler.discard(plan.descriptor().metadata);
+        assert_eq!(assembler.received_bytes(plan.descriptor().metadata), None);
+        // A new key on the unchanged epoch still assembles and completes normally.
+        let replacement =
+            FramePlan::new(metadata(8, true), vec![8; 500].into(), DEFAULT_MTU).unwrap();
+        let completed = assembler
+            .push(
+                Fragment {
+                    descriptor: replacement.descriptor(),
+                    index: 0,
+                    payload: replacement.payload().clone(),
+                },
+                now,
+            )
+            .unwrap()
+            .frame
+            .unwrap();
+        assert_eq!(completed.metadata.epoch, 0);
+        assert_eq!(completed.metadata.frame_id, 8);
+        gate.keyframe_progress(replacement.descriptor(), 1, now + Duration::from_secs(24))
+            .unwrap();
+        gate.keyframe_abandoned(replacement.descriptor().metadata);
+        assert!(gate.request(
+            replacement.descriptor().metadata,
+            true,
+            now + Duration::from_secs(24)
+        ));
+    }
+
     async fn socket() -> UdpSocket {
         UdpSocket::bind("127.0.0.1:0").await.unwrap()
     }

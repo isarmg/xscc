@@ -40,6 +40,8 @@ pub(super) struct Metrics {
     decoded: u64,
     submitted: u64,
     dropped: u64,
+    callbacks: u64,
+    published: u64,
     decode_time: Samples,
     ui_queue_time: Samples,
 }
@@ -52,6 +54,8 @@ impl Default for Metrics {
             decoded: 0,
             submitted: 0,
             dropped: 0,
+            callbacks: 0,
+            published: 0,
             decode_time: Samples::default(),
             ui_queue_time: Samples::default(),
         }
@@ -65,6 +69,8 @@ pub(super) struct Sample {
     pub decode_p95_ms: Option<f32>,
     pub ui_queue_p95_ms: Option<f32>,
     pub mailbox_dropped: u64,
+    pub video_callback_count: u64,
+    pub mailbox_publish_count: u64,
 }
 impl Metrics {
     pub fn epoch(&self) -> u64 {
@@ -93,6 +99,12 @@ impl Metrics {
         self.submitted = self.submitted.saturating_add(1);
         self.ui_queue_time.push(queue_time);
     }
+    pub fn callback(&mut self) {
+        self.callbacks = self.callbacks.saturating_add(1);
+    }
+    pub fn published(&mut self) {
+        self.published = self.published.saturating_add(1);
+    }
     pub fn dropped(&mut self) {
         self.dropped = self.dropped.saturating_add(1);
     }
@@ -114,6 +126,8 @@ impl Metrics {
             decode_p95_ms: self.decode_time.percentile_ms(95),
             ui_queue_p95_ms: self.ui_queue_time.percentile_ms(95),
             mailbox_dropped: self.dropped,
+            video_callback_count: self.callbacks,
+            mailbox_publish_count: self.published,
         };
         *self = Self {
             start: now,
@@ -131,6 +145,29 @@ impl Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn callback_and_mailbox_publication_do_not_invent_ui_submissions() {
+        let mut metrics = Metrics::default();
+        let start = metrics.start;
+        for _ in 0..2 {
+            metrics.callback();
+            metrics.published();
+        }
+        metrics.dropped();
+        let sample = metrics.snapshot(start + Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            (sample.video_callback_count, sample.mailbox_publish_count),
+            (2, 2)
+        );
+        assert_eq!(sample.mailbox_dropped, 1);
+        assert_eq!(sample.submitted_fps, 0);
+        let idle = metrics.snapshot(start + Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            (idle.video_callback_count, idle.mailbox_publish_count),
+            (0, 0)
+        );
+    }
+
     #[test]
     fn distinguishes_network_decode_and_ui_rates_from_decode_work_capacity() {
         let mut m = Metrics::default();

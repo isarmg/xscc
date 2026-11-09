@@ -7,6 +7,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 
 TEST = r"""
@@ -216,6 +217,18 @@ def main():
                    *library_flags, '-o', str(executable)]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(executable)], check=True, timeout=20)
+    # These CPU-only checks share the existing mandatory AMF regression step.
+    subprocess.run(
+        [sys.executable, str(root / '.github/scripts/test-gpui-amf-keyframe.py'),
+         '--cc', args.cc], check=True, timeout=150)
+    retirement_command = [
+        sys.executable, str(root / '.github/scripts/test-gpui-gpu-retirement.py')]
+    if os.name == 'nt':
+        retirement_command += ['--cxx', args.cc]
+    subprocess.run(retirement_command, check=True, timeout=150)
+    subprocess.run(
+        [sys.executable, str(root / '.github/scripts/test-gpui-encoder-retirement.py')],
+        check=True, timeout=150)
 
 
 if __name__ == '__main__':

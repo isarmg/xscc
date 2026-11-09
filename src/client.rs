@@ -946,36 +946,64 @@ impl VideoHandler {
                     pixelbuffer,
                     chroma,
                 );
-                #[cfg(feature = "mediacodec")]
-                if matches!(format, CodecFormat::H264 | CodecFormat::H265)
-                    && matches!(&res, Ok(false))
-                {
-                    // MediaCodec may consume input before an output frame is available.
-                    return res;
-                }
-                if res.as_ref().is_ok_and(|x| *x) {
-                    self.fail_counter = 0;
-                } else {
-                    if self.fail_counter < usize::MAX {
-                        if self.first_frame && self.fail_counter < MAX_DECODE_FAIL_COUNTER {
-                            log::error!("decode first frame failed");
-                            self.fail_counter = MAX_DECODE_FAIL_COUNTER;
-                        } else {
-                            self.fail_counter += 1;
-                        }
-                        hbb_common::throttled_log!(
-                            std::time::Duration::from_secs(1),
-                            error,
-                            "Failed to handle video frame, fail counter: {}",
-                            self.fail_counter
-                        );
-                    }
-                }
-                self.first_frame = false;
-                res
+                self.finish_frame_result(format, res)
             }
             _ => Ok(false),
         }
+    }
+
+    #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+    fn handle_frame_with_callback(
+        &mut self,
+        vf: &VideoFrame,
+        chroma: &mut Option<Chroma>,
+        on_frame: &mut dyn FnMut(&mut ImageRgb),
+    ) -> Option<ResultType<bool>> {
+        let format = CodecFormat::from(vf);
+        if !matches!(format, CodecFormat::H264 | CodecFormat::H265) {
+            return None;
+        }
+        if format != self.decoder.format() {
+            self.reset(Some(format));
+        }
+        let frame = vf.union.as_ref()?;
+        *chroma = Some(Chroma::I420);
+        let result =
+            self.decoder
+                .handle_mediacodec_frame_with_callback(frame, &mut self.rgb, on_frame);
+        Some(self.finish_frame_result(format, result))
+    }
+
+    fn finish_frame_result(
+        &mut self,
+        _format: CodecFormat,
+        res: ResultType<bool>,
+    ) -> ResultType<bool> {
+        #[cfg(feature = "mediacodec")]
+        if matches!(_format, CodecFormat::H264 | CodecFormat::H265) && matches!(&res, Ok(false)) {
+            // MediaCodec may consume input before an output frame is available.
+            return res;
+        }
+        if res.as_ref().is_ok_and(|x| *x) {
+            self.fail_counter = 0;
+        } else {
+            if self.fail_counter < usize::MAX {
+                if self.first_frame && self.fail_counter < MAX_DECODE_FAIL_COUNTER {
+                    log::error!("decode first frame failed");
+                    self.fail_counter = MAX_DECODE_FAIL_COUNTER;
+                } else {
+                    self.fail_counter += 1;
+                }
+                hbb_common::throttled_log!(
+                    std::time::Duration::from_secs(1),
+                    error,
+                    "Failed to handle video frame, fail counter: {}",
+                    self.fail_counter
+                );
+            }
+        }
+        self.first_frame = false;
+        res
     }
 
     #[cfg(all(
@@ -2045,14 +2073,27 @@ pub fn start_video_thread<F, T>(
             #[cfg(feature = "mediacodec")]
             let message = match video_handler.as_mut() {
                 Some(handler) if handler.decoder.has_pending_mediacodec_output() => {
-                    match video_receiver.recv_timeout(Duration::from_millis(4)) {
+                    #[cfg(target_os = "android")]
+                    let wait = mediacodec_output_poll_interval(
+                        session.lc.read().unwrap().streaming_target_fps(),
+                    );
+                    #[cfg(not(target_os = "android"))]
+                    let wait = Duration::from_millis(4);
+                    match video_receiver.recv_timeout(wait) {
                         Ok(data) => Ok(data),
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             // A static desktop still needs the last asynchronous decoded frame.
                             let started = std::time::Instant::now();
+                            #[cfg(all(target_os = "android", feature = "gpui-session"))]
+                            let output_result = handler.decoder.poll_mediacodec_output_with_callback(
+                                &mut handler.rgb,
+                                &mut |image| video_callback(display, image, std::ptr::null_mut(), true),
+                            );
+                            #[cfg(not(all(target_os = "android", feature = "gpui-session")))]
                             let output_result =
                                 handler.decoder.poll_mediacodec_output(&mut handler.rgb);
+                            let output_published = cfg!(all(target_os = "android", feature = "gpui-session"));
                             #[cfg(all(target_os = "android", feature = "gpui-session"))]
                             let decoded_outputs = {
                                 let elapsed = started.elapsed();
@@ -2092,13 +2133,13 @@ pub fn start_video_thread<F, T>(
                                     };
                                     let present = presentation_fps.map_or(true, |fps| {
                                         presentation::should_present(
-                                            true,
+                                            presentation::DECODE_TIME_PACING,
                                             video_queue.len(),
                                             last_presented.map(|instant| instant.elapsed()),
                                             Duration::from_secs_f64(1.0 / fps as f64),
                                         )
                                     });
-                                    if present {
+                                    if present && !output_published {
                                         video_callback(
                                             display,
                                             &mut handler.rgb,
@@ -2184,6 +2225,10 @@ pub fn start_video_thread<F, T>(
                             let mut pixelbuffer = true;
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
+                            #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+                            let mut output_published = false;
+                            #[cfg(not(all(target_os = "android", feature = "mediacodec", feature = "gpui-session")))]
+                            let output_published = false;
                             #[cfg(feature = "mediacodec")]
                             let frame_result = (|| -> ResultType<bool> {
                                 if format_changed {
@@ -2202,6 +2247,15 @@ pub fn start_video_thread<F, T>(
                                         handler.fail_counter = MAX_DECODE_FAIL_COUNTER;
                                         return Err(error);
                                     }
+                                }
+                                #[cfg(all(target_os = "android", feature = "gpui-session"))]
+                                if let Some(result) = handler.handle_frame_with_callback(
+                                    &vf,
+                                    &mut tmp_chroma,
+                                    &mut |image| video_callback(display, image, std::ptr::null_mut(), true),
+                                ) {
+                                    output_published = true;
+                                    return result;
                                 }
                                 handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma)
                             })();
@@ -2248,13 +2302,13 @@ pub fn start_video_thread<F, T>(
                                     };
                                     let present = presentation_fps.map_or(true, |fps| {
                                         presentation::should_present(
-                                            true,
+                                            presentation::DECODE_TIME_PACING,
                                             video_queue.len(),
                                             last_presented.map(|instant| instant.elapsed()),
                                             Duration::from_secs_f64(1.0 / fps as f64),
                                         )
                                     });
-                                    if present {
+                                    if present && !output_published {
                                         video_callback(
                                             display,
                                             &mut handler.rgb,
@@ -2420,13 +2474,35 @@ fn fps_calculate(
     }
 }
 
+#[cfg(any(all(target_os = "android", feature = "mediacodec"), test))]
+fn mediacodec_output_poll_interval(target_fps: i32) -> Duration {
+    if target_fps <= 60 {
+        return Duration::from_millis(4);
+    }
+    // A fixed 4 ms wait spends half a 120 Hz interval before checking ready hardware output.
+    Duration::from_micros((125_000 / target_fps as u64).max(1_000))
+}
+
 #[cfg(test)]
 mod mediacodec_capacity_tests {
-    use super::fps_calculate;
+    use super::{fps_calculate, mediacodec_output_poll_interval};
     use std::{
         sync::{Arc, RwLock},
         time::Duration,
     };
+
+    #[test]
+    fn pending_output_polling_respects_high_refresh_frame_budget() {
+        for fps in [0, 30, 60] {
+            assert_eq!(mediacodec_output_poll_interval(fps), Duration::from_millis(4));
+        }
+        for fps in [90, 120, 240, 1000] {
+            let wait = mediacodec_output_poll_interval(fps);
+            let frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
+            assert!(wait >= Duration::from_millis(1));
+            assert!(wait <= frame_interval / 4 || wait == Duration::from_millis(1));
+        }
+    }
 
     #[test]
     fn batched_outputs_report_the_actual_decode_capacity() {

@@ -340,6 +340,14 @@ pub struct Connection {
     scope_violation_messages: HashSet<&'static str>,
 }
 
+#[cfg(feature = "udp-media")]
+fn service_bitrate_auto_reset(misc: &Misc) -> bool {
+    matches!(
+        &misc.union,
+        Some(misc::Union::Option(option)) if option.bitrate_limit_kbps == Some(0)
+    )
+}
+
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
         Self {
@@ -792,6 +800,15 @@ impl Connection {
                     }
                     match &msg.union {
                         Some(message::Union::Misc(m)) => {
+                            // This is the typed internal service channel, not
+                            // untrusted peer input or a per-packet wire parser.
+                            #[cfg(feature = "udp-media")]
+                            if service_bitrate_auto_reset(m) {
+                                if let Err(error) = conn.stream.set_media_bitrate_limit(0) {
+                                    conn.on_close(&error.to_string(), false).await;
+                                    break;
+                                }
+                            }
                             match &m.union {
                                 Some(misc::Union::StopService(_)) => {
                                     conn.send_close_reason_no_retry("").await;
@@ -3875,11 +3892,11 @@ pub(crate) fn finish_session_display() -> ResultType<()> {
         "session_display_cleanup path=host_exit stage=capture_idle elapsed_ms={}",
         started.elapsed().as_millis()
     );
+    let temporary_resolutions = display_service::temporary_resolution_changes_before_removal()?;
+    virtual_display_manager::prepare_session_display_removal(&idle)?;
+    display_service::discard_detached_resolution_changes(&temporary_resolutions);
     let mut errors = Vec::new();
-    if let Err(error) = virtual_display_manager::restore_session_display(&idle) {
-        errors.push(format!("restore primary: {error:#}"));
-    }
-    display_service::restore_session_resolutions();
+    display_service::restore_resolutions();
     if let Err(error) = virtual_display_manager::reset_all() {
         errors.push(format!("remove temporary displays: {error:#}"));
     }
@@ -4109,10 +4126,22 @@ mod raii {
                 "session_display_cleanup path=disconnect stage=capture_idle elapsed_ms={}",
                 started.elapsed().as_millis()
             );
-            if let Err(error) = virtual_display_manager::restore_session_display(&_idle) {
-                log::error!("Virtual display primary restoration failed: {error:#}");
+            let temporary_resolutions =
+                match display_service::temporary_resolution_changes_before_removal() {
+                    Ok(names) => names,
+                    Err(error) => {
+                        log::error!(
+                            "Temporary display classification failed; devices retained: {error:#}"
+                        );
+                        return;
+                    }
+                };
+            if let Err(error) = virtual_display_manager::prepare_session_display_removal(&_idle) {
+                log::error!("Virtual display topology preparation failed; devices retained: {error:#}");
+                return;
             }
-            display_service::restore_session_resolutions();
+            display_service::discard_detached_resolution_changes(&temporary_resolutions);
+            display_service::restore_resolutions();
             let removal = virtual_display_manager::reset_all();
             hbb_common::throttled_log!(
                 Duration::from_secs(1), info,
@@ -4385,6 +4414,20 @@ mod test {
     // The registry is process-global and the harness runs tests in parallel threads, so every
     // test that admits connections holds this first; a poisoned lock is still a lock.
     static UNAUTHORIZED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(feature = "udp-media")]
+    #[test]
+    fn gpui_only_explicit_internal_auto_feedback_resets_the_wire_ceiling() {
+        let mut misc = Misc::new();
+        assert!(!service_bitrate_auto_reset(&misc));
+        for (value, expected) in [(None, false), (Some(8_000), false), (Some(0), true)] {
+            misc.set_option(OptionMessage {
+                bitrate_limit_kbps: value,
+                ..Default::default()
+            });
+            assert_eq!(service_bitrate_auto_reset(&misc), expected);
+        }
+    }
 
     fn unauthorized_count() -> usize {
         UNAUTHORIZED_CONNS.lock().unwrap().len()

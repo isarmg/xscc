@@ -1,10 +1,24 @@
 use super::*;
+
+#[path = "removal_plan.rs"]
+mod removal_plan;
+
 use base::session_protocol::virtual_display::{VirtualDisplayMode, VirtualDisplayScreen};
 use std::collections::{BTreeMap, BTreeSet};
 use winapi::um::{cfgmgr32::CM_Get_Parent, wingdi::*};
 
 const QDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x40;
 pub(super) const SDC_VIRTUAL_REFRESH_RATE_AWARE: u32 = 0x20000;
+
+#[derive(PartialEq, Eq)]
+struct RetainedMode {
+    position: (i32, i32),
+    size: (u32, u32),
+    pixel_format: u32,
+    refresh_rate_units: u32,
+    rotation: u32,
+    scaling: u32,
+}
 const DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE: u32 = 0x10;
 
 /// A newly enumerated PnP monitor can precede its Windows desktop path.
@@ -273,6 +287,10 @@ impl Topology {
     }
 
     fn apply(&self) -> ResultType<()> {
+        self.apply_with_persistence(true)
+    }
+
+    fn apply_with_persistence(&self, persistent: bool) -> ResultType<()> {
         let flags = SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_VIRTUAL_REFRESH_RATE_AWARE;
         let result = unsafe {
             SetDisplayConfig(
@@ -292,11 +310,92 @@ impl Topology {
                 self.paths.as_ptr(),
                 self.modes.len() as _,
                 self.modes.as_ptr(),
-                flags | SDC_APPLY | SDC_SAVE_TO_DATABASE,
+                flags | SDC_APPLY | if persistent { SDC_SAVE_TO_DATABASE } else { 0 },
             )
         };
         if result != 0 {
             bail!("Apply Windows display topology failed ({result})");
+        }
+        Ok(())
+    }
+
+    fn removal_snapshot(&self) -> ResultType<BTreeMap<String, RetainedMode>> {
+        self.paths
+            .iter()
+            .map(|path| {
+                let source = self
+                    .modes
+                    .get(path.sourceInfo.modeInfoIdx as usize)
+                    .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
+                    .ok_or_else(|| anyhow::anyhow!("Missing surviving display source mode"))?;
+                let target = self
+                    .modes
+                    .get(path.targetInfo.modeInfoIdx as usize)
+                    .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_TARGET)
+                    .ok_or_else(|| anyhow::anyhow!("Missing surviving display target mode"))?;
+                let source = unsafe { source.u.sourceMode() };
+                let rate = active_refresh_rate(
+                    path,
+                    &unsafe { target.u.targetMode() }.targetVideoSignalInfo,
+                )?;
+                Ok((
+                    Self::target_name(path)?.to_ascii_lowercase(),
+                    RetainedMode {
+                        position: (source.position.x, source.position.y),
+                        size: (source.width, source.height),
+                        pixel_format: source.pixelFormat,
+                        refresh_rate_units: rate,
+                        rotation: path.targetInfo.rotation,
+                        scaling: path.targetInfo.scaling,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    pub(super) fn detach_owned(ids: &[String], original_primary: Option<&str>) -> ResultType<()> {
+        let mut topology = Self::query(false)?;
+        let mut paths = Vec::new();
+        for path in &topology.paths {
+            let source = topology
+                .modes
+                .get(path.sourceInfo.modeInfoIdx as usize)
+                .filter(|mode| mode.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
+                .ok_or_else(|| anyhow::anyhow!("Missing active display source mode"))?;
+            let source = unsafe { source.u.sourceMode() };
+            paths.push(removal_plan::DesktopPath {
+                target: Self::target_name(path)?,
+                source: path.sourceInfo.modeInfoIdx as usize,
+                owned: Self::owned_id(path, ids)?.is_some(),
+                position: (source.position.x, source.position.y),
+            });
+        }
+        if !paths.iter().any(|path| path.owned) {
+            return Ok(());
+        }
+        let plan = removal_plan::plan(&paths, original_primary).map_err(anyhow::Error::msg)?;
+        let retained = topology
+            .paths
+            .into_iter()
+            .zip(&paths)
+            .filter_map(|(path, view)| (!view.owned).then_some(path))
+            .collect();
+        topology.paths = retained;
+        for (index, (x, y)) in plan.positions {
+            unsafe { topology.modes[index].u.sourceMode_mut() }.position =
+                winapi::shared::windef::POINTL { x, y };
+        }
+        let expected = topology.removal_snapshot()?;
+        // Windows migrates windows as part of this one transition. Do not move app windows.
+        topology.apply_with_persistence(false)?;
+        let actual = Self::query(false)?;
+        for path in &actual.paths {
+            if Self::owned_id(path, ids)?.is_some() {
+                bail!("Windows still has an active owned display; the adapter was preserved");
+            }
+        }
+        if actual.removal_snapshot()? != expected {
+            bail!("Surviving display topology was not confirmed; the adapter was preserved");
         }
         Ok(())
     }

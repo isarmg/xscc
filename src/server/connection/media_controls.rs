@@ -129,6 +129,12 @@ impl Connection {
                 return;
             }
         }
+        #[cfg(feature = "udp-media")]
+        if let Err(error) = self.stream.set_media_bitrate_limit(value) {
+            self.media_control_error("Video bitrate", error.to_string())
+                .await;
+            return;
+        }
         video_service::VIDEO_QOS
             .lock()
             .unwrap()

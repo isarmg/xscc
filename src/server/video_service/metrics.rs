@@ -46,6 +46,9 @@ pub(super) struct Metrics {
     encode_send: Stage,
     encode: Stage,
     enqueue: Stage,
+    preflight: Stage,
+    handoff: Stage,
+    pacing: Stage,
     outcomes: [u64; 4],
     encodes: [u64; 3],
 }
@@ -59,6 +62,9 @@ impl Metrics {
             encode_send: Stage::default(),
             encode: Stage::default(),
             enqueue: Stage::default(),
+            preflight: Stage::default(),
+            handoff: Stage::default(),
+            pacing: Stage::default(),
             outcomes: [0; 4],
             encodes: [0; 3],
         }
@@ -84,6 +90,18 @@ impl Metrics {
 
     pub(super) fn enqueue_time(&mut self, elapsed: Duration) {
         self.enqueue.record(elapsed);
+    }
+
+    pub(super) fn preflight(&mut self, elapsed: Duration) {
+        self.preflight.record(elapsed);
+    }
+
+    pub(super) fn handoff(&mut self, elapsed: Duration) {
+        self.handoff.record(elapsed);
+    }
+
+    pub(super) fn paced(&mut self, elapsed: Duration) {
+        self.pacing.record(elapsed);
     }
 
     pub(super) fn sample(&mut self, now: Instant, spf: Duration) -> Option<Sample> {
@@ -139,7 +157,10 @@ impl fmt::Display for Sample {
             "\"encode_calls\":{},\"fresh_encode_calls\":{},\"replay_encode_calls\":{},\"repeat_encode_calls\":{},",
             "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{},",
             "\"encoder_backend\":{},\"encoder_driver\":{},\"encoder_texture\":{},",
-            "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},\"encoded_output_count\":{}}}"
+            "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},\"encoded_output_count\":{},",
+            "\"preflight_calls\":{},\"preflight_avg_ms\":{:.3},\"preflight_max_ms\":{:.3},",
+            "\"handoff_calls\":{},\"handoff_avg_ms\":{:.3},\"handoff_max_ms\":{:.3},",
+            "\"pacing_calls\":{},\"pacing_avg_ms\":{:.3},\"pacing_max_ms\":{:.3}}}"
         ), milliseconds(self.elapsed), milliseconds(self.spf),
             values.capture.calls, values.outcomes[0], values.outcomes[1], values.outcomes[2], values.outcomes[3],
             values.capture.average_ms(), milliseconds(values.capture.max), values.convert.calls,
@@ -148,7 +169,10 @@ impl fmt::Display for Sample {
             values.encode_send.average_ms(), milliseconds(values.encode_send.max), self.capture_gdi,
             self.encoder_backend, self.encoder_driver, u8::from(self.encoder_backend == 4),
             values.encode.average_ms(), milliseconds(values.encode.max),
-            values.enqueue.average_ms(), milliseconds(values.enqueue.max), values.enqueue.calls)
+            values.enqueue.average_ms(), milliseconds(values.enqueue.max), values.enqueue.calls,
+            values.preflight.calls, values.preflight.average_ms(), milliseconds(values.preflight.max),
+            values.handoff.calls, values.handoff.average_ms(), milliseconds(values.handoff.max),
+            values.pacing.calls, values.pacing.average_ms(), milliseconds(values.pacing.max))
     }
 }
 
@@ -195,6 +219,9 @@ mod tests {
         metrics.converted(Duration::from_millis(3));
         metrics.encode_time(Duration::from_millis(7));
         metrics.enqueue_time(Duration::from_millis(1));
+        metrics.preflight(Duration::from_millis(2));
+        metrics.handoff(Duration::from_millis(3));
+        metrics.paced(Duration::from_millis(4));
         for (elapsed, kind) in [
             (4, EncodeKind::Fresh),
             (8, EncodeKind::Replay),
@@ -219,6 +246,9 @@ mod tests {
         assert!(line.contains("\"encode_avg_ms\":7.000"));
         assert!(line.contains("\"enqueue_avg_ms\":1.000"));
         assert!(line.contains("\"encoded_output_count\":1"));
+        assert!(line.contains("\"preflight_avg_ms\":2.000"));
+        assert!(line.contains("\"handoff_avg_ms\":3.000"));
+        assert!(line.contains("\"pacing_avg_ms\":4.000"));
         assert!(line.contains("\"elapsed_ms\":1500.000"));
         assert!(line.contains("\"frame_count\":1"));
         assert!(line.contains("\"encode_calls\":3"));

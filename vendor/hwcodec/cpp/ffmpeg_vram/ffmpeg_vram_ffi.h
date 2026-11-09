@@ -21,6 +21,12 @@ int ffmpeg_vram_encode(void *encoder, void *tex, EncodeCallback callback,
                        void *obj, int64_t ms);
 int ffmpeg_vram_destroy_encoder(void *encoder);
 int ffmpeg_vram_poll(void *encoder, EncodeCallback callback, void *obj);
+int ffmpeg_vram_retire(void *encoder, void *capture_device, int timeout_ms);
+int ffmpeg_vram_retire_capture(void *device, int timeout_ms);
+// 1: accepted on the owner thread, 0: unsupported, negative: failed.
+int ffmpeg_vram_request_keyframe(void *encoder);
+int ffmpeg_vram_replay_keyframe(void *encoder, EncodeCallback callback,
+                               void *obj, int64_t ms);
 
 int ffmpeg_vram_test_encode(int64_t *outLuids, int32_t *outVendors, int32_t maxDescNum,
                             int32_t *outDescNum,

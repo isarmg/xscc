@@ -242,33 +242,49 @@ pub(super) fn suspend_locked() -> ResultType<Option<String>> {
     }
     let started = std::time::Instant::now();
     hbb_common::throttled_log!(
-        Duration::from_secs(1), info,
+        Duration::from_secs(1),
+        info,
         "session_display_cleanup stage=primary_restore_begin"
     );
     let result = apply_primary(topology, &previous.original_primary);
     hbb_common::throttled_log!(
-        Duration::from_secs(1), info,
+        Duration::from_secs(1),
+        info,
         "session_display_cleanup stage=primary_restore_end elapsed_ms={} success={}",
-        started.elapsed().as_millis(), result.is_ok()
+        started.elapsed().as_millis(),
+        result.is_ok()
     );
     result?;
     *PREFERENCE.lock().unwrap() = None;
     Ok(Some(previous.preferred))
 }
 
-pub(super) fn complete_removal(
-    restoration: ResultType<Option<String>>,
-    removal: ResultType<()>,
-) -> ResultType<()> {
-    match (restoration, removal) {
-        (Ok(_), result) => result,
-        (Err(error), Ok(())) => {
-            Err(error.context("Display cleanup completed but primary restoration failed"))
-        }
-        (Err(restoration), Err(removal)) => {
-            Err(removal.context(format!("Primary restoration also failed: {restoration:#}")))
-        }
-    }
+pub(super) fn detach_for_removal_locked() -> ResultType<()> {
+    let previous = PREFERENCE.lock().unwrap().clone();
+    let ids = topology::monitor_ids()?;
+    let current = Topology::query(false)?;
+    let current_primary = Topology::target_name(primary(&current)?)?;
+    let original = previous
+        .as_ref()
+        .filter(|previous| same_name(&current_primary, &previous.preferred))
+        .map(|previous| previous.original_primary.as_str());
+    let started = std::time::Instant::now();
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "session_display_cleanup stage=detach_begin"
+    );
+    let result = Topology::detach_owned(&ids, original);
+    hbb_common::throttled_log!(
+        Duration::from_secs(1),
+        info,
+        "session_display_cleanup stage=detach_end elapsed_ms={} success={}",
+        started.elapsed().as_millis(),
+        result.is_ok()
+    );
+    result?;
+    *PREFERENCE.lock().unwrap() = None;
+    Ok(())
 }
 
 pub(super) fn resume_locked(target: String) -> ResultType<()> {
@@ -324,18 +340,7 @@ pub(super) fn before_mode_change() -> ResultType<Option<PersistentDisplayChangeG
 
 #[cfg(test)]
 mod tests {
-    use super::{anyhow, complete_removal, translated_positions};
-
-    #[test]
-    fn removal_result_keeps_both_restore_and_removal_failures() {
-        let restoration = Err(anyhow::anyhow!("primary restore failed"));
-        let error = complete_removal(restoration, Err(anyhow::anyhow!("device removal failed")))
-            .unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("primary restore failed"));
-        assert!(message.contains("device removal failed"));
-        assert!(complete_removal(Err(anyhow::anyhow!("primary restore failed")), Ok(())).is_err());
-    }
+    use super::translated_positions;
 
     #[test]
     fn temporary_primary_preserves_extended_desktop_geometry() {
