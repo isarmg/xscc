@@ -1,0 +1,41 @@
+name: MTT VDD maintenance unsigned candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-and-cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify fixed source and stop-priority patch without devices
+        run: |
+          python3 vendor/mtt-vdd/verify-source.py
+          c++ -std=c++17 -Wall -Wextra -Werror -UNDEBUG vendor/mtt-vdd/tests/SwapChainStopTests.cpp -o "$RUNNER_TEMP/mtt-stop-cpu-tests"
+          "$RUNNER_TEMP/mtt-stop-cpu-tests"
+  unsigned-driver:
+    needs: source-and-cpu
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up fixed NuGet CLI
+        uses: NuGet/setup-nuget@323ab0502cd38fdc493335025a96c8fdb0edc71f
+        with:
+          nuget-version: '6.11.1'
+      - name: Compile CPU regressions and unsigned UMDF candidate only
+        shell: pwsh
+        run: ./.github/scripts/build-mtt-vdd-maintenance.ps1
+      - name: Retain unsigned candidate and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mtt-vdd-maintenance-x64-UNSIGNED-${{ github.sha }}
+          path: artifacts/mtt-vdd-maintenance/
+          if-no-files-found: error
+          retention-days: 7
