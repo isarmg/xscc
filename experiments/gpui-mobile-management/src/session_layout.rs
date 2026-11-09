@@ -34,6 +34,11 @@ pub struct SessionLayout {
     pub mouse: Option<MouseControls>,
 }
 
+pub fn centered_horizontal_bounds(width: f32, left: f32, visible_width: f32) -> (f32, f32) {
+    let margin = left.max(width - left - visible_width).min(width / 2.);
+    (margin, width - margin * 2.)
+}
+
 pub fn layout(
     width: f32,
     height: f32,
@@ -247,6 +252,16 @@ mod tests {
             && b.x < a.x + a.width - 0.01
             && a.y < b.y + b.height - 0.01
             && b.y < a.y + a.height - 0.01
+    }
+
+    #[test]
+    fn asymmetric_safe_areas_keep_the_remote_view_centered_on_the_screen() {
+        for (left, visible_width) in [(36., 764.), (0., 764.), (16., 776.), (0., 800.)] {
+            let (x, width) = centered_horizontal_bounds(800., left, visible_width);
+            assert_eq!(x + width / 2., 400.);
+            assert!(x >= left);
+            assert!(x + width <= left + visible_width);
+        }
     }
 
     #[test]

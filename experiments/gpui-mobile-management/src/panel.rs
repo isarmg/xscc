@@ -302,6 +302,7 @@ impl Render for Panel {
             feature = "mobile-session"
         ))]
         if self.session_visible {
+            let visible = crate::session_view::visible_bounds(window);
             return div()
                 .size_full()
                 .font_family(theme::FONT_FAMILY)
