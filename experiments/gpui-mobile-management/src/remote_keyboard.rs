@@ -1,9 +1,10 @@
+mod computer;
+
 use crate::{
-    keyboard_action::{Shortcut, editor_action, finish_editor_action},
+    keyboard_action::{Shortcut, chords::ChordState, editor_action, finish_editor_action},
     keyboard_input::{KeyboardState, Output},
-    theme,
 };
-use base::message_proto::ControlKey;
+use base::message_proto::{ControlKey, KeyEvent};
 use gpui::{
     Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, EventEmitter,
     FocusHandle, IntoElement, Pixels, Point, Render, Subscription, UTF16Selection, Window, canvas,
@@ -19,6 +20,7 @@ pub enum Command {
     Text(String),
     Key(ControlKey),
     Shortcut(Shortcut),
+    Chord(KeyEvent),
 }
 pub struct KeyboardEvent {
     pub epoch: u64,
@@ -38,6 +40,7 @@ pub struct KeyboardControl {
     editing: Cell<bool>,
     unicode: Cell<bool>,
     shortcuts: Cell<bool>,
+    chords: RefCell<ChordState>,
 }
 impl KeyboardControl {
     pub fn new(unicode: bool) -> Rc<Self> {
@@ -47,12 +50,14 @@ impl KeyboardControl {
             editing: Cell::new(false),
             unicode: Cell::new(unicode),
             shortcuts: Cell::new(false),
+            chords: RefCell::new(ChordState::default()),
         })
     }
     pub fn epoch(&self) -> u64 {
         self.state.borrow().epoch()
     }
     pub fn cancel(&self) {
+        self.chords.borrow_mut().clear();
         self.editing.set(false);
         self.state.borrow_mut().reset();
     }
@@ -70,6 +75,7 @@ pub struct RemoteKeyboard {
     focus: FocusHandle,
     notice: String,
     page: KeyboardPage,
+    computer_second_page: bool,
     _blur: Subscription,
 }
 impl EventEmitter<KeyboardEvent> for RemoteKeyboard {}
@@ -86,6 +92,7 @@ impl RemoteKeyboard {
             focus,
             notice: String::new(),
             page: KeyboardPage::Input,
+            computer_second_page: false,
             _blur: blur,
         }
     }
@@ -182,17 +189,6 @@ impl RemoteKeyboard {
         cx.emit(KeyboardEvent {
             epoch: self.control.epoch(),
             commands: vec![Command::Shortcut(shortcut)],
-        });
-        self.changed(window, cx);
-    }
-    fn control_key(&mut self, key: ControlKey, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.control.enabled.get() {
-            return;
-        }
-        self.control.state.borrow_mut().reset();
-        cx.emit(KeyboardEvent {
-            epoch: self.control.epoch(),
-            commands: vec![Command::Key(key)],
         });
         self.changed(window, cx);
     }
@@ -344,8 +340,7 @@ impl EntityInputHandler for RemoteKeyboard {
     }
 }
 impl Render for RemoteKeyboard {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::LIGHT;
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let focus = self.focus.clone();
         let enabled = self.control.enabled.get();
@@ -374,95 +369,12 @@ impl Render for RemoteKeyboard {
                     .child(
                         div()
                             .text_size(gpui::px(12.))
-                            .text_color(rgb(palette.muted))
+                            .text_color(rgb(0xb0b1b8))
                             .child(status.to_owned()),
                     )
             }
-            KeyboardPage::Keys => div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div().grid().grid_cols(3).gap_2().children(
-                        [
-                            ("退格", ControlKey::Backspace),
-                            ("Delete", ControlKey::Delete),
-                            ("Enter", ControlKey::Return),
-                            ("Tab", ControlKey::Tab),
-                            ("Esc", ControlKey::Escape),
-                            ("←", ControlKey::LeftArrow),
-                            ("→", ControlKey::RightArrow),
-                            ("↑", ControlKey::UpArrow),
-                            ("↓", ControlKey::DownArrow),
-                        ]
-                        .into_iter()
-                        .map(|(label, key)| {
-                            key_button(label, label, enabled).on_click(cx.listener(
-                                move |view, _, window, cx| {
-                                    view.control_key(key, window, cx);
-                                },
-                            ))
-                        }),
-                    ),
-                )
-                .when(!enabled, |view| {
-                    view.child(
-                        div()
-                            .text_size(gpui::px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child("远端未允许键盘输入"),
-                    )
-                })
-                .when(!self.notice.is_empty(), |view| {
-                    view.child(
-                        div()
-                            .text_size(gpui::px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child(self.notice.clone()),
-                    )
-                }),
-            KeyboardPage::Shortcuts => {
-                let supported = enabled && self.control.shortcuts.get();
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(
-                        div().grid().grid_cols(3).gap_2().children(
-                            [
-                                ("全选 Ctrl+A", Shortcut::SelectAll),
-                                ("撤销 Ctrl+Z", Shortcut::Undo),
-                                ("保存 Ctrl+S", Shortcut::Save),
-                            ]
-                            .into_iter()
-                            .map(|(label, shortcut)| {
-                                key_button(label, label, supported).on_click(cx.listener(
-                                    move |view, _, window, cx| {
-                                        view.shortcut(shortcut, window, cx);
-                                    },
-                                ))
-                            }),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .text_size(gpui::px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child(if supported {
-                                "将快捷键发送到远端应用"
-                            } else {
-                                "目标尚未允许这些快捷键"
-                            }),
-                    )
-                    .when(!self.notice.is_empty(), |view| {
-                        view.child(
-                            div()
-                                .text_size(gpui::px(12.))
-                                .text_color(rgb(palette.muted))
-                                .child(self.notice.clone()),
-                        )
-                    })
-            }
+            KeyboardPage::Keys => self.computer_keyboard(window, cx),
+            KeyboardPage::Shortcuts => self.shortcut_keyboard(window, cx),
         };
         div()
             .id("remote-keyboard")
@@ -485,14 +397,16 @@ impl Render for RemoteKeyboard {
             }))
             .size_full()
             .min_h(gpui::px(0.))
-            .bg(rgb(palette.panel))
-            .text_color(rgb(palette.text))
+            .bg(rgb(computer::BACKGROUND))
+            .text_color(rgb(computer::FOREGROUND))
             .child(
                 div()
                     .id("remote-keyboard-page-scroll")
                     .size_full()
                     .min_h(gpui::px(0.))
-                    .overflow_y_scroll()
+                    .when(self.page != KeyboardPage::Keys, |page| {
+                        page.overflow_y_scroll()
+                    })
                     .p_2()
                     .child(content),
             )
@@ -519,28 +433,23 @@ impl Render for RemoteKeyboard {
 }
 
 fn key_button(id: &'static str, label: &str, enabled: bool) -> gpui::Stateful<gpui::Div> {
-    let palette = theme::LIGHT;
     div()
         .id(id)
-        .min_h(gpui::px(48.))
-        .min_w(gpui::px(48.))
+        .h(gpui::px(36.))
+        .min_w(gpui::px(44.))
         .px_2()
-        .py_2()
         .flex()
         .items_center()
         .justify_center()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .bg(rgb(palette.page))
-        .text_color(rgb(palette.text))
+        .rounded(gpui::px(6.))
+        .bg(rgb(computer::KEY))
+        .text_color(rgb(computer::FOREGROUND))
         .text_size(gpui::px(14.))
         .opacity(if enabled { 1. } else { 0.45 })
         .child(label.to_owned())
         .when(enabled, |button| {
             button
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(palette.accent_soft)))
-                .active(|style| style.bg(rgb(palette.border)))
+                .active(|style| style.bg(rgb(0x41434c)))
         })
 }

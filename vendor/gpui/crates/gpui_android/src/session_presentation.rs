@@ -19,6 +19,33 @@ impl Presentation {
         self.set_enabled(self.requested.get());
     }
 
+    pub(crate) fn rotate(&self) {
+        if !self.requested.get() {
+            return;
+        }
+        let app = self.app.clone();
+        self.app.run_on_java_main_thread(Box::new(move || {
+            let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+            let result = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+                let raw: jni::sys::jobject = app.activity_as_ptr().cast();
+                let activity = unsafe { env.as_cast_raw::<JObject>(&raw)? };
+                let result = env.call_method(
+                    &activity,
+                    jni_str!("rotateRemoteSession"),
+                    jni_sig!("()V"),
+                    &[],
+                );
+                if result.is_err() && env.exception_check() {
+                    env.exception_clear();
+                }
+                result.map(|_| ())
+            });
+            if let Err(error) = result {
+                log::warn!("Cannot rotate Android remote session: {error}");
+            }
+        }));
+    }
+
     pub(crate) fn set_enabled(&self, enabled: bool) {
         let previous = self.requested.replace(enabled);
         if !enabled && !previous {

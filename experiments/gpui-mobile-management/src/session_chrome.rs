@@ -74,6 +74,7 @@ pub struct ChromeModel {
 pub enum ChromeAction {
     Exit,
     ToggleRail,
+    RotateScreen,
     OpenPanel(Panel),
     ClosePanel,
     SetPointer(bool),
@@ -280,11 +281,16 @@ impl SessionChrome {
             .border_color(rgb(0xffffff))
             .bg(rgb(PAGE))
             .flex()
-            .flex_col()
             .items_center()
             .gap_1()
             .py_1()
-            .overflow_y_scroll()
+            .when(model.layout.rail.width > model.layout.rail.height, |rail| {
+                rail.flex_row().px_1().overflow_x_scroll()
+            })
+            .when(
+                model.layout.rail.width <= model.layout.rail.height,
+                |rail| rail.flex_col().overflow_y_scroll(),
+            )
             .occlude();
         for (id, label, icon, panel, enabled) in [
             (
@@ -321,6 +327,14 @@ impl SessionChrome {
             rail = rail.child(self.rail_button(cx, id, label, icon, (selected, enabled), action));
         }
         rail.child(self.rail_button(
+            cx,
+            "session-rotate",
+            "旋转屏幕",
+            Glyph::Rotate,
+            (false, true),
+            ChromeAction::RotateScreen,
+        ))
+        .child(self.rail_button(
             cx,
             "session-exit",
             "退出",
@@ -813,6 +827,7 @@ enum Glyph {
     Operations,
     Keyboard,
     Display,
+    Rotate,
     Exit,
     Expand,
     Collapse,
@@ -922,6 +937,13 @@ fn strokes(shape: Glyph) -> &'static [&'static [(f32, f32)]] {
             &[(12., 17.), (12., 21.)],
             &[(7., 21.), (17., 21.)],
         ],
+        Glyph::Rotate => &[
+            &[(8., 3.), (15., 3.), (21., 9.), (21., 16.)],
+            &[(17., 12.), (21., 16.), (23., 12.)],
+            &[(16., 21.), (9., 21.), (3., 15.), (3., 8.)],
+            &[(1., 12.), (3., 8.), (7., 12.)],
+            &[(9., 8.), (15., 8.), (15., 16.), (9., 16.), (9., 8.)],
+        ],
         Glyph::Exit => &[
             &[(11., 4.), (5., 4.), (5., 20.), (11., 20.)],
             &[(10., 12.), (22., 12.)],
@@ -1013,9 +1035,7 @@ mod rail_tests {
     }
 
     #[gpui_test_support::test]
-    fn corner_button_toggles_without_sending_remote_touch_and_leaves_the_lower_edge_free(
-        cx: &mut TestAppContext,
-    ) {
+    fn bottom_corner_button_toggles_without_sending_remote_touch(cx: &mut TestAppContext) {
         let remote_touches = Rc::new(Cell::new(0));
         let (stage, cx) = cx.add_window_view(|_, cx| Stage {
             chrome: cx.new(|cx| {
@@ -1050,24 +1070,66 @@ mod rail_tests {
                 });
             })
         });
-        for (y, end, expected_toggles, expected_remote) in [
-            (30., TouchPhase::Ended, 1, 0),
-            (218., TouchPhase::Ended, 2, 0),
-            (400., TouchPhase::Ended, 2, 2),
-            (30., TouchPhase::Cancelled, 2, 2),
-            (30., TouchPhase::Ended, 3, 2),
+        for ((x, y), end, expected_toggles, expected_remote) in [
+            ((290., 610.), TouchPhase::Ended, 1, 0),
+            ((280., 604.), TouchPhase::Ended, 2, 0),
+            ((290., 400.), TouchPhase::Ended, 2, 2),
+            ((290., 610.), TouchPhase::Cancelled, 2, 2),
+            ((290., 610.), TouchPhase::Ended, 3, 2),
         ] {
             cx.update(|window, cx| window.draw(cx).clear(cx));
             for phase in [TouchPhase::Started, end] {
                 cx.simulate_event(TouchEvent {
                     id: TouchId(1),
                     phase,
-                    position: point(px(290.), px(y)),
+                    position: point(px(x), px(y)),
                     ..TouchEvent::default()
                 });
             }
             assert_eq!(toggles.get(), expected_toggles);
             assert_eq!(remote_touches.get(), expected_remote);
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn rotation_button_emits_each_tap_without_sending_remote_input(cx: &mut TestAppContext) {
+        let remote_touches = Rc::new(Cell::new(0));
+        let (stage, cx) = cx.add_window_view(|_, cx| Stage {
+            chrome: cx.new(|cx| {
+                let mut chrome = SessionChrome::new(cx);
+                chrome.model.rail_expanded = true;
+                chrome.model.layout =
+                    crate::session_layout::layout(320., 640., true, Panel::None, false, 88.);
+                chrome
+            }),
+            remote_touches: remote_touches.clone(),
+        });
+        let chrome = cx.update(|_, cx| stage.read(cx).chrome.clone());
+        let rotations = Rc::new(Cell::new(0));
+        let count = rotations.clone();
+        let _subscription = cx.update(|window, cx| {
+            window.subscribe(&chrome, cx, move |_, action, _, _| {
+                assert_eq!(*action, ChromeAction::RotateScreen);
+                count.set(count.get() + 1);
+            })
+        });
+        for expected in 1..=2 {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            for phase in [TouchPhase::Started, TouchPhase::Ended] {
+                cx.simulate_event(TouchEvent {
+                    id: TouchId(1),
+                    phase,
+                    position: point(px(184.), px(604.)),
+                    ..TouchEvent::default()
+                });
+            }
+            assert_eq!(rotations.get(), expected);
+            assert_eq!(remote_touches.get(), 0);
+            cx.update(|_, cx| {
+                let layout = chrome.read(cx).model.layout;
+                assert_eq!(layout.stage, layout.viewport);
+                assert_eq!(layout.video, layout.viewport);
+            });
         }
     }
 }

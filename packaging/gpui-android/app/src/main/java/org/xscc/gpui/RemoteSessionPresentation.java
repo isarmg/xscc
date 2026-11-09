@@ -31,6 +31,9 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             throw new IllegalStateException("Session presentation must use the UI thread");
         }
         if (enabled == (original != null)) {
+            if (enabled) {
+                original.controller.hide(WindowInsetsCompat.Type.systemBars());
+            }
             return;
         }
         if (!enabled) {
@@ -48,9 +51,8 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             if (Build.VERSION.SDK_INT >= 30 && !activity.isInMultiWindowMode()
                     && !original.fullscreen
                     && original.decor.getWidth() < original.decor.getHeight()) {
+                // Clearing this flag during the session asks Android to show the status bar.
                 window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-                Snapshot entering = original;
-                original.decor.postDelayed(() -> clearEntryFullscreen(entering), 500);
             }
             if (original.surfaceHolder != null) {
                 original.surfaceHolder.addCallback(this);
@@ -66,6 +68,21 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             Log.w("GPUI", "Cannot apply remote session presentation", error);
             restore();
         }
+    }
+
+    public void rotate() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            throw new IllegalStateException("Session rotation must use the UI thread");
+        }
+        if (original == null) {
+            return;
+        }
+        int orientation = activity.getRequestedOrientation();
+        activity.setRequestedOrientation(
+                orientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                        ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        original.controller.hide(WindowInsetsCompat.Type.systemBars());
     }
 
     private void requestHighRefreshRate() {
@@ -108,15 +125,6 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
         }
     }
 
-    private void clearEntryFullscreen(Snapshot entering) {
-        if (Build.VERSION.SDK_INT >= 30 && original == entering && !entering.fullscreen) {
-            Window window = activity.getWindow();
-            if ((window.getAttributes().flags & WindowManager.LayoutParams.FLAG_FULLSCREEN) != 0) {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-            }
-        }
-    }
-
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         requestHighRefreshRate();
@@ -124,9 +132,6 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (original != null && width > height) {
-            clearEntryFullscreen(original);
-        }
         requestHighRefreshRate();
     }
 

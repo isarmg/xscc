@@ -6913,6 +6913,11 @@ impl Window {
             .set_remote_session_presentation(enabled);
     }
 
+    /// Toggles the active mobile session's local orientation without changing the remote display.
+    pub fn rotate_remote_session(&self) {
+        self.platform_window.rotate_remote_session();
+    }
+
     /// Toggle simple (borderless) fullscreen, where the window covers the entire
     /// screen including the menu bar and, on notched displays, the area around the
     /// notch. Unlike [`Window::toggle_fullscreen`], this does not move the window

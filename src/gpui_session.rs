@@ -104,21 +104,38 @@ fn mobile_keyboard_permitted(enabled: bool, platform: &str, input: &InputCommand
     let InputCommand::Key(event) = input else { return false; };
     if event.down || event.mode.enum_value() != Ok(KeyboardMode::Legacy) { return false; }
     if !event.modifiers.is_empty() {
-        // Only three one-shot legacy shortcuts. The existing Windows/Linux host
-        // handler releases modifiers it presses within the same input operation.
-        return matches!(platform, "Windows" | "Linux") && event.press
-            && event.modifiers.len() == 1
-            && event.modifiers[0].enum_value() == Ok(ControlKey::Control)
-            && matches!(event.union, Some(key_event::Union::Chr(97 | 122 | 115)));
+        // These hosts release one-shot modifiers inside the same input operation.
+        if !matches!(platform, "Windows" | "Linux") || !event.press || event.modifiers.len() > 4 {
+            return false;
+        }
+        let mut seen = 0;
+        for modifier in &event.modifiers {
+            let bit = match modifier.enum_value() {
+                Ok(ControlKey::Control) => 1,
+                Ok(ControlKey::Shift) => 2,
+                Ok(ControlKey::Alt) => 4,
+                Ok(ControlKey::Meta) => 8,
+                _ => return false,
+            };
+            if seen & bit != 0 { return false; }
+            seen |= bit;
+        }
     }
     match &event.union {
-        Some(key_event::Union::Seq(text)) => !event.press && !text.is_empty() && text.chars().all(|ch| {
-            !ch.is_control() && (platform != "Linux" || ch.is_ascii() && (' '..='~').contains(&ch))
-        }),
+        Some(key_event::Union::Seq(text)) => event.modifiers.is_empty() && !event.press
+            && !text.is_empty() && text.chars().all(|ch| {
+                !ch.is_control() && (platform != "Linux" || ch.is_ascii() && (' '..='~').contains(&ch))
+            }),
+        Some(key_event::Union::Chr(chr)) => event.press && (32..=126).contains(chr),
         Some(key_event::Union::ControlKey(key)) => event.press && matches!(key.enum_value(), Ok(
             ControlKey::Backspace | ControlKey::Delete | ControlKey::Return | ControlKey::Tab |
             ControlKey::Escape | ControlKey::LeftArrow | ControlKey::RightArrow |
-            ControlKey::UpArrow | ControlKey::DownArrow
+            ControlKey::UpArrow | ControlKey::DownArrow | ControlKey::Home | ControlKey::End |
+            ControlKey::PageUp | ControlKey::PageDown | ControlKey::Insert | ControlKey::Space |
+            ControlKey::CapsLock | ControlKey::Meta | ControlKey::Snapshot | ControlKey::Scroll |
+            ControlKey::Pause | ControlKey::F1 | ControlKey::F2 | ControlKey::F3 | ControlKey::F4 |
+            ControlKey::F5 | ControlKey::F6 | ControlKey::F7 | ControlKey::F8 | ControlKey::F9 |
+            ControlKey::F10 | ControlKey::F11 | ControlKey::F12
         )),
         _ => false,
     }
@@ -1489,7 +1506,8 @@ mod tests {
         let mut key = KeyEvent::new(); key.press = true; key.set_control_key(ControlKey::Return);
         assert!(mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key.clone())));
         key.modifiers.push(ControlKey::Control.into());
-        assert!(!mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key)));
+        assert!(mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key.clone())));
+        assert!(!mobile_keyboard_permitted(true, "Mac OS", &InputCommand::Key(key)));
     }
 
     #[test]
@@ -1727,38 +1745,63 @@ mod tests {
         assert!(handle.take_frame().is_none());
     }
     #[test]
-    fn mobile_shortcuts_are_three_one_shot_control_chords_only() {
+    fn mobile_pc_keyboard_accepts_one_shot_keys_and_chords_with_permission() {
         for platform in ["Windows", "Linux"] {
-            for chr in ['a', 'z', 's'] {
+            for chr in ['a', 'c', 'v', 'x', 'z', 's', 'q', '0', ' ', '+'] {
                 let mut key = KeyEvent::new();
                 key.set_chr(chr as u32);
                 key.press = true;
-                key.modifiers.push(ControlKey::Control.into());
-                let input = InputCommand::Key(key.clone());
-                assert!(mobile_keyboard_permitted(true, platform, &input));
-                assert!(!mobile_keyboard_permitted(false, platform, &input));
-                assert!(!mobile_keyboard_permitted(true, "Mac OS", &input));
-                assert!(!mobile_keyboard_permitted(true, "unknown", &input));
-                key.down = true;
-                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
-                key.down = false;
-                key.press = false;
-                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
-                key.press = true;
-                key.mode = KeyboardMode::Map.into();
-                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
-                key.mode = KeyboardMode::Legacy.into();
+                for modifiers in [vec![], vec![ControlKey::Control],
+                    vec![ControlKey::Control, ControlKey::Shift, ControlKey::Alt, ControlKey::Meta]] {
+                    key.modifiers = modifiers.into_iter().map(Into::into).collect();
+                    let input = InputCommand::Key(key.clone());
+                    assert!(mobile_keyboard_permitted(true, platform, &input));
+                    assert!(!mobile_keyboard_permitted(false, platform, &input));
+                    assert!(!mobile_keyboard_permitted(true, "unknown", &input));
+                    if !key.modifiers.is_empty() {
+                        assert!(!mobile_keyboard_permitted(true, "Mac OS", &input));
+                    }
+                }
+            }
+            for control in [ControlKey::Return, ControlKey::F1, ControlKey::F12,
+                ControlKey::Home, ControlKey::PageDown, ControlKey::Snapshot, ControlKey::Meta,
+                ControlKey::CapsLock, ControlKey::Scroll, ControlKey::Pause] {
+                let mut key = KeyEvent::new(); key.set_control_key(control); key.press = true;
+                assert!(mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
                 key.modifiers.push(ControlKey::Shift.into());
-                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
-                key.modifiers = vec![ControlKey::Alt.into()];
-                assert!(!mobile_keyboard_permitted(true, platform, &InputCommand::Key(key.clone())));
+                assert!(mobile_keyboard_permitted(true, platform, &InputCommand::Key(key)));
             }
         }
-        for chr in ['c', 'v', 'x', 'q', '中'] {
-            let mut key = KeyEvent::new(); key.set_chr(chr as u32); key.press = true;
-            key.modifiers.push(ControlKey::Control.into());
-            assert!(!mobile_keyboard_permitted(true, "Linux", &InputCommand::Key(key)));
+    }
+
+    #[test]
+    fn mobile_pc_keyboard_rejects_held_keys_and_malformed_chords() {
+        let mut key = KeyEvent::new(); key.set_chr('c' as u32); key.press = true;
+        key.modifiers.push(ControlKey::Control.into());
+        key.down = true;
+        assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
+        key.down = false; key.press = false;
+        assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
+        key.press = true; key.mode = KeyboardMode::Map.into();
+        assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
+        key.mode = KeyboardMode::Legacy.into();
+        for modifiers in [vec![ControlKey::Control, ControlKey::Control],
+            vec![ControlKey::CapsLock], vec![ControlKey::Unknown],
+            vec![ControlKey::Control, ControlKey::Shift, ControlKey::Alt, ControlKey::Meta, ControlKey::Control]] {
+            key.modifiers = modifiers.into_iter().map(Into::into).collect();
+            assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
         }
+        key.modifiers = vec![ControlKey::Control.into()];
+        for chr in [0, 31, 127, '中' as u32, u32::MAX] {
+            key.set_chr(chr);
+            assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
+        }
+        for control in [ControlKey::Unknown, ControlKey::Sleep] {
+            key.set_control_key(control);
+            assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key.clone())));
+        }
+        key.set_seq("text".into());
+        assert!(!mobile_keyboard_permitted(true, "Windows", &InputCommand::Key(key)));
     }
 
 }

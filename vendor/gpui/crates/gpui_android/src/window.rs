@@ -440,6 +440,9 @@ impl PlatformWindow for AndroidWindow {
     fn set_remote_session_presentation(&self, enabled: bool) {
         self.0.presentation.set_enabled(enabled);
     }
+    fn rotate_remote_session(&self) {
+        self.0.presentation.rotate();
+    }
     fn is_fullscreen(&self) -> bool {
         true
     }

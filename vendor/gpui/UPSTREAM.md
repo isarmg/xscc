@@ -141,4 +141,12 @@ texture UV mapping. This is a test observation interface; it does not change
 the production renderer, layout engine or `Img` behavior. It does not establish
 test completion, physical GPU output or mobile-device acceptance.
 
-Remote-session entry uses a non-rotating native orientation update so the application can reveal its stable video viewport with a short curtain animation. Android restores its original fullscreen/rotation policy and limits the temporary fullscreen entry override to supported non-multiwindow transitions; API29 keeps its IME resize fallback. UIKit uses the public per-update non-animation API, without changing global animation settings.
+Remote-session entry uses a non-rotating native orientation update so the application can reveal its stable video viewport with a short curtain animation. Android restores its original fullscreen/rotation policy after the session; its supported non-multiwindow fullscreen request stays active during the session so clearing the flag cannot reopen the status bar. API29 keeps its IME resize fallback. UIKit uses the public per-update non-animation API, without changing global animation settings.
+
+
+`Window::rotate_remote_session()` is an opt-in local mobile orientation toggle
+with a default platform no-op. Android changes the active Activity's requested
+portrait/landscape orientation through the same Java UI-thread bridge; UIKit
+updates only the active session's controller policy and public scene geometry.
+Exit restores the original orientation policy. The application control remains
+an overlay and does not request a remote display mode or change desktop windows.

@@ -1,3 +1,5 @@
+pub mod chords;
+
 use crate::keyboard_input::{KeyboardState, Output};
 use gpui::KeyDownEvent;
 

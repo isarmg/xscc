@@ -1256,6 +1256,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn toggle_fullscreen(&self);
     /// Requests a reversible mobile session layout. Other platforms keep their current presentation.
     fn set_remote_session_presentation(&self, _enabled: bool) {}
+    /// Toggles an active mobile session between portrait and landscape.
+    fn rotate_remote_session(&self) {}
     fn is_fullscreen(&self) -> bool;
     fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
         None
