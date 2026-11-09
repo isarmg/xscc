@@ -1,0 +1,51 @@
+--- a/Virtual Display Driver (HDR)/MttVDD/Driver.cpp
++++ b/Virtual Display Driver (HDR)/MttVDD/Driver.cpp
+@@ -13,6 +13,8 @@
+ --*/
+ 
+ #include "Driver.h"
++#include "SwapChainStop.h"
++static_assert(WAIT_OBJECT_0 == 0 && WAIT_TIMEOUT == 258, "Windows wait values changed");
+ //#include "Driver.tmh"
+ #include<fstream>
+ #include<sstream>
+@@ -2220,6 +2222,13 @@
+ 	// Acquire and release buffers in a loop
+ 	for (;;)
+ 	{
++		// Stop has priority even while the producer continuously supplies frames.
++		const auto stop = xscc_mtt::before_acquire(WaitForSingleObject(m_hTerminateEvent.Get(), 0));
++		if (stop != xscc_mtt::LoopAction::Continue) {
++			if (stop == xscc_mtt::LoopAction::Error)
++				vddlog("e", "Swapchain stop-event observation failed");
++			break;
++		}
+ 		ComPtr<IDXGIResource> AcquiredBuffer;
+ 
+ 		// Ask for the next buffer from the producer
+@@ -2245,20 +2254,21 @@
+ 			// We must wait for a new buffer
+ 			HANDLE WaitHandles[] =
+ 			{
+-				m_hAvailableBufferEvent,
+-				m_hTerminateEvent.Get()
++				m_hTerminateEvent.Get(),
++				m_hAvailableBufferEvent
+ 			};
+ 			DWORD WaitResult = WaitForMultipleObjects(ARRAYSIZE(WaitHandles), WaitHandles, FALSE, 16);
+ 
+ 			logStream << "Buffer acquisition pending. WaitResult: " << WaitResult;
+ 
+-			if (WaitResult == WAIT_OBJECT_0 || WaitResult == WAIT_TIMEOUT)
++			const auto action = xscc_mtt::after_pending_wait(WaitResult);
++			if (action == xscc_mtt::LoopAction::Continue)
+ 			{
+ 				// We have a new buffer, so try the AcquireBuffer again
+ 				//vddlog("d", "New buffer trying aquire new buffer");
+ 				continue;
+ 			}
+-			else if (WaitResult == WAIT_OBJECT_0 + 1)
++			else if (action == xscc_mtt::LoopAction::Stop)
+ 			{
+ 				// We need to terminate
+ 				logStream << "Terminate event signaled. Exiting loop.";

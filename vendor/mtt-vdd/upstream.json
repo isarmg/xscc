@@ -1,0 +1,137 @@
+{
+  "repository": "https://github.com/VirtualDrivers/Virtual-Display-Driver",
+  "revision": "d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77",
+  "tree": "17399bc1c0e78237cc40cc30147516fd12b787c0",
+  "tag": "25.7.23",
+  "import_scope": [
+    "Virtual Display Driver (HDR)/",
+    "Common/Include/",
+    "LICENSE"
+  ],
+  "source_file_count": 16,
+  "files": [
+    {
+      "path": "Common/Include/AdapterOption.h",
+      "git_blob": "7c7b085c32e044ea168f355deebcf58281886f9e",
+      "bytes": 4045,
+      "sha256": "4d1d7258032d908e2b70353e18eda3ff9610afd65c337f17c04a3076e1578c48"
+    },
+    {
+      "path": "Common/Include/README.md",
+      "git_blob": "ae379a1995d73382dbb131ce91b9f0a246688f8f",
+      "bytes": 77,
+      "sha256": "a1b4d74beb113207e1a4aa2b4cf4645819cf807492c43b47a65e2ec4d14fd7e9"
+    },
+    {
+      "path": "LICENSE",
+      "git_blob": "1c09fa8f74f33c46046b942c913f6c69709d2ba9",
+      "bytes": 1072,
+      "sha256": "c2285c867ddc9b88f43b4f8fa2c77a9eec66207166c1217b37353a2ccd62ac03"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/8K240HzHDR.edid",
+      "git_blob": "93b1af711db311350c8c145fac6c99ab690e58e5",
+      "bytes": 384,
+      "sha256": "b849def8d88ab29cd59475a93975a39c215b273ff15ea7c686609b233f8851bb"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/CppProperties.json",
+      "git_blob": "f598ba59c4fcb04c1daa0041d8133432df23d437",
+      "bytes": 362,
+      "sha256": "a9a7b81fc95e5f5d8b8fe9a1ddebc08f0695f816f912c88c196c0684302d27f0"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD.sln",
+      "git_blob": "e8045da2d6cce66823ec852531757c3c8770e459",
+      "bytes": 2732,
+      "sha256": "581744eed7a205dfa0269ea27b64233c4fa00eb61dc466119ed8309832d8b570"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
+      "git_blob": "3012b5639cc78cbbf497f6fada4948583a5cd6f3",
+      "bytes": 102680,
+      "sha256": "d320a69bb13f7ba7e79adbb03c999c41a09948c5d17ecf3e1ed55aacc1d8df0b"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/Driver.h",
+      "git_blob": "17be5b3247795ee5c2a7ed07575f5cadc8782e89",
+      "bytes": 2907,
+      "sha256": "9d62afc9c8f2678aaad68f9d9f5dfd2279cd3a4111afe737795888ba4d00ab95"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/MttVDD.inf",
+      "git_blob": "e6ba858c27a290845db0c2e9a8e5c3547ff05e64",
+      "bytes": 4200,
+      "sha256": "c2e5a5b34d840b77977c82fed9a2ed9036a71dfd257ec0d7b1bb9b84516aa523"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/MttVDD.sln",
+      "git_blob": "f45ea3f94c24d633ded370f73f1c9f358c116965",
+      "bytes": 2667,
+      "sha256": "33947301a2373681a3b4dd20d739fff105aaff41bc8303188e45568587567dc6"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/MttVDD.vcxproj",
+      "git_blob": "add0b2cefea60a6be31f1964d823644dd62dc1fa",
+      "bytes": 18351,
+      "sha256": "3e1c0028a2ca9d39892a5e0f38f89e3a93e5831ff196cc670aacbc7a5b7a6a6a"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/MttVDD.vcxproj.filters",
+      "git_blob": "63e688760d52de1ca1f79d91b5ea4ecbf90e1c4c",
+      "bytes": 1719,
+      "sha256": "ccc8f1f59012217360fd3642dc88886a5a9b252a366b01951be0a45db101e81e"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/Trace.h",
+      "git_blob": "c16559013ad9c26f9295936375cf4ef93aa447c5",
+      "bytes": 1959,
+      "sha256": "3eca4dd904e24723e6c47546d91a7eb91f2c3e06323fb5a152c74174acd0f2d1"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/MttVDD/readme.md",
+      "git_blob": "e7fd0c05961016f3ca026a35a36d22b5c6c56bf4",
+      "bytes": 739,
+      "sha256": "197e53fd70228c53353ab69f25992991a8d93468ffba3bbb31d07e0e32b717e4"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/option.txt",
+      "git_blob": "7bc082db42db48d4231a6e7636b1dbc8e98e6af3",
+      "bytes": 1132,
+      "sha256": "67ebdd5ebcbd0f8b8ff5c7deff0811dcaf2c8fe40fff88b036de57fac2fd80b4"
+    },
+    {
+      "path": "Virtual Display Driver (HDR)/vdd_settings.xml",
+      "git_blob": "d70a01d784db0c8bf5d1bf5d89bb59a80dc248cd",
+      "bytes": 3935,
+      "sha256": "c023e471dd760b1f2e17e38e1eb6139b05b6e5fad2952f9f34de678fda981723"
+    }
+  ],
+  "maintained_changes": [
+    "Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
+    "Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h"
+  ],
+  "signed_payloads_imported": false,
+  "product_manifest_changed": false,
+  "installed": false,
+  "native_display_operations": false,
+  "license": "MIT; all upstream and Microsoft sample notices retained",
+  "maintained_files": [
+    {
+      "path": "source/Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
+      "sha256": "fa246ddf34db8d06b42e7011fa22eb8885e8d736f912f5c3ee0477465fd532a2"
+    },
+    {
+      "path": "source/Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
+      "sha256": "e99540ba263d7d6b7f6f2ee3e76704655851188f079b8c48f3eec0626b26ed14"
+    },
+    {
+      "path": "patches/0001-prioritize-swapchain-stop.patch",
+      "sha256": "eeb02ffff54641314b60d6ea6e7797bbe278b1b93c33bbbe79d3e907275aaaf1"
+    },
+    {
+      "path": "tests/SwapChainStopTests.cpp",
+      "sha256": "dd523e6592a536a095121da1ab24fe0e3157d1623c3352a69cedc612785b358a"
+    }
+  ]
+}
