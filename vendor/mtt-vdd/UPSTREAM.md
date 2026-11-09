@@ -31,3 +31,14 @@ its hard-coded Downloads header path, signing settings and post-build commands
 are never executed. Legacy source warnings are retained as warnings; local CPU
 regressions remain /W4 /WX. No runtime or installation job exists. Merely preparing
 this workflow is not evidence that the driver has compiled or passed validation.
+
+The maintained INF additionally follows the official Windows 11 reflector
+Include/Needs pattern from the pinned IddSample INF recorded in upstream.json.
+The UMDF DLL is run from DIRID 13 as required by current Driver Package Isolation
+guidance, rather than copying to drivers/UMDF. The explicit old WUDFRd.sys service
+declaration is replaced by the system WUDFRD.inf sections. The hardware identities,
+UMDF service name, device group, IndirectKmd filter and IddCx extension remain.
+The INF now explicitly targets Windows 11 build 22000 and later, matching the
+product support boundary. Original upstream INF bytes remain unchanged; patch
+0002 records the complete packaging-only maintenance change. No driver code,
+display modes, monitor count or signing-validation requirement is changed.

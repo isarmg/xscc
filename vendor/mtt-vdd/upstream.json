@@ -109,7 +109,8 @@
   ],
   "maintained_changes": [
     "Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
-    "Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h"
+    "Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
+    "Virtual Display Driver (HDR)/MttVDD/MttVDD.inf"
   ],
   "signed_payloads_imported": false,
   "product_manifest_changed": false,
@@ -132,6 +133,24 @@
     {
       "path": "tests/SwapChainStopTests.cpp",
       "sha256": "dd523e6592a536a095121da1ab24fe0e3157d1623c3352a69cedc612785b358a"
+    },
+    {
+      "path": "source/Virtual Display Driver (HDR)/MttVDD/MttVDD.inf",
+      "sha256": "99271d26b5398d6af61c0e02ffaf7460d747ba3d022990ba04492342422c1c1b"
+    },
+    {
+      "path": "patches/0002-use-isolated-windows11-umdf-inf.patch",
+      "sha256": "f3934453d5cef0199c9dcab37e2929855516bd75f4c73e420eea31df96f2ece8"
     }
-  ]
+  ],
+  "inf_reference": {
+    "repository": "https://github.com/microsoft/Windows-driver-samples",
+    "commit": "d5569c08aa2818c6240744bb47a00f67f20fdb54",
+    "path": "video/IndirectDisplay/IddSampleDriver/IddSampleDriver.inf",
+    "git_blob": "4edee6b8438f46213008ef9e5d16874b8e1c9fc3",
+    "sha256": "cbbdb28ff33a515515d63e2c7c3562f77c9d2ab0e44733deb3df92ca38ae9e36",
+    "purpose": "WUDFRD.inf Include/Needs and Windows 11 minimum OS decoration; no source or feature code imported",
+    "driver_store_guidance": "https://learn.microsoft.com/en-us/windows-hardware/drivers/develop/run-from-driver-store",
+    "reflector_guidance": "https://learn.microsoft.com/en-us/windows-hardware/drivers/wdf/adding-the-reflector"
+  }
 }
