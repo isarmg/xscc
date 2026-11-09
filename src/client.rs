@@ -2045,7 +2045,13 @@ pub fn start_video_thread<F, T>(
             #[cfg(feature = "mediacodec")]
             let message = match video_handler.as_mut() {
                 Some(handler) if handler.decoder.has_pending_mediacodec_output() => {
-                    match video_receiver.recv_timeout(Duration::from_millis(4)) {
+                    #[cfg(target_os = "android")]
+                    let wait = mediacodec_output_poll_interval(
+                        session.lc.read().unwrap().streaming_target_fps(),
+                    );
+                    #[cfg(not(target_os = "android"))]
+                    let wait = Duration::from_millis(4);
+                    match video_receiver.recv_timeout(wait) {
                         Ok(data) => Ok(data),
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -2092,7 +2098,7 @@ pub fn start_video_thread<F, T>(
                                     };
                                     let present = presentation_fps.map_or(true, |fps| {
                                         presentation::should_present(
-                                            true,
+                                            presentation::DECODE_TIME_PACING,
                                             video_queue.len(),
                                             last_presented.map(|instant| instant.elapsed()),
                                             Duration::from_secs_f64(1.0 / fps as f64),
@@ -2248,7 +2254,7 @@ pub fn start_video_thread<F, T>(
                                     };
                                     let present = presentation_fps.map_or(true, |fps| {
                                         presentation::should_present(
-                                            true,
+                                            presentation::DECODE_TIME_PACING,
                                             video_queue.len(),
                                             last_presented.map(|instant| instant.elapsed()),
                                             Duration::from_secs_f64(1.0 / fps as f64),
@@ -2420,13 +2426,35 @@ fn fps_calculate(
     }
 }
 
+#[cfg(any(all(target_os = "android", feature = "mediacodec"), test))]
+fn mediacodec_output_poll_interval(target_fps: i32) -> Duration {
+    if target_fps <= 60 {
+        return Duration::from_millis(4);
+    }
+    // A fixed 4 ms wait spends half a 120 Hz interval before checking ready hardware output.
+    Duration::from_micros((125_000 / target_fps as u64).max(1_000))
+}
+
 #[cfg(test)]
 mod mediacodec_capacity_tests {
-    use super::fps_calculate;
+    use super::{fps_calculate, mediacodec_output_poll_interval};
     use std::{
         sync::{Arc, RwLock},
         time::Duration,
     };
+
+    #[test]
+    fn pending_output_polling_respects_high_refresh_frame_budget() {
+        for fps in [0, 30, 60] {
+            assert_eq!(mediacodec_output_poll_interval(fps), Duration::from_millis(4));
+        }
+        for fps in [90, 120, 240, 1000] {
+            let wait = mediacodec_output_poll_interval(fps);
+            let frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
+            assert!(wait >= Duration::from_millis(1));
+            assert!(wait <= frame_interval / 4 || wait == Duration::from_millis(1));
+        }
+    }
 
     #[test]
     fn batched_outputs_report_the_actual_decode_capacity() {
