@@ -9,3 +9,4 @@ vendor/mtt-vdd/upstream/** -text whitespace=-blank-at-eol
 vendor/mtt-vdd/source/** -text whitespace=-blank-at-eol
 vendor/mtt-vdd/patches/** -text
 vendor/mtt-vdd/tests/** -text
+vendor/mtt-vdd/LICENSE -text
