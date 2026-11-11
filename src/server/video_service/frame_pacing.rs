@@ -20,6 +20,21 @@ pub(super) fn budget_start(
     }
 }
 
+#[cfg(all(windows, feature = "gpui-host"))]
+pub(super) fn wait_until(start: std::time::Instant, frame: Duration) {
+    let deadline = start + frame;
+    let spin_guard = Duration::from_millis(2);
+    if let Some(sleep_until) = deadline.checked_sub(spin_guard) {
+        let remaining = sleep_until.saturating_duration_since(std::time::Instant::now());
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining);
+        }
+    }
+    while std::time::Instant::now() < deadline {
+        std::hint::spin_loop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

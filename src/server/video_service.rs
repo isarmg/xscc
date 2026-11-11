@@ -1190,6 +1190,13 @@ fn run_encoder(
         #[cfg(feature = "gpui-host")]
         let pacing_wait_started = Instant::now();
         if elapsed < spf {
+            #[cfg(all(windows, feature = "gpui-host"))]
+            if paced_fps > 60 {
+                frame_pacing::wait_until(pacing_start, spf);
+            } else {
+                std::thread::sleep(spf - elapsed);
+            }
+            #[cfg(not(all(windows, feature = "gpui-host")))]
             std::thread::sleep(spf - elapsed);
         }
         #[cfg(feature = "gpui-host")]
