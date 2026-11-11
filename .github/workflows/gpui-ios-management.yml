@@ -1,6 +1,12 @@
 name: GPUI iOS interactive playback preview
 on:
   workflow_dispatch:
+    inputs:
+      package_version:
+        description: 'Candidate version, e.g. 1.0.1'
+        required: true
+        default: '1.0.0'
+        type: string
   push:
     branches: [main, feat/management-prep]
     paths:
@@ -40,6 +46,7 @@ jobs:
             package_flags: --playback-preview
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/experiments/gpui-mobile-management/target
+      PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
       VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"

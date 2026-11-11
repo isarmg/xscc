@@ -79,6 +79,10 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
     sha = os.environ.get('GITHUB_SHA') or command('git', 'rev-parse', 'HEAD')
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
+    package_version = os.environ.get('PACKAGE_VERSION', info['CFBundleShortVersionString'])
+    require(re.fullmatch(r'\d+\.\d+\.\d+(?:-beta\.\d+)?', package_version),
+            'Invalid package version')
+    info['CFBundleShortVersionString'] = package_version
     mode = 'interactive-playback-preview' if playback_preview else ('view-only' if view_only else 'management')
     if test_lan_direct:
         mode = 'TEST-IP-direct'

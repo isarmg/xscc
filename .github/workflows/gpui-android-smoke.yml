@@ -26,6 +26,11 @@ on:
       - '.github/scripts/*gpui*mobile*'
   workflow_dispatch:
     inputs:
+      package_version:
+        description: 'Candidate version, e.g. 1.0.1'
+        required: true
+        default: '1.0.0'
+        type: string
       build_only:
         description: 'Build and package without additional host-side tests'
         required: false
@@ -44,6 +49,7 @@ env:
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
   GRADLE_VERSION: '9.8.1'
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
+  PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
 jobs:
   android:
     runs-on: ubuntu-24.04
