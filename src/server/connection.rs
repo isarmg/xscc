@@ -1003,11 +1003,18 @@ impl Connection {
                     }
                 },
                 Err(err) => {
+                    if std_mpsc::RecvTimeoutError::Disconnected == err {
+                        if block_input_mode {
+                            let (ok, msg) = crate::platform::block_input(false);
+                            if !ok {
+                                log::error!("Failed to release blocked input: {}", msg);
+                            }
+                            block_input_mode = false;
+                        }
+                        break;
+                    }
                     if block_input_mode {
                         let _ = crate::platform::block_input(true);
-                    }
-                    if std_mpsc::RecvTimeoutError::Disconnected == err {
-                        break;
                     }
                 }
             }
