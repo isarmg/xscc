@@ -1144,19 +1144,32 @@ fn run_encoder(
 
         let mut fetched_conn_ids = HashSet::new();
         let timeout_millis = 3_000u64;
+        // At high refresh rates, waiting for the client to acknowledge each frame
+        // serializes capture with decode and presentation. The bounded media queue
+        // already applies backpressure and recovery, so only drain notifications
+        // without blocking in that mode.
+        let fetch_timeout_millis = if spf < Duration::from_secs(1) / 60 {
+            0
+        } else {
+            300
+        };
         let wait_begin = Instant::now();
-        while wait_begin.elapsed().as_millis() < timeout_millis as _ {
-            #[cfg(windows)]
-            if !sp.ok() || capture_lifecycle::change_pending() {
-                break;
-            }
-            if vs.source.is_monitor() {
-                check_privacy_mode_changed(&sp, display_idx, &c)?;
-            }
-            frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
-            // break if all connections have received current frame
-            if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
-                break;
+        if fetch_timeout_millis == 0 {
+            frame_controller.try_wait_next(&mut fetched_conn_ids, 0);
+        } else {
+            while wait_begin.elapsed().as_millis() < timeout_millis as _ {
+                #[cfg(windows)]
+                if !sp.ok() || capture_lifecycle::change_pending() {
+                    break;
+                }
+                if vs.source.is_monitor() {
+                    check_privacy_mode_changed(&sp, display_idx, &c)?;
+                }
+                frame_controller.try_wait_next(&mut fetched_conn_ids, fetch_timeout_millis);
+                // break if all connections have received current frame
+                if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
+                    break;
+                }
             }
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
