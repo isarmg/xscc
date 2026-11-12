@@ -213,7 +213,7 @@ impl Connection {
                     if !applied {
                         bail!("Virtual display rejected the requested resolution");
                     }
-                    return Ok(false);
+                    return Ok(true);
                 }
             }
             if mode.refresh_rate == 0 {
@@ -241,6 +241,7 @@ impl Connection {
             Ok(Ok(true)) => {
                 #[cfg(windows)]
                 self.prepare_session_display(index).await;
+                self.refresh_video_display(Some(index));
                 if let Some(message) =
                     video_service::make_display_changed_msg(index, None, VideoSource::Monitor)
                 {
