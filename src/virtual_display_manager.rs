@@ -340,7 +340,7 @@ pub mod rustdesk_idd {
     }
 
     pub fn reset_all() -> ResultType<()> {
-        if super::is_virtual_display_supported() {
+        if !super::is_virtual_display_supported() {
             return Ok(());
         }
 
