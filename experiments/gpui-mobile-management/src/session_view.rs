@@ -840,8 +840,8 @@ impl SessionView {
         if !self.frame_scheduled {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
-                view.consume(window, cx);
                 view.frame_scheduled = false;
+                view.consume(window, cx);
                 if view.session.is_some() && window.visibility() != gpui::WindowVisibility::Visible
                 {
                     return;
