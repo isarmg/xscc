@@ -317,7 +317,7 @@ impl Drop for PersistentDisplayChangeGuard {
     fn drop(&mut self) {
         if let Some(target) = self.preferred.take() {
             if let Err(error) = resume_locked(target) {
-                log::error!("Failed to restore temporary primary display: {error:#}");
+                hbb_common::log::error!("Failed to restore temporary primary display: {error:#}");
             }
         }
     }

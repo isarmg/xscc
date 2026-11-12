@@ -772,7 +772,7 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
             if result.is_ok() {
                 return Err(error);
             }
-            log::error!("Failed to restore temporary primary display: {error:#}");
+            hbb_common::log::error!("Failed to restore temporary primary display: {error:#}");
         }
         result?;
     } else {
