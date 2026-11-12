@@ -305,11 +305,21 @@ pub(crate) struct PersistentDisplayChangeGuard {
 }
 
 impl PersistentDisplayChangeGuard {
-    pub(crate) fn finish(self) -> ResultType<()> {
-        if let Some(target) = self.preferred {
+    pub(crate) fn finish(mut self) -> ResultType<()> {
+        if let Some(target) = self.preferred.take() {
             resume_locked(target)?;
         }
         Ok(())
+    }
+}
+
+impl Drop for PersistentDisplayChangeGuard {
+    fn drop(&mut self) {
+        if let Some(target) = self.preferred.take() {
+            if let Err(error) = resume_locked(target) {
+                log::error!("Failed to restore temporary primary display: {error:#}");
+            }
+        }
     }
 }
 

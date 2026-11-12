@@ -765,9 +765,18 @@ pub(super) fn plug_out_monitor(index: i32, force_all: bool) -> ResultType<()> {
         return configure_count(0, &[]);
     }
     let presentation = presentation::suspend_locked()?;
-    configure_count(u32::try_from(target)?, &[])?;
-    if let Some(target) = presentation {
-        presentation::resume_locked(target)?;
+    if let Some(presentation_target) = presentation {
+        let result = configure_count(u32::try_from(target)?, &[]);
+        let restore = presentation::resume_locked(presentation_target);
+        if let Err(error) = restore {
+            if result.is_ok() {
+                return Err(error);
+            }
+            log::error!("Failed to restore temporary primary display: {error:#}");
+        }
+        result?;
+    } else {
+        configure_count(u32::try_from(target)?, &[])?;
     }
     Ok(())
 }
