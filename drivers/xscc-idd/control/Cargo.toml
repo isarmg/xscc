@@ -1,0 +1,11 @@
+[package]
+name = "xscc-idd-control"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

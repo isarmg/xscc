@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{4DA47BB1-236D-44D1-9A7B-D90D01586ADC}</ProjectGuid>
+    <RootNamespace>xscc</RootNamespace>
+    <TargetName>XsccIdd</TargetName>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <XsccPackagesRoot Condition="'$(XsccPackagesRoot)' == ''">$(MSBuildThisFileDirectory)packages\</XsccPackagesRoot>
+    <XsccBuildRoot Condition="'$(XsccBuildRoot)' == ''">$(MSBuildThisFileDirectory)build\</XsccBuildRoot>
+    <SignMode>Off</SignMode>
+  </PropertyGroup>
+  <Import Project="$(XsccPackagesRoot)Microsoft.Windows.WDK.x64.10.0.26100.6584\build\native\Microsoft.Windows.WDK.x64.props" />
+  <Import Project="$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.x64.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.x64.props" />
+  <Import Project="$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.10.0.26100.6584\build\native\Microsoft.Windows.SDK.cpp.props" />
+  <PropertyGroup Label="PropertySheets">
+    <PlatformToolset>WindowsUserModeDriver10.0</PlatformToolset>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <DriverType>UMDF</DriverType>
+    <DriverTargetPlatform>Universal</DriverTargetPlatform>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <TargetVersion>Windows10</TargetVersion>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <UMDF_VERSION_MAJOR>2</UMDF_VERSION_MAJOR>
+    <UMDF_VERSION_MINOR>25</UMDF_VERSION_MINOR>
+    <IndirectDisplayDriver>true</IndirectDisplayDriver>
+    <IDDCX_VERSION_MAJOR>1</IDDCX_VERSION_MAJOR>
+    <IDDCX_VERSION_MINOR>10</IDDCX_VERSION_MINOR>
+    <CharacterSet>Unicode</CharacterSet>
+    <ApiValidator_Enable>true</ApiValidator_Enable>
+    <SkipPackageVerification>false</SkipPackageVerification>
+    <EnableInf2cat>true</EnableInf2cat>
+    <Inf2CatUseLocalTime>false</Inf2CatUseLocalTime>
+    <RunCodeAnalysis>true</RunCodeAnalysis>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <OutDir>$(XsccBuildRoot)bin\</OutDir>
+    <IntDir>$(XsccBuildRoot)obj\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <Optimization>MaxSpeed</Optimization>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <WarningLevel>Level4</WarningLevel>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalOptions>/external:I"$(XsccPackagesRoot)Microsoft.Windows.WDK.x64.10.0.26100.6584\c\Include" /external:I"$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.10.0.26100.6584\c\Include" /external:templates- %(AdditionalOptions)</AdditionalOptions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <WppEnabled>false</WppEnabled>
+      <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;UMDF_DRIVER;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ProgramDatabaseFile>$(OutDir)XsccIdd.pdb</ProgramDatabaseFile>
+    </Link>
+    <DriverSign>
+      <FileDigestAlgorithm>sha256</FileDigestAlgorithm>
+    </DriverSign>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="Driver.cpp" />
+    <ClCompile Include="SwapChainSession.cpp" />
+    <ClInclude Include="SwapChainSession.h" />
+    <ClInclude Include="ControlProtocol.h" />
+    <ClInclude Include="ModeTiming.h" />
+    <Inf Include="XsccIdd.inf" />
+    <None Include="packages.config" />
+    <None Include="ModeTimingTests.cpp" />
+    <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="XsccRequireUnsignedBuild" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(SignMode)' != 'Off'" Text="XsccIdd is build-only; SignMode must be Off. No certificate may be created or used." />
+    <Error Condition="'$(Configuration)|$(Platform)' != 'Release|x64'" Text="This initial XsccIdd build supports only Release|x64." />
+    <Error Condition="'$(ApiValidator_Enable)' != 'true' or '$(SkipPackageVerification)' != 'false'" Text="XsccIdd requires API and INF package validation." />
+  </Target>
+  <Target Name="XsccRequireApiValidation" AfterTargets="Build">
+    <Error Condition="'$(ApiValidator_ExitCode)' != '0'" Text="XsccIdd API validation failed or did not run (exit=$(ApiValidator_ExitCode))." />
+    <Message Importance="High" Text="XSCC_IDD_API_VALIDATION=passed" />
+  </Target>
+</Project>
