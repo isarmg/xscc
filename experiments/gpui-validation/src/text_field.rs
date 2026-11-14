@@ -95,6 +95,7 @@ impl TextField {
         }
     }
 
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
     pub fn with_session_palette(mut self, palette: theme::Palette) -> Self {
         self.session_palette = Some(palette);
         self
