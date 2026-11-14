@@ -24,7 +24,7 @@ use hwcodec::{
     ffmpeg_ram::{
         decode::{DecodeContext, DecodeFrame, Decoder},
         encode::{EncodeContext, EncodeFrame, Encoder},
-        ffmpeg_linesize_offset_length, CodecInfo,
+        CodecInfo,
     },
 };
 
@@ -426,51 +426,54 @@ impl HwRamDecoderImage<'_> {
         rgb.raw.resize(rgb.h * bytes_per_row, 0);
         match frame.pixfmt {
             AVPixelFormat::AV_PIX_FMT_NV12 => {
-                // I420ToARGB is much faster than NV12ToARGB in tests on Windows
+                // Keep the existing I420 route in small even-row blocks, without allocating an AVFrame for layout.
                 if cfg!(windows) {
-                    let Ok((linesize_i420, offset_i420, len_i420)) = ffmpeg_linesize_offset_length(
-                        AVPixelFormat::AV_PIX_FMT_YUV420P,
-                        width as _,
-                        height as _,
-                        HW_STRIDE_ALIGN,
-                    ) else {
-                        bail!("failed to get i420 linesize, offset, length");
-                    };
-                    i420.resize(len_i420 as _, 0);
-                    let i420_offset_y = unsafe { i420.as_ptr().add(0) as _ };
-                    let i420_offset_u = unsafe { i420.as_ptr().add(offset_i420[0] as _) as _ };
-                    let i420_offset_v = unsafe { i420.as_ptr().add(offset_i420[1] as _) as _ };
-                    call_yuv!(NV12ToI420(
-                        frame.data[0].as_ptr(),
-                        frame.linesize[0],
-                        frame.data[1].as_ptr(),
-                        frame.linesize[1],
-                        i420_offset_y,
-                        linesize_i420[0],
-                        i420_offset_u,
-                        linesize_i420[1],
-                        i420_offset_v,
-                        linesize_i420[2],
-                        width,
-                        height,
-                    ));
+                    const ROWS: usize = 32;
+                    let stride_y = rgb.w;
+                    let stride_uv = rgb.w.div_ceil(2);
+                    let rows = rgb.h.min(ROWS);
+                    let offset_u = stride_y * rows;
+                    let offset_v = offset_u + stride_uv * rows.div_ceil(2);
+                    i420.resize(offset_v + stride_uv * rows.div_ceil(2), 0);
+                    let y = i420.as_mut_ptr();
+                    let u = unsafe { y.add(offset_u) };
+                    let v = unsafe { y.add(offset_v) };
                     let f = match rgb.fmt() {
                         ImageFormat::ARGB => I420ToARGB,
                         ImageFormat::ABGR => I420ToABGR,
                         _ => bail!("unsupported format: {:?} -> {:?}", frame.pixfmt, rgb.fmt()),
                     };
-                    call_yuv!(f(
-                        i420_offset_y,
-                        linesize_i420[0],
-                        i420_offset_u,
-                        linesize_i420[1],
-                        i420_offset_v,
-                        linesize_i420[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        width,
-                        height,
-                    ));
+                    for row in (0..rgb.h).step_by(ROWS) {
+                        let rows = (rgb.h - row).min(ROWS) as i32;
+                        call_yuv!(NV12ToI420(
+                            frame.data[0].as_ptr().add(row * frame.linesize[0] as usize),
+                            frame.linesize[0],
+                            frame.data[1]
+                                .as_ptr()
+                                .add((row / 2) * frame.linesize[1] as usize),
+                            frame.linesize[1],
+                            y,
+                            stride_y as i32,
+                            u,
+                            stride_uv as i32,
+                            v,
+                            stride_uv as i32,
+                            width,
+                            rows,
+                        ));
+                        call_yuv!(f(
+                            y,
+                            stride_y as i32,
+                            u,
+                            stride_uv as i32,
+                            v,
+                            stride_uv as i32,
+                            rgb.raw.as_mut_ptr().add(row * bytes_per_row),
+                            bytes_per_row as i32,
+                            width,
+                            rows,
+                        ));
+                    }
                 } else {
                     let f = match rgb.fmt() {
                         ImageFormat::ARGB => NV12ToARGB,
@@ -718,4 +721,70 @@ pub fn start_check_process() {
     ONCE.call_once(|| {
         std::thread::spawn(f);
     });
+}
+
+#[cfg(all(test, windows))]
+mod nv12_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn staged_nv12_keeps_pixels_strides_and_bounds_scratch() {
+        for (width, height) in [
+            (1usize, 1usize),
+            (31, 31),
+            (33, 33),
+            (1921, 129),
+            (1920, 1080),
+        ] {
+            let y_stride = width + 16;
+            let uv_stride = width.div_ceil(2) * 2 + 32;
+            let frame = DecodeFrame {
+                pixfmt: AVPixelFormat::AV_PIX_FMT_NV12,
+                width: width as i32,
+                height: height as i32,
+                data: vec![
+                    (0..y_stride * height)
+                        .map(|i| (i * 37 + i / y_stride) as u8)
+                        .collect(),
+                    (0..uv_stride * height.div_ceil(2))
+                        .map(|i| (i * 19 + 71) as u8)
+                        .collect(),
+                ],
+                linesize: vec![y_stride as i32, uv_stride as i32],
+                key: false,
+            };
+            for format in [ImageFormat::ARGB, ImageFormat::ABGR] {
+                let mut image = ImageRgb::new(format, 16);
+                let mut scratch = Vec::new();
+                HwRamDecoderImage { frame: &frame }
+                    .to_fmt(&mut image, &mut scratch)
+                    .unwrap();
+                let stride = (width * 4 + 15) & !15;
+                let mut expected = vec![0; stride * height];
+                let reference = match format {
+                    ImageFormat::ARGB => NV12ToARGB,
+                    ImageFormat::ABGR => NV12ToABGR,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    unsafe {
+                        reference(
+                            frame.data[0].as_ptr(),
+                            y_stride as i32,
+                            frame.data[1].as_ptr(),
+                            uv_stride as i32,
+                            expected.as_mut_ptr(),
+                            stride as i32,
+                            width as i32,
+                            height as i32,
+                        )
+                    },
+                    0
+                );
+                assert_eq!((image.w, image.h), (width, height));
+                assert_eq!(image.raw, expected);
+                assert!(scratch.len() <= width * 64);
+            }
+        }
+    }
 }
