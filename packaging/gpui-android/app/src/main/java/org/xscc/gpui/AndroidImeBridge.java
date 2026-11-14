@@ -83,8 +83,8 @@ public class AndroidImeBridge extends GameActivity {
         try {
             closeEditorConnection();
             if (editor != null) { editor.hideEditor(); }
-            // Invalidate old connections before a hide/restart can call closeConnection.
-            imeSurface.connection.setSoftKeyboardActive(false, 0);
+            // A corrected remote-input anchor must not dismiss the still-active IME.
+            if (!show) { imeSurface.connection.setSoftKeyboardActive(false, 0); }
             EditorInfo info = new EditorInfo();
             info.inputType = inputType;
             info.actionId = action;

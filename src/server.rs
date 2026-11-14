@@ -471,9 +471,15 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         wait_initial_config_sync().await;
         #[cfg(target_os = "windows")]
         crate::platform::try_kill_broker();
-        #[cfg(all(feature = "hwcodec", not(feature = "gpui-session")))]
+        #[cfg(all(
+            feature = "hwcodec",
+            not(any(feature = "gpui-session", feature = "gpui-host"))
+        ))]
         scrap::hwcodec::start_check_process();
-        #[cfg(all(feature = "hwcodec", feature = "gpui-session"))]
+        #[cfg(all(
+            feature = "hwcodec",
+            any(feature = "gpui-session", feature = "gpui-host")
+        ))]
         if let Err(error) = tokio::task::spawn_blocking(crate::client::get_hwcodec_config).await {
             log::warn!("Local hardware codec probe task failed: {error}");
         }

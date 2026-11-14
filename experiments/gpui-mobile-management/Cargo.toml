@@ -44,6 +44,7 @@ log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+base = { path = "../../libs/base" }
 
 # Host scene tests exercise the same core Image/Taffy implementation as mobile.
 # Keep test infrastructure outside Android/iOS checks and all production builds.

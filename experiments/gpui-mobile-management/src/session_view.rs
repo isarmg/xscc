@@ -841,9 +841,9 @@ impl SessionView {
         {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
-                // Coalesce updates into this callback instead of scheduling idle vsyncs.
-                view.consume(window, cx);
+                // Native video surfaces also need the session pump between RGBA notifications.
                 view.frame_scheduled = false;
+                view.consume(window, cx);
                 if view.session.is_some() && window.visibility() != gpui::WindowVisibility::Visible
                 {
                     return;

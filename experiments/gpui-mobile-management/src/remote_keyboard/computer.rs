@@ -236,6 +236,23 @@ impl RemoteKeyboard {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .on_scroll_wheel(cx.listener(
+                        |view, event: &gpui::ScrollWheelEvent, window, cx| {
+                            let delta = event.delta.pixel_delta(window.line_height());
+                            if matches!(
+                                event.touch_phase,
+                                gpui::TouchPhase::Started | gpui::TouchPhase::Moved
+                            ) && delta.x.abs() > delta.y.abs()
+                            {
+                                let second = delta.x < px(0.);
+                                if view.computer_second_page != second {
+                                    view.computer_second_page = second;
+                                    cx.notify();
+                                }
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
                     .child(body),
             )
             .child(pages.flex_shrink_0())
@@ -526,4 +543,68 @@ fn portrait_symbol_rows() -> Vec<Vec<(&'static str, Key)>> {
             ("→", K(RightArrow)),
         ],
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote_keyboard::{KeyboardControl, KeyboardPage};
+    use base::message_proto::key_event;
+    use gpui_test_support::{TestAppContext, TouchEvent, TouchId, TouchPhase, point, size};
+    use std::{cell::RefCell, rc::Rc};
+
+    #[gpui_test_support::test]
+    fn horizontal_swipes_change_keys_without_typing(cx: &mut TestAppContext) {
+        let (keyboard, cx) = cx.add_window_view(|window, cx| {
+            let control = KeyboardControl::new(true);
+            control.configure(true, true, true);
+            let mut view = RemoteKeyboard::new(control, window, cx);
+            view.page = KeyboardPage::Keys;
+            view
+        });
+        cx.simulate_resize(size(px(320.), px(640.)));
+        let sent = Rc::new(RefCell::new(Vec::new()));
+        let output = sent.clone();
+        let _subscription = cx.update(|window, cx| {
+            window.subscribe(&keyboard, cx, move |_, event, _, _| {
+                for command in &event.commands {
+                    if let Command::Chord(event) = command {
+                        let value = match event.union.as_ref().expect("key") {
+                            key_event::Union::Chr(value) => *value as i32,
+                            key_event::Union::ControlKey(value) => -value.value(),
+                            _ => panic!("unexpected key"),
+                        };
+                        output.borrow_mut().push(value);
+                    }
+                }
+            })
+        });
+        for (start, end, expected) in [
+            (240., 60., -(ControlKey::F1 as i32)),
+            (60., 240., '1' as i32),
+        ] {
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let before = sent.borrow().len();
+            for (phase, x) in [
+                (TouchPhase::Started, start),
+                (TouchPhase::Moved, end),
+                (TouchPhase::Ended, end),
+            ] {
+                if phase == TouchPhase::Ended {
+                    cx.executor()
+                        .advance_clock(std::time::Duration::from_millis(200));
+                }
+                cx.simulate_event(TouchEvent {
+                    id: TouchId(1),
+                    phase,
+                    position: point(px(x), px(110.)),
+                    ..TouchEvent::default()
+                });
+            }
+            assert_eq!(sent.borrow().len(), before, "swiping typed a key");
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            cx.simulate_click(point(px(20.), px(110.)), gpui::Modifiers::default());
+            assert_eq!(sent.borrow().last(), Some(&expected));
+        }
+    }
 }

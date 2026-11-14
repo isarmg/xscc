@@ -121,6 +121,7 @@ import com.google.androidgamesdk.GameActivity;
 public class InputConnection extends BaseInputConnection implements View.OnKeyListener {
     public State state = new State("", 0, 0, -1, -1);
     public int edits;
+    public int hideRequests;
     private boolean visible;
     private int batchDepth;
     private boolean dirty;
@@ -131,7 +132,7 @@ public class InputConnection extends BaseInputConnection implements View.OnKeyLi
         this.view = view; this.info = settings.info; view.setOnKeyListener(this);
     }
     public final InputConnection setListener(GameActivity listener) { this.listener = listener; return this; }
-    public final void setSoftKeyboardActive(boolean visible, int flags) { this.visible = visible; if (!visible) restartInput(); }
+    public final void setSoftKeyboardActive(boolean visible, int flags) { this.visible = visible; if (!visible) { ++hideRequests; restartInput(); } }
     public final boolean getSoftKeyboardActive() { return visible; }
     public final EditorInfo getEditorInfo() { return info; }
     public final void setEditorInfo(EditorInfo info) { this.info = info; }
@@ -260,7 +261,10 @@ public final class BridgeTest extends AndroidImeBridge {
         bridge.onEditorAction(9);
         check(callbacks() == count, "untagged callback accepted");
         check(surface.dispatchKeyEvent(new KeyEvent()) && lastGeneration() == 12, "hardware source");
+        int hidesBeforeCorrection = bridge.original.hideRequests;
         bridge.configureIme(13, 1, 6, 0, "updated", 7, 7, -1, -1, true);
+        check(bridge.original.hideRequests == hidesBeforeCorrection,
+                "same-field correction dismissed the active keyboard");
         rejectEveryMethod(current);
         current = surface.onCreateInputConnection(new EditorInfo());
         check(current.commitText("new", 1) && lastGeneration() == 13, "same-field replacement");
