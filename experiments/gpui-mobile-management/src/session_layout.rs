@@ -57,21 +57,17 @@ pub fn place_rail(
 
 pub fn keyboard_overlay(layout: &mut SessionLayout, height: f32, ime: f32) {
     let bottom = (height - ime).max(0.);
-    if layout.rail.width > layout.rail.height {
-        layout.rail.y = (bottom - layout.rail.height).max(0.);
-    }
     if let Some(keyboard) = &mut layout.keyboard {
-        let end = if layout.rail.width > layout.rail.height {
-            layout.rail.y
-        } else {
-            bottom
-        };
-        keyboard.height = keyboard.height.min(end);
-        keyboard.y = end - keyboard.height;
+        keyboard.height = keyboard.height.min(bottom);
+        keyboard.y = bottom - keyboard.height;
     }
     layout.stage.height = height;
     layout.viewport.height = height;
-    layout.video.height = height;
+    layout.video.height = if layout.rail.width > layout.rail.height {
+        (height - layout.rail.height).max(0.)
+    } else {
+        height
+    };
 }
 
 pub fn pan_for_keyboard(
@@ -526,11 +522,17 @@ mod tests {
     #[test]
     fn keyboard_overlays_full_size_video_and_pans_in_both_directions() {
         for (width, height, ime) in [(800., 360., 180.), (393., 873., 330.)] {
+            let before = layout(width, height, true, Panel::None, false, 0.).video;
             let mut layout = layout(width, height, true, Panel::Keyboard, false, 36.);
             keyboard_overlay(&mut layout, height, ime);
+            let keyboard = layout.keyboard.unwrap();
+            assert_eq!(keyboard.y + keyboard.height, height - ime);
             let size = (layout.video.width, layout.video.height);
             assert_eq!(layout.stage.height, height);
-            assert_eq!(layout.video.height, height);
+            assert_eq!(
+                (layout.video.width, layout.video.height),
+                (before.width, before.height)
+            );
             let mut offset = 0.;
             pan_for_keyboard(&mut layout, (1920, 1080), 1079, &mut offset);
             assert!(offset < 0., "bottom pointer must clear the keyboard");

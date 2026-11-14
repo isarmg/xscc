@@ -830,7 +830,11 @@ impl Render for SessionChrome {
         if let Some(panel) = self.model.layout.panel {
             chrome = chrome.child(self.panel(panel, window, cx));
         }
-        chrome.child(self.rail(window, cx))
+        if self.model.panel == Panel::Keyboard {
+            chrome
+        } else {
+            chrome.child(self.rail(window, cx))
+        }
     }
 }
 
