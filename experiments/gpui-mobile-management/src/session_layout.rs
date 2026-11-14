@@ -41,8 +41,16 @@ pub fn place_rail(
     height: f32,
 ) {
     if let Some((x, y)) = position {
-        layout.rail.x = (width - layout.rail.width).max(0.) * f32::from(x) / 10_000.;
-        layout.rail.y = (height - layout.rail.height).max(0.) * f32::from(y) / 10_000.;
+        let margin_x = 16_f32.min((width - layout.rail.width).max(0.) / 2.);
+        let margin_y = 16_f32.min((height - layout.rail.height).max(0.) / 2.);
+        layout.rail.x = ((width - layout.rail.width).max(0.) * f32::from(x) / 10_000.).clamp(
+            margin_x,
+            (width - layout.rail.width - margin_x).max(margin_x),
+        );
+        layout.rail.y = ((height - layout.rail.height).max(0.) * f32::from(y) / 10_000.).clamp(
+            margin_y,
+            (height - layout.rail.height - margin_y).max(margin_y),
+        );
     }
 }
 
@@ -70,7 +78,7 @@ pub fn layout(
     } else {
         0.
     };
-    let available_width = (width - rail_width - if rail_expanded { 8. } else { 0. }).max(0.);
+    let available_width = (width - rail_width).max(0.);
     let options = matches!(panel, Panel::Operations | Panel::Display);
     let side_width = if options && width >= 640. {
         320_f32
@@ -103,18 +111,26 @@ pub fn layout(
             height
         },
     };
-    let video = stage;
+    let video = if rail_expanded {
+        Rect {
+            x: rail_width,
+            width: (width - 2. * rail_width).max(0.),
+            ..stage
+        }
+    } else {
+        stage
+    };
     let rail = if rail_expanded {
         Rect {
             x: available_width,
-            y: 8_f32.min(height),
+            y: 0.,
             width: rail_width,
-            height: 294_f32.min((height - 16.).max(0.)),
+            height,
         }
     } else {
         let size = 44_f32.min(width).min(height);
-        let right = 8_f32.min((width - size).max(0.));
-        let top = 8_f32.min((height - size).max(0.));
+        let right = 16_f32.min((width - size).max(0.));
+        let top = 16_f32.min((height - size).max(0.));
         Rect {
             x: width - size - right,
             y: top,
@@ -144,24 +160,23 @@ pub fn layout(
     let keyboard = (panel == Panel::Keyboard).then_some(Rect {
         x: 0.,
         y: control_height,
-        width,
+        width: available_width,
         height: bottom_height,
     });
     let (rail, control_panel, keyboard, stage, video, control_width, control_height) =
         if height > width {
-            let rail_height = if rail_expanded { 56_f32 } else { 44_f32 }.min(height);
-            let vertical_margin = 8_f32.min((height - rail_height).max(0.) / 2.);
-            let rail_width = if rail_expanded { 294_f32 } else { 44_f32 }.min(width);
-            let horizontal_margin = 8_f32.min((width - rail_width).max(0.) / 2.);
-            let rail = Rect {
-                x: if rail_expanded {
-                    (width - rail_width) / 2.
-                } else {
-                    width - rail_width - horizontal_margin
-                },
-                y: height - rail_height - vertical_margin,
-                width: rail_width,
-                height: rail_height,
+            let rail = if rail_expanded {
+                rail
+            } else {
+                let size = 44_f32.min(width).min(height);
+                let margin_x = 16_f32.min((width - size).max(0.));
+                let margin_y = 16_f32.min((height - size).max(0.));
+                Rect {
+                    x: width - size - margin_x,
+                    y: height - size - margin_y,
+                    width: size,
+                    height: size,
+                }
             };
             let requested_height = if panel == Panel::Keyboard {
                 if keyboard_height.is_finite() {
@@ -172,12 +187,16 @@ pub fn layout(
             } else {
                 320_f32.min(height * 0.48)
             };
-            let panel_bottom = (rail.y - 8.).max(0.);
+            let panel_bottom = if rail_expanded {
+                height
+            } else {
+                (rail.y - 8.).max(0.)
+            };
             let panel_height = requested_height.min((panel_bottom - 44.).max(0.));
             let bottom = Rect {
                 x: 0.,
                 y: panel_bottom - panel_height,
-                width,
+                width: available_width,
                 height: panel_height,
             };
             let stage = Rect {
@@ -193,8 +212,11 @@ pub fn layout(
                 options.then_some(bottom),
                 (panel == Panel::Keyboard).then_some(bottom),
                 stage,
-                stage,
-                width,
+                Rect {
+                    height: stage.height,
+                    ..video
+                },
+                available_width,
                 stage.height.min(panel_bottom),
             )
         } else {
@@ -295,19 +317,23 @@ mod tests {
                         assert_eq!(layout.stage.x, baseline.stage.x);
                         assert_eq!(layout.stage.width, baseline.stage.width);
                         assert!(layout.stage.height <= baseline.stage.height);
-                        assert_eq!(layout.video, layout.stage);
+                        assert_eq!(layout.video.height, layout.stage.height);
+                        assert_eq!(layout.video.x + layout.video.width / 2., width / 2.);
                     } else if panel == Panel::Keyboard {
                         assert_eq!(layout.stage.width, baseline.stage.width);
                         assert_eq!(
                             layout.stage.height + layout.keyboard.unwrap().height,
                             height
                         );
-                        assert_eq!(layout.video, layout.stage);
+                        assert_eq!(layout.video.height, layout.stage.height);
+                        assert_eq!(layout.video.x + layout.video.width / 2., width / 2.);
                     } else {
-                        assert_eq!(layout.video, baseline.video);
+                        assert_eq!(layout.video.height, baseline.video.height);
+                        assert_eq!(layout.video.x + layout.video.width / 2., width / 2.);
                         assert_eq!(layout.stage, baseline.stage);
                     }
-                    assert_eq!(layout.video, layout.viewport);
+                    assert_eq!(layout.video.height, layout.viewport.height);
+                    assert_eq!(layout.video.x + layout.video.width / 2., width / 2.);
                     for control in [Some(layout.rail), layout.panel, layout.keyboard]
                         .into_iter()
                         .flatten()
@@ -318,9 +344,7 @@ mod tests {
                     }
                     if expanded {
                         if let Some(panel) = layout.panel.or(layout.keyboard) {
-                            if !(height <= width && layout.keyboard.is_some()) {
-                                assert!(!overlaps(panel, layout.rail));
-                            }
+                            assert!(!overlaps(panel, layout.rail));
                         }
                     }
                 }
@@ -337,8 +361,8 @@ mod tests {
             assert_eq!(
                 layout.rail,
                 Rect {
-                    x: width - 52.,
-                    y: if height > width { height - 52. } else { 8. },
+                    x: width - 60.,
+                    y: if height > width { height - 60. } else { 16. },
                     width: 44.,
                     height: 44.,
                 }
@@ -347,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn portrait_bottom_controls_leave_a_full_width_uncovered_remote_viewport() {
+    fn portrait_dock_and_bottom_panels_keep_the_image_centered_and_uncovered() {
         let baseline = layout(393., 873., false, Panel::None, false, 88.);
         for panel in [
             Panel::None,
@@ -360,9 +384,12 @@ mod tests {
                 assert_eq!(layout.stage.x, 0.);
                 assert_eq!(layout.stage.width, baseline.stage.width);
                 assert_eq!(layout.viewport, layout.stage);
-                assert_eq!(layout.video, layout.stage);
+                assert_eq!(layout.video.x + layout.video.width / 2., 393. / 2.);
                 if expanded {
-                    assert!(layout.rail.width > layout.rail.height);
+                    assert_eq!(layout.rail.y, 0.);
+                    assert_eq!(layout.rail.height, 873.);
+                    assert_eq!(layout.rail.x + layout.rail.width, 393.);
+                    assert!(!overlaps(layout.video, layout.rail));
                 }
                 if let Some(mouse) = layout.mouse {
                     for button in [mouse.left, mouse.middle, mouse.right, mouse.wheel] {
@@ -376,9 +403,9 @@ mod tests {
                     assert!(!overlaps(bottom, layout.rail));
                     assert!(!overlaps(bottom, layout.video));
                     assert_eq!(layout.video.y + layout.video.height, bottom.y);
-                    assert!(bottom.y + bottom.height <= layout.rail.y - 8.);
+                    assert!(bottom.y + bottom.height <= 873.);
                 } else {
-                    assert_eq!(layout.video, baseline.video);
+                    assert_eq!(layout.video.height, baseline.video.height);
                 }
             }
         }
@@ -413,10 +440,13 @@ mod tests {
         }
         let full = layout(1280., 576., false, Panel::None, true, 88.);
         assert_eq!(full.video.height, 576.);
+        let docked = layout(1280., 576., true, Panel::None, true, 88.);
+        assert_eq!(full.video.height, docked.video.height);
         assert_eq!(
-            full.video,
-            layout(1280., 576., true, Panel::None, true, 88.).video
+            full.video.x + full.video.width / 2.,
+            docked.video.x + docked.video.width / 2.
         );
+        assert!(!overlaps(docked.video, docked.rail));
     }
 
     #[test]

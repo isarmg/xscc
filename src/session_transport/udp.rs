@@ -2045,7 +2045,7 @@ async fn host_media(
                         // Idle restart windows and large IDRs are not evidence of a slow path.
                         let backlogged = current.as_ref().is_some_and(|frame|
                             !frame.plan.descriptor().metadata.keyframe
-                                && now.saturating_duration_since(frame.queued) >= Duration::from_millis(75));
+                                && frame.deadline.saturating_duration_since(now) <= Duration::from_millis(25));
                         if backlogged || (previous != 0 && estimate > previous) {
                             bitrate_budget.store(estimate, Ordering::Release);
                         }

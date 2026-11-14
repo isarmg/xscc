@@ -1,5 +1,5 @@
 use super::{ChromeAction, SessionChrome};
-use crate::session_layout::{Panel, Rect};
+use crate::session_layout::Rect;
 use gpui::{
     Bounds, Context, HitboxBehavior, IntoElement, Pixels, TouchEvent, TouchId, TouchPhase, canvas,
     prelude::*,
@@ -59,43 +59,7 @@ impl SessionChrome {
     ) {
         let position = (f32::from(event.position.x), f32::from(event.position.y));
         if event.phase == TouchPhase::Started {
-            let model = &self.model;
-            let action = if !model.rail_expanded {
-                Some(ChromeAction::ToggleRail)
-            } else {
-                let offset = if bounds.size.width > bounds.size.height {
-                    f32::from(event.position.x - bounds.origin.x)
-                } else {
-                    f32::from(event.position.y - bounds.origin.y)
-                } - 4.;
-                let index = (offset / 48.).floor() as i32;
-                let in_button = offset >= 0. && offset % 48. < 44.;
-                match (in_button, index) {
-                    (true, 0..=2) => {
-                        let panel =
-                            [Panel::Operations, Panel::Keyboard, Panel::Display][index as usize];
-                        let enabled = match panel {
-                            Panel::Keyboard => {
-                                model.connected
-                                    && model.can_control
-                                    && !model.view_only
-                                    && model.pending_monitor.is_none()
-                            }
-                            Panel::Display => model.connected,
-                            _ => true,
-                        };
-                        enabled.then_some(if panel == model.panel {
-                            ChromeAction::ClosePanel
-                        } else {
-                            ChromeAction::OpenPanel(panel)
-                        })
-                    }
-                    (true, 3) => Some(ChromeAction::RotateScreen),
-                    (true, 4) => Some(ChromeAction::Exit),
-                    (true, 5) => Some(ChromeAction::ToggleRail),
-                    _ => None,
-                }
-            };
+            let action = Some(ChromeAction::ToggleRail);
             self.rail_gesture = Some(Gesture {
                 id: event.id,
                 started: now,

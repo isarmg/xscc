@@ -261,10 +261,11 @@ impl SessionChrome {
         if !model.rail_expanded {
             return at(model.layout.rail)
                 .id("session-rail-expand")
+                .debug_selector(|| "session-rail-expand".into())
                 .role(Role::Button)
                 .aria_label("展开操控栏")
                 .aria_expanded(false)
-                .rounded(px(12.))
+                .rounded_full()
                 .bg(rgb(PAGE))
                 .border_1()
                 .border_color(rgb(0xffffff))
@@ -281,24 +282,13 @@ impl SessionChrome {
                     cx.stop_propagation();
                 }));
         }
-        let mut rail = at(model.layout.rail)
-            .id("session-control-rail")
-            .rounded(px(18.))
-            .border_1()
-            .border_color(rgb(0xffffff))
-            .bg(rgb(PAGE))
+        let mut rail = div()
+            .w_full()
+            .min_h_full()
             .flex()
+            .flex_col()
             .items_center()
-            .gap_1()
-            .py_1()
-            .when(model.layout.rail.width > model.layout.rail.height, |rail| {
-                rail.flex_row().px_1().overflow_x_scroll()
-            })
-            .when(
-                model.layout.rail.width <= model.layout.rail.height,
-                |rail| rail.flex_col().overflow_y_scroll(),
-            )
-            .occlude();
+            .gap_1();
         for (id, label, icon, panel, enabled) in [
             (
                 "session-operations",
@@ -333,31 +323,47 @@ impl SessionChrome {
             };
             rail = rail.child(self.rail_button(cx, id, label, icon, (selected, enabled), action));
         }
-        rail.child(self.rail_button(
-            cx,
-            "session-rotate",
-            "旋转屏幕",
-            Glyph::Rotate,
-            (false, true),
-            ChromeAction::RotateScreen,
-        ))
-        .child(self.rail_button(
-            cx,
-            "session-exit",
-            "退出",
-            Glyph::Exit,
-            (false, true),
-            ChromeAction::Exit,
-        ))
-        .child(self.rail_button(
-            cx,
-            "session-rail-collapse",
-            "收起",
-            Glyph::Collapse,
-            (false, true),
-            ChromeAction::ToggleRail,
-        ))
-        .child(self.rail_touch(cx))
+        rail = rail
+            .child(self.rail_button(
+                cx,
+                "session-rotate",
+                "旋转屏幕",
+                Glyph::Rotate,
+                (false, true),
+                ChromeAction::RotateScreen,
+            ))
+            .child(self.rail_button(
+                cx,
+                "session-exit",
+                "退出",
+                Glyph::Exit,
+                (false, true),
+                ChromeAction::Exit,
+            ))
+            .child(self.rail_button(
+                cx,
+                "session-rail-collapse",
+                "收起",
+                Glyph::Collapse,
+                (false, true),
+                ChromeAction::ToggleRail,
+            ));
+        at(model.layout.rail)
+            .id("session-control-rail")
+            .bg(rgb(0x2b2d31))
+            .flex()
+            .flex_col()
+            .py(px(24.))
+            .occlude()
+            .child(
+                div()
+                    .id("session-docked-controls")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll()
+                    .child(rail),
+            )
     }
 
     fn rail_button(
@@ -371,6 +377,7 @@ impl SessionChrome {
     ) -> Stateful<Div> {
         div()
             .id(id)
+            .debug_selector(move || id.into())
             .role(Role::Button)
             .aria_label(label.to_owned())
             .aria_selected(state.0)
@@ -1103,7 +1110,7 @@ mod rail_tests {
         });
         for ((x, y), end, expected_toggles, expected_remote) in [
             ((290., 610.), TouchPhase::Ended, 1, 0),
-            ((280., 604.), TouchPhase::Ended, 2, 0),
+            ((292., 286.), TouchPhase::Ended, 2, 0),
             ((290., 400.), TouchPhase::Ended, 2, 2),
             ((290., 610.), TouchPhase::Cancelled, 2, 2),
             ((290., 610.), TouchPhase::Ended, 3, 2),
@@ -1210,7 +1217,7 @@ mod rail_tests {
                 cx.simulate_event(TouchEvent {
                     id: TouchId(1),
                     phase,
-                    position: point(px(184.), px(604.)),
+                    position: point(px(292.), px(190.)),
                     ..TouchEvent::default()
                 });
             }
@@ -1219,7 +1226,11 @@ mod rail_tests {
             cx.update(|_, cx| {
                 let layout = chrome.read(cx).model.layout;
                 assert_eq!(layout.stage, layout.viewport);
-                assert_eq!(layout.video, layout.viewport);
+                assert_eq!(layout.video.height, layout.viewport.height);
+                assert_eq!(
+                    layout.video.x + layout.video.width / 2.,
+                    layout.viewport.width / 2.
+                );
             });
         }
     }

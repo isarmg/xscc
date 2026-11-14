@@ -206,7 +206,7 @@ impl SessionView {
             pending_monitor: None,
             pending_virtual: None,
             connected: false,
-            rail_expanded: true,
+            rail_expanded: false,
             panel: Panel::None,
             mouse_buttons: true,
             keyboard_page: KeyboardPage::Input,
@@ -264,7 +264,7 @@ impl SessionView {
         self.controls_idle.take();
         self.entry_pending = None;
         self.panel = Panel::None;
-        self.rail_expanded = true;
+        self.rail_expanded = false;
         self.prepared_cursor = PreparedCursor::default();
         self.target_fps = None;
         self.quality = SessionQuality::default();
@@ -1476,12 +1476,14 @@ impl Render for SessionView {
             self.input.mode() == InputMode::Pointer && self.mouse_buttons && self.input_allowed(),
             keyboard_height,
         );
-        session_layout::place_rail(
-            &mut layout,
-            self.rail_position,
-            visible.width.into(),
-            visible.height.into(),
-        );
+        if !self.rail_expanded {
+            session_layout::place_rail(
+                &mut layout,
+                self.rail_position,
+                visible.width.into(),
+                visible.height.into(),
+            );
+        }
         if self.layout != layout {
             self.layout = layout;
             self.publish_chrome(cx);
