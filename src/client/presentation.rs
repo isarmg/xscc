@@ -1,8 +1,7 @@
 use std::time::Duration;
 
-// Android GPUI already coalesces its bounded latest-frame mailbox at Choreographer vsync.
-pub(super) const DECODE_TIME_PACING: bool =
-    !cfg!(all(target_os = "android", feature = "gpui-session"));
+// GPUI coalesces its bounded latest-frame mailbox when the window renders.
+pub(super) const DECODE_TIME_PACING: bool = !cfg!(feature = "gpui-session");
 
 pub(super) fn should_present(
     enabled: bool,
@@ -20,7 +19,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn ui_pacing_preserves_decoded_frames_with_jitter() {
+    fn gpui_pacing_preserves_decoded_frames_with_jitter() {
         let interval = Duration::from_secs_f64(1.0 / 120.);
         let admitted = |decode_time_pacing| {
             let mut since_presented = Duration::ZERO;
@@ -36,9 +35,9 @@ mod tests {
         };
         assert_eq!(admitted(false), [true, true, true, true]);
         assert_eq!(admitted(true), [false, true, false, true]);
-        #[cfg(all(target_os = "android", feature = "gpui-session"))]
+        #[cfg(feature = "gpui-session")]
         assert_eq!(admitted(DECODE_TIME_PACING), [true, true, true, true]);
-        #[cfg(not(all(target_os = "android", feature = "gpui-session")))]
+        #[cfg(not(feature = "gpui-session"))]
         assert_eq!(admitted(DECODE_TIME_PACING), [false, true, false, true]);
     }
 

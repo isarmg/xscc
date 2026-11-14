@@ -180,8 +180,8 @@ jobs:
             "$RUNNER_TEMP/gpui-decode-capacity-tests" --exact "$name"
           done
           printf '#[path = "%s/src/client/presentation.rs"] mod presentation;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-presentation-tests.rs"
-          rustc --edition 2024 --test "$RUNNER_TEMP/gpui-presentation-tests.rs" -o "$RUNNER_TEMP/gpui-presentation-tests"
-          presentation_test=presentation::tests::ui_pacing_preserves_decoded_frames_with_jitter
+          rustc --edition 2024 --cfg 'feature="gpui-session"' --test "$RUNNER_TEMP/gpui-presentation-tests.rs" -o "$RUNNER_TEMP/gpui-presentation-tests"
+          presentation_test=presentation::tests::gpui_pacing_preserves_decoded_frames_with_jitter
           "$RUNNER_TEMP/gpui-presentation-tests" --list | grep -Fx "$presentation_test: test"
           "$RUNNER_TEMP/gpui-presentation-tests" --exact "$presentation_test"
 

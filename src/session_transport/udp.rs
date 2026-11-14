@@ -884,8 +884,8 @@ impl HybridTransport {
         {
             return Ok(None);
         }
-        let message = Message::parse_from_bytes(&frame.payload)?;
-        if media_metadata(&message)?.map(|(kind, display, key, _)| (kind, display, key))
+        if media_metadata(&Message::parse_from_tokio_bytes(&frame.payload)?)?
+            .map(|(kind, display, key, _)| (kind, display, key))
             != Some((metadata.kind, metadata.display_id, metadata.keyframe))
         {
             bail!("UDP media payload metadata mismatch");
@@ -909,7 +909,9 @@ impl HybridTransport {
         }
         state.last = Some(metadata.frame_id);
         self.video_recovery.lock().unwrap().frame_delivered(metadata);
-        Ok(Some(frame.payload.as_ref().into()))
+        Ok(Some(frame.payload.try_into_mut().unwrap_or_else(
+            |payload| BytesMut::from(payload.as_ref()),
+        )))
     }
 }
 
@@ -1303,7 +1305,7 @@ mod tests {
         serving.await.unwrap();
     }
     #[tokio::test]
-    async fn a_delta_gap_does_not_discard_a_late_usable_keyframe() {
+    async fn gpui_delta_gap_preserves_late_keyframes_and_reuses_payload() {
         let (client, _host, _listener) = streams().await;
         let (mut transport, _channels) =
             HybridTransport::new(client, SessionId([9; 16]), false).unwrap();
@@ -1326,11 +1328,23 @@ mod tests {
             },
             payload: video(keyframe, 100).write_to_bytes().unwrap().into(),
         };
-        assert!(transport.deliver(frame(0, true)).unwrap().is_some());
+        let first = frame(0, true);
+        let allocation = first.payload.as_ptr();
+        let delivered = transport.deliver(first).unwrap().unwrap();
+        assert_eq!(delivered.as_ptr(), allocation);
         assert!(transport.deliver(frame(2, false)).unwrap().is_none());
         assert!(transport.deliver(frame(1, true)).unwrap().is_some());
         assert!(transport.deliver(frame(2, false)).unwrap().is_some());
         assert!(transport.deliver(frame(1, true)).unwrap().is_none());
+        let next = frame(3, false);
+        let shared = next.payload.clone();
+        let mut delivered = transport.deliver(next).unwrap().unwrap();
+        assert_eq!(delivered.as_ref(), shared.as_ref());
+        delivered[0] ^= 1;
+        assert_ne!(delivered.as_ref(), shared.as_ref());
+        let mut invalid = frame(4, false);
+        invalid.metadata.keyframe = true;
+        assert!(transport.deliver(invalid).is_err());
     }
     #[tokio::test]
     async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
