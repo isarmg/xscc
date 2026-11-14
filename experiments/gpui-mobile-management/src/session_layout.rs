@@ -34,6 +34,18 @@ pub struct SessionLayout {
     pub mouse: Option<MouseControls>,
 }
 
+pub fn place_rail(
+    layout: &mut SessionLayout,
+    position: Option<(u16, u16)>,
+    width: f32,
+    height: f32,
+) {
+    if let Some((x, y)) = position {
+        layout.rail.x = (width - layout.rail.width).max(0.) * f32::from(x) / 10_000.;
+        layout.rail.y = (height - layout.rail.height).max(0.) * f32::from(y) / 10_000.;
+    }
+}
+
 pub fn centered_horizontal_bounds(width: f32, left: f32, visible_width: f32) -> (f32, f32) {
     let margin = left.max(width - left - visible_width).min(width / 2.);
     (margin, width - margin * 2.)
@@ -69,11 +81,11 @@ pub fn layout(
     };
     let bottom_height = if panel == Panel::Keyboard {
         let requested = if keyboard_height.is_finite() {
-            keyboard_height.max(44.)
+            keyboard_height.max(0.)
         } else {
             88.
         };
-        requested.min(height * 0.60).min((height - 44.).max(0.))
+        requested.min((height - 44.).max(0.))
     } else if options && side_width == 0. {
         320_f32.min(height * 0.48).min((height - 56.).max(0.))
     } else {
@@ -85,7 +97,11 @@ pub fn layout(
         x: 0.,
         y: 0.,
         width,
-        height,
+        height: if panel == Panel::Keyboard {
+            control_height
+        } else {
+            height
+        },
     };
     let video = stage;
     let rail = if rail_expanded {
@@ -128,7 +144,7 @@ pub fn layout(
     let keyboard = (panel == Panel::Keyboard).then_some(Rect {
         x: 0.,
         y: control_height,
-        width: available_width,
+        width,
         height: bottom_height,
     });
     let (rail, control_panel, keyboard, stage, video, control_width, control_height) =
@@ -149,11 +165,10 @@ pub fn layout(
             };
             let requested_height = if panel == Panel::Keyboard {
                 if keyboard_height.is_finite() {
-                    keyboard_height.max(44.)
+                    keyboard_height.max(0.)
                 } else {
                     88.
                 }
-                .min(height * 0.60)
             } else {
                 320_f32.min(height * 0.48)
             };
@@ -281,6 +296,13 @@ mod tests {
                         assert_eq!(layout.stage.width, baseline.stage.width);
                         assert!(layout.stage.height <= baseline.stage.height);
                         assert_eq!(layout.video, layout.stage);
+                    } else if panel == Panel::Keyboard {
+                        assert_eq!(layout.stage.width, baseline.stage.width);
+                        assert_eq!(
+                            layout.stage.height + layout.keyboard.unwrap().height,
+                            height
+                        );
+                        assert_eq!(layout.video, layout.stage);
                     } else {
                         assert_eq!(layout.video, baseline.video);
                         assert_eq!(layout.stage, baseline.stage);
@@ -296,7 +318,9 @@ mod tests {
                     }
                     if expanded {
                         if let Some(panel) = layout.panel.or(layout.keyboard) {
-                            assert!(!overlaps(panel, layout.rail));
+                            if !(height <= width && layout.keyboard.is_some()) {
+                                assert!(!overlaps(panel, layout.rail));
+                            }
                         }
                     }
                 }

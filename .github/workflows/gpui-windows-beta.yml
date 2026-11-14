@@ -225,6 +225,12 @@ jobs:
       - name: Test cursor-only high-refresh pacing
         if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_service::frame_pacing::tests::"
+      - name: Test UDP encoder adaptation and static desktop refinement
+        if: matrix.role == 'host' && !inputs.build_only
+        run: |
+          foreach ($filter in @('server::video_qos::', 'server::video_service::idle_refresh::tests::', 'session_transport::udp::tests::udp_encoder_budget')) {
+            ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter $filter
+          }
       - name: Test virtual display protocol and pipelined DXGI readback
         if: matrix.role == 'host' && !inputs.build_only
         run: |

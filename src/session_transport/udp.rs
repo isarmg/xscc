@@ -98,6 +98,16 @@ impl SessionTransport {
             _ => "TCP",
         }
     }
+    #[cfg(feature = "gpui-host")]
+    pub fn video_bitrate_budget(&self) -> Option<u32> {
+        match self {
+            Self::Hybrid(stream) if stream.host && stream.ready.load(Ordering::Acquire) => {
+                let bps = stream.bitrate_budget.load(Ordering::Acquire);
+                (bps != 0).then_some((bps / 1000).clamp(64, 1_000_000) as u32)
+            }
+            _ => None,
+        }
+    }
     pub fn set_send_timeout(&mut self, ms: u64) {
         match self {
             Self::Legacy(stream) => stream.set_send_timeout(ms),
@@ -454,6 +464,7 @@ pub struct HybridTransport {
     limits: watch::Sender<Option<usize>>,
     receive_limit: Arc<AtomicUsize>,
     send_timeout: Arc<AtomicU64>,
+    bitrate_budget: Arc<AtomicU64>,
     tasks: Vec<JoinHandle<()>>,
     sending: BTreeMap<StreamKey, SendStream>,
     receiving: BTreeMap<StreamKey, ReceiveStream>,
@@ -518,6 +529,7 @@ impl HybridTransport {
                 limits,
                 receive_limit,
                 send_timeout,
+                bitrate_budget: Arc::new(AtomicU64::new(0)),
                 tasks,
                 sending: BTreeMap::new(),
                 receiving: BTreeMap::new(),
@@ -556,6 +568,7 @@ impl HybridTransport {
             channels,
             transport.writer.clone(),
             transport.ready.clone(),
+            transport.bitrate_budget.clone(),
         )));
         Ok(transport)
     }
@@ -1237,6 +1250,51 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+    #[cfg(feature = "gpui-host")]
+    #[tokio::test]
+    async fn udp_encoder_budget_tracks_backlogged_deltas_without_limiting_idle_keyframes() {
+        let _guard = crate::udp_host::TEST_LISTENER_LOCK.lock().await;
+        let (client, host, listener) = streams().await;
+        let _udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+        let mut host: SessionTransport = host.into();
+        let offer = host.offer_host().await.unwrap().unwrap();
+        let mut client: SessionTransport = client.into();
+        client.enable_client(&offer).await.unwrap();
+        timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(host.video_bitrate_budget(), None);
+        host.set_media_bitrate_limit(1_000).unwrap();
+        let mut serving = tokio::spawn(async move {
+            host.send(&video(true, 100)).await.unwrap();
+            let mut tick = interval(Duration::from_millis(40));
+            let until = tokio::time::sleep(Duration::from_millis(800));
+            tokio::pin!(until);
+            loop {
+                tokio::select! {
+                    _ = &mut until => return (host.video_bitrate_budget(), host),
+                    _ = tick.tick() => host.send(&video(false, 64 * 1024)).await.unwrap(),
+                    packet = host.next() => { packet.unwrap().unwrap(); }
+                }
+            }
+        });
+        let budget = timeout(Duration::from_secs(3), async {
+            loop {
+                tokio::select! {
+                    result = &mut serving => break result.unwrap().0,
+                    packet = client.next() => { packet.unwrap().unwrap(); }
+                }
+            }
+        })
+        .await
+        .unwrap()
+        .expect("authenticated feedback from a backlogged UDP stream");
+        assert!((64..=1_000).contains(&budget), "budget={budget}");
+        assert_eq!(client.video_bitrate_budget(), None);
+    }
+
     #[tokio::test]
     async fn dropped_udp_response_is_retried_before_tcp_ready() {
         let (client, mut host, listener) = streams().await;
@@ -1912,6 +1970,7 @@ async fn host_media(
     channels: WorkerChannels,
     writer: ReliableWriter,
     ready: Arc<AtomicBool>,
+    bitrate_budget: Arc<AtomicU64>,
 ) {
     let WorkerChannels {
         mut frames,
@@ -1978,7 +2037,20 @@ async fn host_media(
                     }
                 }
                 packet = session.next() => match packet.context("UDP host session closed")? {
-                    AuthenticatedPacket::Report(report) => { pacer.on_report(&report, Instant::now())?; next_send = Instant::now(); }
+                    AuthenticatedPacket::Report(report) => {
+                        let now = Instant::now();
+                        pacer.on_report(&report, now)?;
+                        let estimate = pacer.effective_bitrate();
+                        let previous = bitrate_budget.load(Ordering::Acquire);
+                        // Idle restart windows and large IDRs are not evidence of a slow path.
+                        let backlogged = current.as_ref().is_some_and(|frame|
+                            !frame.plan.descriptor().metadata.keyframe
+                                && now.saturating_duration_since(frame.queued) >= Duration::from_millis(75));
+                        if backlogged || (previous != 0 && estimate > previous) {
+                            bitrate_budget.store(estimate, Ordering::Release);
+                        }
+                        next_send = now;
+                    }
                     AuthenticatedPacket::Probe { kind: ProbeKind::Response, token } => {
                         if let Some((expected, sent)) = probe {
                             if token == expected { pacer.on_probe_response(sent.elapsed().max(Duration::from_micros(1)), Instant::now())?; probe = None; next_send = Instant::now(); }

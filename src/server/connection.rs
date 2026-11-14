@@ -869,6 +869,8 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+                    video_service::VIDEO_QOS.lock().unwrap().user_transport_bitrate(conn.inner.id(), conn.stream.video_bitrate_budget());
                     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
                     if !conn.session_authority_valid() {
                         conn.send_close_reason_no_retry("Management authorization expired").await;

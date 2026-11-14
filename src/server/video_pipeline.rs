@@ -445,6 +445,14 @@ impl ConnectionTransport {
         }
     }
 
+    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+    pub(super) fn video_bitrate_budget(&self) -> Option<u32> {
+        match self {
+            Self::Legacy(stream) => stream.video_bitrate_budget(),
+            _ => None,
+        }
+    }
+
     #[cfg(feature = "udp-media")]
     pub(super) fn set_media_bitrate_limit(&mut self, kbps: u32) -> ResultType<()> {
         match self {

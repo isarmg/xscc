@@ -8,6 +8,7 @@ use gpui::{
 };
 
 mod bitrate;
+mod floating_rail;
 mod mouse_controls;
 mod resolution;
 pub(crate) mod virtual_displays;
@@ -74,6 +75,7 @@ pub struct ChromeModel {
 pub enum ChromeAction {
     Exit,
     ToggleRail,
+    MoveRail(u16, u16),
     RotateScreen,
     OpenPanel(Panel),
     ClosePanel,
@@ -107,6 +109,8 @@ pub struct SessionChrome {
     bitrate: bitrate::BitrateEditor,
     resolution: resolution::ResolutionEditor,
     media_menu: Option<MediaMenu>,
+    rail_gesture: Option<floating_rail::Gesture>,
+    rail_touch_owner: gpui::Entity<()>,
 }
 
 impl EventEmitter<ChromeAction> for SessionChrome {}
@@ -118,6 +122,8 @@ impl SessionChrome {
             bitrate: bitrate::BitrateEditor::new(cx),
             resolution: resolution::ResolutionEditor::new(cx),
             media_menu: None,
+            rail_gesture: None,
+            rail_touch_owner: cx.new(|_| ()),
         }
     }
 
@@ -269,6 +275,7 @@ impl SessionChrome {
                 .occlude()
                 .cursor_pointer()
                 .child(glyph(Glyph::Expand, 0xffffff))
+                .child(self.rail_touch(cx))
                 .on_click(cx.listener(|_, _, _, cx| {
                     cx.emit(ChromeAction::ToggleRail);
                     cx.stop_propagation();
@@ -350,6 +357,7 @@ impl SessionChrome {
             (false, true),
             ChromeAction::ToggleRail,
         ))
+        .child(self.rail_touch(cx))
     }
 
     fn rail_button(
@@ -1112,6 +1120,66 @@ mod rail_tests {
             assert_eq!(toggles.get(), expected_toggles);
             assert_eq!(remote_touches.get(), expected_remote);
         }
+    }
+
+    #[gpui_test_support::test]
+    fn long_press_moves_rail_without_tapping_or_sending_remote_input(cx: &mut TestAppContext) {
+        let remote_touches = Rc::new(Cell::new(0));
+        let (stage, cx) = cx.add_window_view(|_, cx| Stage {
+            chrome: cx.new(|cx| {
+                let mut chrome = SessionChrome::new(cx);
+                chrome.model.has_frame = true;
+                chrome.model.layout =
+                    crate::session_layout::layout(320., 640., false, Panel::None, false, 0.);
+                chrome
+            }),
+            remote_touches: remote_touches.clone(),
+        });
+        cx.simulate_resize(gpui_test_support::size(px(320.), px(640.)));
+        let chrome = cx.update(|_, cx| stage.read(cx).chrome.clone());
+        let moves = Rc::new(Cell::new(0));
+        let count = moves.clone();
+        let _subscription = cx.update(|window, cx| {
+            window.subscribe(&chrome, cx, move |chrome, action, _, cx| {
+                let ChromeAction::MoveRail(x, y) = *action else {
+                    panic!("drag must not activate a button");
+                };
+                count.set(count.get() + 1);
+                chrome.update(cx, |chrome, cx| {
+                    let mut model = chrome.model.clone();
+                    crate::session_layout::place_rail(&mut model.layout, Some((x, y)), 320., 640.);
+                    chrome.set_model(model, cx);
+                });
+            })
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_event(TouchEvent {
+            id: TouchId(2),
+            phase: TouchPhase::Started,
+            position: point(px(290.), px(610.)),
+            ..Default::default()
+        });
+        chrome.update(cx, |chrome, _| {
+            chrome
+                .rail_gesture
+                .as_mut()
+                .expect("touch captured")
+                .started -= std::time::Duration::from_millis(501);
+        });
+        for phase in [TouchPhase::Moved, TouchPhase::Ended] {
+            cx.simulate_event(TouchEvent {
+                id: TouchId(2),
+                phase,
+                position: point(px(30.), px(30.)),
+                ..Default::default()
+            });
+        }
+        assert_eq!(moves.get(), 1);
+        assert_eq!(remote_touches.get(), 0);
+        cx.update(|_, cx| {
+            assert!(chrome.read(cx).model.layout.rail.x < 20.);
+            assert!(chrome.read(cx).model.layout.rail.y < 20.);
+        });
     }
 
     #[gpui_test_support::test]

@@ -60,6 +60,8 @@ pub struct SessionView {
     panel: Panel,
     mouse_buttons: bool,
     keyboard_page: KeyboardPage,
+    ime_height: [Option<f32>; 2],
+    rail_position: Option<(u16, u16)>,
     controls_idle: Option<gpui::Task<()>>,
     presentation_active: bool,
     entry_pending: Option<(Instant, gpui::Size<Pixels>)>,
@@ -208,6 +210,8 @@ impl SessionView {
             panel: Panel::None,
             mouse_buttons: true,
             keyboard_page: KeyboardPage::Input,
+            ime_height: [None; 2],
+            rail_position: None,
             controls_idle: None,
             presentation_active: false,
             entry_pending: None,
@@ -1231,6 +1235,9 @@ impl SessionView {
                 cx.emit(SessionUiEvent::BackToDevices);
                 return;
             }
+            ChromeAction::MoveRail(x, y) => {
+                self.rail_position = Some((x, y));
+            }
             ChromeAction::ToggleRail => {
                 self.release_input();
                 self.rail_expanded = !self.rail_expanded;
@@ -1252,6 +1259,7 @@ impl SessionView {
                 self.hide_keyboard(window, cx);
                 self.panel = panel;
                 if panel == Panel::Keyboard {
+                    self.ime_height = [None; 2];
                     self.keyboard_page(KeyboardPage::Input, window, cx);
                 }
             }
@@ -1434,24 +1442,45 @@ impl Render for SessionView {
                 window.request_animation_frame();
             }
         }
-        let keyboard_height = match self.keyboard_page {
-            KeyboardPage::Input => 88.,
-            KeyboardPage::Keys => {
-                if visible.width < visible.height {
-                    (f32::from(visible.height) * 0.42).min(440.)
-                } else {
-                    (f32::from(visible.height) * 0.60).min(360.)
-                }
-            }
-            KeyboardPage::Shortcuts => (f32::from(visible.height) * 0.46).min(300.),
-        };
-        let layout = session_layout::layout(
+        let viewport = window.viewport_size();
+        let landscape = viewport.width >= viewport.height;
+        let orientation = usize::from(landscape);
+        let insets = window.insets();
+        let ime = f32::from(insets.ime.bottom - insets.safe_area.bottom).max(0.);
+        if self.panel == Panel::Keyboard && self.keyboard_page == KeyboardPage::Input && ime > 0. {
+            self.ime_height[orientation] =
+                Some(self.ime_height[orientation].unwrap_or(0.).max(ime));
+        }
+        let body_height = self.ime_height[orientation].unwrap_or_else(|| {
+            (f32::from(viewport.height) * if landscape { 0.45 } else { 0.34 }).clamp(120., 420.)
+        });
+        let key_height = crate::remote_keyboard::computer::key_height(body_height, landscape);
+        let input_notice = self
+            .keyboard
+            .as_ref()
+            .is_some_and(|keyboard| keyboard.read(cx).input_notice().is_some());
+        let keyboard_height = key_height
+            + if self.keyboard_page == KeyboardPage::Input {
+                if input_notice { key_height } else { 0. }
+            } else {
+                (body_height - ime).max(0.)
+            };
+        if let Some(keyboard) = &self.keyboard {
+            keyboard.update(cx, |keyboard, cx| keyboard.set_body_height(body_height, cx));
+        }
+        let mut layout = session_layout::layout(
             visible.width.into(),
             visible.height.into(),
             self.rail_expanded,
             self.panel,
             self.input.mode() == InputMode::Pointer && self.mouse_buttons && self.input_allowed(),
             keyboard_height,
+        );
+        session_layout::place_rail(
+            &mut layout,
+            self.rail_position,
+            visible.width.into(),
+            visible.height.into(),
         );
         if self.layout != layout {
             self.layout = layout;
@@ -1520,23 +1549,8 @@ impl Render for SessionView {
                 .top(px(layout.stage.y))
                 .w(px(layout.stage.width))
                 .h(px(layout.stage.height)),
-            )
-            .child(
-                self.chrome.clone().cached(
-                    StyleRefinement::default()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .w(visible.width)
-                        .h(visible.height),
-                ),
             );
         if let Some(keyboard_bounds) = layout.keyboard {
-            let key_height = if visible.width < visible.height {
-                38.
-            } else {
-                30.
-            };
             let mut header = div()
                 .h(px(key_height))
                 .flex_shrink_0()
@@ -1619,6 +1633,16 @@ impl Render for SessionView {
                     ),
             );
         }
+        root = root.child(
+            self.chrome.clone().cached(
+                StyleRefinement::default()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(visible.width)
+                    .h(visible.height),
+            ),
+        );
         if self.selected.is_some() && !cx.reduce_motion() {
             let curtain = div()
                 .absolute()

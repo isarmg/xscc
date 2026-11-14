@@ -8,6 +8,11 @@ pub(super) const KEY: u32 = 0x292a30;
 pub(super) const FOREGROUND: u32 = 0xe7e7eb;
 pub(super) const ACCENT: u32 = 0x4d88fa;
 
+pub(crate) fn key_height(body_height: f32, landscape: bool) -> f32 {
+    let (rows, spacing) = if landscape { (5., 44.) } else { (6., 48.) };
+    ((body_height - spacing) / rows).clamp(24., 72.)
+}
+
 #[derive(Clone, Copy)]
 enum Key {
     Character(char),
@@ -102,9 +107,8 @@ impl RemoteKeyboard {
     }
 
     pub(super) fn computer_keyboard(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let landscape =
-            window.fully_visible_bounds().size.width >= window.fully_visible_bounds().size.height;
-        let height = if landscape { 30. } else { 38. };
+        let landscape = window.viewport_size().width >= window.viewport_size().height;
+        let height = key_height(self.body_height, landscape);
         let enabled = self.control.enabled.get();
         let modifiers_enabled = enabled && self.control.shortcuts.get();
         let mut modifiers = div().flex().gap_1().items_center().child(
@@ -259,16 +263,12 @@ impl RemoteKeyboard {
     }
 
     pub(super) fn shortcut_keyboard(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let columns = if window.fully_visible_bounds().size.width
-            >= window.fully_visible_bounds().size.height
-        {
-            6
-        } else {
-            3
-        };
+        let landscape = window.viewport_size().width >= window.viewport_size().height;
+        let height = key_height(self.body_height, landscape);
+        let columns = if landscape { 6 } else { 3 };
         let enabled = self.control.enabled.get();
         let supported = enabled && self.control.shortcuts.get();
-        let mut grid = div().grid().grid_cols(columns).gap_2();
+        let mut grid = div().grid().grid_cols(columns).gap_1();
         for (label, detail, key, modifiers) in [
             (
                 "Caps Lock",
@@ -339,13 +339,12 @@ impl RemoteKeyboard {
                     "",
                     if local { enabled } else { supported },
                     local && self.control.chords.borrow().caps(),
-                    62.,
+                    height,
                 )
                 .aria_label(format!("{label} {detail}"))
-                .flex_col()
                 .gap_1()
                 .child(label)
-                .child(div().text_size(px(12.)).child(detail))
+                .child(div().text_size(px(11.)).child(detail))
                 .on_click(cx.listener(move |view, _, window, cx| {
                     if !view.control.enabled.get() || !local && !view.control.shortcuts.get() {
                         return;
@@ -365,14 +364,17 @@ impl RemoteKeyboard {
 }
 
 fn button(
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<gpui::SharedString>,
     label: &str,
     enabled: bool,
     selected: bool,
     height: f32,
 ) -> Stateful<Div> {
+    let id = id.into();
+    let selector = id.to_string();
     div()
         .id(id)
+        .debug_selector(move || selector)
         .role(Role::Button)
         .aria_label(label.to_owned())
         .h(px(height))
@@ -554,12 +556,44 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     #[gpui_test_support::test]
+    fn shortcut_keys_match_computer_key_height_and_keep_keyboard_extent(cx: &mut TestAppContext) {
+        let (keyboard, cx) = cx.add_window_view(|window, cx| {
+            let control = KeyboardControl::new(true);
+            control.configure(true, true, true);
+            let mut view = RemoteKeyboard::new(control, window, cx);
+            view.page = KeyboardPage::Keys;
+            view
+        });
+        for (width, height, body_height) in [(360., 800., 300.), (800., 360., 180.)] {
+            cx.simulate_resize(size(px(width), px(height)));
+            keyboard.update(cx, |view, cx| view.set_body_height(body_height, cx));
+            keyboard.update(cx, |view, _| view.page = KeyboardPage::Keys);
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let key = cx.debug_bounds("computer-key-a").expect("letter key");
+            let extent = cx.debug_bounds("remote-keyboard").unwrap();
+            keyboard.update(cx, |view, _| view.page = KeyboardPage::Shortcuts);
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let shortcut = cx
+                .debug_bounds("computer-shortcut-Ctrl+C")
+                .expect("shortcut key");
+            assert_eq!(shortcut.size.height, key.size.height);
+            assert_eq!(cx.debug_bounds("remote-keyboard").unwrap(), extent);
+            assert!(shortcut.size.width > key.size.width);
+            keyboard.update(cx, |view, _| {
+                view.page = KeyboardPage::Input;
+                assert_eq!(view.input_notice(), None);
+            });
+        }
+    }
+
+    #[gpui_test_support::test]
     fn horizontal_swipes_change_keys_without_typing(cx: &mut TestAppContext) {
         let (keyboard, cx) = cx.add_window_view(|window, cx| {
             let control = KeyboardControl::new(true);
             control.configure(true, true, true);
             let mut view = RemoteKeyboard::new(control, window, cx);
             view.page = KeyboardPage::Keys;
+            view.body_height = 276.;
             view
         });
         cx.simulate_resize(size(px(320.), px(640.)));

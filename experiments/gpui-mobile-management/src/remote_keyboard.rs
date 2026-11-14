@@ -1,4 +1,4 @@
-mod computer;
+pub(crate) mod computer;
 
 use crate::{
     keyboard_action::{Shortcut, chords::ChordState, editor_action, finish_editor_action},
@@ -76,6 +76,7 @@ pub struct RemoteKeyboard {
     notice: String,
     page: KeyboardPage,
     computer_second_page: bool,
+    body_height: f32,
     _blur: Subscription,
 }
 impl EventEmitter<KeyboardEvent> for RemoteKeyboard {}
@@ -93,9 +94,29 @@ impl RemoteKeyboard {
             notice: String::new(),
             page: KeyboardPage::Input,
             computer_second_page: false,
+            body_height: 240.,
             _blur: blur,
         }
     }
+    pub fn set_body_height(&mut self, height: f32, cx: &mut Context<Self>) {
+        if self.body_height != height {
+            self.body_height = height;
+            cx.notify();
+        }
+    }
+
+    pub fn input_notice(&self) -> Option<&str> {
+        if !self.control.enabled.get() {
+            Some("远端未允许键盘输入")
+        } else if !self.notice.is_empty() {
+            Some(&self.notice)
+        } else if !self.control.unicode.get() {
+            Some("目标仅支持可打印 ASCII，暂不支持中文")
+        } else {
+            None
+        }
+    }
+
     pub fn show(&mut self, page: KeyboardPage, window: &mut Window, cx: &mut Context<Self>) {
         let changed_page = self.page != page;
         if changed_page {
@@ -343,28 +364,17 @@ impl Render for RemoteKeyboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
         let focus = self.focus.clone();
-        let enabled = self.control.enabled.get();
         let content = match self.page {
-            KeyboardPage::Input => {
-                let status = if !enabled {
-                    "远端未允许键盘输入"
-                } else if !self.notice.is_empty() {
-                    &self.notice
-                } else if self.control.unicode.get() {
-                    "使用本机输入法，文字直接提交到远端"
-                } else {
-                    "目标仅支持可打印 ASCII，暂不支持中文"
-                };
-                div()
-                    .text_size(gpui::px(12.))
-                    .text_color(rgb(0xb0b1b8))
-                    .child(status.to_owned())
-            }
+            KeyboardPage::Input => div()
+                .text_size(gpui::px(12.))
+                .text_color(rgb(0xb0b1b8))
+                .children(self.input_notice().map(str::to_owned)),
             KeyboardPage::Keys => self.computer_keyboard(window, cx),
             KeyboardPage::Shortcuts => self.shortcut_keyboard(window, cx),
         };
         div()
             .id("remote-keyboard")
+            .debug_selector(|| "remote-keyboard".into())
             .relative()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|view, event, window, cx| {
@@ -394,7 +404,7 @@ impl Render for RemoteKeyboard {
                     .when(self.page != KeyboardPage::Keys, |page| {
                         page.overflow_y_scroll()
                     })
-                    .p_2()
+                    .p_1()
                     .child(content),
             )
             .when(self.page == KeyboardPage::Input, |view| {

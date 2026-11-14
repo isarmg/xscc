@@ -31,6 +31,8 @@ pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
 mod frame_pacing;
 #[cfg(feature = "gpui-host")]
 mod metrics;
+#[cfg(any(feature = "gpui-host", test))]
+mod idle_refresh;
 
 use super::video_pipeline::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
@@ -795,6 +797,8 @@ fn run_encoder(
     let mut encoder_warmed_up = false;
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
     #[cfg(feature = "gpui-host")]
+    let mut idle_refresh = idle_refresh::IdleRefresh::default();
+    #[cfg(feature = "gpui-host")]
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "gpui-host"))]
@@ -947,6 +951,8 @@ fn run_encoder(
                 Ok(frame) => {
                     repeat_encode_counter = 0;
                     if frame.valid() {
+                        #[cfg(feature = "gpui-host")]
+                        idle_refresh.captured(now);
                         let screenshot_key = (vs.source, display_idx);
                         let screenshot = SCREENSHOTS.lock().unwrap().remove(&screenshot_key);
                         if let Some(mut screenshot) = screenshot {
@@ -1044,6 +1050,10 @@ fn run_encoder(
 
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
+                #[cfg(feature = "gpui-host")]
+                if idle_refresh.due(now) {
+                    sp.set_option_bool(OPTION_REFRESH, true);
+                }
                 #[cfg(all(windows, feature = "vram"))]
                 let pending_frame = match encoder.replay_keyframe(ms)? {
                     Some(frame) => Some(frame),
@@ -1716,6 +1726,33 @@ fn check_qos(
             bitrate_limit,
         )
     };
+    let previous_bitrate = encoder.bitrate();
+    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+    {
+        let budget = VIDEO_QOS
+            .lock()
+            .unwrap()
+            .transport_bitrate_for_connections(&subscriber_ids);
+        let effective_limit =
+            budget.map(|budget| bitrate_limit.map_or(budget, |limit| budget.min(limit)));
+        if let Some(limit) = effective_limit {
+            let limit = encoder_bitrate_limit(Some(limit))?;
+            if encoder.bitrate_limit() != limit {
+                if let Err(error) = encoder.set_bitrate_limit(limit) {
+                    hbb_common::throttled_log!(
+                        Duration::from_secs(10),
+                        warn,
+                        "Encoder rejected UDP budget: {error}"
+                    );
+                    apply_bitrate_limit(encoder, service, bitrate_limit)?;
+                }
+                VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
+            }
+        } else {
+            apply_bitrate_limit(encoder, service, bitrate_limit)?;
+        }
+    }
+    #[cfg(not(all(feature = "gpui-host", feature = "udp-media")))]
     apply_bitrate_limit(encoder, service, bitrate_limit)?;
     // Driver reconfiguration can block; it must never hold the global QoS mutex.
     if encoder.frame_rate() != requested_fps {
@@ -1735,6 +1772,12 @@ fn check_qos(
             bail!(VideoRestart::QualityChanged);
         }
     }
+    #[cfg(feature = "gpui-host")]
+    if encoder.bitrate() > previous_bitrate {
+        service.set_option_bool(OPTION_REFRESH, true);
+    }
+    #[cfg(not(feature = "gpui-host"))]
+    let _ = previous_bitrate;
     Ok(())
 }
 

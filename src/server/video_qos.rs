@@ -263,6 +263,8 @@ struct UserData {
     auto_adjust_fps: Option<u32>, // reserve for compatibility
     custom_fps: Option<u32>,
     bitrate_limit: Option<u32>,
+    #[cfg(any(all(feature = "gpui-host", feature = "udp-media"), test))]
+    transport_bitrate: Option<u32>,
     streaming_target_fps: Option<u32>,
     quality: Option<(i64, Quality)>, // (time, quality)
     delay: UserDelay,
@@ -415,6 +417,24 @@ impl VideoQoS {
         if let Some(user) = self.users.get_mut(&id) {
             user.bitrate_limit = limit;
         }
+    }
+
+    #[cfg(any(all(feature = "gpui-host", feature = "udp-media"), test))]
+    pub fn user_transport_bitrate(&mut self, id: i32, budget: Option<u32>) {
+        if let Some(user) = self.users.get_mut(&id) {
+            if !matches!((user.transport_bitrate, budget), (Some(old), Some(new))
+                if new >= old.saturating_mul(9) / 10 && new <= old.saturating_mul(11) / 10)
+            {
+                user.transport_bitrate = budget;
+            }
+        }
+    }
+
+    #[cfg(any(all(feature = "gpui-host", feature = "udp-media"), test))]
+    pub fn transport_bitrate_for_connections(&self, ids: &[i32]) -> Option<u32> {
+        ids.iter()
+            .filter_map(|id| self.users.get(id)?.transport_bitrate)
+            .min()
     }
 
     pub fn clear_bitrate_limits(&mut self) {
@@ -851,6 +871,7 @@ impl VideoQoS {
 
         let target_ratio = self.latest_quality().ratio();
         let current_ratio = self.ratio;
+        let recover_static = cfg!(feature = "gpui-host") && current_ratio < target_ratio;
         let current_bitrate = self.bitrate();
 
         // Calculate ratio for adding 150kbps bandwidth
@@ -871,15 +892,18 @@ impl VideoQoS {
         if let Some(factor) = reduction {
             v = current_ratio * factor;
         } else if max_delay < 50 {
-            if dynamic_screen {
+            if dynamic_screen || recover_static {
                 v = current_ratio * 1.15;
             }
         } else if max_delay < 100 {
-            if dynamic_screen {
+            if dynamic_screen || recover_static {
                 v = current_ratio * 1.1;
             }
-        } else if dynamic_screen {
+        } else if dynamic_screen || recover_static {
             v = current_ratio * 1.05;
+        }
+        if !dynamic_screen && reduction.is_none() {
+            v = v.min(target_ratio.max(current_ratio));
         }
 
         // Limit quality increase rate for better stability
@@ -1100,6 +1124,49 @@ mod bitrate_limit_tests {
         assert_eq!(qos.bitrate_limit_for_connections(&[2]), None);
         qos.on_connection_close(1);
         assert_eq!(qos.bitrate_limit_for_connections(&[1, 2]), None);
+    }
+
+    #[test]
+    fn udp_budget_adapts_without_overwriting_the_requested_ceiling() {
+        let mut qos = VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.on_connection_open(2);
+        qos.user_bitrate_limit(1, Some(8_000));
+        qos.user_transport_bitrate(1, Some(700));
+        qos.user_transport_bitrate(2, Some(400));
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(700));
+        assert_eq!(qos.transport_bitrate_for_connections(&[1, 2]), Some(400));
+        qos.user_transport_bitrate(1, Some(730));
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(700));
+        qos.user_transport_bitrate(1, Some(2_000));
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(2_000));
+        assert_eq!(qos.bitrate_limit_for_connections(&[1]), Some(8_000));
+        qos.user_transport_bitrate(1, None);
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), None);
+        qos.on_connection_close(2);
+        assert_eq!(qos.transport_bitrate_for_connections(&[1, 2]), None);
+    }
+
+    #[cfg(feature = "gpui-host")]
+    #[test]
+    fn idle_desktop_recovers_quality_without_requiring_animation() {
+        let mut qos = VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.new_display("desktop".into());
+        qos.set_support_changing_quality("desktop", true);
+        qos.ratio = BR_BALANCED / 2.;
+        qos.store_bitrate(2_000);
+        for _ in 0..8 {
+            qos.user_network_delay(1, 10);
+        }
+        let reduced = qos.ratio();
+        for _ in 0..30 {
+            qos.advance_ms(3_000);
+            qos.user_network_delay(1, 10);
+            qos.update_display_data("desktop", 0);
+        }
+        assert!(qos.ratio() > reduced);
+        assert_eq!(qos.ratio(), BR_BALANCED);
     }
 
     #[test]

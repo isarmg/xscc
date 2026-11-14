@@ -238,19 +238,34 @@ impl Connection {
         })
         .await;
         match result {
-            Ok(Ok(true)) => {
+            Ok(Ok(_)) => {
                 #[cfg(windows)]
                 self.prepare_session_display(index).await;
-                self.refresh_video_display(Some(index));
-                if let Some(message) =
+                let snapshot = tokio::task::spawn_blocking(move || -> ResultType<Message> {
+                    display_service::check_displays_changed()?;
                     video_service::make_display_changed_msg(index, None, VideoSource::Monitor)
-                {
-                    self.send(message).await;
+                        .ok_or_else(|| {
+                            hbb_common::anyhow::anyhow!("The display is no longer available")
+                        })
+                })
+                .await;
+                match snapshot {
+                    Ok(Ok(message)) => {
+                        self.send(message).await;
+                        self.refresh_video_display(Some(index));
+                    }
+                    Ok(Err(error)) => {
+                        self.media_control_error("Display resolution", error.to_string())
+                            .await
+                    }
+                    Err(error) => {
+                        self.media_control_error(
+                            "Display resolution",
+                            format!("Display snapshot task failed: {error}"),
+                        )
+                        .await
+                    }
                 }
-            }
-            Ok(Ok(false)) => {
-                #[cfg(windows)]
-                self.prepare_session_display(index).await;
             }
             Ok(Err(error)) => {
                 self.media_control_error("Display resolution", error.to_string())
