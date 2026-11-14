@@ -5,6 +5,11 @@
 - 修复虚拟显示器会话断开、模式切换失败或删除失败时的临时主屏和残留显示器清理问题。
 - 修复临时高刷主屏恢复失败时缺少明确日志的问题。
 
+- 优化高刷新率帧调度与 GPUI 呈现，减少重复限帧和空闲刷新。
+- 减少加密 UDP 串流的分片分配、帧重组和交付复制，保持原有协议兼容。
+- 复用解码输出缓冲，优化 Windows GDI 捕获与 NV12 像素转换。
+- 移除 WGPU 同尺寸 BGRA 画面更新中的重复整帧复制，保留连续更新合并。
+
 本 Release 包含 Windows 11 x86_64、Linux x86_64、macOS 26 Apple Silicon、Android ARM64
 以及 iOS/iPadOS 26 ARM64 的原生 GPUI 候选包。Windows/macOS 包未作发行签名，
 iOS IPA 需自行签名。
