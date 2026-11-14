@@ -798,6 +798,8 @@ fn run_encoder(
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
     #[cfg(feature = "gpui-host")]
     let mut idle_refresh = idle_refresh::IdleRefresh::default();
+    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+    let mut rejected_transport_limit = None;
     #[cfg(feature = "gpui-host")]
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
@@ -829,6 +831,8 @@ fn run_encoder(
             &mut second_instant,
             &sp_name,
             sp,
+            #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+            &mut rejected_transport_limit,
         )?;
         #[cfg(feature = "gpui-host")]
         if _quality_improved && idle_refresh.is_idle(Instant::now()) {
@@ -1696,6 +1700,8 @@ fn check_qos(
     second_instant: &mut Instant,
     name: &str,
     service: &GenericService,
+    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+    rejected_transport_limit: &mut Option<u32>,
 ) -> ResultType<bool> {
     #[cfg(feature = "gpui-host")]
     let subscriber_ids = service.subscriber_ids();
@@ -1739,10 +1745,13 @@ fn check_qos(
             .transport_bitrate_for_connections(&subscriber_ids);
         let effective_limit =
             budget.map(|budget| bitrate_limit.map_or(budget, |limit| budget.min(limit)));
-        if let Some(limit) = effective_limit {
+        if let Some(limit) = effective_limit.filter(|limit| Some(*limit) != *rejected_transport_limit) {
+            let wire_limit = limit;
             let limit = encoder_bitrate_limit(Some(limit))?;
             if encoder.bitrate_limit() != limit {
                 if let Err(error) = encoder.set_bitrate_limit(limit) {
+                    // Keep the user's ceiling and do not retry a rejected driver target every frame.
+                    *rejected_transport_limit = Some(wire_limit);
                     hbb_common::throttled_log!(
                         Duration::from_secs(10),
                         warn,
