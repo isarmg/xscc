@@ -169,6 +169,17 @@ fn check_copied_rows(copied: i32, height: i32) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+pub(super) fn changed_frame<'a>(
+    captured: &mut Vec<u8>,
+    previous: &'a mut Vec<u8>,
+) -> std::io::Result<&'a [u8]> {
+    if captured == previous {
+        return Err(std::io::ErrorKind::WouldBlock.into());
+    }
+    std::mem::swap(captured, previous);
+    Ok(previous.as_slice())
+}
+
 impl Drop for CapturerGDI {
     fn drop(&mut self) {
         unsafe {
@@ -183,6 +194,28 @@ impl Drop for CapturerGDI {
 mod tests {
     use super::*;
     use winapi::um::wingdi::{CreateBitmap, SetPixel, CLR_INVALID};
+
+    #[test]
+    fn gdi_changed_frames_keep_pixels_and_allocation_without_copying() {
+        let mut captured = vec![1, 2, 3, 4];
+        let mut previous = vec![0; 4];
+        let allocation = captured.as_ptr();
+        let frame = changed_frame(&mut captured, &mut previous).unwrap();
+        assert_eq!(frame, [1, 2, 3, 4]);
+        assert_eq!(frame.as_ptr(), allocation);
+        captured.copy_from_slice(&[1, 2, 3, 4]);
+        assert_eq!(
+            changed_frame(&mut captured, &mut previous)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        captured.resize(8, 9);
+        let allocation = captured.as_ptr();
+        let frame = changed_frame(&mut captured, &mut previous).unwrap();
+        assert_eq!(frame, [1, 2, 3, 4, 9, 9, 9, 9]);
+        assert_eq!(frame.as_ptr(), allocation);
+    }
 
     #[test]
     fn gdi_rejects_incomplete_readback() {

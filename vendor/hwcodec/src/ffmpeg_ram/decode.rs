@@ -63,8 +63,11 @@ struct DecodeOutput {
 
 impl DecodeOutput {
     fn begin_packet(&mut self) {
-        self.reusable.clear();
-        self.reusable.append(&mut self.frames);
+        // An input packet may produce no output; keep the last batch's spare planes.
+        if !self.frames.is_empty() {
+            self.reusable.clear();
+            self.reusable.append(&mut self.frames);
+        }
     }
 }
 
@@ -446,10 +449,14 @@ mod decode_output_tests {
     fn packet_without_decoded_output_exposes_no_stale_frame() {
         let mut output = DecodeOutput::default();
         emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 1);
-        output.begin_packet();
-        assert!(output.frames.is_empty());
-        output.begin_packet();
+        output.frames[0].data[0].reserve(4096);
+        let capacity = output.frames[0].data[0].capacity();
+        for _ in 0..8 {
+            output.begin_packet();
+            assert!(output.frames.is_empty());
+        }
         emit(&mut output, 16, 8, AVPixelFormat::AV_PIX_FMT_NV12, 2);
+        assert_eq!(output.frames[0].data[0].capacity(), capacity);
         assert_eq!(output.frames.len(), 1);
         assert!(output.frames[0].data[0].iter().all(|v| *v == 2));
     }
