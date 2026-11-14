@@ -265,10 +265,9 @@ impl RemoteKeyboard {
     pub(super) fn shortcut_keyboard(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let landscape = window.viewport_size().width >= window.viewport_size().height;
         let height = key_height(self.body_height, landscape);
-        let columns = if landscape { 6 } else { 3 };
         let enabled = self.control.enabled.get();
         let supported = enabled && self.control.shortcuts.get();
-        let mut grid = div().grid().grid_cols(columns).gap_1();
+        let mut grid = div().flex().flex_wrap().gap_1();
         for (label, detail, key, modifiers) in [
             (
                 "Caps Lock",
@@ -342,6 +341,7 @@ impl RemoteKeyboard {
                     height,
                 )
                 .aria_label(format!("{label} {detail}"))
+                .px_2()
                 .gap_1()
                 .child(label)
                 .child(div().text_size(px(11.)).child(detail))

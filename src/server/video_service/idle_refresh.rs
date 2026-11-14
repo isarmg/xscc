@@ -1,16 +1,26 @@
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
-pub(super) struct IdleRefresh(Option<Instant>);
+pub(super) struct IdleRefresh {
+    last_capture: Option<Instant>,
+    refined: bool,
+}
 
 impl IdleRefresh {
     pub fn captured(&mut self, now: Instant) {
-        self.0 = Some(now + Duration::from_millis(750));
+        self.last_capture = Some(now);
+        self.refined = false;
+    }
+
+    pub fn is_idle(&self, now: Instant) -> bool {
+        self.last_capture.is_some_and(|captured| {
+            now.saturating_duration_since(captured) >= Duration::from_millis(750)
+        })
     }
 
     pub fn due(&mut self, now: Instant) -> bool {
-        if self.0.is_some_and(|deadline| now >= deadline) {
-            self.0 = None;
+        if !self.refined && self.is_idle(now) {
+            self.refined = true;
             true
         } else {
             false

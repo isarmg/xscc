@@ -821,7 +821,7 @@ fn run_encoder(
         })?;
         #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
-        check_qos(
+        let _quality_improved = check_qos(
             &mut encoder,
             &mut quality,
             &mut spf,
@@ -830,6 +830,10 @@ fn run_encoder(
             &sp_name,
             sp,
         )?;
+        #[cfg(feature = "gpui-host")]
+        if _quality_improved && idle_refresh.is_idle(Instant::now()) {
+            sp.set_option_bool(OPTION_REFRESH, true);
+        }
         #[cfg(feature = "gpui-host")]
         if let Some(sample) = stages.sample(Instant::now(), spf) {
             #[cfg(windows)]
@@ -1692,7 +1696,7 @@ fn check_qos(
     second_instant: &mut Instant,
     name: &str,
     service: &GenericService,
-) -> ResultType<()> {
+) -> ResultType<bool> {
     #[cfg(feature = "gpui-host")]
     let subscriber_ids = service.subscriber_ids();
     let (requested_fps, requested_ratio, in_vbr, custom_quality, bitrate_limit) = {
@@ -1772,13 +1776,7 @@ fn check_qos(
             bail!(VideoRestart::QualityChanged);
         }
     }
-    #[cfg(feature = "gpui-host")]
-    if encoder.bitrate() > previous_bitrate {
-        service.set_option_bool(OPTION_REFRESH, true);
-    }
-    #[cfg(not(feature = "gpui-host"))]
-    let _ = previous_bitrate;
-    Ok(())
+    Ok(encoder.bitrate() > previous_bitrate)
 }
 
 pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String, tx: Sender) {
