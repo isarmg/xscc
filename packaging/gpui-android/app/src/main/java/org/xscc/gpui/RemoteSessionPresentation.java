@@ -45,6 +45,12 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             Window window = activity.getWindow();
             WindowManager.LayoutParams attributes = window.getAttributes();
             attributes.rotationAnimation = WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT;
+            if (Build.VERSION.SDK_INT >= 30 && !activity.isInMultiWindowMode()) {
+                // The session handles IME occlusion without resizing its video surface.
+                attributes.softInputMode = (attributes.softInputMode
+                        & ~WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)
+                        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
+            }
             window.setAttributes(attributes);
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             // Keep API29's resize-based IME fallback and multiwindow policy intact.
@@ -178,6 +184,7 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             attributes.preferredDisplayModeId = saved.preferredDisplayModeId;
             attributes.preferredRefreshRate = saved.preferredRefreshRate;
             attributes.rotationAnimation = saved.rotationAnimation;
+            attributes.softInputMode = saved.softInputMode;
             if (saved.fullscreen) {
                 attributes.flags |= WindowManager.LayoutParams.FLAG_FULLSCREEN;
             } else {
@@ -215,6 +222,7 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
         final boolean keepScreenOn;
         final boolean fullscreen;
         final int rotationAnimation;
+        final int softInputMode;
         final int preferredDisplayModeId;
         final float preferredRefreshRate;
         final View decor;
@@ -233,6 +241,7 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
             keepScreenOn = (attributes.flags & WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0;
             fullscreen = (attributes.flags & WindowManager.LayoutParams.FLAG_FULLSCREEN) != 0;
             rotationAnimation = attributes.rotationAnimation;
+            softInputMode = attributes.softInputMode;
             preferredDisplayModeId = attributes.preferredDisplayModeId;
             preferredRefreshRate = attributes.preferredRefreshRate;
             decor = window.getDecorView();
