@@ -74,6 +74,7 @@ pub struct TextField {
     last_bounds: Option<Bounds<Pixels>>,
     scroll_x: Pixels,
     selecting: bool,
+    session_palette: Option<theme::Palette>,
 }
 
 impl TextField {
@@ -90,7 +91,13 @@ impl TextField {
             last_bounds: None,
             scroll_x: px(0.),
             selecting: false,
+            session_palette: None,
         }
+    }
+
+    pub fn with_session_palette(mut self, palette: theme::Palette) -> Self {
+        self.session_palette = Some(palette);
+        self
     }
 
     pub fn is_composing(&self) -> bool {
@@ -498,7 +505,9 @@ impl Focusable for TextField {
 
 impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = theme::palette(window.appearance());
+        let palette = self
+            .session_palette
+            .unwrap_or_else(|| theme::palette(window.appearance()));
         let focused = self.focus.is_focused(window);
         let input = div()
             .id("text-input")
@@ -568,8 +577,10 @@ fn text_canvas(field: Entity<TextField>) -> impl IntoElement {
     let prepaint_field = field.clone();
     canvas(
         move |bounds, window, cx| {
-            let palette = theme::palette(window.appearance());
             let field = prepaint_field.read(cx);
+            let palette = field
+                .session_palette
+                .unwrap_or_else(|| theme::palette(window.appearance()));
             let style = window.text_style();
             let text: SharedString = if field.content.is_empty() {
                 field.placeholder.clone()

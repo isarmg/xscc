@@ -25,6 +25,7 @@ pub struct ControlRegions {
     pub middle: Option<Bounds>,
     pub wheel: Option<Bounds>,
     pub reserved: Option<Bounds>,
+    pub canvas: Option<Bounds>,
 }
 
 #[derive(Clone, Copy)]
@@ -79,6 +80,13 @@ impl SessionInput {
         if self.geometry == Some(geometry) && self.controls == controls {
             return Vec::new();
         }
+        if self.mode == InputMode::Pointer
+            && self.controls == controls
+            && self.pointer.translate_viewport(geometry)
+        {
+            self.geometry = Some(geometry);
+            return Vec::new();
+        }
         let mut output = self.cancel();
         self.geometry = Some(geometry);
         self.controls = controls;
@@ -123,7 +131,8 @@ impl SessionInput {
     }
 
     pub fn placed_controls(&self, controls: ControlRegions, bounds: Bounds) -> ControlRegions {
-        self.placements.regions(controls, bounds)
+        self.placements
+            .regions(controls, controls.canvas.unwrap_or(bounds))
     }
 
     pub fn moving_control(&self) -> Option<Control> {
@@ -287,7 +296,8 @@ impl SessionInput {
                 Route::Control(mut gesture) => {
                     let scroll = gesture.update(point, now);
                     if gesture.mode == Mode::Moving {
-                        self.placements.move_control(gesture, geometry.bounds);
+                        self.placements
+                            .move_control(gesture, controls.canvas.unwrap_or(geometry.bounds));
                     } else if scroll != 0. {
                         self.pointer.scroll_vertical(scroll);
                     }
@@ -399,6 +409,7 @@ mod tests {
                 middle: Some((140., 100., 60., 50.)),
                 wheel: None,
                 reserved: None,
+                canvas: None,
             },
         )
     }
@@ -441,6 +452,98 @@ mod tests {
     }
 
     #[test]
+    fn floating_controls_use_the_full_canvas_even_when_video_has_black_bars() {
+        let geometry = Geometry {
+            bounds: (100., 0., 400., 300.),
+            extent: (800, 600),
+            origin: (0, 0),
+        };
+        let controls = ControlRegions {
+            left: Some((180., 100., 48., 48.)),
+            canvas: Some((0., 0., 600., 300.)),
+            ..Default::default()
+        };
+        let mut input = SessionInput::default();
+        input.set_mode(InputMode::Pointer);
+        let now = Instant::now();
+        assert!(
+            input
+                .event_at(
+                    1,
+                    Phase::Started,
+                    Point(204., 124.),
+                    geometry,
+                    controls,
+                    now
+                )
+                .is_empty()
+        );
+        assert!(
+            input
+                .event_at(
+                    1,
+                    Phase::Moved,
+                    Point(-100., -100.),
+                    geometry,
+                    controls,
+                    now + std::time::Duration::from_millis(501)
+                )
+                .is_empty()
+        );
+        input.event_at(
+            1,
+            Phase::Ended,
+            Point(-100., -100.),
+            geometry,
+            controls,
+            now + std::time::Duration::from_millis(510),
+        );
+        assert_eq!(
+            input.placed_controls(controls, geometry.bounds).left,
+            Some((0., 0., 48., 48.))
+        );
+        input.event_at(
+            2,
+            Phase::Started,
+            Point(24., 24.),
+            geometry,
+            controls,
+            now + std::time::Duration::from_secs(1),
+        );
+        assert!(
+            !input
+                .event_at(
+                    2,
+                    Phase::Ended,
+                    Point(24., 24.),
+                    geometry,
+                    controls,
+                    now + std::time::Duration::from_millis(1100)
+                )
+                .is_empty(),
+            "painted control in a black bar must still receive the click"
+        );
+    }
+
+    #[test]
+    fn keyboard_camera_translation_keeps_a_live_pointer_gesture() {
+        let mut input = SessionInput::default();
+        input.set_mode(InputMode::Pointer);
+        let mut geometry = Geometry {
+            bounds: (0., 0., 600., 300.),
+            extent: (1200, 600),
+            origin: (0, 0),
+        };
+        let controls = ControlRegions::default();
+        input.event(1, Phase::Started, Point(200., 100.), geometry, controls);
+        geometry.bounds.1 = -80.;
+        assert!(input.configure(geometry, controls).is_empty());
+        assert!(input.active());
+        input.event(1, Phase::Moved, Point(240., 140.), geometry, controls);
+        assert!(!input.flush().is_empty());
+    }
+
+    #[test]
     fn short_taps_click_but_long_press_moves_each_control_without_remote_input() {
         let (mut g, _) = layout();
         g.bounds = (0., 0., 320., 240.);
@@ -450,6 +553,7 @@ mod tests {
             right: Some((140., 180., 48., 48.)),
             wheel: Some((200., 100., 48., 112.)),
             reserved: Some((268., 0., 44., 44.)),
+            canvas: None,
         };
         for control in [
             Control::Left,

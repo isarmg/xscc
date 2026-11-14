@@ -664,7 +664,10 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: 
                 mailbox.updates.notify_one();
             }
         }) {
-            Ok(audio) => config.mobile_audio = Some(audio),
+            Ok(audio) => {
+                audio.set_enabled(true);
+                config.mobile_audio = Some(audio);
+            }
             Err(error) => handler.event(SessionEvent::Error(format!(
                 "Audio playback unavailable: {error}"
             ))),
@@ -733,7 +736,10 @@ async fn connect_test_lan_mode(endpoint: &str, _interactive: bool) -> ResultType
                 mailbox.updates.notify_one();
             }
         }) {
-            Ok(audio) => config.mobile_audio = Some(audio),
+            Ok(audio) => {
+                audio.set_enabled(true);
+                config.mobile_audio = Some(audio);
+            }
             Err(error) => handler.event(SessionEvent::Error(format!(
                 "Audio playback unavailable: {error}"
             ))),

@@ -124,11 +124,11 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
         'package_version': package_version,
         'bundle_id': info['CFBundleIdentifier'], 'build': info['CFBundleVersion'],
         'platform': 'iOS/iPadOS 26 ARM64 physical device',
-        'scope': ('GPUI interactive playback preview: direct control or view-only; software-keyboard text and control keys; foreground audio playback is opt-in per session and initially off; no microphone or clipboard; limited hardware Enter/Tab only; full hardware keyboard unsupported and Wayland non-ASCII rejected'
+        'scope': ('GPUI interactive playback preview: direct control or view-only; software-keyboard text and control keys; foreground audio playback starts enabled and can be muted per session; no microphone or clipboard; limited hardware Enter/Tab only; full hardware keyboard unsupported and Wayland non-ASCII rejected'
                   if playback_preview else 'GPUI view-only preview: management and software video; not full remote control'
                   if view_only else 'GPUI management preview: binding and authorized host list; no video session'),
         'declared_capabilities': preview_capabilities(view_only, playback_preview),
-        'audio_default_enabled': False,
+        'audio_default_enabled': bool(playback_preview),
         'test_lan_direct': test_lan_direct,
         'test_ip_scope': 'any-reachable-ipv4-or-ipv6' if test_lan_direct else None,
         'test_warning': WARNING if test_lan_direct else None,

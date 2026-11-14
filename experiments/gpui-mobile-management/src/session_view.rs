@@ -62,6 +62,7 @@ pub struct SessionView {
     keyboard_page: KeyboardPage,
     ime_height: [Option<f32>; 2],
     rail_position: Option<(u16, u16)>,
+    keyboard_pan_y: f32,
     controls_idle: Option<gpui::Task<()>>,
     presentation_active: bool,
     entry_pending: Option<(Instant, gpui::Size<Pixels>)>,
@@ -212,6 +213,7 @@ impl SessionView {
             keyboard_page: KeyboardPage::Input,
             ime_height: [None; 2],
             rail_position: None,
+            keyboard_pan_y: 0.,
             controls_idle: None,
             presentation_active: false,
             entry_pending: None,
@@ -1138,6 +1140,7 @@ impl SessionView {
                     right: Some(bounds(mouse.right)),
                     wheel: Some(bounds(mouse.wheel)),
                     reserved: Some(bounds(layout.rail)),
+                    canvas: Some(bounds(layout.stage)),
                 },
                 bounds(layout.stage),
             );
@@ -1395,6 +1398,7 @@ fn stage_geometry(
                 middle: Some(global(mouse.middle)),
                 wheel: Some(global(mouse.wheel)),
                 reserved: Some(global(layout.rail)),
+                canvas: Some(global(layout.stage)),
             })
             .unwrap_or_default(),
     )
@@ -1416,16 +1420,7 @@ impl Drop for SessionView {
 }
 
 pub fn visible_bounds(window: &Window) -> Bounds<Pixels> {
-    let mut visible = window.fully_visible_bounds();
-    // A one-sided cutout must not shift the remote image and its input coordinates.
-    let (left, width) = session_layout::centered_horizontal_bounds(
-        window.viewport_size().width.into(),
-        visible.origin.x.into(),
-        visible.size.width.into(),
-    );
-    visible.origin.x = px(left);
-    visible.size.width = px(width);
-    visible
+    Bounds::new(gpui::point(px(0.), px(0.)), window.viewport_size())
 }
 
 impl Render for SessionView {
@@ -1446,7 +1441,7 @@ impl Render for SessionView {
         let landscape = viewport.width >= viewport.height;
         let orientation = usize::from(landscape);
         let insets = window.insets();
-        let ime = f32::from(insets.ime.bottom - insets.safe_area.bottom).max(0.);
+        let ime = f32::from(insets.ime.bottom).max(0.);
         if self.panel == Panel::Keyboard && self.keyboard_page == KeyboardPage::Input && ime > 0. {
             self.ime_height[orientation] =
                 Some(self.ime_height[orientation].unwrap_or(0.).max(ime));
@@ -1465,9 +1460,6 @@ impl Render for SessionView {
             } else {
                 (body_height - ime).max(0.)
             };
-        if let Some(keyboard) = &self.keyboard {
-            keyboard.update(cx, |keyboard, cx| keyboard.set_body_height(body_height, cx));
-        }
         let mut layout = session_layout::layout(
             visible.width.into(),
             visible.height.into(),
@@ -1476,6 +1468,31 @@ impl Render for SessionView {
             self.input.mode() == InputMode::Pointer && self.mouse_buttons && self.input_allowed(),
             keyboard_height,
         );
+        if self.panel == Panel::Keyboard {
+            session_layout::keyboard_overlay(&mut layout, visible.height.into(), ime);
+            let body = layout
+                .keyboard
+                .map_or(0., |bounds| (bounds.height - key_height).max(0.));
+            if let Some(keyboard) = &self.keyboard {
+                keyboard.update(cx, |keyboard, cx| {
+                    keyboard.set_body_size(
+                        body,
+                        layout.keyboard.map_or(0., |bounds| bounds.width),
+                        cx,
+                    )
+                });
+            }
+            if let Some((_, y)) = self.input.pointer_snapshot().position {
+                session_layout::pan_for_keyboard(
+                    &mut layout,
+                    self.extent,
+                    y - self.origin.1,
+                    &mut self.keyboard_pan_y,
+                );
+            }
+        } else {
+            self.keyboard_pan_y = 0.;
+        }
         if !self.rail_expanded {
             session_layout::place_rail(
                 &mut layout,

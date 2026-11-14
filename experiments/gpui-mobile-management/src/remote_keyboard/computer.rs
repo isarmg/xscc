@@ -3,14 +3,27 @@ use crate::keyboard_action::{Shortcut, chords::Modifier};
 use base::message_proto::{ControlKey, KeyEvent};
 use gpui::{Context, Div, Role, Stateful, Window, div, prelude::*, px, rgb};
 
+use std::time::{Duration, Instant};
+
+#[derive(Default)]
+pub(super) enum PageMotion {
+    #[default]
+    Idle,
+    Dragging(f32),
+    Settling {
+        from: f32,
+        started: Instant,
+    },
+}
+
 pub(super) const BACKGROUND: u32 = 0x111214;
 pub(super) const KEY: u32 = 0x292a30;
 pub(super) const FOREGROUND: u32 = 0xe7e7eb;
 pub(super) const ACCENT: u32 = 0x4d88fa;
 
 pub(crate) fn key_height(body_height: f32, landscape: bool) -> f32 {
-    let (rows, spacing) = if landscape { (5., 44.) } else { (6., 48.) };
-    ((body_height - spacing) / rows).clamp(24., 72.)
+    let (rows, spacing) = if landscape { (5., 48.) } else { (6., 52.) };
+    ((body_height - spacing) / rows).floor().clamp(1., 72.)
 }
 
 #[derive(Clone, Copy)]
@@ -106,7 +119,32 @@ impl RemoteKeyboard {
         }))
     }
 
-    pub(super) fn computer_keyboard(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn page_progress(&mut self, now: Instant) -> (f32, bool) {
+        let target = f32::from(self.computer_second_page);
+        match self.page_motion {
+            PageMotion::Idle => (target, false),
+            PageMotion::Dragging(offset) => (offset, false),
+            PageMotion::Settling { from, started } => {
+                let t = (now.saturating_duration_since(started).as_secs_f32() / 0.14).min(1.);
+                if t >= 1. {
+                    self.page_motion = PageMotion::Idle;
+                }
+                (from + (target - from) * (1. - (1. - t).powi(3)), t < 1.)
+            }
+        }
+    }
+
+    fn select_computer_page(&mut self, second: bool, cx: &mut Context<Self>) {
+        let from = self.page_progress(Instant::now()).0;
+        self.computer_second_page = second;
+        self.page_motion = PageMotion::Settling {
+            from,
+            started: Instant::now(),
+        };
+        cx.notify();
+    }
+
+    pub(super) fn computer_keyboard(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let landscape = window.viewport_size().width >= window.viewport_size().height;
         let height = key_height(self.body_height, landscape);
         let enabled = self.control.enabled.get();
@@ -155,38 +193,54 @@ impl RemoteKeyboard {
                 })),
             );
         }
-        let rows = if self.computer_second_page {
-            if landscape {
-                symbol_rows()
-            } else {
-                portrait_symbol_rows()
-            }
+        let width = ((if self.body_width > 0. {
+            self.body_width
         } else {
-            let mut rows = letter_rows();
-            if !landscape {
-                rows.insert(0, symbol_rows().remove(0));
-            }
-            rows
-        };
-        let columns = if !landscape && self.computer_second_page {
-            6
-        } else {
-            10
-        };
-        let mut body = div().flex().flex_col().gap_1();
-        for row in rows {
-            for keys in row.chunks(columns) {
-                let mut line = div().flex().gap_1();
-                for (label, key) in keys {
-                    line = line.child(self.computer_key(label, *key, height, cx));
+            window.viewport_size().width.into()
+        }) - 8.)
+            .max(1.);
+        let (progress, animating) = self.page_progress(Instant::now());
+        if animating {
+            window.request_animation_frame();
+        }
+        let mut body = div().relative().size_full().overflow_hidden();
+        for second in [false, true] {
+            let rows = if second {
+                if landscape {
+                    symbol_rows()
+                } else {
+                    portrait_symbol_rows()
                 }
-                if !landscape && self.computer_second_page {
+            } else {
+                let mut rows = letter_rows();
+                if !landscape {
+                    rows.insert(0, symbol_rows().remove(0));
+                }
+                rows
+            };
+            let columns = if !landscape && second { 6 } else { 10 };
+            let mut page = div()
+                .absolute()
+                .top_0()
+                .left(px(width * (f32::from(second) - progress)))
+                .w(px(width))
+                .h_full()
+                .flex()
+                .flex_col()
+                .gap_1();
+            for row in rows {
+                for keys in row.chunks(columns) {
+                    let mut line = div().flex().gap_1().flex_shrink_0();
+                    for (label, key) in keys {
+                        line = line.child(self.computer_key(label, *key, height, cx));
+                    }
                     for _ in keys.len()..columns {
                         line = line.child(div().flex_1().min_w_0());
                     }
+                    page = page.child(line);
                 }
-                body = body.child(line);
             }
+            body = body.child(page);
         }
         let mut pages = div()
             .flex()
@@ -222,8 +276,7 @@ impl RemoteKeyboard {
                         },
                     )))
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        view.computer_second_page = second;
-                        cx.notify();
+                        view.select_computer_page(second, cx);
                     })),
             );
         }
@@ -237,23 +290,38 @@ impl RemoteKeyboard {
             .child(
                 div()
                     .id("computer-key-rows")
+                    .debug_selector(|| "computer-key-rows".into())
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
+                    .overflow_hidden()
                     .on_scroll_wheel(cx.listener(
-                        |view, event: &gpui::ScrollWheelEvent, window, cx| {
+                        move |view, event: &gpui::ScrollWheelEvent, window, cx| {
                             let delta = event.delta.pixel_delta(window.line_height());
-                            if matches!(
-                                event.touch_phase,
+                            match event.touch_phase {
                                 gpui::TouchPhase::Started | gpui::TouchPhase::Moved
-                            ) && delta.x.abs() > delta.y.abs()
-                            {
-                                let second = delta.x < px(0.);
-                                if view.computer_second_page != second {
-                                    view.computer_second_page = second;
+                                    if delta.x.abs() > delta.y.abs()
+                                        || matches!(view.page_motion, PageMotion::Dragging(_)) =>
+                                {
+                                    let from = view.page_progress(Instant::now()).0;
+                                    view.page_motion = PageMotion::Dragging(
+                                        (from - f32::from(delta.x) / width).clamp(0., 1.),
+                                    );
                                     cx.notify();
+                                    cx.stop_propagation();
                                 }
-                                cx.stop_propagation();
+                                gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled
+                                    if matches!(view.page_motion, PageMotion::Dragging(_)) =>
+                                {
+                                    let second = if event.touch_phase == gpui::TouchPhase::Cancelled
+                                    {
+                                        view.computer_second_page
+                                    } else {
+                                        view.page_progress(Instant::now()).0 >= 0.5
+                                    };
+                                    view.select_computer_page(second, cx);
+                                    cx.stop_propagation();
+                                }
+                                _ => {}
                             }
                         },
                     ))
@@ -586,6 +654,120 @@ mod tests {
         }
     }
 
+    struct KeyboardViewport {
+        keyboard: gpui::Entity<RemoteKeyboard>,
+        height: f32,
+    }
+    impl gpui::Render for KeyboardViewport {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            div()
+                .w_full()
+                .h(px(self.height))
+                .child(self.keyboard.clone())
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn both_computer_pages_fit_the_native_keyboard_height_without_vertical_scroll(
+        cx: &mut TestAppContext,
+    ) {
+        let (stage, cx) = cx.add_window_view(|window, cx| {
+            let keyboard = cx.new(|cx| {
+                let control = KeyboardControl::new(true);
+                control.configure(true, true, true);
+                let mut view = RemoteKeyboard::new(control, window, cx);
+                view.page = KeyboardPage::Keys;
+                view
+            });
+            KeyboardViewport {
+                keyboard,
+                height: 250.,
+            }
+        });
+        let keyboard = cx.update(|_, cx| stage.read(cx).keyboard.clone());
+        for (width, screen_height, body_height) in [(360., 800., 250.), (800., 360., 160.)] {
+            cx.simulate_resize(size(px(width), px(screen_height)));
+            stage.update(cx, |view, _| view.height = body_height);
+            for second in [false, true] {
+                keyboard.update(cx, |view, cx| {
+                    view.set_body_size(body_height, width, cx);
+                    view.computer_second_page = second;
+                    view.page_motion = PageMotion::Idle;
+                });
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                let rows = cx.debug_bounds("computer-key-rows").unwrap();
+                let last = cx
+                    .debug_bounds(if second {
+                        "computer-key-↓"
+                    } else {
+                        "computer-key-Enter"
+                    })
+                    .unwrap();
+                assert!(last.origin.y >= rows.origin.y);
+                assert!(
+                    last.bottom() <= rows.bottom() + px(0.01),
+                    "last key outside its page: {last:?}, page={rows:?}"
+                );
+                let before = last;
+                for (phase, y) in [
+                    (TouchPhase::Started, 80.),
+                    (TouchPhase::Moved, 20.),
+                    (TouchPhase::Ended, 20.),
+                ] {
+                    cx.simulate_event(TouchEvent {
+                        id: TouchId(8),
+                        phase,
+                        position: point(px(150.), px(y)),
+                        ..Default::default()
+                    });
+                }
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                assert_eq!(
+                    cx.debug_bounds(if second {
+                        "computer-key-↓"
+                    } else {
+                        "computer-key-Enter"
+                    })
+                    .unwrap(),
+                    before,
+                    "vertical gesture must not scroll the computer keyboard"
+                );
+            }
+        }
+    }
+
+    #[gpui_test_support::test]
+    fn horizontal_swipe_tracks_the_finger_before_snapping(cx: &mut TestAppContext) {
+        let (keyboard, cx) = cx.add_window_view(|window, cx| {
+            let control = KeyboardControl::new(true);
+            control.configure(true, true, true);
+            let mut view = RemoteKeyboard::new(control, window, cx);
+            view.page = KeyboardPage::Keys;
+            view.body_height = 276.;
+            view
+        });
+        cx.simulate_resize(size(px(320.), px(640.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        for (phase, x) in [(TouchPhase::Started, 240.), (TouchPhase::Moved, 140.)] {
+            cx.simulate_event(TouchEvent {
+                id: TouchId(1),
+                phase,
+                position: point(px(x), px(110.)),
+                ..Default::default()
+            });
+        }
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        keyboard.update(cx, |view, _| {
+            let offset = view.page_progress(Instant::now()).0;
+            assert!(
+                offset > 0.1 && offset < 0.9,
+                "swipe snapped instead of tracking: {offset}"
+            );
+            assert!(!view.computer_second_page);
+        });
+        assert!(cx.debug_bounds("computer-key-1").unwrap().origin.x < px(0.));
+    }
+
     #[gpui_test_support::test]
     fn horizontal_swipes_change_keys_without_typing(cx: &mut TestAppContext) {
         let (keyboard, cx) = cx.add_window_view(|window, cx| {
@@ -636,6 +818,11 @@ mod tests {
                 });
             }
             assert_eq!(sent.borrow().len(), before, "swiping typed a key");
+            keyboard.update(cx, |view, _| {
+                if let PageMotion::Settling { started, .. } = &mut view.page_motion {
+                    *started -= Duration::from_millis(200);
+                }
+            });
             cx.update(|window, cx| window.draw(cx).clear(cx));
             cx.simulate_click(point(px(20.), px(110.)), gpui::Modifiers::default());
             assert_eq!(sent.borrow().last(), Some(&expected));

@@ -44,9 +44,9 @@ pub(super) fn render(model: &ChromeModel, cx: &mut Context<SessionChrome>) -> Di
                 .aria_description("轻点点击鼠标按键；单指长按半秒后拖动可移动按钮位置")
                 .rounded_full()
                 .bg(rgba(if pressed {
-                    (ACCENT << 8) | 0xee
+                    (ACCENT << 8) | 0xcc
                 } else {
-                    (RAISED << 8) | 0xe0
+                    (super::SURFACE << 8) | 0xc0
                 }))
                 .border_2()
                 .border_color(rgb(if moving || pressed { ACCENT } else { BORDER }))
@@ -70,7 +70,7 @@ pub(super) fn render(model: &ChromeModel, cx: &mut Context<SessionChrome>) -> Di
             .aria_label("鼠标滚轮滑块")
             .aria_description("上下滑动滚动；单指长按半秒后拖动可移动滑块位置")
             .rounded_full()
-            .bg(rgba((RAISED << 8) | 0xe0))
+            .bg(rgba((super::SURFACE << 8) | 0xc0))
             .border_2()
             .border_color(rgb(if moving { ACCENT } else { BORDER }))
             .child(
@@ -213,6 +213,7 @@ mod tests {
                 right: Some(bounds(mouse.right)),
                 wheel: Some(bounds(mouse.wheel)),
                 reserved: Some(bounds(layout.rail)),
+                canvas: Some(bounds(layout.stage)),
             };
             let touch = cx.listener(move |view, event: &TouchEvent, _, _| {
                 let phase = match event.phase {

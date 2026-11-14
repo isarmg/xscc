@@ -59,6 +59,20 @@ impl TrackpadInput {
         }
     }
 
+    pub fn translate_viewport(&mut self, geometry: Geometry) -> bool {
+        if self.geometry.is_some_and(|old| {
+            old.extent == geometry.extent
+                && old.origin == geometry.origin
+                && old.bounds.2 == geometry.bounds.2
+                && old.bounds.3 == geometry.bounds.3
+        }) {
+            self.geometry = Some(geometry);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn configure(&mut self, geometry: Geometry) -> Vec<Output> {
         if self.geometry == Some(geometry) {
             return Vec::new();

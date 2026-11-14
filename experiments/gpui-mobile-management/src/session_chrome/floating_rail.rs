@@ -1,8 +1,7 @@
 use super::{ChromeAction, SessionChrome};
 use crate::session_layout::Rect;
 use gpui::{
-    Bounds, Context, HitboxBehavior, IntoElement, Pixels, TouchEvent, TouchId, TouchPhase, canvas,
-    prelude::*,
+    Context, HitboxBehavior, IntoElement, TouchEvent, TouchId, TouchPhase, canvas, prelude::*,
 };
 use std::time::{Duration, Instant};
 
@@ -18,28 +17,21 @@ pub(super) struct Gesture {
 impl SessionChrome {
     pub(super) fn rail_touch(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let owner = self.rail_touch_owner.entity_id();
-        let touch = cx.listener(
-            move |view, (event, bounds): &(TouchEvent, Bounds<Pixels>), window, cx| {
-                let visible = window.fully_visible_bounds();
-                let (_, width) = crate::session_layout::centered_horizontal_bounds(
-                    window.viewport_size().width.into(),
-                    visible.origin.x.into(),
-                    visible.size.width.into(),
-                );
-                view.move_rail(
-                    event,
-                    *bounds,
-                    (width, visible.size.height.into()),
-                    Instant::now(),
-                    cx,
-                );
-            },
-        );
+        let touch = cx.listener(move |view, event: &TouchEvent, window, cx| {
+            let viewport = window.viewport_size();
+            let height = (viewport.height - window.insets().ime.bottom).max(gpui::px(0.));
+            view.move_rail(
+                event,
+                (viewport.width.into(), height.into()),
+                Instant::now(),
+                cx,
+            );
+        });
         canvas(
-            |bounds, window, _| (bounds, window.insert_hitbox(bounds, HitboxBehavior::Normal)),
-            move |_, (bounds, hitbox), window, _| {
+            |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
                 window.on_touch_event(owner, &hitbox, move |event, window, cx| {
-                    touch(&(event.clone(), bounds), window, cx);
+                    touch(event, window, cx);
                 });
             },
         )
@@ -52,7 +44,6 @@ impl SessionChrome {
     fn move_rail(
         &mut self,
         event: &TouchEvent,
-        bounds: Bounds<Pixels>,
         extent: (f32, f32),
         now: Instant,
         cx: &mut Context<Self>,

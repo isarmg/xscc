@@ -329,7 +329,7 @@ jobs:
           if [ "$FLAVOR" != smoke ]; then scope=software-video-pointer-keyboard-audio-preview; fi
           printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=%s\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope" "$signing"             > dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" != smoke ]; then
-            printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=false\naudio_mode=foreground-playback-only-explicit-per-session-opt-in\nmicrophone=false\nclipboard=false\nlocal_field_paste=explicit-foreground-text-only\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
+            printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=true\naudio_mode=foreground-playback-default-on-with-session-mute\nmicrophone=false\nclipboard=false\nlocal_field_paste=explicit-foreground-text-only\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
           fi
           if [ "$FLAVOR" = landirect ]; then

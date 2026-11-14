@@ -77,6 +77,8 @@ pub struct RemoteKeyboard {
     page: KeyboardPage,
     computer_second_page: bool,
     body_height: f32,
+    body_width: f32,
+    page_motion: computer::PageMotion,
     _blur: Subscription,
 }
 impl EventEmitter<KeyboardEvent> for RemoteKeyboard {}
@@ -95,9 +97,19 @@ impl RemoteKeyboard {
             page: KeyboardPage::Input,
             computer_second_page: false,
             body_height: 240.,
+            body_width: 0.,
+            page_motion: computer::PageMotion::default(),
             _blur: blur,
         }
     }
+    pub fn set_body_size(&mut self, height: f32, width: f32, cx: &mut Context<Self>) {
+        if self.body_width != width {
+            self.body_width = width;
+            cx.notify();
+        }
+        self.set_body_height(height, cx);
+    }
+
     pub fn set_body_height(&mut self, height: f32, cx: &mut Context<Self>) {
         if self.body_height != height {
             self.body_height = height;

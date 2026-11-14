@@ -4,7 +4,7 @@ use crate::{
 };
 use gpui::{
     Context, Div, EventEmitter, IntoElement, PathBuilder, Render, Role, Stateful, Window, canvas,
-    div, point, prelude::*, px, rgb,
+    div, point, prelude::*, px, rgb, rgba,
 };
 
 mod bitrate;
@@ -13,13 +13,12 @@ mod mouse_controls;
 mod resolution;
 pub(crate) mod virtual_displays;
 
-const PAGE: u32 = 0x000000;
-const SURFACE: u32 = crate::theme::LIGHT.panel;
-const RAISED: u32 = crate::theme::LIGHT.accent_soft;
-const BORDER: u32 = crate::theme::LIGHT.border;
-const TEXT: u32 = crate::theme::LIGHT.text;
-const MUTED: u32 = crate::theme::LIGHT.muted;
-const ACCENT: u32 = crate::theme::LIGHT.accent;
+const SURFACE: u32 = 0x2b2d31;
+const RAISED: u32 = 0x41444b;
+const BORDER: u32 = 0x737984;
+const TEXT: u32 = 0xffffff;
+const MUTED: u32 = 0xc5c8ce;
+const ACCENT: u32 = 0x626975;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChromeMonitor {
@@ -170,7 +169,7 @@ impl SessionChrome {
             .items_center()
             .justify_center()
             .rounded(px(14.))
-            .bg(rgb(if selected { ACCENT } else { RAISED }))
+            .bg(rgba(((if selected { ACCENT } else { RAISED }) << 8) | 0xc0))
             .text_color(rgb(if selected {
                 crate::theme::LIGHT.on_accent
             } else {
@@ -256,7 +255,7 @@ impl SessionChrome {
             )
     }
 
-    fn rail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn rail(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let model = &self.model;
         if !model.rail_expanded {
             return at(model.layout.rail)
@@ -266,7 +265,7 @@ impl SessionChrome {
                 .aria_label("展开操控栏")
                 .aria_expanded(false)
                 .rounded_full()
-                .bg(rgb(PAGE))
+                .bg(rgba((SURFACE << 8) | 0xc0))
                 .border_1()
                 .border_color(rgb(0xffffff))
                 .flex()
@@ -282,13 +281,13 @@ impl SessionChrome {
                     cx.stop_propagation();
                 }));
         }
+        let horizontal = model.layout.rail.width > model.layout.rail.height;
         let mut rail = div()
-            .w_full()
-            .min_h_full()
             .flex()
-            .flex_col()
             .items_center()
-            .gap_1();
+            .gap_1()
+            .when(horizontal, |rail| rail.h_full().min_w_full().flex_row())
+            .when(!horizontal, |rail| rail.w_full().min_h_full().flex_col());
         for (id, label, icon, panel, enabled) in [
             (
                 "session-operations",
@@ -348,20 +347,30 @@ impl SessionChrome {
                 (false, true),
                 ChromeAction::ToggleRail,
             ));
+        let insets = window.insets().safe_area;
         at(model.layout.rail)
             .id("session-control-rail")
-            .bg(rgb(0x2b2d31))
+            .bg(rgba((SURFACE << 8) | 0xc0))
             .flex()
             .flex_col()
-            .py(px(24.))
+            .when(horizontal, |dock| {
+                dock.pl(insets.left.max(px(24.)))
+                    .pr(insets.right.max(px(24.)))
+            })
+            .when(!horizontal, |dock| {
+                dock.pt(insets.top.max(px(24.)))
+                    .pb(insets.bottom.max(px(24.)))
+            })
             .occlude()
             .child(
                 div()
                     .id("session-docked-controls")
                     .flex_1()
                     .min_h_0()
-                    .w_full()
-                    .overflow_y_scroll()
+                    .min_w_0()
+                    .size_full()
+                    .when(horizontal, |body| body.overflow_x_scroll())
+                    .when(!horizontal, |body| body.overflow_y_scroll())
                     .child(rail),
             )
     }
@@ -721,10 +730,7 @@ impl SessionChrome {
         };
         at(area)
             .id("session-options-panel")
-            .rounded(px(14.))
-            .bg(rgb(SURFACE))
-            .border_1()
-            .border_color(rgb(BORDER))
+            .bg(rgba((SURFACE << 8) | 0xc0))
             .overflow_hidden()
             .occlude()
             .flex()
@@ -824,7 +830,7 @@ impl Render for SessionChrome {
         if let Some(panel) = self.model.layout.panel {
             chrome = chrome.child(self.panel(panel, window, cx));
         }
-        chrome.child(self.rail(cx))
+        chrome.child(self.rail(window, cx))
     }
 }
 
@@ -1110,7 +1116,7 @@ mod rail_tests {
         });
         for ((x, y), end, expected_toggles, expected_remote) in [
             ((290., 610.), TouchPhase::Ended, 1, 0),
-            ((292., 286.), TouchPhase::Ended, 2, 0),
+            ((286., 612.), TouchPhase::Ended, 2, 0),
             ((290., 400.), TouchPhase::Ended, 2, 2),
             ((290., 610.), TouchPhase::Cancelled, 2, 2),
             ((290., 610.), TouchPhase::Ended, 3, 2),
@@ -1217,7 +1223,7 @@ mod rail_tests {
                 cx.simulate_event(TouchEvent {
                     id: TouchId(1),
                     phase,
-                    position: point(px(292.), px(190.)),
+                    position: point(px(190.), px(612.)),
                     ..TouchEvent::default()
                 });
             }

@@ -15,8 +15,12 @@ pub(super) struct ResolutionEditor {
 impl ResolutionEditor {
     pub(super) fn new(cx: &mut Context<SessionChrome>) -> Self {
         Self {
-            width: cx.new(|cx| TextField::new("宽度（像素）", false, cx)),
-            height: cx.new(|cx| TextField::new("高度（像素）", false, cx)),
+            width: cx.new(|cx| {
+                TextField::new("宽度（像素）", false, cx).with_session_palette(crate::theme::DARK)
+            }),
+            height: cx.new(|cx| {
+                TextField::new("高度（像素）", false, cx).with_session_palette(crate::theme::DARK)
+            }),
             custom: false,
             error: None,
         }

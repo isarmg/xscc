@@ -41,17 +41,57 @@ pub fn place_rail(
     height: f32,
 ) {
     if let Some((x, y)) = position {
-        let margin_x = 16_f32.min((width - layout.rail.width).max(0.) / 2.);
-        let margin_y = 16_f32.min((height - layout.rail.height).max(0.) / 2.);
-        layout.rail.x = ((width - layout.rail.width).max(0.) * f32::from(x) / 10_000.).clamp(
-            margin_x,
-            (width - layout.rail.width - margin_x).max(margin_x),
-        );
-        layout.rail.y = ((height - layout.rail.height).max(0.) * f32::from(y) / 10_000.).clamp(
-            margin_y,
-            (height - layout.rail.height - margin_y).max(margin_y),
-        );
+        layout.rail.x = (width - layout.rail.width).max(0.) * f32::from(x) / 10_000.;
+        layout.rail.y = (height - layout.rail.height).max(0.) * f32::from(y) / 10_000.;
     }
+}
+
+pub fn keyboard_overlay(layout: &mut SessionLayout, height: f32, ime: f32) {
+    let bottom = (height - ime).max(0.);
+    if layout.rail.width > layout.rail.height {
+        layout.rail.y = (bottom - layout.rail.height).max(0.);
+    }
+    if let Some(keyboard) = &mut layout.keyboard {
+        let end = if layout.rail.width > layout.rail.height {
+            layout.rail.y
+        } else {
+            bottom
+        };
+        keyboard.height = keyboard.height.min(end);
+        keyboard.y = end - keyboard.height;
+    }
+    layout.stage.height = height;
+    layout.viewport.height = height;
+    layout.video.height = height;
+}
+
+pub fn pan_for_keyboard(
+    layout: &mut SessionLayout,
+    extent: (u32, u32),
+    pointer_y: i32,
+    offset: &mut f32,
+) {
+    let Some(keyboard) = layout.keyboard else {
+        return;
+    };
+    if extent.0 == 0 || extent.1 == 0 {
+        return;
+    }
+    let scale = (layout.video.width / extent.0 as f32).min(layout.video.height / extent.1 as f32);
+    let image_top = (layout.video.height - extent.1 as f32 * scale) / 2.;
+    let image_bottom = image_top + extent.1 as f32 * scale;
+    let edge = 24_f32.min(keyboard.y / 4.);
+    let low = (keyboard.y - edge).max(0.);
+    let high = (image_top + edge).min((low - edge).max(0.));
+    let pointer =
+        image_top + pointer_y.clamp(0, extent.1.saturating_sub(1) as i32) as f32 * scale + *offset;
+    if pointer > low {
+        *offset -= pointer - low;
+    } else if pointer < high {
+        *offset += high - pointer;
+    }
+    *offset = offset.clamp((low - image_bottom).min(0.), 0.);
+    layout.video.y = *offset;
 }
 
 pub fn centered_horizontal_bounds(width: f32, left: f32, visible_width: f32) -> (f32, f32) {
@@ -73,14 +113,15 @@ pub fn layout(
     } else {
         0.
     };
-    let rail_width = if rail_expanded {
+    let portrait = height > width;
+    let rail_width = if rail_expanded && !portrait {
         56_f32.min(width * 0.2)
     } else {
         0.
     };
     let available_width = (width - rail_width).max(0.);
     let options = matches!(panel, Panel::Operations | Panel::Display);
-    let side_width = if options && width >= 640. {
+    let side_width = if options && !portrait {
         320_f32
             .min(available_width * 0.42)
             .min((available_width - 160.).max(0.))
@@ -166,7 +207,13 @@ pub fn layout(
     let (rail, control_panel, keyboard, stage, video, control_width, control_height) =
         if height > width {
             let rail = if rail_expanded {
-                rail
+                let rail_height = 56_f32.min(height);
+                Rect {
+                    x: 0.,
+                    y: height - rail_height,
+                    width,
+                    height: rail_height,
+                }
             } else {
                 let size = 44_f32.min(width).min(height);
                 let margin_x = 16_f32.min((width - size).max(0.));
@@ -188,7 +235,7 @@ pub fn layout(
                 320_f32.min(height * 0.48)
             };
             let panel_bottom = if rail_expanded {
-                height
+                rail.y
             } else {
                 (rail.y - 8.).max(0.)
             };
@@ -200,10 +247,12 @@ pub fn layout(
                 height: panel_height,
             };
             let stage = Rect {
-                height: if panel == Panel::None {
-                    height
-                } else {
+                height: if panel == Panel::Keyboard {
                     bottom.y
+                } else if rail_expanded {
+                    rail.y
+                } else {
+                    height
                 },
                 ..stage
             };
@@ -217,7 +266,11 @@ pub fn layout(
                     ..video
                 },
                 available_width,
-                stage.height.min(panel_bottom),
+                if options {
+                    bottom.y
+                } else {
+                    stage.height.min(panel_bottom)
+                },
             )
         } else {
             (
@@ -233,30 +286,32 @@ pub fn layout(
     let mouse = (pointer_buttons
         && panel != Panel::Keyboard
         && control_width >= 224.
-        && control_height >= 64.)
+        && control_height >= 124.)
         .then(|| {
             let key_size = 48.;
-            let first = (control_width - key_size * 4. - 24.) / 2.;
+            let first = (control_width - key_size * 2. - 8.) / 2.;
             let left = Rect {
                 x: first,
                 y: control_height - key_size - 12.,
                 width: key_size,
                 height: key_size,
             };
-            let middle = Rect {
+            let right = Rect {
                 x: first + key_size + 8.,
                 ..left
             };
-            let right = Rect {
-                x: first + 2. * (key_size + 8.),
-                ..left
-            };
-            let wheel_height = 112_f32.min(control_height - 24.).max(44.);
-            let wheel = Rect {
-                x: first + 3. * (key_size + 8.),
-                y: control_height - wheel_height - 12.,
+            let wheel_height = (control_height - key_size - 32.).clamp(44., 112.);
+            let group_height = key_size + 8. + wheel_height;
+            let middle = Rect {
+                x: control_width - key_size - 12.,
+                y: (control_height - group_height) / 2.,
                 width: key_size,
+                height: key_size,
+            };
+            let wheel = Rect {
+                y: middle.y + key_size + 8.,
                 height: wheel_height,
+                ..middle
             };
             MouseControls {
                 left,
@@ -386,9 +441,9 @@ mod tests {
                 assert_eq!(layout.viewport, layout.stage);
                 assert_eq!(layout.video.x + layout.video.width / 2., 393. / 2.);
                 if expanded {
-                    assert_eq!(layout.rail.y, 0.);
-                    assert_eq!(layout.rail.height, 873.);
-                    assert_eq!(layout.rail.x + layout.rail.width, 393.);
+                    assert_eq!(layout.rail.x, 0.);
+                    assert_eq!(layout.rail.y + layout.rail.height, 873.);
+                    assert_eq!(layout.rail.width, 393.);
                     assert!(!overlaps(layout.video, layout.rail));
                 }
                 if let Some(mouse) = layout.mouse {
@@ -401,11 +456,20 @@ mod tests {
                 }
                 if let Some(bottom) = layout.panel.or(layout.keyboard) {
                     assert!(!overlaps(bottom, layout.rail));
-                    assert!(!overlaps(bottom, layout.video));
-                    assert_eq!(layout.video.y + layout.video.height, bottom.y);
+                    if panel == Panel::Keyboard {
+                        assert!(!overlaps(bottom, layout.video));
+                        assert_eq!(layout.video.y + layout.video.height, bottom.y);
+                    }
                     assert!(bottom.y + bottom.height <= 873.);
                 } else {
-                    assert_eq!(layout.video.height, baseline.video.height);
+                    assert_eq!(
+                        layout.video.height,
+                        if expanded {
+                            layout.rail.y
+                        } else {
+                            baseline.video.height
+                        }
+                    );
                 }
             }
         }
@@ -447,6 +511,50 @@ mod tests {
             docked.video.x + docked.video.width / 2.
         );
         assert!(!overlaps(docked.video, docked.rail));
+    }
+
+    #[test]
+    fn keyboard_overlays_full_size_video_and_pans_in_both_directions() {
+        for (width, height, ime) in [(800., 360., 180.), (393., 873., 330.)] {
+            let mut layout = layout(width, height, true, Panel::Keyboard, false, 36.);
+            keyboard_overlay(&mut layout, height, ime);
+            let size = (layout.video.width, layout.video.height);
+            assert_eq!(layout.stage.height, height);
+            assert_eq!(layout.video.height, height);
+            let mut offset = 0.;
+            pan_for_keyboard(&mut layout, (1920, 1080), 1079, &mut offset);
+            assert!(offset < 0., "bottom pointer must clear the keyboard");
+            let bottom = offset;
+            pan_for_keyboard(&mut layout, (1920, 1080), 0, &mut offset);
+            assert!(
+                offset > bottom,
+                "top pointer must move the image down again"
+            );
+            assert_eq!((layout.video.width, layout.video.height), size);
+        }
+    }
+
+    #[test]
+    fn middle_and_wheel_default_to_a_centered_right_hand_stack() {
+        let layout = layout(800., 360., false, Panel::None, true, 0.);
+        let mouse = layout.mouse.unwrap();
+        assert_eq!(mouse.middle.x, mouse.wheel.x);
+        assert_eq!(
+            (mouse.middle.y + mouse.wheel.y + mouse.wheel.height) / 2.,
+            180.
+        );
+        assert_eq!(mouse.wheel.x + mouse.wheel.width, 788.);
+        let mut moved = layout;
+        place_rail(&mut moved, Some((0, 0)), 800., 360.);
+        assert_eq!((moved.rail.x, moved.rail.y), (0., 0.));
+        place_rail(&mut moved, Some((10_000, 10_000)), 800., 360.);
+        assert_eq!(
+            (
+                moved.rail.x + moved.rail.width,
+                moved.rail.y + moved.rail.height
+            ),
+            (800., 360.)
+        );
     }
 
     #[test]
