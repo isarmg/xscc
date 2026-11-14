@@ -74,7 +74,7 @@ if [[ $target == x86_64-unknown-linux-gnu ]]; then
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$conversion_tests" || { echo 'RGBA conversion regression did not run' >&2; exit 1; }
     # Select only the excluded dependency package while reusing the root lockfile.
     cargo test --locked -p rust-pulsectl --lib --target "$target"
-    for filter in upload_staging_reuses_allocation_after_snapshot swizzle_upload_data; do
+    for filter in upload_staging_ swizzle_upload_data; do
         output=$(cargo test --locked --manifest-path vendor/gpui/Cargo.toml -p gpui_wgpu --lib --target "$target" "$filter" 2>&1) || { printf '%s\n' "$output"; exit 1; }
         printf '%s\n' "$output"
         grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$output" || { echo "No passing upload tests: $filter" >&2; exit 1; }

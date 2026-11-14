@@ -25,7 +25,8 @@ pub struct WgpuAtlas(Mutex<AtlasState<WgpuAtlasTextures>>);
 struct PendingUpload {
     id: AtlasTextureId,
     bounds: Bounds<DevicePixels>,
-    data: Vec<u8>,
+    // None retains a directly queued snapshot until the draw, bounding subsequent updates.
+    data: Option<Vec<u8>>,
 }
 
 struct WgpuAtlasTextures {
@@ -149,10 +150,46 @@ impl AtlasBackend for WgpuAtlasTextures {
     }
 
     fn update(&mut self, tile: AtlasTile, bytes: &[u8]) -> Result<bool> {
-        if self.storage.get(tile.texture_id).is_none() {
+        let Some(texture) = self.storage.get(tile.texture_id) else {
             return Ok(false);
+        };
+        if texture.format == wgpu::TextureFormat::Bgra8Unorm
+            && !self
+                .pending_uploads
+                .iter()
+                .any(|upload| upload.id == tile.texture_id && upload.bounds == tile.bounds)
+        {
+            // write_texture snapshots the borrowed pixels; another CPU copy is unnecessary.
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: tile.bounds.origin.x.0 as u32,
+                        y: tile.bounds.origin.y.0 as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(tile.bounds.size.width.0 as u32 * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: tile.bounds.size.width.0 as u32,
+                    height: tile.bounds.size.height.0 as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.pending_uploads.push(PendingUpload {
+                id: tile.texture_id,
+                bounds: tile.bounds,
+                data: None,
+            });
+            return Ok(true);
         }
-        // Existing upload APIs snapshot CPU bytes and order writes with earlier GPU use.
         self.upload_texture(tile.texture_id, tile.bounds, bytes);
         Ok(true)
     }
@@ -282,17 +319,26 @@ impl WgpuAtlasTextures {
             .iter_mut()
             .find(|upload| upload.id == id && upload.bounds == bounds)
         {
-            fill_upload_data(&mut upload.data, bytes, format);
+            let data = upload
+                .data
+                .get_or_insert_with(|| self.upload_buffers.pop().unwrap_or_default());
+            fill_upload_data(data, bytes, format);
             return;
         }
         let mut data = self.upload_buffers.pop().unwrap_or_default();
         fill_upload_data(&mut data, bytes, format);
-        self.pending_uploads
-            .push(PendingUpload { id, bounds, data });
+        self.pending_uploads.push(PendingUpload {
+            id,
+            bounds,
+            data: Some(data),
+        });
     }
 
     fn flush_uploads(&mut self) {
         for upload in self.pending_uploads.drain(..) {
+            let Some(data) = upload.data else {
+                continue;
+            };
             if let Some(texture) = self.storage.get(upload.id) {
                 let bytes_per_pixel = texture.bytes_per_pixel();
 
@@ -307,7 +353,7 @@ impl WgpuAtlasTextures {
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &upload.data,
+                    &data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(
@@ -322,8 +368,8 @@ impl WgpuAtlasTextures {
                     },
                 );
             }
-            if self.upload_buffers.len() < 3 && upload.data.capacity() <= 64 * 1024 * 1024 {
-                self.upload_buffers.push(upload.data);
+            if self.upload_buffers.len() < 3 && data.capacity() <= 64 * 1024 * 1024 {
+                self.upload_buffers.push(data);
             }
         }
     }
@@ -585,6 +631,75 @@ mod tests {
 
         assert_eq!(second_tile.texture_id, first_tile.texture_id);
         assert_ne!(second_generation, first_generation);
+        Ok(())
+    }
+
+    #[test]
+    fn upload_staging_preserves_latest_replacement_pixels() -> anyhow::Result<()> {
+        use gpui::{ContentMask, Corners, PlatformHeadlessRenderer, PolychromeSprite, Scene};
+
+        let mut renderer = crate::WgpuHeadlessRenderer::new()?;
+        let atlas = renderer.sprite_atlas();
+        let size = Size {
+            width: DevicePixels(2),
+            height: DevicePixels(2),
+        };
+        let make_key = |image_id| {
+            AtlasKey::Image(RenderImageParams {
+                image_id: ImageId(image_id),
+                frame_index: 0,
+            })
+        };
+        let mut key = make_key(0);
+        let tile = atlas
+            .get_or_insert_with(key.clone(), &mut || {
+                Ok(Some((size, Cow::Owned(vec![255; 16]))))
+            })?
+            .expect("tile should be created");
+        let bounds = Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: 2.0.into(),
+                height: 2.0.into(),
+            },
+        };
+        let mut scene = Scene::default();
+        scene.insert_primitive(PolychromeSprite {
+            order: 0,
+            pad: 0,
+            grayscale: false.into(),
+            opacity: 1.0,
+            bounds,
+            content_mask: ContentMask { bounds },
+            corner_radii: Corners::default(),
+            tile,
+        });
+        scene.finish();
+        let mut image_id = 0;
+        for updates in [3, 1, 7, 1] {
+            let mut expected = [0; 4];
+            for _ in 0..updates {
+                image_id += 1;
+                let bgra = match image_id % 3 {
+                    0 => [255, 0, 0, 255],
+                    1 => [0, 255, 0, 255],
+                    _ => [0, 0, 255, 255],
+                };
+                let mut pixels = bgra.repeat(4);
+                let next = make_key(image_id);
+                assert!(atlas.replace(&key, next.clone(), size, &pixels)?);
+                key = next;
+                pixels.fill(0);
+                expected = [bgra[2], bgra[1], bgra[0], bgra[3]];
+            }
+            let image = renderer.render_scene_to_image(&scene, size)?;
+            assert!(image.pixels().all(|pixel| pixel.0 == expected));
+        }
+        let next = make_key(image_id + 1);
+        assert!(atlas.replace(&key, next.clone(), size, &[255; 16])?);
+        atlas.remove(&next);
+        let image = renderer.render_scene_to_image(&scene, size)?;
+        assert!(image.pixels().all(|pixel| pixel.0 == [0, 0, 0, 255]));
         Ok(())
     }
 
