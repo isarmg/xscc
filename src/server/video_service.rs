@@ -798,8 +798,6 @@ fn run_encoder(
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "gpui-host"))]
-    let mut paced_fps = 0;
-    #[cfg(all(windows, feature = "gpui-host"))]
     let mut frame_pacer = frame_pacing::FramePacer::new();
 
     while sp.ok() {
@@ -827,8 +825,6 @@ fn run_encoder(
             &mut second_instant,
             &sp_name,
             sp,
-            #[cfg(all(windows, feature = "gpui-host"))]
-            &mut paced_fps,
         )?;
         #[cfg(feature = "gpui-host")]
         if let Some(sample) = stages.sample(Instant::now(), spf) {
@@ -898,7 +894,7 @@ fn run_encoder(
         #[cfg(feature = "gpui-host")]
         stages.preflight(now.saturating_duration_since(iteration_started));
         #[cfg(all(windows, feature = "gpui-host"))]
-        let pacing_start = frame_pacing::budget_start(paced_fps, iteration_started, now);
+        let pacing_start = iteration_started;
         #[cfg(not(all(windows, feature = "gpui-host")))]
         let pacing_start = now;
         if vs.source.is_monitor() && last_check_displays.elapsed().as_millis() > 1000 {
@@ -1166,7 +1162,7 @@ fn run_encoder(
         stages.handoff(wait_begin.elapsed());
 
         #[cfg(all(windows, feature = "vram"))]
-        // Cursor-only updates carry no encodable image and must not spend a high-rate frame slot.
+        // Cursor-only updates carry no encodable image and must not spend a requested image frame slot.
         if try_gdi == 0
             && !frame_pacing::should_pace_capture(spf, encoder.input_texture(), capture_would_block)
         {
@@ -1180,11 +1176,7 @@ fn run_encoder(
         let pacing_wait_started = Instant::now();
         if elapsed < spf {
             #[cfg(all(windows, feature = "gpui-host"))]
-            if paced_fps > 60 {
-                frame_pacer.wait_until(pacing_start, spf);
-            } else {
-                std::thread::sleep(spf - elapsed);
-            }
+            frame_pacer.wait_until(pacing_start, spf);
             #[cfg(not(all(windows, feature = "gpui-host")))]
             std::thread::sleep(spf - elapsed);
         }
@@ -1690,7 +1682,6 @@ fn check_qos(
     second_instant: &mut Instant,
     name: &str,
     service: &GenericService,
-    #[cfg(all(windows, feature = "gpui-host"))] paced_fps_out: &mut u32,
 ) -> ResultType<()> {
     #[cfg(feature = "gpui-host")]
     let subscriber_ids = service.subscriber_ids();
@@ -1698,10 +1689,6 @@ fn check_qos(
         let mut qos = VIDEO_QOS.lock().unwrap();
         #[cfg(feature = "gpui-host")]
         let (paced_fps, requested_fps) = qos.frame_rates_for_connections(&subscriber_ids);
-        #[cfg(all(windows, feature = "gpui-host"))]
-        {
-            *paced_fps_out = paced_fps;
-        }
         #[cfg(feature = "gpui-host")]
         {
             *spf = Duration::from_secs_f32(1. / paced_fps as f32);

@@ -3,21 +3,7 @@ use std::time::Duration;
 
 #[cfg(any(all(windows, feature = "vram"), test))]
 pub(super) fn should_pace_capture(spf: Duration, texture: bool, would_block: bool) -> bool {
-    !would_block || !texture || spf >= Duration::from_secs(1) / 60
-}
-
-#[cfg(any(all(windows, feature = "gpui-host"), test))]
-pub(super) fn budget_start(
-    fps: u32,
-    iteration: std::time::Instant,
-    capture: std::time::Instant,
-) -> std::time::Instant {
-    // High-refresh pacing must include checks performed before acquiring the next frame.
-    if fps > 60 {
-        iteration
-    } else {
-        capture
-    }
+    !would_block || !texture || (!cfg!(feature = "gpui-host") && spf >= Duration::from_secs(1) / 60)
 }
 
 #[cfg(all(windows, feature = "gpui-host"))]
@@ -136,31 +122,11 @@ mod tests {
     }
 
     #[test]
-    fn high_refresh_checks_do_not_extend_the_requested_frame_period() {
-        let iteration = std::time::Instant::now();
-        let checks = Duration::from_millis(1);
-        let capture = iteration + checks;
-        for fps in [61, 90, 120, 240] {
-            let spf = Duration::from_secs(1) / fps;
-            let done = capture + spf / 2;
-            let remaining =
-                spf.saturating_sub(done.duration_since(budget_start(fps, iteration, capture)));
-            assert_eq!((done + remaining).duration_since(iteration), spf);
-        }
-    }
-
-    #[test]
-    fn ordinary_frame_rates_keep_the_existing_capture_budget() {
-        let iteration = std::time::Instant::now();
-        let capture = iteration + Duration::from_millis(1);
-        for fps in [1, 30, 60] {
-            assert_eq!(budget_start(fps, iteration, capture), capture);
-        }
-    }
-
-    #[test]
-    fn cursor_only_updates_do_not_halve_high_refresh_delivery() {
-        for fps in [90, 120, 240] {
+    fn cursor_only_updates_do_not_halve_requested_image_delivery() {
+        for fps in [1, 30, 60, 90, 120, 240] {
+            if fps <= 60 && !cfg!(feature = "gpui-host") {
+                continue;
+            }
             let spf = Duration::from_secs(1) / fps;
             let mut elapsed = Duration::ZERO;
             let mut frames = 0;

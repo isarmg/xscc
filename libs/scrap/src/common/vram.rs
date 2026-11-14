@@ -388,9 +388,7 @@ impl VRamEncoder {
     }
 
     fn amf_pipeline(&self) -> bool {
-        self.ctx.f.driver == Driver::FFMPEG
-            && self.ctx.f.vendor == Driver::AMF
-            && self.streaming_fps.is_some_and(|fps| fps > 60)
+        self.ctx.f.driver == Driver::FFMPEG && self.ctx.f.vendor == Driver::AMF
     }
 
     fn create(cfg: EncoderCfg, _i444: bool, streaming_fps: Option<u32>) -> ResultType<Self> {

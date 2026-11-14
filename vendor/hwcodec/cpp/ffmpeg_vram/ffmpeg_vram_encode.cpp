@@ -149,7 +149,7 @@ public:
     if (!util_encode::set_lantency_free(c_->priv_data, encoder_->name_)) {
       return false;
     }
-    amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF && framerate_ > 60;
+    amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF;
     if (amf_pipeline_) {
       amf_poll_timer_.reset(CreateWaitableTimerExW(
           nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
@@ -362,9 +362,8 @@ public:
   }
 
   int set_framerate(int framerate) {
-    // Recreate AMF when a high-rate target changes, including its device/pool.
-    if (encoder_->driver_ == EncoderDriver::AMF &&
-        (amf_pipeline_ || framerate > 60) && framerate != framerate_)
+    // Recreate AMF when its target changes, including its device/pool.
+    if (amf_pipeline_ && framerate != framerate_)
       return -1;
     c_->time_base = av_make_q(1, framerate);
     c_->framerate = av_inv_q(c_->time_base);

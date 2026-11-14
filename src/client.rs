@@ -2476,11 +2476,8 @@ fn fps_calculate(
 
 #[cfg(any(all(target_os = "android", feature = "mediacodec"), test))]
 fn mediacodec_output_poll_interval(target_fps: i32) -> Duration {
-    if target_fps <= 60 {
-        return Duration::from_millis(4);
-    }
-    // A fixed 4 ms wait spends half a 120 Hz interval before checking ready hardware output.
-    Duration::from_micros((125_000 / target_fps as u64).max(1_000))
+    // Use one frame-budget policy at every rate; keep idle/unknown targets bounded.
+    Duration::from_micros((125_000 / target_fps.max(1) as u64).clamp(1_000, 4_000))
 }
 
 #[cfg(test)]
@@ -2492,15 +2489,15 @@ mod mediacodec_capacity_tests {
     };
 
     #[test]
-    fn pending_output_polling_respects_high_refresh_frame_budget() {
-        for fps in [0, 30, 60] {
+    fn pending_output_polling_respects_every_requested_frame_budget() {
+        for fps in [0, 1, 30] {
             assert_eq!(mediacodec_output_poll_interval(fps), Duration::from_millis(4));
         }
-        for fps in [90, 120, 240, 1000] {
+        for fps in [30, 60, 90, 120, 240, 1000] {
             let wait = mediacodec_output_poll_interval(fps);
             let frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
             assert!(wait >= Duration::from_millis(1));
-            assert!(wait <= frame_interval / 4 || wait == Duration::from_millis(1));
+            assert!(wait <= frame_interval / 8 || wait == Duration::from_millis(1));
         }
     }
 

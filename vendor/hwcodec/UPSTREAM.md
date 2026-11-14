@@ -42,3 +42,7 @@ enabled, as do bindgen layout tests. This avoids importing unrelated Darwin
 libc records whose old bindgen 0.59 field-offset tests dereference null pointers;
 the native decoded-plane regression tests remain enabled. No C ABI or codec
 link dependencies change.
+
+The FFmpeg AMD texture encoder now uses its existing owned-input asynchronous
+pipeline at every frame rate. Input retention, output polling, keyframe recovery
+and GPU retirement share the same path; no SDK code or C ABI was changed.
