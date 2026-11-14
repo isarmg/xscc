@@ -27,7 +27,10 @@ async fn receive(stream: &mut Stream) -> ResultType<WireMessage> {
     let packet = hbb_common::timeout(CONNECT_TIMEOUT, stream.next())
         .await
         .context("Management handshake timed out")?
-        .context("Management peer closed during handshake")??;
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "Management peer closed during handshake",
+        ))??;
     if packet.len() > 4096 {
         bail!("Management handshake is too large");
     }
@@ -119,21 +122,42 @@ pub(crate) async fn connect(
         .strip_prefix("managed:")
         .context("Select a host from the managed host list")?
         .parse()?;
-    let target: Target = serde_json::from_value(rpc(Request::Target { device_id: id }).await?)?;
     interface.update_direct(None);
     interface.update_received(false);
-    let target_ref = &target;
-    let candidates = target.addresses.iter().map(|address| async move {
-        let endpoint = if address.host.contains(':') {
-            format!("[{}]:{}", address.host, address.port)
-        } else {
-            format!("{}:{}", address.host, address.port)
-        };
-        connect_target(&endpoint, target_ref).await
-    }).collect::<Vec<_>>();
-    let (stream, key) = first_authorized_candidate(candidates).await?;
+    let (stream, key, permit) = retry_closed_handshake(|| async {
+        let target: Target = serde_json::from_value(rpc(Request::Target { device_id: id }).await?)?;
+        let target_ref = &target;
+        let candidates = target.addresses.iter().map(|address| async move {
+            let endpoint = if address.host.contains(':') {
+                format!("[{}]:{}", address.host, address.port)
+            } else {
+                format!("{}:{}", address.host, address.port)
+            };
+            connect_target(&endpoint, target_ref).await
+        }).collect::<Vec<_>>();
+        let (stream, key) = first_authorized_candidate(candidates).await?;
+        Ok((stream, key, target.permit))
+    }).await?;
     interface.update_direct(Some(true));
-    Ok((stream, key, "TCP", Some(target.permit)))
+    Ok((stream, key, "TCP", Some(permit)))
+}
+
+async fn retry_closed_handshake<T, F, A>(mut connect: F) -> ResultType<T>
+where
+    F: FnMut() -> A,
+    A: Future<Output = ResultType<T>>,
+{
+    let mut retries = 0;
+    loop {
+        match connect().await {
+            Err(error) if retries < 2 && error.downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof) => {
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(250 * retries)).await;
+            }
+            result => return result,
+        }
+    }
 }
 
 async fn first_authorized_candidate<T, F>(candidates: impl IntoIterator<Item = F>) -> ResultType<T>
@@ -410,6 +434,36 @@ mod tests {
             .await
             .unwrap();
         assert!(receive(&mut host).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn encrypted_management_peer_close_can_reconnect_without_leaving_the_session() {
+        let mut attempts = 0;
+        let reply = retry_closed_handshake(|| {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                let (mut controller, mut host, _) = encrypted_pair().await;
+                if attempt == 1 {
+                    drop(host);
+                } else {
+                    send(&mut host, &WireMessage::Accepted {}).await?;
+                }
+                receive(&mut controller).await
+            }
+        }).await.unwrap();
+        assert!(matches!(reply, WireMessage::Accepted {}));
+    }
+
+    #[tokio::test]
+    async fn management_authorization_failure_is_not_retried() {
+        let mut attempts = 0;
+        let error = retry_closed_handshake(|| {
+            attempts += 1;
+            async { ResultType::<()>::Err(hbb_common::anyhow::anyhow!("Management authorization expired")) }
+        }).await.unwrap_err();
+        assert_eq!(error.to_string(), "Management authorization expired");
+        assert_eq!(attempts, 1);
     }
 
     #[tokio::test]
