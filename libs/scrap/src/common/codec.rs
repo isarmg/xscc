@@ -137,6 +137,11 @@ pub trait EncoderApi {
     }
 
     #[cfg(all(windows, feature = "vram"))]
+    fn refine_frame(&mut self, _ms: i64) -> ResultType<Option<VideoFrame>> {
+        Ok(None)
+    }
+
+    #[cfg(all(windows, feature = "vram"))]
     fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
         Ok(None)
     }

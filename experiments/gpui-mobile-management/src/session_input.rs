@@ -151,11 +151,7 @@ impl SessionInput {
                 Route::Control(gesture)
                     if gesture.control == Control::Wheel && gesture.mode == Mode::Scrolling =>
                 {
-                    Some(
-                        ((gesture.point.1 - gesture.bounds.1 - 16.)
-                            / (gesture.bounds.3 - 32.).max(1.))
-                        .clamp(0., 1.),
-                    )
+                    Some(gesture.wheel_position())
                 }
                 _ => None,
             })
@@ -172,7 +168,8 @@ impl SessionInput {
     pub fn pending(&self) -> bool {
         self.contacts.iter().any(|contact| {
             matches!(contact.route,
-            Route::Control(gesture) if gesture.mode == Mode::Waiting)
+            Route::Control(gesture) if gesture.mode == Mode::Waiting
+                    || gesture.scroll_rate() != 0.)
         }) || match self.mode {
             InputMode::Direct => self.direct.pending(),
             InputMode::Pointer => self.pointer.pending(),
@@ -180,9 +177,14 @@ impl SessionInput {
     }
 
     pub fn flush(&mut self) -> Vec<Output> {
+        self.flush_at(Instant::now())
+    }
+
+    fn flush_at(&mut self, now: Instant) -> Vec<Output> {
         for contact in &mut self.contacts {
             if let Route::Control(gesture) = &mut contact.route {
-                gesture.advance(Instant::now());
+                gesture.advance(now);
+                self.pointer.scroll_vertical(gesture.scroll_delta(now));
             }
         }
         match self.mode {
@@ -294,12 +296,10 @@ impl SessionInput {
             match self.contacts[index].route {
                 Route::Video => output.extend(self.video_event(id, phase, point, geometry)),
                 Route::Control(mut gesture) => {
-                    let scroll = gesture.update(point, now);
+                    gesture.update(point, now);
                     if gesture.mode == Mode::Moving {
                         self.placements
                             .move_control(gesture, controls.canvas.unwrap_or(geometry.bounds));
-                    } else if scroll != 0. {
-                        self.pointer.scroll_vertical(scroll);
                     }
                     if phase == Phase::Ended
                         && let Some(button) = gesture.control.button()
@@ -666,6 +666,78 @@ mod tests {
     }
 
     #[test]
+    fn wheel_push_repeats_without_more_moves_and_release_stops_it() {
+        let (g, mut controls) = layout();
+        controls.wheel = Some((160., 0., 40., 112.));
+        for (dy, direction) in [(-40., 1), (40., -1)] {
+            let mut input = SessionInput::default();
+            input.configure(g, controls);
+            input.set_mode(InputMode::Pointer);
+            let now = Instant::now();
+            input.event_at(1, Phase::Started, Point(180., 56.), g, controls, now);
+            input.event_at(1, Phase::Moved, Point(180., 56. + dy), g, controls, now);
+            assert!(input.pending());
+            for frame in 1..=60 {
+                let output = input.flush_at(now + std::time::Duration::from_millis(frame * 16));
+                assert!(output.iter().any(|event| matches!(event,
+                    Output::Scroll(0, delta) if delta.signum() == direction)));
+            }
+            input.event_at(
+                1,
+                Phase::Ended,
+                Point(180., 56. + dy),
+                g,
+                controls,
+                now + std::time::Duration::from_secs(1),
+            );
+            assert!(!input.pending());
+            assert!(
+                input
+                    .flush_at(now + std::time::Duration::from_secs(2))
+                    .is_empty()
+            );
+            assert_eq!(input.wheel_position(), 0.5);
+        }
+    }
+
+    #[test]
+    fn wheel_returns_to_neutral_and_cancel_does_not_leave_scroll_running() {
+        let (g, mut controls) = layout();
+        controls.wheel = Some((160., 0., 40., 112.));
+        let mut input = SessionInput::default();
+        input.configure(g, controls);
+        input.set_mode(InputMode::Pointer);
+        let now = Instant::now();
+        input.event_at(1, Phase::Started, Point(180., 56.), g, controls, now);
+        input.event_at(1, Phase::Moved, Point(180., 96.), g, controls, now);
+        assert!(
+            !input
+                .flush_at(now + std::time::Duration::from_millis(16))
+                .is_empty()
+        );
+        input.event_at(
+            1,
+            Phase::Moved,
+            Point(180., 56.),
+            g,
+            controls,
+            now + std::time::Duration::from_millis(20),
+        );
+        assert!(!input.pending());
+        assert!(
+            input
+                .flush_at(now + std::time::Duration::from_millis(36))
+                .is_empty()
+        );
+        input.cancel_event(1, Phase::Cancelled);
+        assert!(
+            input
+                .flush_at(now + std::time::Duration::from_secs(1))
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn wheel_sliding_and_button_plus_video_drag_remain_independent_and_balanced() {
         let (g, mut controls) = layout();
         controls.wheel = Some((160., 0., 40., 80.));
@@ -676,8 +748,8 @@ mod tests {
         input.event_at(1, Phase::Started, Point(180., 20.), g, controls, now);
         input.event_at(1, Phase::Moved, Point(180., 40.), g, controls, now);
         assert_eq!(
-            input.flush(),
-            vec![Output::Move(-200, 150), Output::Scroll(0, 20)]
+            input.flush_at(now + std::time::Duration::from_millis(16)),
+            vec![Output::Move(-200, 150), Output::Scroll(0, -38)]
         );
         assert!(
             input

@@ -468,8 +468,10 @@ impl SessionView {
             if let Some(control) = &self.keyboard_control {
                 control.cancel();
             }
-            window.dismiss_virtual_keyboard();
-            self.focus.focus(window, cx);
+            if self.panel != Panel::Keyboard {
+                window.dismiss_virtual_keyboard();
+                self.focus.focus(window, cx);
+            }
         }
         let had_pending = self.input.pending();
         let output = self.input.event(

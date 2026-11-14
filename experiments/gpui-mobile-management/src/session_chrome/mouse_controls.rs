@@ -67,8 +67,10 @@ pub(super) fn render(model: &ChromeModel, cx: &mut Context<SessionChrome>) -> Di
     dock.child(
         at(mouse.wheel)
             .id("session-mouse-wheel")
-            .aria_label("鼠标滚轮滑块")
-            .aria_description("上下滑动滚动；单指长按半秒后拖动可移动滑块位置")
+            .aria_label("鼠标滚轮")
+            .aria_description(
+                "向上或向下推住持续滚动，推得越远越快，松手停止；长按半秒后拖动可移动位置",
+            )
             .rounded_full()
             .bg(rgba((super::SURFACE << 8) | 0xc0))
             .border_2()
@@ -325,9 +327,14 @@ mod tests {
                 .copied()
                 .collect();
             assert!(matches!(
-                edges.as_slice(),
-                [Output::Down(_, _), Output::Up(_, _), Output::Scroll(0, 20)]
+                &edges[..2],
+                [Output::Down(_, _), Output::Up(_, _)]
             ));
+            assert!(
+                edges[2..]
+                    .iter()
+                    .all(|event| matches!(event, Output::Scroll(0, delta) if *delta < 0))
+            );
             cx.simulate_click(
                 point(px(mouse.right.x + 24.), px(mouse.right.y + 24.)),
                 Default::default(),

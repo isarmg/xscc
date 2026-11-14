@@ -307,6 +307,13 @@ public:
     return encode(nullptr, callback, obj, ms);
   }
 
+  int refine_frame(EncodeCallback callback, void *obj, int64_t ms) {
+    if (!amf_pipeline_ || retiring_ || !amf_capture_input_)
+      return 0;
+    // Preserve the current reference; only explicit recovery requests force IDR.
+    return encode(nullptr, callback, obj, ms);
+  }
+
   int retire(void *capture_device, int timeout_ms) {
     retiring_ = true; // Owner stops submissions before asking the codec to drain.
     if (retired_)
@@ -738,6 +745,17 @@ int ffmpeg_vram_replay_keyframe(FFmpegVRamEncoder *encoder, EncodeCallback callb
     return AVERROR(EINVAL);
   try {
     return encoder->replay_keyframe(callback, obj, ms);
+  } catch (const std::exception &) {
+    return AVERROR_EXTERNAL;
+  }
+}
+
+int ffmpeg_vram_refine_frame(FFmpegVRamEncoder *encoder, EncodeCallback callback,
+                             void *obj, int64_t ms) {
+  if (!encoder)
+    return AVERROR(EINVAL);
+  try {
+    return encoder->refine_frame(callback, obj, ms);
   } catch (const std::exception &) {
     return AVERROR_EXTERNAL;
   }

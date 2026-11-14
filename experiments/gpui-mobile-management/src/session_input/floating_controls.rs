@@ -50,6 +50,7 @@ pub(super) struct Gesture {
     pub point: Point,
     pub bounds: Bounds,
     started: Instant,
+    scrolled: Instant,
 }
 
 impl Gesture {
@@ -61,6 +62,7 @@ impl Gesture {
             point,
             bounds,
             started: now,
+            scrolled: now,
         }
     }
 
@@ -70,9 +72,8 @@ impl Gesture {
         }
     }
 
-    pub fn update(&mut self, point: Point, now: Instant) -> f32 {
+    pub fn update(&mut self, point: Point, now: Instant) {
         self.advance(now);
-        let previous = self.point;
         self.point = point;
         if self.mode == Mode::Waiting
             && (point.0 - self.start.0).hypot(point.1 - self.start.1) >= SLOP
@@ -82,17 +83,33 @@ impl Gesture {
             } else {
                 Mode::Cancelled
             };
-            return if self.mode == Mode::Scrolling {
-                point.1 - self.start.1
-            } else {
-                0.
-            };
+            self.scrolled = now;
         }
-        if self.mode == Mode::Scrolling {
-            point.1 - previous.1
-        } else {
-            0.
+    }
+
+    pub fn wheel_position(&self) -> f32 {
+        (0.5 + (self.point.1 - self.start.1) / (self.bounds.3 - 44.).max(16.)).clamp(0., 1.)
+    }
+
+    pub fn scroll_rate(&self) -> f32 {
+        if self.mode != Mode::Scrolling {
+            return 0.;
         }
+        let displacement = self.point.1 - self.start.1;
+        if displacement.abs() <= SLOP {
+            return 0.;
+        }
+        let radius = ((self.bounds.3 - 44.).max(16.) / 2. - SLOP).max(1.);
+        let pressure = ((displacement.abs() - SLOP) / radius).clamp(0., 1.);
+        -displacement.signum() * (240. + 2160. * pressure * pressure)
+    }
+
+    pub fn scroll_delta(&mut self, now: Instant) -> f32 {
+        let elapsed = now
+            .saturating_duration_since(self.scrolled)
+            .min(Duration::from_millis(50));
+        self.scrolled = now;
+        self.scroll_rate() * elapsed.as_secs_f32()
     }
 }
 

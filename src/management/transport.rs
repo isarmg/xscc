@@ -150,10 +150,14 @@ where
     let mut retries = 0;
     loop {
         match connect().await {
-            Err(error) if retries < 2 && error.downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof) => {
+            Err(error)
+                if retries < 3
+                    && error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::UnexpectedEof) =>
+            {
                 retries += 1;
-                tokio::time::sleep(Duration::from_millis(250 * retries)).await;
+                tokio::time::sleep(Duration::from_secs(retries)).await;
             }
             result => return result,
         }
@@ -453,6 +457,28 @@ mod tests {
             }
         }).await.unwrap();
         assert!(matches!(reply, WireMessage::Accepted {}));
+    }
+
+    #[tokio::test]
+    async fn managed_first_connection_waits_for_the_peer_policy_refresh_window() {
+        let mut attempts = 0;
+        let connected = retry_closed_handshake(|| {
+            attempts += 1;
+            let attempt = attempts;
+            async move {
+                if attempt < 4 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Management peer closed during handshake",
+                    )
+                    .into());
+                }
+                Ok("authorized session")
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(connected, "authorized session");
     }
 
     #[tokio::test]
