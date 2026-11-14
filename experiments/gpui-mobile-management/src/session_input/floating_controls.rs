@@ -127,6 +127,8 @@ impl Placements {
                     && (left < stage.0 || below - rect.1 <= rect.0 - left)
                 {
                     rect.1 = below;
+                } else if left < stage.0 && avoid.1 - rect.3 >= stage.1 {
+                    rect.1 = avoid.1 - rect.3;
                 } else {
                     rect.0 = left.max(stage.0);
                 }

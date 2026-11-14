@@ -34,6 +34,15 @@ pub struct SessionLayout {
     pub mouse: Option<MouseControls>,
 }
 
+impl SessionLayout {
+    pub fn control_canvas(&self) -> Rect {
+        Rect {
+            height: self.stage.height.max(self.rail.y + self.rail.height),
+            ..self.stage
+        }
+    }
+}
+
 pub fn place_rail(
     layout: &mut SessionLayout,
     position: Option<(u16, u16)>,
@@ -300,11 +309,12 @@ pub fn layout(
                 x: first + key_size + 8.,
                 ..left
             };
-            let wheel_height = (control_height - key_size - 32.).clamp(44., 112.);
+            let stack_height = if options { control_height } else { height };
+            let wheel_height = (stack_height - key_size - 32.).clamp(44., 112.);
             let group_height = key_size + 8. + wheel_height;
             let middle = Rect {
                 x: control_width - key_size - 12.,
-                y: (control_height - group_height) / 2.,
+                y: (stack_height - group_height) / 2.,
                 width: key_size,
                 height: key_size,
             };
@@ -544,6 +554,13 @@ mod tests {
             180.
         );
         assert_eq!(mouse.wheel.x + mouse.wheel.width, 788.);
+        let portrait = super::layout(393., 873., true, Panel::None, true, 0.);
+        assert_eq!(portrait.control_canvas().height, 873.);
+        let portrait_mouse = portrait.mouse.unwrap();
+        assert_eq!(
+            (portrait_mouse.middle.y + portrait_mouse.wheel.y + portrait_mouse.wheel.height) / 2.,
+            873. / 2.
+        );
         let mut moved = layout;
         place_rail(&mut moved, Some((0, 0)), 800., 360.);
         assert_eq!((moved.rail.x, moved.rail.y), (0., 0.));

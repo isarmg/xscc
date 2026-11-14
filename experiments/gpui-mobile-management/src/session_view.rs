@@ -1140,9 +1140,9 @@ impl SessionView {
                     right: Some(bounds(mouse.right)),
                     wheel: Some(bounds(mouse.wheel)),
                     reserved: Some(bounds(layout.rail)),
-                    canvas: Some(bounds(layout.stage)),
+                    canvas: Some(bounds(layout.control_canvas())),
                 },
-                bounds(layout.stage),
+                bounds(layout.control_canvas()),
             );
             for (rect, placed) in [
                 (&mut mouse.left, controls.left),
@@ -1398,7 +1398,7 @@ fn stage_geometry(
                 middle: Some(global(mouse.middle)),
                 wheel: Some(global(mouse.wheel)),
                 reserved: Some(global(layout.rail)),
-                canvas: Some(global(layout.stage)),
+                canvas: Some(global(layout.control_canvas())),
             })
             .unwrap_or_default(),
     )
@@ -1482,7 +1482,7 @@ impl Render for SessionView {
                     )
                 });
             }
-            if let Some((_, y)) = self.input.pointer_snapshot().position {
+            if let Some((_, y)) = self.input.snapshot().position {
                 session_layout::pan_for_keyboard(
                     &mut layout,
                     self.extent,
@@ -1566,8 +1566,8 @@ impl Render for SessionView {
                 .absolute()
                 .left(px(layout.stage.x))
                 .top(px(layout.stage.y))
-                .w(px(layout.stage.width))
-                .h(px(layout.stage.height)),
+                .w(px(layout.control_canvas().width))
+                .h(px(layout.control_canvas().height)),
             );
         if let Some(keyboard_bounds) = layout.keyboard {
             let mut header = div()

@@ -19,7 +19,7 @@ impl SessionChrome {
         let owner = self.rail_touch_owner.entity_id();
         let touch = cx.listener(move |view, event: &TouchEvent, window, cx| {
             let viewport = window.viewport_size();
-            let height = (viewport.height - window.insets().ime.bottom).max(gpui::px(0.));
+            let height = viewport.height;
             view.move_rail(
                 event,
                 (viewport.width.into(), height.into()),
