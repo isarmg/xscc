@@ -1131,6 +1131,7 @@ impl SessionView {
 
     fn mouse_layout(&self) -> SessionLayout {
         let mut layout = self.layout;
+        let canvas = layout.control_canvas();
         if let Some(mouse) = &mut layout.mouse {
             let bounds = |rect: Rect| (rect.x, rect.y, rect.width, rect.height);
             let controls = self.input.placed_controls(
@@ -1140,9 +1141,9 @@ impl SessionView {
                     right: Some(bounds(mouse.right)),
                     wheel: Some(bounds(mouse.wheel)),
                     reserved: Some(bounds(layout.rail)),
-                    canvas: Some(bounds(layout.control_canvas())),
+                    canvas: Some(bounds(canvas)),
                 },
-                bounds(layout.control_canvas()),
+                bounds(canvas),
             );
             for (rect, placed) in [
                 (&mut mouse.left, controls.left),
