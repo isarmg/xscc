@@ -174,7 +174,7 @@ jobs:
           pathlib.Path(sys.argv[1]).write_text("use std::{sync::{Arc, RwLock}, time::Duration};\n" + source[start:end])
           PY
           rustc --edition 2024 --test "$RUNNER_TEMP/gpui-decode-capacity-tests.rs" -o "$RUNNER_TEMP/gpui-decode-capacity-tests"
-          for capacity_test in batched_outputs_report_the_actual_decode_capacity empty_input_submission_counts_work_without_inventing_frames single_output_capacity_keeps_the_existing_warmup pending_output_polling_respects_high_refresh_frame_budget; do
+          for capacity_test in batched_outputs_report_the_actual_decode_capacity empty_input_submission_counts_work_without_inventing_frames single_output_capacity_keeps_the_existing_warmup pending_output_polling_respects_every_requested_frame_budget; do
             name="mediacodec_capacity_tests::$capacity_test"
             "$RUNNER_TEMP/gpui-decode-capacity-tests" --list | grep -Fx "$name: test"
             "$RUNNER_TEMP/gpui-decode-capacity-tests" --exact "$name"
