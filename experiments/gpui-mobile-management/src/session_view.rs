@@ -837,7 +837,8 @@ impl SessionView {
         if changed || audio_changed {
             self.publish_chrome(cx);
         }
-        if !self.frame_scheduled {
+        if !self.frame_scheduled && (self.session.is_some() || self.presentation.image().is_some())
+        {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
                 view.frame_scheduled = false;

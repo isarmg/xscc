@@ -28,6 +28,13 @@ class DevicePreviewTests(unittest.TestCase):
         for name in ('microphone', 'clipboard'):
             self.assertFalse(capabilities[name])
 
+    def test_candidate_versions_keep_a_numeric_ios_bundle_version(self):
+        for version in ('1.0.2', '1.0.2-beta.3'):
+            self.assertEqual(package.bundle_short_version(version), '1.0.2')
+        for version in ('1.0.2-rc.1', '1.0.2\u0661'):
+            with self.assertRaises(ValueError):
+                package.bundle_short_version(version)
+
     def test_device_metadata(self):
         info = plistlib.loads((Path(__file__).resolve().parents[2] / 'packaging/gpui-ios/Info.plist').read_bytes())
         package.validate_metadata(info)

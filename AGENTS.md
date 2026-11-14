@@ -1,5 +1,10 @@
 # RustDesk Guide
 
+## Git workflow
+
+* Commit and push changes directly to `main` by default.
+* Do not create or push task branches unless the maintainer explicitly requests one.
+
 ## Project Layout
 
 ### Directory Structure

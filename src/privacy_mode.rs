@@ -254,7 +254,8 @@ fn turn_on_privacy_sync(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>
         let owner = get_privacy_mode_conn_id().unwrap_or(INVALID_PRIVACY_MODE_CONN_ID);
         if owner == INVALID_PRIVACY_MODE_CONN_ID || owner == conn_id {
             match crate::virtual_display_manager::before_persistent_display_change() {
-                Ok(presentation) => drop(presentation),
+                Ok(Some(presentation)) => presentation.keep_original_primary(),
+                Ok(None) => {}
                 Err(error) => return Some(Err(error)),
             }
         }

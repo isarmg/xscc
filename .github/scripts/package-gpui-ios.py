@@ -23,6 +23,12 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def bundle_short_version(package_version):
+    version = re.fullmatch(r'([0-9]+\.[0-9]+\.[0-9]+)(?:-beta\.[0-9]+)?', package_version)
+    require(version, 'Invalid package version')
+    return version[1]
+
+
 def validate_metadata(info):
     require(info.get('CFBundleIdentifier') == 'org.sarmg.xscc.gpui.preview', 'Unexpected bundle ID')
     require(info.get('CFBundleExecutable') == 'xscc-gpui-mobile-management', 'Unexpected executable')
@@ -80,9 +86,7 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
     require(re.fullmatch('[0-9a-f]{40}', sha), 'Invalid source revision')
     info['CFBundleVersion'] = os.environ.get('GITHUB_RUN_NUMBER', '1')
     package_version = os.environ.get('PACKAGE_VERSION', info['CFBundleShortVersionString'])
-    require(re.fullmatch(r'\d+\.\d+\.\d+(?:-beta\.\d+)?', package_version),
-            'Invalid package version')
-    info['CFBundleShortVersionString'] = package_version
+    info['CFBundleShortVersionString'] = bundle_short_version(package_version)
     mode = 'interactive-playback-preview' if playback_preview else ('view-only' if view_only else 'management')
     if test_lan_direct:
         mode = 'TEST-IP-direct'
@@ -117,7 +121,7 @@ def package(binary, output, view_only=False, playback_preview=False, test_lan_di
     (output / f'{name}.sha256').write_text(f'{digest}  {name}\n')
     (output / 'build-info.json').write_text(json.dumps({
         'source_commit': sha, 'artifact': name, 'sha256': digest,
-        'package_version': info['CFBundleShortVersionString'],
+        'package_version': package_version,
         'bundle_id': info['CFBundleIdentifier'], 'build': info['CFBundleVersion'],
         'platform': 'iOS/iPadOS 26 ARM64 physical device',
         'scope': ('GPUI interactive playback preview: direct control or view-only; software-keyboard text and control keys; foreground audio playback is opt-in per session and initially off; no microphone or clipboard; limited hardware Enter/Tab only; full hardware keyboard unsupported and Wayland non-ASCII rejected'

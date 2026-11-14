@@ -305,6 +305,10 @@ pub(crate) struct PersistentDisplayChangeGuard {
 }
 
 impl PersistentDisplayChangeGuard {
+    pub(crate) fn keep_original_primary(mut self) {
+        self.preferred = None;
+    }
+
     pub(crate) fn finish(mut self) -> ResultType<()> {
         if let Some(target) = self.preferred.take() {
             resume_locked(target)?;
