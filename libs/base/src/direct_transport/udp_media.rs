@@ -312,8 +312,14 @@ impl DatagramSender {
             next: 0,
         })
     }
-    fn seal(&mut self, kind: u8, body: &[u8]) -> Result<SealedDatagram, MediaError> {
-        if PREFIX + aead::TAGBYTES + body.len() > MAX_DATAGRAM_SIZE {
+    fn seal(
+        &mut self,
+        kind: u8,
+        header: &[u8],
+        payload: &[u8],
+    ) -> Result<SealedDatagram, MediaError> {
+        let body_len = header.len() + payload.len();
+        if PREFIX + aead::TAGBYTES + body_len > MAX_DATAGRAM_SIZE {
             return Err(MediaError::DatagramTooLarge);
         }
         let sequence = self.next;
@@ -321,13 +327,21 @@ impl DatagramSender {
             .next
             .checked_add(1)
             .ok_or(MediaError::SequenceExhausted)?;
-        let mut bytes = Vec::with_capacity(PREFIX + aead::TAGBYTES + body.len());
+        let mut bytes = Vec::with_capacity(PREFIX + aead::TAGBYTES + body_len);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&[VERSION, kind]);
         bytes.extend_from_slice(&self.sid.0);
         bytes.extend_from_slice(&sequence.to_be_bytes());
-        let encrypted = aead::seal(body, Some(&bytes), &nonce(self.sid, sequence), &self.key);
-        bytes.extend_from_slice(&encrypted);
+        bytes.extend_from_slice(header);
+        bytes.extend_from_slice(payload);
+        let (associated, body) = bytes.split_at_mut(PREFIX);
+        let tag = aead::seal_detached(
+            body,
+            Some(associated),
+            &nonce(self.sid, sequence),
+            &self.key,
+        );
+        bytes.extend_from_slice(tag.as_ref());
         Ok(SealedDatagram {
             sequence,
             bytes,
@@ -346,6 +360,7 @@ impl DatagramSender {
                 ProbeKind::Response => 4,
             },
             &token,
+            &[],
         )
     }
     pub fn seal_fragment(
@@ -356,20 +371,19 @@ impl DatagramSender {
         let descriptor = frame.descriptor;
         let metadata = descriptor.metadata;
         let payload = frame.fragment(index)?;
-        let mut body = Vec::with_capacity(FRAGMENT_HEADER + payload.len());
-        body.push(match metadata.kind {
+        let mut header = [0; FRAGMENT_HEADER];
+        header[0] = match metadata.kind {
             MediaKind::Video => 1,
             MediaKind::Audio => 2,
-        });
-        body.push(u8::from(metadata.keyframe));
-        body.extend_from_slice(&metadata.display_id.to_be_bytes());
-        body.extend_from_slice(&metadata.epoch.to_be_bytes());
-        body.extend_from_slice(&metadata.frame_id.to_be_bytes());
-        body.extend_from_slice(&descriptor.total_size.to_be_bytes());
-        body.extend_from_slice(&index.to_be_bytes());
-        body.extend_from_slice(&descriptor.fragment_count.to_be_bytes());
-        body.extend_from_slice(payload);
-        self.seal(1, &body)
+        };
+        header[1] = u8::from(metadata.keyframe);
+        header[2..6].copy_from_slice(&metadata.display_id.to_be_bytes());
+        header[6..14].copy_from_slice(&metadata.epoch.to_be_bytes());
+        header[14..22].copy_from_slice(&metadata.frame_id.to_be_bytes());
+        header[22..26].copy_from_slice(&descriptor.total_size.to_be_bytes());
+        header[26..28].copy_from_slice(&index.to_be_bytes());
+        header[28..30].copy_from_slice(&descriptor.fragment_count.to_be_bytes());
+        self.seal(1, &header, payload)
     }
     pub fn seal_report(&mut self, report: &ReceiveReport) -> Result<SealedDatagram, MediaError> {
         report.validate()?;
@@ -381,7 +395,7 @@ impl DatagramSender {
             body.extend_from_slice(&range.first.to_be_bytes());
             body.extend_from_slice(&range.last.to_be_bytes());
         }
-        self.seal(5, &body)
+        self.seal(5, &body, &[])
     }
 }
 
@@ -502,24 +516,29 @@ impl DatagramReceiver {
         {
             self.largest_at = Some(now);
         }
-        self.ranges.push(AckRange {
-            first: sequence,
-            last: sequence,
-        });
-        self.ranges
-            .sort_unstable_by_key(|range| std::cmp::Reverse(range.last));
-        let mut merged: Vec<AckRange> = Vec::with_capacity(MAX_ACK_RANGES + 1);
-        for range in self.ranges.drain(..) {
-            if let Some(previous) = merged.last_mut() {
+        if let Some(first) = self
+            .ranges
+            .first_mut()
+            .filter(|range| range.last.checked_add(1) == Some(sequence))
+        {
+            first.last = sequence;
+        } else {
+            self.ranges.push(AckRange {
+                first: sequence,
+                last: sequence,
+            });
+            self.ranges
+                .sort_unstable_by_key(|range| std::cmp::Reverse(range.last));
+            self.ranges.dedup_by(|range, previous| {
                 if range.last.saturating_add(1) >= previous.first {
                     previous.first = previous.first.min(range.first);
-                    continue;
+                    true
+                } else {
+                    false
                 }
-            }
-            merged.push(range);
+            });
+            self.ranges.truncate(MAX_ACK_RANGES);
         }
-        merged.truncate(MAX_ACK_RANGES);
-        self.ranges = merged;
         self.unreported = self.unreported.saturating_add(1);
     }
     pub fn take_report(&mut self, now: Instant) -> Option<ReceiveReport> {
@@ -1235,10 +1254,20 @@ impl Reassembler {
         if frame.received != descriptor.total_size as usize {
             return Err(MediaError::InvalidEnvelope);
         }
-        let mut payload = Vec::with_capacity(frame.received);
-        for fragment in frame.fragments.into_iter().flatten() {
-            payload.extend_from_slice(&fragment);
-        }
+        let payload = if descriptor.fragment_count == 1 {
+            frame
+                .fragments
+                .into_iter()
+                .flatten()
+                .next()
+                .expect("invariant: complete assembly contains its fragment")
+        } else {
+            let mut payload = Vec::with_capacity(frame.received);
+            for fragment in frame.fragments.into_iter().flatten() {
+                payload.extend_from_slice(&fragment);
+            }
+            Bytes::from(payload)
+        };
         if self.completed.len() == 128 {
             self.completed.pop_front();
         }
@@ -1266,7 +1295,7 @@ impl Reassembler {
         }
         outcome.frame = Some(CompletedFrame {
             metadata: descriptor.metadata,
-            payload: payload.into(),
+            payload,
         });
         Ok(outcome)
     }
@@ -1967,6 +1996,95 @@ mod tests {
             panic!("fragment expected")
         };
         fragment
+    }
+
+    #[test]
+    fn fragment_sealing_preserves_the_version_one_wire_format() {
+        let sid = SessionId([6; 16]);
+        let mut sender = DatagramSender::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let plan = FramePlan::new(
+            metadata(0, false),
+            Bytes::from_static(b"frame"),
+            DEFAULT_MTU,
+        )
+        .unwrap();
+        let packet = sender.seal_fragment(&plan, 0).unwrap();
+        // Version 1 fixture produced by the original combined AEAD sealing path.
+        assert_eq!(
+            packet.bytes,
+            [
+                88, 83, 77, 85, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0,
+                0, 0, 0, 0, 210, 232, 138, 140, 214, 166, 49, 25, 250, 137, 182, 86, 157, 4, 145,
+                1, 64, 3, 30, 191, 229, 66, 122, 59, 40, 150, 97, 210, 124, 195, 191, 76, 84, 101,
+                130, 67, 57, 215, 199, 152, 68, 129, 185, 238, 59, 76, 236, 189, 31, 240, 100,
+            ]
+        );
+        let mut receiver =
+            DatagramReceiver::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let now = Instant::now();
+        let mut tampered = packet.bytes.clone();
+        tampered[PREFIX] ^= 1;
+        assert_eq!(
+            receiver.open(&tampered, now).unwrap_err(),
+            MediaError::Crypto
+        );
+        let AuthenticatedPacket::Fragment(fragment) = receiver.open(&packet.bytes, now).unwrap()
+        else {
+            panic!("fragment expected");
+        };
+        assert_eq!(fragment.descriptor, plan.descriptor());
+        assert_eq!(&fragment.payload, plan.payload());
+        let completed = Reassembler::default()
+            .push(fragment, now)
+            .unwrap()
+            .frame
+            .unwrap();
+        assert_eq!(completed.metadata, plan.descriptor().metadata);
+        assert_eq!(&completed.payload, plan.payload());
+    }
+
+    #[test]
+    fn ack_ranges_stay_bounded_and_merge_reordered_and_sequential_packets() {
+        let sid = SessionId([6; 16]);
+        let mut sender = DatagramSender::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let mut receiver =
+            DatagramReceiver::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let plan =
+            FramePlan::new(metadata(0, false), Bytes::from_static(b"x"), DEFAULT_MTU).unwrap();
+        let packets: Vec<_> = (0..131)
+            .map(|_| sender.seal_fragment(&plan, 0).unwrap())
+            .collect();
+        let now = Instant::now();
+        for index in (0..=128).step_by(2) {
+            receiver.open(&packets[index].bytes, now).unwrap();
+        }
+        let report = receiver.take_report(now + REPORT_INTERVAL).unwrap();
+        report.validate().unwrap();
+        assert_eq!(report.ranges.len(), MAX_ACK_RANGES);
+        assert_eq!(
+            report.ranges.first(),
+            Some(&AckRange {
+                first: 128,
+                last: 128
+            })
+        );
+        assert_eq!(report.ranges.last(), Some(&AckRange { first: 2, last: 2 }));
+        for index in (1..128).step_by(2) {
+            receiver.open(&packets[index].bytes, now).unwrap();
+        }
+        for packet in &packets[129..] {
+            receiver.open(&packet.bytes, now + REPORT_INTERVAL).unwrap();
+        }
+        let report = receiver.take_report(now + REPORT_INTERVAL * 2).unwrap();
+        report.validate().unwrap();
+        assert_eq!(
+            report.ranges,
+            [AckRange {
+                first: 1,
+                last: 130
+            }]
+        );
+        assert_eq!(report.ack_delay_us, REPORT_INTERVAL.as_micros() as u32);
     }
 
     #[tokio::test]
