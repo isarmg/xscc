@@ -799,6 +799,8 @@ fn run_encoder(
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "gpui-host"))]
     let mut paced_fps = 0;
+    #[cfg(all(windows, feature = "gpui-host"))]
+    let mut frame_pacer = frame_pacing::FramePacer::new();
 
     while sp.ok() {
         #[cfg(feature = "gpui-host")]
@@ -1179,7 +1181,7 @@ fn run_encoder(
         if elapsed < spf {
             #[cfg(all(windows, feature = "gpui-host"))]
             if paced_fps > 60 {
-                frame_pacing::wait_until(pacing_start, spf);
+                frame_pacer.wait_until(pacing_start, spf);
             } else {
                 std::thread::sleep(spf - elapsed);
             }

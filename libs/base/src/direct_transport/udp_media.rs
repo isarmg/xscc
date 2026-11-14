@@ -1581,16 +1581,10 @@ impl Pacer {
         let mut acknowledged = 0usize;
         let mut sample = None;
         for range in &report.ranges {
-            let keys: Vec<_> = self
+            for (sequence, flight) in self
                 .flights
-                .range(range.first..=range.last)
-                .map(|(&sequence, _)| sequence)
-                .collect();
-            for sequence in keys {
-                let flight = self
-                    .flights
-                    .remove(&sequence)
-                    .expect("invariant: selected flight exists");
+                .extract_if(range.first..=range.last, |_, _| true)
+            {
                 acknowledged += flight.bytes;
                 self.inflight_bytes -= flight.bytes;
                 if sequence == report.largest {
@@ -1608,23 +1602,14 @@ impl Pacer {
         }
         self.last_feedback = now;
         let loss_age = self.feedback_timeout();
-        let lost: Vec<_> = self
-            .flights
-            .iter()
-            .filter(|(&sequence, flight)| {
-                let age = now.saturating_duration_since(flight.sent);
-                age >= loss_age
-                    || (sequence.saturating_add(3) <= report.largest
-                        && age >= self.srtt.mul_f64(1.125))
-            })
-            .map(|(&sequence, _)| sequence)
-            .collect();
-        let had_loss = !lost.is_empty();
-        for sequence in lost {
-            let flight = self
-                .flights
-                .remove(&sequence)
-                .expect("invariant: selected lost flight exists");
+        let srtt = self.srtt;
+        let mut had_loss = false;
+        for (_, flight) in self.flights.extract_if(.., |&sequence, flight| {
+            let age = now.saturating_duration_since(flight.sent);
+            age >= loss_age
+                || (sequence.saturating_add(3) <= report.largest && age >= srtt.mul_f64(1.125))
+        }) {
+            had_loss = true;
             self.inflight_bytes -= flight.bytes;
         }
         if had_loss
@@ -2296,6 +2281,40 @@ mod tests {
             [Recovery::RefreshVideo(metadata(20, true))]
         );
         quota.note_notice(next, now).unwrap();
+    }
+
+    #[test]
+    fn disjoint_ack_ranges_release_credit_once_and_preserve_loss_response() {
+        let now = Instant::now();
+        let mut pacer = Pacer::new(DEFAULT_MTU, 1_000_000_000, now).unwrap();
+        let initial = pacer.congestion_window();
+        for sequence in 0..8 {
+            pacer.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+        }
+        let report = ReceiveReport {
+            largest: 7,
+            ack_delay_us: 0,
+            ranges: vec![
+                AckRange { first: 6, last: 7 },
+                AckRange { first: 0, last: 3 },
+            ],
+        };
+        pacer
+            .on_report(&report, now + Duration::from_millis(25))
+            .unwrap();
+        assert_eq!(pacer.inflight_bytes(), 2 * DEFAULT_MTU);
+        let grown = pacer.congestion_window();
+        assert_eq!(grown, initial + 6 * DEFAULT_MTU);
+        pacer
+            .on_report(&report, now + Duration::from_millis(25))
+            .unwrap();
+        assert_eq!(pacer.inflight_bytes(), 2 * DEFAULT_MTU);
+        assert_eq!(pacer.congestion_window(), grown);
+        pacer
+            .on_report(&report, now + Duration::from_millis(200))
+            .unwrap();
+        assert_eq!(pacer.inflight_bytes(), DEFAULT_MTU);
+        assert_eq!(pacer.congestion_window(), grown / 2);
     }
 
     #[tokio::test]
