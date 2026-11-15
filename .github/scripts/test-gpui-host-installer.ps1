@@ -52,6 +52,8 @@ function Assert-Unbound {
     }
 }
 
+$publisherCertificate = $null
+$publisherAdded = $false
 $identityHash = $null
 try {
     Write-Host 'HOST_CI_STAGE=install'
@@ -93,6 +95,25 @@ try {
     try { $identityHash = (Get-FileHash $identity -Algorithm SHA256).Hash }
     catch [System.UnauthorizedAccessException] { Write-Warning 'Identity contents are inaccessible; no ACL changes will be made' }
     if ($env:XSCC_VALIDATE_VIRTUAL_DISPLAY_DRIVER -eq 'true') {
+        $driver = Get-Content -Raw (Join-Path $root 'packaging/gpui-windows/virtual-display-vdd-driver.json') | ConvertFrom-Json
+        $catalog = Join-Path $installed 'mtt_vdd/mttvdd.cat'
+        if ((Get-FileHash $catalog -Algorithm SHA256).Hash.ToLowerInvariant() -cne $driver.files.'mttvdd.cat') {
+            throw 'Disposable VDD catalog differs from the pinned driver'
+        }
+        $signature = Get-AuthenticodeSignature $catalog
+        if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -cne $driver.signer) {
+            throw 'Disposable VDD publisher signature is not the pinned valid signer'
+        }
+        $publisherCertificate = $signature.SignerCertificate
+        $store = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+        $store.Open('ReadWrite')
+        try {
+            if ($store.Certificates.Find('FindByThumbprint', $publisherCertificate.Thumbprint, $false).Count -eq 0) {
+                $store.Add($publisherCertificate)
+                $publisherAdded = $true
+            }
+        } finally { $store.Close() }
         Write-Host 'VDD_CI_STAGE=read-test-artifact'
         $buildLog = Join-Path $env:RUNNER_TEMP 'xscc-vdd-test-build.jsonl'
         if (-not (Test-Path -LiteralPath $buildLog)) { throw 'Prepared native test build manifest is missing' }
@@ -161,7 +182,15 @@ try {
     } while ((Get-Date) -lt $deadline)
 } finally {
     # Remove only the host installed by this test, including when a later assertion fails.
-    if (Test-Path (Join-Path $installed 'Uninstall.exe')) { Invoke-Installer (Join-Path $installed 'Uninstall.exe') }
+    try {
+        if (Test-Path (Join-Path $installed 'Uninstall.exe')) { Invoke-Installer (Join-Path $installed 'Uninstall.exe') }
+    } finally {
+        if ($publisherAdded) {
+            $store = [Security.Cryptography.X509Certificates.X509Store]::new('TrustedPublisher', 'LocalMachine')
+            $store.Open('ReadWrite')
+            try { $store.Remove($publisherCertificate) } finally { $store.Close() }
+        }
+    }
 }
 $deadline = (Get-Date).AddSeconds(45)
 while (((Get-HostService) -or (Test-Path $exe) -or (Test-Path $key)) -and (Get-Date) -lt $deadline) {
