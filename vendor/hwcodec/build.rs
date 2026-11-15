@@ -9,7 +9,6 @@ fn main() {
     let externals_dir = manifest_dir.join("externals");
     let cpp_dir = manifest_dir.join("cpp");
     println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=deps");
     println!("cargo:rerun-if-changed={}", externals_dir.display());
     println!("cargo:rerun-if-changed={}", cpp_dir.display());
     let mut builder = Build::new();
