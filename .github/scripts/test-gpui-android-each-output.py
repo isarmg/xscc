@@ -41,7 +41,7 @@ def production_method(source, name):
 
 
 PREFIX = r"""
-use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::{Duration, Instant}};
+use std::{cell::RefCell, collections::VecDeque, convert::TryFrom, rc::Rc, time::{Duration, Instant}};
 #[derive(Debug)] struct Status(i32);
 #[derive(Debug)] enum NdkMediaError { UnknownResult(Status), Release, Queue }
 #[derive(Debug)] enum Error { Ndk(NdkMediaError), Pixels, Message(String) }
@@ -200,7 +200,7 @@ def main():
         harness = Path(directory) / 'actual-mediacodec-delivery.rs'
         executable = Path(directory) / ('delivery-tests.exe' if os.name == 'nt' else 'delivery-tests')
         harness.write_text('#![allow(dead_code)]\n' + PREFIX + methods + TESTS, encoding='utf-8')
-        subprocess.run([rustc, '--edition', '2024', '--test', str(harness), '-o', str(executable)], check=True)
+        subprocess.run([rustc, '--edition', '2018', '--test', str(harness), '-o', str(executable)], check=True)
         listing = subprocess.check_output([str(executable), '--list'], text=True)
         selected = set(re.findall(r'^([^\n]+): test$', listing, re.M))
         if selected != TEST_NAMES:

@@ -7,6 +7,7 @@ use ndk::media::{
     NdkMediaError,
 };
 use std::{
+    convert::TryFrom,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
