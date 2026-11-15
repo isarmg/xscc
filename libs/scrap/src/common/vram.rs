@@ -211,16 +211,6 @@ impl EncoderApi for VRamEncoder {
         Self::polled_video_frame(format, frames)
     }
 
-    #[cfg(windows)]
-    fn refine_frame(&mut self, ms: i64) -> ResultType<Option<VideoFrame>> {
-        let format = self.format;
-        let frames = self
-            .encoder
-            .refine_frame(ms)
-            .map_err(|error| anyhow!("Refine AMD static frame failed: {error}"))?;
-        Self::polled_video_frame(format, frames)
-    }
-
     fn yuvfmt(&self) -> EncodeYuvFormat {
         // useless
         EncodeYuvFormat {

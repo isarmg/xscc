@@ -133,24 +133,6 @@ impl Encoder {
         }
     }
 
-    pub fn refine_frame(&mut self, ms: i64) -> Result<&mut Vec<EncodeFrame>, i32> {
-        unsafe {
-            (&mut *self.frames).clear();
-            if self.ctx.f.driver == FFMPEG {
-                let result = ffmpeg::ffmpeg_vram_refine_frame(
-                    self.codec,
-                    Some(Self::callback),
-                    self.frames as *mut c_void,
-                    ms,
-                );
-                if result != 0 {
-                    return Err(result);
-                }
-            }
-            Ok(&mut *self.frames)
-        }
-    }
-
     extern "C" fn callback(data: *const u8, size: c_int, key: i32, obj: *const c_void, pts: i64) {
         unsafe {
             let frames = &mut *(obj as *mut Vec<EncodeFrame>);

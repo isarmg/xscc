@@ -31,8 +31,6 @@ pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
 mod frame_pacing;
 #[cfg(feature = "gpui-host")]
 mod metrics;
-#[cfg(any(feature = "gpui-host", test))]
-mod idle_refresh;
 
 use super::video_pipeline::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
@@ -796,12 +794,6 @@ fn run_encoder(
     // Set once the encoder emits its first packet; until then it may legitimately return nothing.
     let mut encoder_warmed_up = false;
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
-    #[cfg(feature = "gpui-host")]
-    let mut idle_refresh = idle_refresh::IdleRefresh::default();
-    #[cfg(feature = "gpui-host")]
-    if replay_cached {
-        idle_refresh.captured(Instant::now());
-    }
     #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
     let mut rejected_transport_limit = None;
     #[cfg(feature = "gpui-host")]
@@ -827,7 +819,7 @@ fn run_encoder(
         })?;
         #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
-        let _quality_improved = check_qos(
+        check_qos(
             &mut encoder,
             &mut quality,
             &mut spf,
@@ -838,10 +830,6 @@ fn run_encoder(
             #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
             &mut rejected_transport_limit,
         )?;
-        #[cfg(feature = "gpui-host")]
-        if _quality_improved && idle_refresh.is_idle(Instant::now()) {
-            idle_refresh.improve();
-        }
         #[cfg(feature = "gpui-host")]
         if let Some(sample) = stages.sample(Instant::now(), spf) {
             #[cfg(windows)]
@@ -963,8 +951,6 @@ fn run_encoder(
                 Ok(frame) => {
                     repeat_encode_counter = 0;
                     if frame.valid() {
-                        #[cfg(feature = "gpui-host")]
-                        idle_refresh.captured(now);
                         let screenshot_key = (vs.source, display_idx);
                         let screenshot = SCREENSHOTS.lock().unwrap().remove(&screenshot_key);
                         if let Some(mut screenshot) = screenshot {
@@ -1062,22 +1048,8 @@ fn run_encoder(
 
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
-                #[cfg(feature = "gpui-host")]
-                let refine = idle_refresh.due(now);
-                #[cfg(feature = "gpui-host")]
-                if refine && cached.valid {
-                    replay_cached = true;
-                }
-                #[cfg(all(windows, feature = "vram", feature = "gpui-host"))]
-                let replay = if refine && cached.texture {
-                    encoder.refine_frame(ms)?
-                } else {
-                    encoder.replay_keyframe(ms)?
-                };
-                #[cfg(all(windows, feature = "vram", not(feature = "gpui-host")))]
-                let replay = encoder.replay_keyframe(ms)?;
                 #[cfg(all(windows, feature = "vram"))]
-                let pending_frame = match replay {
+                let pending_frame = match encoder.replay_keyframe(ms)? {
                     Some(frame) => Some(frame),
                     None => encoder.poll_video_frame()?,
                 };
@@ -1716,7 +1688,7 @@ fn check_qos(
     service: &GenericService,
     #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
     rejected_transport_limit: &mut Option<u32>,
-) -> ResultType<bool> {
+) -> ResultType<()> {
     #[cfg(feature = "gpui-host")]
     let subscriber_ids = service.subscriber_ids();
     let (requested_fps, requested_ratio, in_vbr, custom_quality, bitrate_limit) = {
@@ -1750,7 +1722,6 @@ fn check_qos(
             bitrate_limit,
         )
     };
-    let previous_bitrate = encoder.bitrate();
     #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
     {
         let budget = VIDEO_QOS
@@ -1799,7 +1770,7 @@ fn check_qos(
             bail!(VideoRestart::QualityChanged);
         }
     }
-    Ok(encoder.bitrate() > previous_bitrate)
+    Ok(())
 }
 
 pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String, tx: Sender) {
