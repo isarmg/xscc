@@ -18,6 +18,7 @@ name = "xscc_gpui_android_smoke"
 crate-type = ["cdylib"]
 
 [target.'cfg(target_os = "android")'.dependencies]
+xscc-native-ui = { path = "../../crates/native-ui" }
 gpui = { package = "gpui_platform", path = "../../vendor/gpui/crates/gpui_platform", default-features = false }
 android_logger = "=0.13.3"
 log = "0.4"

@@ -38,12 +38,9 @@ mod remote_video;
     feature = "live-session"
 ))]
 use xscc_native_ui::text_field;
-#[cfg(any(
-    all(
-        any(target_os = "windows", target_os = "linux", target_os = "macos"),
-        feature = "live-session"
-    ),
-    test
+#[cfg(all(
+    any(target_os = "windows", target_os = "linux", target_os = "macos"),
+    feature = "live-session"
 ))]
 use xscc_native_ui::theme;
 mod virtual_display_cli;

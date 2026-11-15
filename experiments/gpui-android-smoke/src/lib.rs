@@ -1,9 +1,6 @@
 #![cfg(target_os = "android")]
 
-#[path = "../../gpui-validation/src/text_field.rs"]
-mod text_field;
-#[path = "../../gpui-validation/src/theme.rs"]
-mod theme;
+use xscc_native_ui::{text_field, theme};
 
 use gpui::{Context, Entity, Window, WindowOptions, div, prelude::*, px, rgb};
 

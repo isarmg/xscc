@@ -5457,7 +5457,21 @@ dependencies = [
  "gpui_platform",
  "log",
  "unicode-segmentation",
+ "xscc-native-ui",
 ]
+
+[[package]]
+name = "xscc-native-ui"
+version = "4.0.0"
+dependencies = [
+ "gpui_platform",
+ "unicode-segmentation",
+ "xscc-session-model",
+]
+
+[[package]]
+name = "xscc-session-model"
+version = "4.0.0"
 
 [[package]]
 name = "y4m"
