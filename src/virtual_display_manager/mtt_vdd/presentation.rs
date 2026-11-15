@@ -105,10 +105,6 @@ pub(super) fn active() -> bool {
     PREFERENCE.lock().unwrap().is_some()
 }
 
-pub(super) fn needs_preference(name: &str) -> ResultType<bool> {
-    Ok(candidate(name)?.is_some())
-}
-
 fn translated_positions(positions: &[(i32, i32)], primary: usize) -> ResultType<Vec<(i32, i32)>> {
     let &(x, y) = positions
         .get(primary)

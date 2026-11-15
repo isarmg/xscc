@@ -789,26 +789,6 @@ pub(super) fn session_display_active() -> bool {
     presentation::active()
 }
 
-pub(super) fn session_display_needs_preference(name: &str) -> ResultType<bool> {
-    let _guard = LOCK.lock().unwrap();
-    presentation::needs_preference(name)
-}
-
-pub(super) fn prefer_session_display(
-    name: &str,
-    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
-) -> ResultType<bool> {
-    let _guard = LOCK.lock().unwrap();
-    presentation::prefer_locked(name)
-}
-
-pub(super) fn restore_session_display(
-    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
-) -> ResultType<()> {
-    let _guard = LOCK.lock().unwrap();
-    presentation::suspend_locked().map(|_| ())
-}
-
 pub(super) fn prepare_session_display_removal(
     _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
 ) -> ResultType<()> {

@@ -1007,32 +1007,6 @@ pub(crate) fn session_display_cleanup_required() -> ResultType<bool> {
     mtt_vdd::cleanup_required_at_exit()
 }
 
-pub(crate) fn session_display_needs_preference(name: &str) -> ResultType<bool> {
-    if IDD_IMPL != IDD_IMPL_MTT_VDD {
-        return Ok(false);
-    }
-    mtt_vdd::session_display_needs_preference(name)
-}
-
-pub(crate) fn prefer_session_display(
-    name: &str,
-    idle: &crate::server::video_service::CaptureIdleGuard<'_>,
-) -> ResultType<bool> {
-    if IDD_IMPL != IDD_IMPL_MTT_VDD {
-        return Ok(false);
-    }
-    mtt_vdd::prefer_session_display(name, idle)
-}
-
-pub(crate) fn restore_session_display(
-    idle: &crate::server::video_service::CaptureIdleGuard<'_>,
-) -> ResultType<()> {
-    if IDD_IMPL != IDD_IMPL_MTT_VDD {
-        return Ok(());
-    }
-    mtt_vdd::restore_session_display(idle)
-}
-
 pub(crate) fn prepare_session_display_removal(
     idle: &crate::server::video_service::CaptureIdleGuard<'_>,
 ) -> ResultType<()> {

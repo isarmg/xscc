@@ -8,15 +8,12 @@ making that virtual output primary produced 119.5 submitted frames/s and 117.7
 DesktopDup updates/s. These are local native drawing/capture measurements, not a
 browser UFO test or Android end-to-end acceptance.
 
-The workaround may temporarily promote only XSCC-owned, nonpersistent virtual
-outputs at high refresh rates while a currently authorized session has input
-permission. It does not save this layout to the Windows display configuration
-database. The temporary primary selection is released before mode/count changes
-and re-evaluated afterward; the last disconnect, permission withdrawal, virtual
-display removal or normal process exit restores the prior primary. Worker startup
-cleans owned nonpersistent orphan outputs. Persistent virtual displays are not
-promoted automatically; physical display modes and other drivers remain outside
-this policy.
+As requested on 2026-11-15, session display selection and mode changes no longer
+automatically promote a virtual display to primary. Adding or selecting a virtual
+display must preserve the user's primary display. The measurements above describe
+the former workaround, not a guarantee of high-rate content on a secondary output.
+Capture-idle, GPU retirement, mode-change and temporary-display cleanup guards
+remain in place. High-refresh transport performance is investigated separately.
 
 ## 2026-11-02: measured Android/Windows follow-up
 

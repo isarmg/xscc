@@ -2743,14 +2743,6 @@ impl Connection {
 
     async fn handle_switch_display(&mut self, s: SwitchDisplay) {
         let display_idx = s.display as usize;
-        #[cfg(windows)]
-        if self.prepare_session_display(display_idx).await && self.display_idx == display_idx {
-            if let Some(message) =
-                video_service::make_display_changed_msg(display_idx, None, self.video_source())
-            {
-                self.send(message).await;
-            }
-        }
         if self.display_idx != display_idx {
             if let Some(server) = self.server.upgrade() {
                 if !self.switch_display_to(display_idx, server.clone()) {
