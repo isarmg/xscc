@@ -1565,13 +1565,12 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_udp_response_is_retried_before_tcp_ready() {
-        let (client, mut host, listener, socket) = media_streams(|port| {
+        let (client, mut host, _listener, socket) = media_streams(|port| {
             let socket = std::net::UdpSocket::bind(("127.0.0.1", port))?;
             socket.set_nonblocking(true)?;
             Ok(tokio::net::UdpSocket::from_std(socket)?)
         })
         .await;
-        let address = listener.local_addr().unwrap();
         let seed = host.udp_media_seed().unwrap().unwrap();
         let sid = SessionId([8; 16]);
         let offer = UdpMediaOffer {
