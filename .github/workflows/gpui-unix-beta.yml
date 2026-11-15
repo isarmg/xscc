@@ -143,7 +143,7 @@ jobs:
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output" || { echo 'Native management header touch regression did not run' >&2; exit 1; }
           output=$(cargo test --locked --manifest-path apps/mobile/Cargo.toml --bin xscc-mobile --no-default-features --features mobile-management session_chrome::virtual_displays:: 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
-          grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$output" || { echo 'Virtual display count regressions did not run all three tests' >&2; exit 1; }
+          grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output" || { echo 'Mobile virtual display count interaction test did not run' >&2; exit 1; }
           output=$(cargo test --locked --manifest-path apps/mobile/Cargo.toml --bin xscc-mobile --no-default-features --features mobile-management remote_keyboard::computer::tests::horizontal_swipes_change_keys_without_typing 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output" || { echo 'Computer keyboard swipe regression did not run' >&2; exit 1; }

@@ -11,6 +11,7 @@ cargo check --locked -p scrap --lib --no-default-features --target "$target"
 cargo tree --locked -p scrap --no-default-features --target "$target" -e normal,build --prefix none
 cargo clippy --locked --no-deps --manifest-path "$manifest" --no-default-features --features "$features" --target "$target" --all-targets -- -D warnings
 cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target"
+cargo test --locked -p xscc-native-ui --target "$target"
 pointer_tests=$(cargo test --locked --manifest-path "$manifest" --no-default-features --features "$features" --target "$target" input::tests::clicks_position_the_host_pointer_without_duplicating_drag_events 2>&1) || { printf '%s\n' "$pointer_tests"; exit 1; }
 printf '%s\n' "$pointer_tests"
 grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$pointer_tests" || { echo 'Pointer click regression did not run' >&2; exit 1; }
