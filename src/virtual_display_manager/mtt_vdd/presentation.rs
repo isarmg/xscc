@@ -301,6 +301,44 @@ pub(crate) struct PersistentDisplayChangeGuard {
 }
 
 impl PersistentDisplayChangeGuard {
+    pub(crate) fn change_virtual_mode(
+        &self,
+        name: &str,
+        requested: &base::message_proto::Resolution,
+    ) -> ResultType<bool> {
+        use base::session_protocol::virtual_display::VirtualDisplayMode;
+
+        let Some(screen) = super::current_display_mode(name)? else {
+            return Ok(false);
+        };
+        if configuration::query()?.status == "external_owned" {
+            bail!("The virtual display is managed by another application");
+        }
+        let mode = VirtualDisplayMode {
+            width: u32::try_from(requested.width)?,
+            height: u32::try_from(requested.height)?,
+            refresh_rate_units: requested
+                .refresh_rate
+                .checked_mul(10000)
+                .ok_or_else(|| anyhow::anyhow!("Virtual display refresh rate overflow"))?,
+        };
+        mode.validate()?;
+        let ids = [screen.id];
+        // The supplied CCD path sets desktop and target rates together, without
+        // the legacy DEVMODE call retaining a 60 Hz virtual desktop rate.
+        Topology::configure(&ids, Some(mode), Some(mode))?;
+        let actual = Topology::query(false)?.screens(&ids)?;
+        if !actual.iter().any(|screen| {
+            screen.active
+                && screen.width == mode.width
+                && screen.height == mode.height
+                && screen.refresh_rate_units.abs_diff(mode.refresh_rate_units) <= 1
+        }) {
+            bail!("Windows did not confirm the requested virtual display desktop refresh rate");
+        }
+        Ok(true)
+    }
+
     pub(crate) fn keep_original_primary(mut self) {
         self.preferred = None;
     }

@@ -7,6 +7,7 @@ pub const RUSTDESK_IDD_DEVICE_STRING: &'static str = "RustDeskIddDriver Device\0
 pub const AMYUNI_IDD_DEVICE_STRING: &'static str = "USB Mobile Monitor Virtual Display\0";
 
 mod mtt_vdd;
+pub(crate) use mtt_vdd::current_display_mode as virtual_display_mode;
 
 #[cfg(feature = "gpui-host")]
 const IDD_IMPL: &str = IDD_IMPL_MTT_VDD;

@@ -55,6 +55,19 @@ const OWNER: &[u8] = b"XSCC owns this VDD configuration v1\n";
 const MANIFEST: &str = include_str!("../../packaging/gpui-windows/virtual-display-vdd-driver.json");
 static LOCK: Mutex<()> = Mutex::new(());
 
+pub(crate) fn current_display_mode(
+    name: &str,
+) -> ResultType<Option<base::session_protocol::virtual_display::VirtualDisplayScreen>> {
+    let ids = topology::monitor_ids()?;
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    Ok(topology::Topology::query(false)?
+        .screens(&ids)?
+        .into_iter()
+        .find(|screen| screen.active && screen.name.eq_ignore_ascii_case(name)))
+}
+
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }

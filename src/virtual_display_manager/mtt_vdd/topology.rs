@@ -820,14 +820,15 @@ mod tests {
             modes: vec![VirtualDisplayMode {
                 width: 1920,
                 height: 1080,
-                refresh_rate_units: 1200000,
+                refresh_rate_units: 600000,
             }],
             persistent: false,
         };
+        let retained = original.removal_snapshot()?;
         let check = (|| -> ResultType<()> {
-            for (step, hz) in [120, 240, 120, 240].into_iter().enumerate() {
+            for (step, hz) in [60, 120, 240, 60, 120, 240].into_iter().enumerate() {
                 config.modes[0].refresh_rate_units = hz * 10000;
-                let state = if step < 2 {
+                let state = if step == 0 {
                     println!("VDD_CI_STAGE=configure-display step={step} hz={hz}");
                     configuration::configure(&config)?
                 } else {
@@ -866,6 +867,13 @@ mod tests {
                 }
                 println!("VDD_CI_STAGE=verify-current-mode step={step} hz={hz}");
                 for screen in &state.displays {
+                    let advertised =
+                        crate::platform::windows::display_modes::current(&screen.name)?;
+                    if (advertised.width, advertised.height, advertised.refresh_rate)
+                        != (1920, 1080, hz)
+                    {
+                        bail!("The refresh menu did not report the actual {hz} Hz desktop mode");
+                    }
                     let name = wide(OsStr::new(&screen.name));
                     let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
                     mode.dmSize = std::mem::size_of_val(&mode) as _;
@@ -877,6 +885,13 @@ mod tests {
                     {
                         bail!("Windows current DEVMODE did not confirm {hz} Hz");
                     }
+                }
+                let current = Topology::query(false)?.removal_snapshot()?;
+                if retained
+                    .iter()
+                    .any(|(target, mode)| current.get(target) != Some(mode))
+                {
+                    bail!("The refresh menu changed another display's mode or position");
                 }
                 println!("VDD_CI_DESKTOP_HZ={hz}");
             }

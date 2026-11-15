@@ -60,7 +60,13 @@ pub(crate) fn current(name: &str) -> ResultType<Resolution> {
             std::io::Error::last_os_error()
         );
     }
-    Ok(resolution(&mode))
+    let mut value = resolution(&mode);
+    if let Some(screen) = crate::virtual_display_manager::virtual_display_mode(name)? {
+        value.width = i32::try_from(screen.width)?;
+        value.height = i32::try_from(screen.height)?;
+        value.refresh_rate = u32::try_from((u64::from(screen.refresh_rate_units) + 5000) / 10000)?;
+    }
+    Ok(value)
 }
 
 pub(crate) fn supported(name: &str) -> SupportedResolutions {
@@ -94,6 +100,16 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
             hbb_common::anyhow::anyhow!("The display driver does not offer this mode")
         })?;
     let presentation = crate::virtual_display_manager::before_display_mode_change()?;
+    let virtual_mode_applied = match &presentation {
+        Some(guard) => guard.change_virtual_mode(name, requested)?,
+        None => false,
+    };
+    if virtual_mode_applied {
+        if let Some(presentation) = presentation {
+            presentation.finish()?;
+        }
+        return Ok(());
+    }
     let device = str_to_device_name(name);
     mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_DISPLAYORIENTATION;
     let test =
