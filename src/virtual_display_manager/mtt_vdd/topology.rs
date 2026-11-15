@@ -817,17 +817,18 @@ mod tests {
         }
         let mut config = VirtualDisplayConfiguration {
             count: 1,
-            modes: vec![VirtualDisplayMode {
-                width: 1920,
-                height: 1080,
-                refresh_rate_units: 600000,
-            }],
+            modes: [60, 120, 240]
+                .map(|hz| VirtualDisplayMode {
+                    width: 1920,
+                    height: 1080,
+                    refresh_rate_units: hz * 10000,
+                })
+                .to_vec(),
             persistent: false,
         };
         let retained = original.removal_snapshot()?;
         let check = (|| -> ResultType<()> {
             for (step, hz) in [60, 120, 240, 60, 120, 240].into_iter().enumerate() {
-                config.modes[0].refresh_rate_units = hz * 10000;
                 let state = if step == 0 {
                     println!("VDD_CI_STAGE=configure-display step={step} hz={hz}");
                     configuration::configure(&config)?
