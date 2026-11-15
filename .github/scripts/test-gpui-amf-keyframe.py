@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run three CPU-only AMF IDR checks against the production latch and surface helper."""
+"""Run CPU-only AMF IDR and dynamic peak-rate checks against production helpers."""
 import argparse
 import os
 from pathlib import Path
@@ -131,6 +131,53 @@ int main(void)
 """
 
 
+BITRATE_TEST = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <wchar.h>
+#include "core/Surface.h"
+#include "components/VideoEncoderVCE.h"
+#include "components/VideoEncoderHEVC.h"
+enum { AV_CODEC_ID_H264 = 1, AV_CODEC_ID_HEVC = 2 };
+typedef struct { int count; const wchar_t *names[2]; int64_t values[2], target, peak; } Encoder;
+typedef struct { int64_t av_bitrate; Encoder *encoder; } AmfContext;
+typedef struct { int id; } Codec;
+typedef struct { AmfContext *priv_data; Codec *codec; int64_t bit_rate, rc_max_rate; } AVCodecContext;
+#define av_log(...) ((void)0)
+#undef AMF_ASSIGN_PROPERTY_INT64
+#define AMF_ASSIGN_PROPERTY_INT64(res, e, k, v) do { \
+    assert((e)->count < 2); (e)->names[(e)->count] = (k); \
+    (e)->values[(e)->count++] = (v); (res) = AMF_OK; assert((res) == AMF_OK); \
+    if (!wcscmp((k), AMF_VIDEO_ENCODER_TARGET_BITRATE) || !wcscmp((k), AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE)) (e)->target = (v); else (e)->peak = (v); \
+    assert((e)->target <= (e)->peak); \
+} while (0)
+#include "amf_bitrate.h"
+int main(void)
+{
+    for (int id = AV_CODEC_ID_H264; id <= AV_CODEC_ID_HEVC; ++id) {
+        Encoder encoder = {.target = 20000000, .peak = 20000000}; Codec codec = {id}; AmfContext context = {20000000, &encoder};
+        AVCodecContext av = {&context, &codec, 1000000, 1000000};
+        for (int update = 0; update != 2; ++update) {
+            encoder.count = 0;
+            assert(reconfig_encoder(&av) == 0 && encoder.count == 2);
+            const wchar_t *target = id == AV_CODEC_ID_H264 ? AMF_VIDEO_ENCODER_TARGET_BITRATE : AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE;
+            const wchar_t *peak = id == AV_CODEC_ID_H264 ? AMF_VIDEO_ENCODER_PEAK_BITRATE : AMF_VIDEO_ENCODER_HEVC_PEAK_BITRATE;
+            int t = wcscmp(encoder.names[0], target) != 0;
+            assert(!wcscmp(encoder.names[t], target) && !wcscmp(encoder.names[1 - t], peak));
+            assert(encoder.values[t] == av.bit_rate && encoder.values[1 - t] == av.rc_max_rate);
+            av.bit_rate = av.rc_max_rate = 1000000000;
+        }
+        encoder.count = 0;
+        assert(reconfig_encoder(&av) == 0 && encoder.count == 0);
+        av.bit_rate = 4000000; av.rc_max_rate = 0;
+        assert(reconfig_encoder(&av) == 0 && encoder.count == 1);
+    }
+    puts("1 AMF dynamic target/peak ceiling regression passed for AVC and HEVC");
+}
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default='cc')
@@ -153,12 +200,17 @@ def main():
         (work / 'amfenc_keyframe.h').write_text(header)
         (work / 'latch.cpp').write_text(LATCH_TEST)
         (work / 'surface.c').write_text(SURFACE_TEST)
+        rate_patch = (root / 'res/vcpkg/ffmpeg/patch/0002-libavcodec-amfenc-reconfig-when-bitrate-change.patch').read_text()
+        rate_body = '+static int reconfig_encoder' + rate_patch.split('+static int reconfig_encoder', 1)[1].split('\n int ff_amf_receive_packet', 1)[0]
+        (work / 'amf_bitrate.h').write_text('\n'.join(line[1:] for line in rate_body.split('\n') if line.startswith('+')))
+        (work / 'bitrate.c').write_text(BITRATE_TEST)
         include = root / 'vendor/hwcodec/externals/AMF_v1.4.35/amf/public/include'
         latch = root / 'vendor/hwcodec/cpp/ffmpeg_vram'
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
         for source, compiler, standard in (
             ('latch.cpp', args.cxx or args.cc, 'c++17'),
             ('surface.c', args.cc, 'c11'),
+            ('bitrate.c', args.cc, 'c11'),
         ):
             executable = work / (source + ('.exe' if os.name == 'nt' else '.out'))
             subprocess.run(

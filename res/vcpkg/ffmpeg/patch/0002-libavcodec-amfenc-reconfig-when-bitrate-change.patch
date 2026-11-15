@@ -5,9 +5,9 @@ Subject: [PATCH 2/5] libavcodec/amfenc: reconfig when bitrate change
 
 Signed-off-by: 21pages <sunboeasy@gmail.com>
 ---
- libavcodec/amfenc.c | 20 ++++++++++++++++++++
+ libavcodec/amfenc.c | 32 ++++++++++++++++++++++++++++++++
  libavcodec/amfenc.h |  1 +
- 2 files changed, 21 insertions(+)
+ 2 files changed, 33 insertions(+)
 
 diff --git a/libavcodec/amfenc.c b/libavcodec/amfenc.c
 index a47aea6108..f70f0109f6 100644
@@ -21,7 +21,7 @@ index a47aea6108..f70f0109f6 100644
  
      // configure AMF logger
      // the return of these functions indicates old state and do not affect behaviour
-@@ -640,6 +641,23 @@ static void amf_release_buffer_with_frame_ref(AMFBuffer *frame_ref_storage_buffe
+@@ -640,6 +641,35 @@ static void amf_release_buffer_with_frame_ref(AMFBuffer *frame_ref_storage_buffe
      frame_ref_storage_buffer->pVtbl->Release(frame_ref_storage_buffer);
  }
  
@@ -32,12 +32,24 @@ index a47aea6108..f70f0109f6 100644
 +
 +    if (ctx->av_bitrate != avctx->bit_rate) {
 +        av_log(ctx, AV_LOG_INFO, "change bitrate from %d to %d\n", ctx->av_bitrate, avctx->bit_rate);
-+        ctx->av_bitrate = avctx->bit_rate;
 +        if (avctx->codec->id == AV_CODEC_ID_H264) {
++            if (avctx->rc_max_rate > ctx->av_bitrate) {
++                AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_PEAK_BITRATE, avctx->rc_max_rate);
++            }
 +            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_TARGET_BITRATE, avctx->bit_rate);
++            if (avctx->rc_max_rate > 0 && avctx->rc_max_rate <= ctx->av_bitrate) {
++                AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_PEAK_BITRATE, avctx->rc_max_rate);
++            }
 +        } else if (avctx->codec->id == AV_CODEC_ID_HEVC) {
++            if (avctx->rc_max_rate > ctx->av_bitrate) {
++                AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_HEVC_PEAK_BITRATE, avctx->rc_max_rate);
++            }
 +            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE, avctx->bit_rate);
++            if (avctx->rc_max_rate > 0 && avctx->rc_max_rate <= ctx->av_bitrate) {
++                AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_HEVC_PEAK_BITRATE, avctx->rc_max_rate);
++            }
 +        }
++        ctx->av_bitrate = avctx->bit_rate;
 +    }
 +    return 0;
 +}
@@ -45,7 +57,7 @@ index a47aea6108..f70f0109f6 100644
  int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
  {
      AmfContext *ctx = avctx->priv_data;
-@@ -653,6 +671,8 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+@@ -653,6 +683,8 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
      int         query_output_data_flag = 0;
      AMF_RESULT  res_resubmit;
  
