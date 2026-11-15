@@ -175,8 +175,7 @@ public:
     util_encode::set_rate_control(c_, encoder_->name_, RC_CBR, -1);
     if (amf_pipeline_) {
       c_->rc_max_rate = c_->bit_rate;
-      if (av_opt_set(c_->priv_data, "usage", "lowlatency", 0) < 0 ||
-          av_opt_set(c_->priv_data, "rc", "vbr_peak", 0) < 0)
+      if (av_opt_set(c_->priv_data, "rc", "vbr_peak", 0) < 0)
         return false;
     }
     util_encode::set_others(c_->priv_data, encoder_->name_);

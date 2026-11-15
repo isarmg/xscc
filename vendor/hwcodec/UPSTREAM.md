@@ -47,8 +47,8 @@ The FFmpeg AMD texture encoder now uses its existing owned-input asynchronous
 pipeline at every frame rate. Input retention, output polling, keyframe recovery
 and GPU retirement share the same path; no SDK code or C ABI was changed.
 
-The FFmpeg AMD texture encoder uses low-latency peak-constrained VBR for both
-moving and unchanged pictures. Its declared peak follows every bitrate target
+The FFmpeg AMD texture encoder uses peak-constrained VBR for both moving
+and unchanged pictures, retaining its existing ultra-low-latency usage mode. Its declared peak follows every bitrate target
 update; the product's FFmpeg AMF reconfiguration patch applies that peak to the
 existing encoder. Other vendors retain their existing rate-control settings.
 No idle-picture replay policy, GPU lifetime or SDK source is changed here.
