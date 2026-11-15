@@ -1,7 +1,7 @@
 //! Shared encrypted TCP handshake followed by current instance authorization.
 use super::crypto::SigningKeyPair;
 use anyhow::{bail, Context};
-use hbb_common::{bytes::Bytes, Stream};
+use hbb_common::Stream;
 use one_kvm_management::{nonce, ManagedKvm, SessionPermit, Transcript, WireMessage};
 use std::{sync::Arc, time::Duration};
 
@@ -15,9 +15,7 @@ async fn receive(stream: &mut Stream) -> anyhow::Result<WireMessage> {
     Ok(serde_json::from_slice(&packet)?)
 }
 async fn send(stream: &mut Stream, value: &WireMessage) -> anyhow::Result<()> {
-    stream
-        .send_bytes(Bytes::from(serde_json::to_vec(value)?))
-        .await
+    stream.send_raw(serde_json::to_vec(value)?).await
 }
 
 pub async fn accept(
@@ -73,4 +71,32 @@ pub async fn accept(
     })
     .await
     .context("encrypted handshake timed out")?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn management_proof_messages_use_the_negotiated_stream_encryption() {
+        super::super::crypto::init().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client, server) = tokio::join!(
+            tokio::net::TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept(),
+        );
+        let client = client.unwrap();
+        let (server, _) = server.unwrap();
+        let client_address = client.local_addr().unwrap();
+        let server_address = server.local_addr().unwrap();
+        let mut controller = Stream::from(client, client_address);
+        let mut host = Stream::from(server, server_address);
+        let key = hbb_common::sodiumoxide::crypto::secretbox::Key([0x39; 32]);
+        controller.set_key(key.clone());
+        host.set_key(key);
+        send(&mut host, &WireMessage::Accepted {}).await.unwrap();
+        assert!(matches!(
+            receive(&mut controller).await.unwrap(),
+            WireMessage::Accepted {}
+        ));
+    }
 }

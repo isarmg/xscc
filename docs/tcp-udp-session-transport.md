@@ -1,8 +1,9 @@
 # TCP management and UDP media
 
 The native product enables `udp-media` through `gpui-session` on Windows,
-Linux, macOS, Android and iOS. The historical `experimental-quic` feature is
-mutually exclusive with this product path and is not enabled by product CI.
+Linux, macOS, Android and iOS. QUIC has been removed.
+The implementation is owned by `crates/session-transport`; all native rates and
+applications use the same sender and transport lifecycle.
 
 ## Network layout
 
@@ -39,9 +40,9 @@ protection. Unvalidated traffic cannot enable media or change the destination.
 Closing the TCP session revokes its UDP registration. Dropping/restarting the
 TCP listener also drops its UDP listener and all registrations.
 
-Peers without capability/offer retain the existing TCP compatibility path.
-Once a UDP offer is accepted, failed association is an explicit connection
-error; negotiated media is not silently relabeled or sent through TCP.
+Native session revision 4 requires the current revision and UDP offer from
+both peers. Older peers and TCP-only media sessions are rejected. Failed UDP
+association is an explicit connection error; media is never sent through TCP.
 
 ## Bounded realtime delivery
 

@@ -46,3 +46,5 @@ GPUI 产品入口使用实例绑定和授权列表，不显示临时 IP 直连�
 支持 Windows 11 x86_64、Linux x86_64 Wayland、macOS 26 Apple Silicon、iOS / iPadOS 26 ARM64，以及 Android ARM64 API 29 起。硬件能力按实际捕获、codec 和渲染后端探测。
 
 RustDesk 来源许可证见 [LICENCE](LICENCE)，管理库许可证见 [LICENSE-APACHE](crates/management/LICENSE-APACHE)。来源快照记录在 [rustdesk-source.json](rustdesk-source.json)，旧版说明作为 [历史资料](docs/upstream-rustdesk-README.md) 保存。
+
+The coordinated XSCC/XSCS v4 ownership and upgrade contract is documented in [system architecture](docs/system-architecture-v4.md).

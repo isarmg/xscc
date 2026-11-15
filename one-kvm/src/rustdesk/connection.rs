@@ -8,9 +8,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use parking_lot::RwLock;
 use protobuf::Message as ProtobufMessage;
-use sodiumoxide::crypto::box_;
-#[cfg(test)]
-use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -23,8 +20,6 @@ use crate::video::codec::BitratePreset;
 use crate::video::codec_constraints::{encoder_codec_to_id, encoder_codec_to_video_codec};
 use crate::video::stream_manager::VideoStreamManager;
 
-#[cfg(test)]
-use super::bytes_codec::write_frame_vectored;
 use super::config::RustDeskConfig;
 use super::crypto::{self, KeyPair, SigningKeyPair};
 use super::frame_adapters::{AudioFrameAdapter, VideoCodec, VideoFrameAdapter};
@@ -33,11 +28,9 @@ use super::keyboard_mapping::KeyboardCodeSpace;
 use super::protocol::hbb::message::key_event as ke_union;
 use super::protocol::{
     decode_message, login_response, message, misc, Clipboard, ControlKey, DisplayInfo, Hash,
-    HbbMessage, IdPk, KeyEvent, LoginRequest, LoginResponse, Misc, MouseEvent, OptionMessage,
-    PeerInfo, PublicKey, SignedId, SupportedEncoding, TestDelay,
+    HbbMessage, KeyEvent, LoginRequest, LoginResponse, Misc, MouseEvent, OptionMessage, PeerInfo,
+    SupportedEncoding, TestDelay,
 };
-
-use sodiumoxide::crypto::secretbox;
 
 /// Default screen dimensions for mouse coordinate conversion
 const DEFAULT_SCREEN_WIDTH: u32 = 1920;
@@ -51,7 +44,6 @@ const MAX_CONNECTIONS: usize = 8;
 const MAX_UNAUTHENTICATED_PACKET_LENGTH: usize = 256 * 1024;
 const MAX_AUTHENTICATED_PACKET_LENGTH: usize = 8 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_PASSWORD_ATTEMPTS: u8 = 5;
 const CONNECTION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// RustDesk-facing identity and the physical key code space implied by it.
@@ -92,6 +84,7 @@ fn key_event_union_details(event: &KeyEvent) -> (&'static str, String) {
         Some(ke_union::Union::Seq(seq)) => ("Seq", format!("{seq:?}")),
         Some(ke_union::Union::Win2winHotkey(code)) => ("Win2winHotkey", format!("0x{code:X}")),
         None => ("None", "none".to_string()),
+        _ => ("Unsupported", "unknown".to_string()),
     }
 }
 
@@ -172,13 +165,6 @@ pub struct Connection {
     state: Arc<RwLock<ConnectionState>>,
     /// Our signing keypair (Ed25519) for signing SignedId messages
     signing_keypair: Option<SigningKeyPair>,
-    /// Temporary Curve25519 keypair for this connection (used for encryption)
-    /// Generated fresh for each connection, public key goes in IdPk.pk
-    temp_keypair: (box_::PublicKey, box_::SecretKey),
-    /// Device password
-    password: String,
-    /// Connection path determines whether the RustDesk signed-ID handshake is used.
-    mode: ConnectionMode,
     /// Password hashing salt sent to the client.
     password_salt: String,
     /// Per-connection challenge prevents replaying a captured password hash.
@@ -198,12 +184,6 @@ pub struct Connection {
     video_task: Option<tokio::task::JoinHandle<()>>,
     /// Audio streaming task handle
     audio_task: Option<tokio::task::JoinHandle<()>>,
-    /// Session encryption key (negotiated during handshake)
-    session_key: Option<secretbox::Key>,
-    /// Encryption enabled flag
-    encryption_enabled: bool,
-    /// Decryption sequence number (for nonce generation)
-    dec_seqnum: u64,
     /// Negotiated video codec (after client capability exchange)
     negotiated_codec: Option<VideoEncoderType>,
     /// Input event throttler to prevent HID device EAGAIN errors
@@ -220,15 +200,10 @@ pub struct Connection {
     pending_mouse_move: Option<MouseEvent>,
     /// Server-configured RustDesk video codec.
     configured_codec: VideoEncoderType,
-    /// Failed authentication attempts on this TCP session.
-    password_attempts: u8,
 }
 
 enum WriterCommand {
-    SetSessionKey(secretbox::Key),
-    SetManagedKey(secretbox::Key),
-    Send { data: Bytes, encrypt: bool },
-    Shutdown,
+    Send(Bytes),
 }
 
 /// Messages received from client
@@ -253,17 +228,12 @@ impl Connection {
     pub fn new(
         id: u32,
         config: &RustDeskConfig,
-        mode: ConnectionMode,
         signing_keypair: Option<SigningKeyPair>,
         hid: Option<Arc<HidController>>,
         audio: Option<Arc<AudioController>>,
         video_manager: Option<Arc<VideoStreamManager>>,
     ) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
-
-        // Generate fresh Curve25519 keypair for this connection
-        // This is used for encrypting the symmetric key exchange
-        let temp_keypair = box_::gen_keypair();
 
         let configured_codec = match config.codec {
             super::config::RustDeskCodec::H264 => VideoEncoderType::H264,
@@ -280,9 +250,6 @@ impl Connection {
             peer_name: String::new(),
             state: Arc::new(RwLock::new(ConnectionState::Pending)),
             signing_keypair,
-            temp_keypair,
-            password: config.device_password.clone(),
-            mode,
             password_salt: config.device_id.clone(),
             password_challenge: uuid::Uuid::new_v4().simple().to_string(),
             hid,
@@ -293,9 +260,6 @@ impl Connection {
             shutdown_tx,
             video_task: None,
             audio_task: None,
-            session_key: None,
-            encryption_enabled: false,
-            dec_seqnum: 0,
             negotiated_codec: None,
             input_throttler: InputThrottler::new(),
             last_delay: 0,
@@ -304,7 +268,6 @@ impl Connection {
             relative_mouse_active: false,
             pending_mouse_move: None,
             configured_codec,
-            password_attempts: 0,
         }
     }
 
@@ -353,7 +316,6 @@ impl Connection {
         )
         .await?;
         self.managed_permit = Some(permit);
-        self.password.clear();
         let mut transport = SessionTransport::accepted(stream, self.media_registration.clone());
         transport.set_send_timeout(10_000);
         transport.send(&self.create_hash_message()).await?;
@@ -378,18 +340,17 @@ impl Connection {
                     _=shutdown.changed()=>break,
                     _=&mut deadline,if self.state()!=ConnectionState::Active=>anyhow::bail!("native login timed out"),
                     command=control.recv()=>match command {
-                        Some(WriterCommand::Send {data,..})=>{
+                        Some(WriterCommand::Send(data))=>{
                             let mut message=HbbMessage::parse_from_tokio_bytes(&data)?;
                             if let Some(message::Union::LoginResponse(response))=&mut message.union {
                                 if let Some(login_response::Union::PeerInfo(peer))=&mut response.union {
                                     peer.session_revision=base::session_protocol::NATIVE_SESSION_REVISION;
-                                    peer.udp_media=transport.offer_host().await?.ok_or_else(||anyhow::anyhow!("UDP media listener required"))?.into();
+                                    peer.udp_media=protobuf::MessageField::some(transport.offer_host().await?.ok_or_else(||anyhow::anyhow!("UDP media listener required"))?);
                                 }
                             }
                             transport.send(&message).await?;
                         }
-                        Some(WriterCommand::Shutdown)|None=>break,
-                        _=>anyhow::bail!("key exchange already completed"),
+                        None=>break,
                     },
                     packet=transport.next()=>{
                         let Some(packet)=packet else {break;};let packet=packet?;
@@ -427,45 +388,17 @@ impl Connection {
         result
     }
 
-    async fn send_framed(
+    async fn send_control(
         &self,
         writer: &mpsc::Sender<WriterCommand>,
         data: &[u8],
     ) -> anyhow::Result<()> {
         writer
-            .send(WriterCommand::Send {
-                data: Bytes::copy_from_slice(data),
-                encrypt: false,
-            })
+            .send(WriterCommand::Send(Bytes::copy_from_slice(data)))
             .await
             .map_err(|_| anyhow::anyhow!("RustDesk writer is closed"))
     }
 
-    /// Generate nonce from sequence number (RustDesk format)
-    fn get_nonce(seqnum: u64) -> secretbox::Nonce {
-        let mut nonce = secretbox::Nonce([0u8; 24]);
-        nonce.0[..8].copy_from_slice(&seqnum.to_le_bytes());
-        nonce
-    }
-
-    /// Send encrypted framed message if encryption is enabled
-    /// RustDesk uses sequence-based nonce, NOT nonce prefix in message
-    async fn send_encrypted(
-        &self,
-        writer: &mpsc::Sender<WriterCommand>,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        writer
-            .send(WriterCommand::Send {
-                data: Bytes::copy_from_slice(data),
-                encrypt: self.session_key.is_some(),
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("RustDesk writer is closed"))
-    }
-
-    /// Handle incoming message with Arc writer
-    /// Messages may be encrypted after session key negotiation
     async fn handle_message_arc(
         &mut self,
         data: &[u8],
@@ -478,51 +411,11 @@ impl Connection {
         if !self.managed_authorized() {
             anyhow::bail!("XSCS session authorization expired");
         }
-        // Try to decrypt if we have a session key
-        // RustDesk uses sequence-based nonce, NOT nonce prefix in message
-        let decrypted_data: Vec<u8>;
-        let msg_data = if let Some(ref key) = self.session_key {
-            // Increment decryption sequence number
-            self.dec_seqnum += 1;
-            let nonce = Self::get_nonce(self.dec_seqnum);
-            match secretbox::open(data, &nonce, key) {
-                Ok(decrypted) => {
-                    decrypted_data = decrypted;
-                    &decrypted_data[..]
-                }
-                Err(_) => {
-                    if self.managed.is_some() {
-                        anyhow::bail!("Encrypted XSCC packet authentication failed");
-                    }
-                    // Decryption failed, try as plain message
-                    // (PublicKey message is sent before encryption is enabled)
-                    // Reset sequence number since this wasn't an encrypted message
-                    self.dec_seqnum -= 1;
-                    data
-                }
-            }
-        } else {
-            data
-        };
-
-        let msg = decode_message(msg_data)?;
+        let msg = decode_message(data)?;
 
         match msg.union {
-            Some(message::Union::PublicKey(ref pk)) => {
-                if self.managed.is_some() {
-                    anyhow::bail!("XSCC key exchange already completed");
-                }
-                info!(
-                    "Received PublicKey from peer: asymmetric_len={}, symmetric_len={}",
-                    pk.asymmetric_value.len(),
-                    pk.symmetric_value.len()
-                );
-                if pk.asymmetric_value.is_empty() && pk.symmetric_value.is_empty() {
-                    warn!(
-                        "Received EMPTY PublicKey - client may have failed signature verification!"
-                    );
-                }
-                self.handle_peer_public_key(pk, writer).await?;
+            Some(message::Union::PublicKey(_) | message::Union::SignedId(_)) => {
+                anyhow::bail!("native key exchange already completed");
             }
             Some(message::Union::LoginRequest(lr)) => {
                 debug!("Received login request from {}", lr.my_id);
@@ -567,24 +460,12 @@ impl Connection {
             Some(other) => {
                 // Log the actual message type for debugging
                 let type_name = match other {
-                    message::Union::SignedId(ref si) => {
-                        if self.managed.is_some() {
-                            anyhow::bail!("key exchange already completed");
-                        }
-                        // Client sends SignedId as first message in handshake
-                        // We should respond with our IdPk (ID + public key)
-                        info!("Received SignedId from peer, id_len={}", si.id.len());
-                        self.handle_signed_id(si, writer).await?;
-                        return Ok(());
-                    }
                     message::Union::Hash(_) => "Hash",
                     message::Union::VideoFrame(_) => "VideoFrame",
                     message::Union::CursorData(_) => "CursorData",
                     message::Union::CursorPosition(_) => "CursorPosition",
                     message::Union::CursorId(_) => "CursorId",
                     message::Union::AudioFrame(_) => "AudioFrame",
-                    message::Union::FileAction(_) => "FileAction",
-                    message::Union::FileResponse(_) => "FileResponse",
                     message::Union::SwitchSidesResponse(_) => "SwitchSidesResponse",
                     message::Union::PointerDeviceEvent(_) => "PointerDeviceEvent",
                     _ => "Other",
@@ -616,44 +497,9 @@ impl Connection {
             lr.session_revision,
             lr.supports_udp_media,
         )?;
-        // Check if our server requires a password
-        if !self.password.is_empty() {
-            // Server requires password
-            if lr.password.is_empty() {
-                // Client sent empty password - tell them to enter password
-                info!(
-                    "Empty password from {}, requesting password input",
-                    lr.my_id
-                );
-                let error_response = self.create_login_error_response("Empty Password");
-                let response_bytes = error_response
-                    .write_to_bytes()
-                    .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-                self.send_encrypted(writer, &response_bytes).await?;
-                // Don't close connection - wait for retry with password
-                return Ok(false);
-            }
-
-            // Verify the password
-            if !self.verify_password(&lr.password) {
-                self.password_attempts = self.password_attempts.saturating_add(1);
-                warn!("Wrong password from {}", lr.my_id);
-                let error_response = self.create_login_error_response("Wrong Password");
-                let response_bytes = error_response
-                    .write_to_bytes()
-                    .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-                self.send_encrypted(writer, &response_bytes).await?;
-                if self.password_attempts >= MAX_PASSWORD_ATTEMPTS {
-                    anyhow::bail!("Too many failed RustDesk password attempts");
-                }
-                // Don't close connection - wait for retry with correct password
-                return Ok(false);
-            }
+        if !self.managed_authorized() {
+            anyhow::bail!("current management authorization required");
         }
-
-        // Password valid or no password required
-        info!("Login successful for {}", lr.my_id);
-        self.password_attempts = 0;
         *self.state.write() = ConnectionState::Active;
 
         // Select the best available video codec
@@ -666,7 +512,7 @@ impl Connection {
         let response_bytes = response
             .write_to_bytes()
             .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-        self.send_encrypted(writer, &response_bytes).await?;
+        self.send_control(writer, &response_bytes).await?;
         Ok(true)
     }
 
@@ -857,222 +703,6 @@ impl Connection {
         self.audio_task = Some(task);
     }
 
-    /// Create SignedId message for initial handshake
-    ///
-    /// RustDesk protocol:
-    /// - IdPk contains device ID and a fresh Curve25519 public key for this connection
-    /// - The IdPk is signed with Ed25519 to prove ownership of the device
-    /// - Client verifies the Ed25519 signature using public key from hbbs
-    /// - Client then encrypts symmetric key using the Curve25519 public key from IdPk
-    fn create_signed_id_message(&self, device_id: &str) -> HbbMessage {
-        // Create IdPk with our device ID and temporary Curve25519 public key
-        // IMPORTANT: Use the fresh Curve25519 public key, NOT Ed25519!
-        // The client will use this directly for encryption (no conversion needed)
-        let pk_bytes = self.temp_keypair.0.as_ref();
-        let mut id_pk = IdPk::new();
-        id_pk.id = device_id.to_string();
-        id_pk.pk = pk_bytes.to_vec().into();
-
-        // Encode IdPk to bytes
-        let id_pk_bytes = id_pk.write_to_bytes().unwrap_or_default();
-
-        // Sign the IdPk bytes with Ed25519
-        // RustDesk's sign::sign() prepends the 64-byte signature to the message
-        let signed_id_pk = self
-            .signing_keypair
-            .as_ref()
-            .expect("secure RustDesk connections require a signing keypair")
-            .sign(&id_pk_bytes);
-
-        let mut signed_id = SignedId::new();
-        signed_id.id = signed_id_pk.into();
-
-        let mut msg = HbbMessage::new();
-        msg.union = Some(message::Union::SignedId(signed_id));
-        msg
-    }
-
-    /// Handle peer's public key and negotiate session encryption
-    /// After successful negotiation, send Hash message for password authentication
-    async fn handle_peer_public_key(
-        &mut self,
-        pk: &PublicKey,
-        writer: &mpsc::Sender<WriterCommand>,
-    ) -> anyhow::Result<()> {
-        // RustDesk's PublicKey message has two parts:
-        // - asymmetric_value: The peer's temporary Curve25519 public key (32 bytes)
-        // - symmetric_value: The sealed symmetric key (encrypted with our Curve25519 public key from IdPk)
-
-        if pk.asymmetric_value.len() == 32 && !pk.symmetric_value.is_empty() {
-            // Client sent us an encrypted symmetric key
-            debug!(
-                "Received encrypted handshake: pk={} bytes, sealed_key={} bytes",
-                pk.asymmetric_value.len(),
-                pk.symmetric_value.len()
-            );
-
-            // Decrypt the symmetric key using our temporary Curve25519 keypair
-            // The client encrypted it using our Curve25519 public key from IdPk
-            match crypto::decrypt_symmetric_key(
-                &pk.asymmetric_value,
-                &pk.symmetric_value,
-                &self.temp_keypair.1,
-            ) {
-                Ok(session_key) => {
-                    info!("Session key negotiated successfully");
-                    writer
-                        .send(WriterCommand::SetSessionKey(session_key.clone()))
-                        .await
-                        .map_err(|_| anyhow::anyhow!("RustDesk writer is closed"))?;
-                    self.session_key = Some(session_key);
-                    self.encryption_enabled = true;
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to decrypt session key: {:?}, falling back to unencrypted",
-                        e
-                    );
-                    // Continue without encryption - some clients may not support it
-                    self.encryption_enabled = false;
-                }
-            }
-        } else if pk.asymmetric_value.is_empty() {
-            // Client doesn't want encryption
-            debug!("Client requested unencrypted session");
-            self.encryption_enabled = false;
-        } else {
-            // Just received a public key without symmetric key
-            // This might be an older client or a different handshake mode
-            debug!(
-                "Received public key without symmetric value: {} bytes",
-                pk.asymmetric_value.len()
-            );
-            self.encryption_enabled = false;
-        }
-
-        // Send Hash message for password authentication
-        // This tells the client what salt to use for password hashing
-        // Must be encrypted if session key was negotiated
-        let hash_msg = self.create_hash_message();
-        let hash_bytes = hash_msg
-            .write_to_bytes()
-            .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-        debug!(
-            "Sending Hash message for password authentication (encrypted={})",
-            self.encryption_enabled
-        );
-        self.send_encrypted(writer, &hash_bytes).await?;
-
-        Ok(())
-    }
-
-    /// Handle SignedId from peer
-    ///
-    /// When we receive a SignedId from the client, it means the client is also trying
-    /// to authenticate. We should respond with our own SignedId if we haven't already,
-    /// or proceed with the connection.
-    async fn handle_signed_id(
-        &mut self,
-        si: &SignedId,
-        writer: &mpsc::Sender<WriterCommand>,
-    ) -> anyhow::Result<()> {
-        // The SignedId contains a signed IdPk message
-        // Try to parse the IdPk from the signed data
-        // Note: The signature is at the beginning (64 bytes for Ed25519) followed by the message
-        let signed_data = &si.id;
-
-        // RustDesk's sign::sign() prepends the signature to the message
-        // Ed25519 signature is 64 bytes
-        let id_pk_bytes = if signed_data.len() > 64 {
-            // Skip the signature and parse the IdPk
-            &signed_data[64..]
-        } else {
-            // Might be unsigned, try parsing directly
-            &signed_data[..]
-        };
-
-        if let Ok(id_pk) = IdPk::parse_from_bytes(id_pk_bytes) {
-            info!(
-                "Received SignedId from peer: id={}, pk_len={}",
-                id_pk.id,
-                id_pk.pk.len()
-            );
-
-            // Store the peer's ID
-            if !id_pk.id.is_empty() {
-                self.peer_id = id_pk.id.clone();
-            }
-
-            // If the peer sent a public key, we could use it for encryption
-            // For now, just acknowledge
-            debug!("Peer ID from SignedId: {}", self.peer_id);
-        } else {
-            warn!("Failed to parse IdPk from SignedId");
-        }
-
-        // If we haven't sent our SignedId yet, send it now
-        // (This handles the case where client sends SignedId before we do)
-        let signed_id_msg = self.create_signed_id_message(&self.device_id.clone());
-        let signed_id_bytes = signed_id_msg
-            .write_to_bytes()
-            .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-        self.send_framed(writer, &signed_id_bytes).await?;
-
-        Ok(())
-    }
-
-    /// Verify password
-    fn verify_password(&self, provided: &[u8]) -> bool {
-        // RustDesk password verification:
-        // We send a stable salt and a fresh per-connection challenge to the client.
-        // The client calculates: SHA256(SHA256(password + salt) + challenge)
-        // See create_hash_message() for the salt and challenge we use
-        //
-        // Empty password case
-        if provided.is_empty() {
-            return self.password.is_empty();
-        }
-
-        if self.password.is_empty() {
-            return false;
-        }
-
-        let expected_hash = crypto::hash_password_double(
-            &self.password,
-            &self.password_salt,
-            &self.password_challenge,
-        );
-
-        // Try comparison with double hash
-        if provided.len() == expected_hash.len()
-            && sodiumoxide::utils::memcmp(provided, expected_hash.as_slice())
-        {
-            debug!("Password verified with double hash");
-            return true;
-        }
-
-        // Keep the legacy single-hash fallback only inside the encrypted ID-service path.
-        // It has no per-connection challenge and must not be accepted on direct IP access.
-        let expected_hash_single = crypto::hash_password(&self.password, &self.password_salt);
-        if self.mode == ConnectionMode::Secure
-            && provided.len() == expected_hash_single.len()
-            && sodiumoxide::utils::memcmp(provided, expected_hash_single.as_slice())
-        {
-            debug!("Password verified with single hash");
-            return true;
-        }
-
-        // Log what we received vs expected for debugging
-        debug!(
-            "Password mismatch: provided_len={}, expected_double_len={}, expected_single_len={}",
-            provided.len(),
-            expected_hash.len(),
-            expected_hash_single.len()
-        );
-
-        false
-    }
-
     /// Create login response with dynamically detected encoder capabilities
     async fn create_login_response(&mut self, success: bool) -> HbbMessage {
         if success {
@@ -1155,20 +785,6 @@ impl Connection {
         }
     }
 
-    /// Create login error response with specific error message
-    /// RustDesk client recognizes specific error strings:
-    /// - "Empty Password" -> prompts for password input
-    /// - "Wrong Password" -> prompts for password re-entry
-    fn create_login_error_response(&self, error: &str) -> HbbMessage {
-        let mut login_response = LoginResponse::new();
-        login_response.union = Some(login_response::Union::Error(error.to_string()));
-        login_response.enable_trusted_devices = false;
-
-        let mut msg = HbbMessage::new();
-        msg.union = Some(message::Union::LoginResponse(login_response));
-        msg
-    }
-
     /// Create Hash message for password authentication
     /// The client will hash the password with the salt and send it back in LoginRequest
     fn create_hash_message(&self) -> HbbMessage {
@@ -1207,7 +823,7 @@ impl Connection {
             let data = response
                 .write_to_bytes()
                 .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-            self.send_encrypted(writer, &data).await?;
+            self.send_control(writer, &data).await?;
 
             debug!(
                 "TestDelay response sent: time={}, last_delay={}ms",
@@ -1256,7 +872,7 @@ impl Connection {
         let data = msg
             .write_to_bytes()
             .map_err(|e| anyhow::anyhow!("Failed to encode: {}", e))?;
-        self.send_encrypted(writer, &data).await?;
+        self.send_control(writer, &data).await?;
 
         // Record when we sent this, so we can calculate RTT when client echoes back
         self.last_test_delay_sent = Some(Instant::now());
@@ -1421,77 +1037,9 @@ impl Connection {
         match (&self.managed, &self.managed_permit) {
             (Some(manager), Some(permit)) => manager.native_permits(permit),
             (Some(_), None) => false,
-            (None, _) => true,
+            (None, _) => false,
         }
     }
-}
-
-#[cfg(test)]
-async fn run_connection_writer(
-    mut writer: OwnedWriteHalf,
-    mut control_rx: mpsc::Receiver<WriterCommand>,
-    mut video_rx: mpsc::Receiver<Bytes>,
-    mut audio_rx: mpsc::Receiver<Bytes>,
-) -> anyhow::Result<()> {
-    let mut session_key: Option<secretbox::Key> = None;
-    let mut sequence = 0u64;
-
-    loop {
-        let (data, encrypt) = tokio::select! {
-            biased;
-
-            command = control_rx.recv() => {
-                match command {
-                    Some(WriterCommand::SetSessionKey(key)) => {
-                        session_key = Some(key);
-                        continue;
-                    }
-                    Some(WriterCommand::SetManagedKey(key)) => {
-                        session_key = Some(key);
-                        sequence = 2;
-                        continue;
-                    }
-                    Some(WriterCommand::Send { data, encrypt }) => (data, encrypt),
-                    Some(WriterCommand::Shutdown) | None => break,
-                }
-            }
-            frame = video_rx.recv() => {
-                match frame {
-                    Some(data) => (data, session_key.is_some()),
-                    None => continue,
-                }
-            }
-            frame = audio_rx.recv() => {
-                match frame {
-                    Some(data) => (data, session_key.is_some()),
-                    None => continue,
-                }
-            }
-        };
-
-        let encrypted;
-        let payload = if encrypt {
-            if let Some(key) = session_key.as_ref() {
-                sequence = sequence.wrapping_add(1);
-                let nonce = Connection::get_nonce(sequence);
-                encrypted = secretbox::seal(&data, &nonce, key);
-                encrypted.as_slice()
-            } else {
-                data.as_ref()
-            }
-        } else {
-            data.as_ref()
-        };
-
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            write_frame_vectored(&mut writer, payload),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("RustDesk socket write timed out"))??;
-    }
-
-    Ok(())
 }
 
 /// Lightweight connection info for tracking active connections
@@ -1654,7 +1202,7 @@ impl ConnectionManager {
         &self,
         stream: TcpStream,
         peer_addr: SocketAddr,
-        mode: ConnectionMode,
+        _mode: ConnectionMode,
         registration: Option<xscc_session_transport::host::Registration>,
     ) -> anyhow::Result<u32> {
         if self.connection_count() >= MAX_CONNECTIONS {
@@ -1673,15 +1221,7 @@ impl ConnectionManager {
         let hid = self.hid.read().clone();
         let audio = self.audio.read().clone();
         let video_manager = self.video_manager.read().clone();
-        let mut conn = Connection::new(
-            id,
-            &config,
-            mode,
-            signing_keypair,
-            hid,
-            audio,
-            video_manager,
-        );
+        let mut conn = Connection::new(id, &config, signing_keypair, hid, audio, video_manager);
         conn.managed = Some(self.managed.clone());
         conn.media_registration = registration;
 
@@ -2111,45 +1651,11 @@ mod tests {
         Connection::new(
             1,
             &config,
-            mode,
             (mode == ConnectionMode::Secure).then(SigningKeyPair::generate),
             None,
             None,
             None,
         )
-    }
-
-    #[test]
-    fn direct_ip_password_challenge_is_non_empty_and_verifiable() {
-        let connection = connection(ConnectionMode::DirectIp);
-        let message = connection.create_hash_message();
-        let hash = match message.union {
-            Some(message::Union::Hash(hash)) => hash,
-            _ => panic!("expected Hash message"),
-        };
-
-        assert_eq!(hash.salt, "123456789");
-        assert!(!hash.challenge.is_empty());
-
-        let response = crypto::hash_password_double("fixed-password", &hash.salt, &hash.challenge);
-        assert!(connection.verify_password(&response));
-    }
-
-    #[test]
-    fn direct_ip_rejects_legacy_replayable_single_hash() {
-        let direct = connection(ConnectionMode::DirectIp);
-        let single_hash = crypto::hash_password("fixed-password", "123456789");
-        assert!(!direct.verify_password(&single_hash));
-
-        let secure = connection(ConnectionMode::Secure);
-        assert!(secure.verify_password(&single_hash));
-    }
-
-    #[test]
-    fn password_challenge_changes_for_each_connection() {
-        let first = connection(ConnectionMode::DirectIp);
-        let second = connection(ConnectionMode::DirectIp);
-        assert_ne!(first.password_challenge, second.password_challenge);
     }
 
     #[tokio::test]
@@ -2243,24 +1749,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn password_attempts_are_bounded_per_session() {
+    async fn login_requires_current_contract_and_live_instance_authorization() {
         let mut connection = connection(ConnectionMode::DirectIp);
         let (writer, _reader) = mpsc::channel(32);
         let mut login = LoginRequest::new();
-        login.my_id = "attacker".to_string();
-        login.session_revision = base::session_protocol::NATIVE_SESSION_REVISION;
-        login.supports_udp_media = true;
-        login.password = vec![0u8; 32].into();
-
-        for _ in 1..MAX_PASSWORD_ATTEMPTS {
-            assert!(!connection
-                .handle_login_request_arc(&login, &writer)
-                .await
-                .unwrap());
-        }
         assert!(connection
             .handle_login_request_arc(&login, &writer)
             .await
             .is_err());
+        login.session_revision = base::session_protocol::NATIVE_SESSION_REVISION;
+        login.supports_udp_media = true;
+        assert!(connection
+            .handle_login_request_arc(&login, &writer)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("current management authorization required"));
+        assert_ne!(connection.state(), ConnectionState::Active);
     }
 }

@@ -69,7 +69,7 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 | `.github/workflows/gpui-windows-beta.yml`、`gpui-unix-beta.yml` | beta.11 版本与新依赖的触发范围，Windows 增加非空的实际模式配置回归。 |
 | `packaging/gpui-android/app/build.gradle` | Android 版本升为 beta.11/code11，区分此前预览包。 |
 
-新逻辑集中在 `src/platform/windows/display_modes.rs`、`src/virtual_display_manager/mtt_vdd/` 及其后端模块、驱动来源清单和独立准备脚本。码率滑杆、精确输入分别位于各前端功能子模块，分段比例、步进与十进制解析共用 `experiments/shared/bitrate_controls.rs`；没有新增持久化写入。hwcodec 原始来源、SDK 子 revision、保留文件清单与局部补丁记录随 vendored 源码提供。
+新逻辑集中在 `src/platform/windows/display_modes.rs`、`src/virtual_display_manager/mtt_vdd/` 及其后端模块、驱动来源清单和独立准备脚本。码率滑杆、精确输入分别位于各前端功能子模块，分段比例、步进与十进制解析共用 `crates/native-ui/src/bitrate_controls.rs`；没有新增持久化写入。hwcodec 原始来源、SDK 子 revision、保留文件清单与局部补丁记录随 vendored 源码提供。
 
 ## 验证边界
 

@@ -33,7 +33,7 @@ Linux 两者均通过现有 VP9 软件解码器回放、窗口缩放、键鼠消
 - GPUI 源自 Zed 上游提交 `28d0a3547f16b9609b301b48ab363bfca649c864`，现由 XSCC 在 `vendor/gpui` 独立维护，通过本地路径依赖构建。不使用落后于上游源码的 crates.io `0.2.2` 包评估当前能力。
 - 两套原型均固定 `libc 0.2.189`：首次 iOS 检查发现 `0.2.190` 将 dyld 声明限定为 macOS，而共享 `backtrace` 仍在 iOS 调用，导致编译失败。此约束仅在实验 workspace 中，不改变正式应用的依赖。
 - 两套程序分别位于 `experiments/slint-validation`、`apps/desktop`，各自独立 Cargo workspace/lockfile，不接入正式应用构建。
-- 两者复用 `experiments/shared/video.rs` 的测试图案、单帧邮箱与可选 VP9 回放，以及相同的 `NativeManager` 实现；键鼠事件编码为现有 `base::message_proto::Message` 后再解码检查。
+- GPUI 诊断入口使用 `apps/desktop/src/diagnostic_video.rs`，历史 Slint 对照保留 `experiments/shared/video.rs`；二者使用相同的 `NativeManager` 管理实现，键鼠事件编码为现有 `base::message_proto::Message` 后再解码检查。
 - `--state-dir` 必须显式指定私有的测试目录。默认不读取正式应用的绑定与凭据。原型不启动被控端监听，不向远端注入输入。
 
 ## 目前可以验证什么

@@ -85,5 +85,11 @@
         "removed": []
       }
     }
-  ]
+  ],
+  "runtime_source": {
+    "client": "../../../crates/management",
+    "native": "../../../crates/native-management",
+    "protocol": "xscs-protocol 4.0.0 pinned by crates/management/Cargo.toml"
+  },
+  "snapshot_status": "Retired from builds; original source archives and licenses retained for provenance."
 }

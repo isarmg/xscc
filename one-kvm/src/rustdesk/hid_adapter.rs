@@ -186,7 +186,7 @@ fn key_event_to_mapping(
             ),
             KeyboardMode::Legacy | KeyboardMode::Auto => legacy_character_mapping(*code, modifiers),
         },
-        Some(ke_union::Union::Seq(_)) | Some(ke_union::Union::Win2winHotkey(_)) | None => None,
+        _ => None,
     }
 }
 
@@ -294,9 +294,9 @@ fn log_rejected_key_event(event: &KeyEvent, code_space: KeyboardCodeSpace) {
             ?code_space,
             "Dropping unsupported RustDesk keyboard event"
         ),
-        None => debug!(
+        _ => debug!(
             mode,
-            union = "None",
+            union = "Unsupported",
             ?code_space,
             "Dropping unsupported RustDesk keyboard event"
         ),

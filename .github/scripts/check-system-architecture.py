@@ -25,6 +25,10 @@ def check():
     kvm = manifest('one-kvm/crates/management')['dependencies']
     for key, destination in [('xscc', 'crates/management'), ('xscc-native-management', 'crates/native-management')]:
         assert (ROOT / 'one-kvm/crates/management' / kvm[key]['path']).resolve() == ROOT / destination
+    for retired in ('src/session_transport.rs', 'src/udp_host.rs',
+                    'src/client/udp_media.rs', 'src/server/video_pipeline.rs',
+                    'one-kvm/crates/management/vendor'):
+        assert not (ROOT / retired).exists(), retired
     core = manifest('.')
     assert 'experimental-quic' not in core['features']
     assert core['dependencies']['xscc-session-transport']['path'] == 'crates/session-transport'
