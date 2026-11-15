@@ -516,7 +516,7 @@ pub struct MediaSender {
     released: Arc<OnceLock<VideoReleased>>,
 }
 impl MediaSender {
-    /// Releases the producer after initial sending or discard; the callback must not block.
+    /// Releases deltas at dequeue and keyframes after sending; the callback must not block.
     pub fn on_video_released(&self, callback: impl Fn(u32, Instant) + Send + Sync + 'static) -> ResultType<()> {
         self.released.set(Box::new(callback)).map_err(|_| {
             hbb_common::anyhow::anyhow!("Video release callback already registered")
@@ -2040,7 +2040,13 @@ mod tests {
                     _ = tick.tick(), if fetched => {
                         fetched = false;
                         let key = std::mem::take(&mut refresh);
-                        host.send(&video(key, if key { 300_000 } else { 4_000 })).await.unwrap();
+                        let bytes = if key { 300_000 } else if produced == 1 { 60_000 } else { 4_000 };
+                        host.send(&video(key, bytes)).await.unwrap();
+                        if !key && produced == 1 {
+                            timeout(Duration::from_millis(20), released.notified()).await
+                                .expect("delta production must overlap the ongoing initial UDP send");
+                            fetched = true;
+                        }
                         produced += 1;
                     }
                     packet = host.next() => {
@@ -2446,7 +2452,7 @@ async fn host_media(
                             cached.retain(|metadata| (metadata.kind, metadata.display_id) != key);
                             retries.retain(|retry: &Transmission| (retry.plan.descriptor().metadata.kind, retry.plan.descriptor().metadata.display_id) != key);
                             if current.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) {
-                                if current.as_ref().is_some_and(|frame| frame.initial) {
+                                if current.as_ref().is_some_and(|frame| frame.initial && frame.plan.descriptor().metadata.keyframe) {
                                     video_released(&released, epoch.kind, epoch.display, Instant::now());
                                 }
                                 current = None;
@@ -2514,6 +2520,9 @@ async fn host_media(
                         video_released(&released, metadata.kind, metadata.display_id, queued);
                         continue;
                     }
+                    if !metadata.keyframe {
+                        video_released(&released, metadata.kind, metadata.display_id, queued);
+                    }
                     if metadata.keyframe {
                         for evicted in cache.insert(frame.clone(), Instant::now())? {
                             cached.retain(|metadata| *metadata != evicted); frame_notice(&writer, sid, FrameNotice::Abandoned(evicted))?;
@@ -2531,7 +2540,7 @@ async fn host_media(
                         if slot.as_ref().is_some_and(|frame| frame.deadline <= now) {
                             let expired = slot.take().expect("invariant: expired transmission exists");
                             let metadata = expired.plan.descriptor().metadata;
-                            if expired.initial { video_released(&released, metadata.kind, metadata.display_id, now); }
+                            if expired.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
                         }
@@ -2564,7 +2573,7 @@ async fn host_media(
                             next_send = now + media::REPORT_INTERVAL; break;
                         }
                         SendDecision::Expired => {
-                            if frame.initial { video_released(&released, metadata.kind, metadata.display_id, now); }
+                            if frame.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
                         }
@@ -2576,7 +2585,7 @@ async fn host_media(
                                 if frame.initial {
                                     if metadata.keyframe { cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?; }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
-                                    video_released(&released, metadata.kind, metadata.display_id, Instant::now());
+                                    if metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, Instant::now()); }
                                 }
                                 *active = None;
                             }

@@ -1,5 +1,33 @@
 # Native session performance
 
+## 2026-11-15: restore delta overlap after beta.3 regression
+
+The beta.3 device samples exposed a cost the transport-only fixture did not
+measure: waiting for every frame's complete transmission added approximately
+7.5 ms per frame on this Windows host. The 120 FPS session averaged 68 fresh
+frames/s (capture 3.9 ms, encode 2.9 ms, send barrier 7.5 ms). Ordinary-screen
+capture also lost throughput. A loopback payload count cannot validate the
+capture/encode/network pipeline's overlap.
+
+Only keyframes now hold the producer until their initial transmission completes.
+Delta frames release it when dequeued, allowing the existing bounded lookahead
+to overlap the next capture/encode with UDP sending. This keeps deltas from
+waiting behind the large initial keyframe while avoiding a per-frame wire
+completion barrier. Delta expiry, queue bounds, reference-gap checks, initial
+keyframe recovery and bandwidth feedback remain. Terminal callbacks release
+only keyframes that were not already released at dequeue.
+
+The Xiaomi 13 simultaneously reported a system-wide
+`PRIORITY_MIUI_REFRESH_RATE` maximum of 60 Hz, while XSCC's window requested mode
+2 and 120 Hz. During the virtual-screen session received/decoded rates were
+approximately 65–76 FPS and submitted rates 51–58 FPS. The phone refresh policy
+must be checked independently of the host regression; no renderer change is
+justified by those target-versus-actual values alone.
+
+Changed runtime file: `crates/session-transport/src/lib.rs`, host-only producer
+release points for initial delta and keyframe transmissions. No display, driver,
+client decoder or renderer path changes are part of this correction.
+
 ## 2026-11-15: bound UDP production to initial transmission completion
 
 On the Xiaomi 13, the 1080p/120 Hz/8 Mbps session configured Qualcomm HEVC at
