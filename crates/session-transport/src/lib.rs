@@ -1554,17 +1554,24 @@ mod tests {
             .unwrap();
         assert_eq!(host.video_bitrate_budget(), None);
         host.set_media_bitrate_limit(1_000).unwrap();
+        let released = Arc::new(Notify::new());
+        let notify = released.clone();
+        host.media_sender().unwrap().on_video_released(move |_, _| notify.notify_one()).unwrap();
         let mut serving = tokio::spawn(async move {
             host.send(&video(true, 100)).await.unwrap();
-            // A 120-FPS producer can fill the two-frame queue while each delta is
-            // still much younger than the 75 ms deadline-based backlog threshold.
+            // A producer waiting for wire completion has no queued successor.
+            let mut fetched = false;
             let mut tick = interval(Duration::from_millis(8));
             let until = tokio::time::sleep(Duration::from_millis(800));
             tokio::pin!(until);
             loop {
                 tokio::select! {
                     _ = &mut until => return (host.video_bitrate_budget(), host),
-                    _ = tick.tick() => host.send(&video(false, 1024)).await.unwrap(),
+                    _ = released.notified() => fetched = true,
+                    _ = tick.tick(), if fetched => {
+                        fetched = false;
+                        host.send(&video(false, 1024)).await.unwrap();
+                    }
                     packet = host.next() => { packet.unwrap().unwrap(); }
                 }
             }
@@ -2476,7 +2483,7 @@ async fn host_media(
                         // Idle restart windows and large IDRs are not evidence of a slow path.
                         let backlogged = current.as_ref().is_some_and(|frame|
                             !frame.plan.descriptor().metadata.keyframe
-                                && (!frames.is_empty()
+                                && (released.get().is_some() || !frames.is_empty()
                                     || frame.deadline.saturating_duration_since(now) <= Duration::from_millis(25)));
                         if backlogged || (previous != 0 && estimate > previous) {
                             bitrate_budget.store(estimate, Ordering::Release);

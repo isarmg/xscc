@@ -19,7 +19,9 @@ delivered only 9 over three seconds before the correction.
 The host now participates in the existing producer barrier. Its UDP sender
 releases that barrier after a frame's initial transmission completes or is
 discarded, rather than at enqueue or dequeue. Retransmissions do not release a
-subsequent frame's barrier. Frames discarded before UDP readiness, full queue
+subsequent frame's barrier. The congestion estimator also recognizes this
+waiting producer without requiring an already queued successor, preserving
+encoder bandwidth feedback on a constrained path. Frames discarded before UDP readiness, full queue
 admission and format replacement also release the producer. The old queue bound,
 wire bitrate ceiling, delta deadlines, authenticated delivery and keyframe gap
 checks remain. This prevents production of dependent frames while the initial
