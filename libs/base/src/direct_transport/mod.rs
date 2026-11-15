@@ -13,10 +13,8 @@ pub mod client;
 pub mod host;
 #[cfg(feature = "udp-media")]
 pub mod udp_media;
-#[cfg(feature = "experimental-quic")]
-pub mod quic;
-#[cfg(any(feature = "experimental-quic", test))]
-pub mod quic_media;
+
+
 
 pub fn decode_peer_identity(
     signed: &[u8],

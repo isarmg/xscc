@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/management-prep]
     paths:
-      - 'experiments/gpui-validation/**'
+      - 'apps/desktop/**'
       - 'vendor/gpui/**'
       - 'vendor/hwcodec/**'
       - 'res/vcpkg/ffmpeg/**'
@@ -45,7 +45,7 @@ on:
       package_version:
         description: 'Candidate version, e.g. 1.0.0 (does not create a tag or release)'
         required: true
-        default: '1.0.0'
+        default: '4.0.0-beta.1'
         type: string
       build_only:
         description: 'Build and package without additional lint, tests or smoke checks'
@@ -84,7 +84,7 @@ jobs:
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
       PACKAGE_ROLE: ${{ matrix.role }}
-      PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
+      PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.1' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -171,7 +171,7 @@ jobs:
           "LIBCLANG_PATH=$clang" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Check formatting
         if: ${{ !inputs.build_only }}
-        run: cargo fmt --manifest-path experiments/gpui-validation/Cargo.toml -- --check
+        run: cargo fmt --manifest-path apps/desktop/Cargo.toml -- --check
       - name: Compile optional Windows VRAM reconfiguration path
         if: matrix.role == 'host' && !inputs.build_only
         run: |
@@ -179,21 +179,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'VRAM reconfiguration compile check failed' }
       - name: Lint Windows preview
         if: ${{ !inputs.build_only }}
-        run: cargo clippy --locked --no-deps --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+        run: cargo clippy --locked --no-deps --manifest-path apps/desktop/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: Test Windows preview
         if: ${{ !inputs.build_only }}
-        run: cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
+        run: cargo test --locked --manifest-path apps/desktop/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc
       - name: Test pointer click positioning
         if: ${{ !inputs.build_only }}
         run: |
-          $pointerTests = & cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::clicks_position_the_host_pointer_without_duplicating_drag_events 2>&1
+          $pointerTests = & cargo test --locked --manifest-path apps/desktop/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::clicks_position_the_host_pointer_without_duplicating_drag_events 2>&1
           $pointerExit = $LASTEXITCODE
           $pointerTests | Write-Output
           if ($pointerExit -ne 0 -or ($pointerTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Pointer click regression did not run' }
       - name: Test scroll positioning
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
-          $scrollTests = & cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::scroll_position_matches_pointer_coordinates_and_keeps_delta 2>&1
+          $scrollTests = & cargo test --locked --manifest-path apps/desktop/Cargo.toml --features ${{ matrix.features }} --target x86_64-pc-windows-msvc input::tests::scroll_position_matches_pointer_coordinates_and_keeps_delta 2>&1
           $scrollExit = $LASTEXITCODE
           $scrollTests | Write-Output
           if ($scrollExit -ne 0 -or ($scrollTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Scroll position regression did not run' }
@@ -228,7 +228,7 @@ jobs:
       - name: Test UDP encoder adaptation
         if: matrix.role == 'host' && !inputs.build_only
         run: |
-          foreach ($filter in @('server::video_qos::', 'session_transport::udp::tests::udp_encoder_budget')) {
+          foreach ($filter in @('server::video_qos::')) {
             ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter $filter
           }
       - name: Test virtual display protocol and pipelined DXGI readback
@@ -287,7 +287,9 @@ jobs:
               throw "UDP test failed or matched zero tests: $($case[1])"
             }
           }
-          foreach ($filter in @('client::udp_media::tests', 'udp_host::tests', 'session_transport::udp::tests', 'gpui_session::tests::connection_type_reports_the_actual_transport')) {
+          cargo test --locked -p xscc-session-transport --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Session transport integration tests failed' }
+          foreach ($filter in @('gpui_session::tests::connection_type_reports_the_actual_transport')) {
             ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter $filter
           }
       - name: Test frame-rate-aware codec budget and timestamp duration
@@ -351,7 +353,7 @@ jobs:
       - name: Compile and test test-only IP role
         if: ${{ !inputs.build_only }}
         run: |
-          cargo test --locked --manifest-path experiments/gpui-validation/Cargo.toml --features "${{ matrix.features }},test-lan-direct" --target x86_64-pc-windows-msvc
+          cargo test --locked --manifest-path apps/desktop/Cargo.toml --features "${{ matrix.features }},test-lan-direct" --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'Test-only IP role tests failed' }
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }},test-lan-direct" -Filter "test_lan::"
           if ('${{ matrix.role }}' -eq 'controller') {
@@ -366,7 +368,7 @@ jobs:
       - name: Build standalone release executable
         run: |
           $features = '${{ matrix.features }}'
-          cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features $features --bin xscc-gpui-validation --target x86_64-pc-windows-msvc
+          cargo build --locked --release --manifest-path apps/desktop/Cargo.toml --features $features --bin xscc-desktop --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
       - name: Prepare and verify final application manifest
         run: ./.github/scripts/prepare-gpui-manifest.ps1
@@ -417,7 +419,7 @@ jobs:
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '1.0.0' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '4.0.0-beta.1' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

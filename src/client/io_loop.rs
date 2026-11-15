@@ -1,12 +1,9 @@
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::clipboard::{clipboard_listener, update_clipboard, ClipboardSide};
 #[cfg(not(any(target_os = "ios")))]
 use crate::clipboard::CLIPBOARD_INTERVAL;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::clipboard::{clipboard_listener, update_clipboard, ClipboardSide};
 use crate::{
-    client::{
-        self, Client, Data, Interface, MediaData, MediaSender,
-        QualityStatus, SEC30,
-    },
+    client::{self, Client, Data, Interface, MediaData, MediaSender, QualityStatus, SEC30},
     session_transport::SessionTransport,
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -17,9 +14,7 @@ const RESTART_REMOTE_DEVICE_NO_DATA_TIMEOUT: Duration = Duration::from_secs(5);
 use base::message_proto::{permission_info::Permission, *};
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{
-    allow_err,
-    config,
-    log,
+    allow_err, config, log,
     protobuf::Message as _,
     rendezvous_proto::ConnType,
     timeout,
@@ -55,7 +50,10 @@ async fn send_ui_message(
 
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
-    #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+    #[cfg(not(all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "gpui-mobile-session"
+    )))]
     audio_sender: MediaSender,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
@@ -100,7 +98,10 @@ impl<T: InvokeUiSession> Remote<T> {
     ) -> Self {
         Self {
             handler,
-            #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+            #[cfg(not(all(
+                any(target_os = "ios", target_os = "android"),
+                feature = "gpui-mobile-session"
+            )))]
             audio_sender: crate::client::start_audio_thread(),
             receiver,
             sender,
@@ -121,37 +122,47 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     pub async fn io_loop(&mut self, round: u32) {
-        #[cfg(all(feature = "hwcodec", not(any(target_os = "android", target_os = "ios"))))]
+        #[cfg(all(
+            feature = "hwcodec",
+            not(any(target_os = "android", target_os = "ios"))
+        ))]
         if let Err(err) = tokio::task::spawn_blocking(client::get_hwcodec_config).await {
             log::error!("Local hardware codec probe task failed: {err}");
         }
-        #[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
+        #[cfg(all(
+            feature = "test-lan-direct",
+            any(
+                feature = "gpui-mobile-session",
+                not(any(target_os = "android", target_os = "ios"))
+            )
+        ))]
         let test_lan = crate::test_lan::is_peer(&self.handler.get_id());
-        #[cfg(not(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios"))))))]
+        #[cfg(not(all(
+            feature = "test-lan-direct",
+            any(
+                feature = "gpui-mobile-session",
+                not(any(target_os = "android", target_os = "ios"))
+            )
+        )))]
         let test_lan = false;
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
-        #[cfg(feature = "experimental-quic")]
-        let (result, managed_permit) = match client::quic::connect(
-            &self.handler.get_id(), conn_type, self.handler.clone(),
-        ).await {
-            Ok((stream, key, kind, permit)) => (Ok((stream, key, kind)), permit),
-            Err(error) => (Err(error), None),
-        };
-        #[cfg(all(feature = "managed", not(feature = "experimental-quic")))]
+
+        #[cfg(feature = "managed")]
         let (result, managed_permit) = match crate::management::connect(
-            &self.handler.get_id(), conn_type, self.handler.clone(),
-        ).await {
-            Ok((stream, key, kind, permit)) => (Ok((SessionTransport::from(stream), key, kind)), permit),
-            Err(error) => (Err(error), None),
-        };
-        #[cfg(not(feature = "managed"))]
-        let result = Client::start(
             &self.handler.get_id(),
             conn_type,
             self.handler.clone(),
         )
-        .await;
+        .await
+        {
+            Ok((stream, key, kind, permit)) => {
+                (Ok((SessionTransport::from(stream), key, kind)), permit)
+            }
+            Err(error) => (Err(error), None),
+        };
+        #[cfg(not(feature = "managed"))]
+        let result = Client::start(&self.handler.get_id(), conn_type, self.handler.clone()).await;
         match result {
             Ok((mut peer, pk, stream_type)) => {
                 let direct = true;
@@ -169,10 +180,14 @@ impl<T: InvokeUiSession> Remote<T> {
                 let identity_verified = managed_permit.is_some();
                 #[cfg(not(feature = "managed"))]
                 let identity_verified = false;
-                if !is_secured || (!test_lan && !identity_verified && !client::confirm_direct_identity(
-                    &self.handler, &mut self.receiver, &pk,
-                ).await) {
-                    self.send_close_reason(&mut peer, "Device identity was not trusted").await;
+                if !is_secured
+                    || (!test_lan
+                        && !identity_verified
+                        && !client::confirm_direct_identity(&self.handler, &mut self.receiver, &pk)
+                            .await)
+                {
+                    self.send_close_reason(&mut peer, "Device identity was not trusted")
+                        .await;
                     self.handle_disconnected(round);
                     return;
                 }
@@ -188,7 +203,6 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut fps_instant = Instant::now();
 
                 let mut last_recv_time = Instant::now();
-
 
                 loop {
                     tokio::select! {
@@ -295,10 +309,10 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 log::debug!("Exit io_loop of id={}", self.handler.get_id());
-
             }
             Err(err) => {
-                self.handler.on_establish_connection_error(format!("{err:#}"));
+                self.handler
+                    .on_establish_connection_error(format!("{err:#}"));
             }
         }
         self.handle_disconnected(round);
@@ -321,10 +335,7 @@ impl<T: InvokeUiSession> Remote<T> {
 
             Client::try_stop_clipboard();
         }
-
     }
-
-
 
     async fn send_close_reason(&mut self, peer: &mut SessionTransport, reason: &str) {
         if self.sent_close_reason {
@@ -383,7 +394,10 @@ impl<T: InvokeUiSession> Remote<T> {
     // Capture after readiness so changes during the read can invalidate the snapshot.
     // A separate task keeps a stalled backend from blocking the connection loop.
     #[cfg(target_os = "linux")]
-    fn spawn_initial_clipboard_read_after_ready(&self, read_clipboard: impl FnOnce() + Send + 'static) {
+    fn spawn_initial_clipboard_read_after_ready(
+        &self,
+        read_clipboard: impl FnOnce() + Send + 'static,
+    ) {
         // Initial-sync wait budget, not a protocol-defined startup deadline.
         const CLIPBOARD_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -468,7 +482,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
                 match &msg.union {
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    Some(message::Union::Clipboard(_)) | Some(message::Union::MultiClipboards(_)) => {
+                    Some(message::Union::Clipboard(_))
+                    | Some(message::Union::MultiClipboards(_)) => {
                         self.initial_clipboard_pending = false;
                         // Permission can change after the clipboard listener queues an update.
                         if !self.handler.is_text_clipboard_required() {
@@ -570,7 +585,12 @@ impl<T: InvokeUiSession> Remote<T> {
         if !self.peer_info.is_support_virtual_display() {
             return;
         }
-        let displays = self.handler.lc.read().unwrap().get_option("virtual-display");
+        let displays = self
+            .handler
+            .lc
+            .read()
+            .unwrap()
+            .get_option("virtual-display");
         for d in displays.split(',') {
             if let Ok(index) = d.parse::<i32>() {
                 let mut misc = Misc::new();
@@ -591,7 +611,7 @@ impl<T: InvokeUiSession> Remote<T> {
             let lc = self.handler.lc.read().unwrap();
             (lc.version >= hbb_common::get_version_number("1.2.4")
                 && lc.get_toggle_option("privacy-mode"))
-                .then(|| lc.get_option("privacy-mode-impl-key"))
+            .then(|| lc.get_option("privacy-mode-impl-key"))
         };
         if let Some(impl_key) = impl_key {
             if impl_key == crate::privacy_mode::PRIVACY_MODE_IMPL_WIN_VIRTUAL_DISPLAY
@@ -625,7 +645,12 @@ impl<T: InvokeUiSession> Remote<T> {
     // Currently, this function only considers decoding speed and queue length, not network delay.
     // The controlled end can consider auto fps as the maximum decoding fps.
     #[inline]
-    async fn fps_control(&mut self, direct: bool, real_fps_map: HashMap<usize, i32>, peer: &mut SessionTransport) -> bool {
+    async fn fps_control(
+        &mut self,
+        direct: bool,
+        real_fps_map: HashMap<usize, i32>,
+        peer: &mut SessionTransport,
+    ) -> bool {
         self.video_threads.iter_mut().for_each(|(k, v)| {
             let real_fps = real_fps_map.get(k).cloned().unwrap_or_default();
             if real_fps == 0 {
@@ -741,11 +766,16 @@ impl<T: InvokeUiSession> Remote<T> {
         true
     }
 
-    async fn send_congestion_refresh(&mut self, peer: &mut SessionTransport, display: usize) -> bool {
+    async fn send_congestion_refresh(
+        &mut self,
+        peer: &mut SessionTransport,
+        display: usize,
+    ) -> bool {
         // Send in this loop: a queued UI refresh could invalidate a later recovery keyframe.
         let message = client::LoginConfigHandler::refresh_display(display as _);
         if let Err(error) = peer.send(&message).await {
-            self.handler.on_establish_connection_error(format!("{error:#}"));
+            self.handler
+                .on_establish_connection_error(format!("{error:#}"));
             return false;
         }
         true
@@ -809,10 +839,18 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
-                    #[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
+                    #[cfg(all(
+                        feature = "test-lan-direct",
+                        any(
+                            feature = "gpui-mobile-session",
+                            not(any(target_os = "android", target_os = "ios"))
+                        )
+                    ))]
                     if crate::test_lan::is_peer(&self.handler.get_id()) {
                         let message = self.handler.lc.read().unwrap().create_login_msg(
-                            String::new(), String::new(), Vec::new(),
+                            String::new(),
+                            String::new(),
+                            Vec::new(),
                         );
                         return peer.send(&message).await.is_ok();
                     }
@@ -835,10 +873,20 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(login_response::Union::PeerInfo(pi)) => {
+                        if let Err(error) = base::session_protocol::require_current_session(
+                            pi.session_revision,
+                            pi.udp_media.is_some(),
+                        ) {
+                            self.handler
+                                .on_establish_connection_error(error.to_string());
+                            return false;
+                        }
                         #[cfg(feature = "udp-media")]
                         if let Some(offer) = pi.udp_media.as_ref() {
                             if let Err(error) = peer.enable_client(offer).await {
-                                self.handler.on_establish_connection_error(format!("UDP media association failed: {error:#}"));
+                                self.handler.on_establish_connection_error(format!(
+                                    "UDP media association failed: {error:#}"
+                                ));
                                 return false;
                             }
                         }
@@ -886,11 +934,6 @@ impl<T: InvokeUiSession> Remote<T> {
                             // https://github.com/rustdesk/rustdesk/discussions/9010
                         }
 
-                        #[cfg(feature = "experimental-quic")]
-                        if let Err(error) = peer.enable_media() {
-                            self.handler.on_establish_connection_error(format!("{error:#}"));
-                            return false;
-                        }
                         self.is_connected = true;
                     }
                     _ => {}
@@ -926,7 +969,12 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::CursorPosition(cp)) => {
                     self.handler.set_cursor_position(cp);
                 }
-                Some(message::Union::Clipboard(cb)) if !cfg!(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")) => {
+                Some(message::Union::Clipboard(cb))
+                    if !cfg!(all(
+                        any(target_os = "ios", target_os = "android"),
+                        feature = "gpui-mobile-session"
+                    )) =>
+                {
                     let clipboard_allowed = {
                         let lc = self.handler.lc.read().unwrap();
                         !lc.disable_clipboard.v && !lc.view_only.v
@@ -964,8 +1012,14 @@ impl<T: InvokeUiSession> Remote<T> {
                         crate::clipboard::handle_msg_clipboard(cb);
                     }
                 }
-                Some(message::Union::MultiClipboards(mut _mcb)) if !cfg!(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")) => {
-                    _mcb.clipboards.retain(|c| c.format.enum_value() == Ok(ClipboardFormat::Text));
+                Some(message::Union::MultiClipboards(mut _mcb))
+                    if !cfg!(all(
+                        any(target_os = "ios", target_os = "android"),
+                        feature = "gpui-mobile-session"
+                    )) =>
+                {
+                    _mcb.clipboards
+                        .retain(|c| c.format.enum_value() == Ok(ClipboardFormat::Text));
                     if _mcb.clipboards.is_empty() {
                         return true;
                     }
@@ -1013,13 +1067,21 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
-                    Some(misc::Union::Option(options)) => self.handler.ui_handler.media_options(&options),
+                    Some(misc::Union::Option(options)) => {
+                        self.handler.ui_handler.media_options(&options)
+                    }
                     Some(misc::Union::AudioFormat(f)) => {
-                        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                        #[cfg(all(
+                            any(target_os = "ios", target_os = "android"),
+                            feature = "gpui-mobile-session"
+                        ))]
                         if let Some(audio) = &self.handler.lc.read().unwrap().mobile_audio {
                             audio.handle_format(f);
                         }
-                        #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+                        #[cfg(not(all(
+                            any(target_os = "ios", target_os = "android"),
+                            feature = "gpui-mobile-session"
+                        )))]
                         self.audio_sender.send(MediaData::AudioFormat(f)).ok();
                     }
                     Some(misc::Union::PermissionInfo(p)) => {
@@ -1042,12 +1104,17 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Ok(Permission::Audio) => {
-                                #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                                #[cfg(all(
+                                    any(target_os = "ios", target_os = "android"),
+                                    feature = "gpui-mobile-session"
+                                ))]
                                 {
                                     let mut config = self.handler.lc.write().unwrap();
                                     config.mobile_audio_allowed = p.enabled;
                                     if !p.enabled {
-                                        if let Some(audio) = &config.mobile_audio { audio.set_enabled(false); }
+                                        if let Some(audio) = &config.mobile_audio {
+                                            audio.set_enabled(false);
+                                        }
                                     }
                                 }
                                 self.handler.set_permission("audio", p.enabled);
@@ -1067,10 +1134,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     Some(misc::Union::SwitchDisplay(s)) => {
                         let size_changed = {
                             let mut config = self.handler.lc.write().unwrap();
-                            if let Some(display) = config.peer_info.as_mut()
+                            if let Some(display) = config
+                                .peer_info
+                                .as_mut()
                                 .and_then(|peer| peer.displays.get_mut(s.display as usize))
                             {
-                                let changed = display.width != s.width || display.height != s.height;
+                                let changed =
+                                    display.width != s.width || display.height != s.height;
                                 if s.width > 0 && s.height > 0 {
                                     display.width = s.width;
                                     display.height = s.height;
@@ -1084,7 +1154,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         // Refresh-rate and layout updates can follow the new keyframe.
                         // Preserve its parameter sets when the pixel dimensions are unchanged.
                         if size_changed {
-                            if let Some(thread) = self.video_threads.get_mut(&(s.display as usize)) {
+                            if let Some(thread) = self.video_threads.get_mut(&(s.display as usize))
+                            {
                                 thread.video_sender.send(MediaData::Reset).ok();
                             }
                         }
@@ -1219,11 +1290,17 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.handle_test_delay(t, peer).await;
                 }
                 Some(message::Union::AudioFrame(frame)) => {
-                    #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
+                    #[cfg(all(
+                        any(target_os = "ios", target_os = "android"),
+                        feature = "gpui-mobile-session"
+                    ))]
                     if let Some(audio) = &self.handler.lc.read().unwrap().mobile_audio {
                         audio.push_frame(frame);
                     }
-                    #[cfg(not(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
+                    #[cfg(not(all(
+                        any(target_os = "ios", target_os = "android"),
+                        feature = "gpui-mobile-session"
+                    )))]
                     if !self.handler.lc.read().unwrap().disable_audio.v {
                         self.audio_sender
                             .send(MediaData::AudioFrame(Box::new(frame)))
@@ -1741,25 +1818,47 @@ mod ui_send_tests {
         let mut remote = Remote::new(Session::<QuietUi>::default(), receiver, sender);
         remote.handler.lc.write().unwrap().id = "same-size-refresh-regression".into();
         remote.handler.lc.write().unwrap().peer_info = Some(PeerInfo {
-            displays: vec![DisplayInfo { width: 1920, height: 1080, ..Default::default() }],
+            displays: vec![DisplayInfo {
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            }],
             ..Default::default()
         });
         let (video_sender, received) = std::sync::mpsc::channel();
-        remote.video_threads.insert(0, VideoThread {
-            video_queue: Arc::new(ArrayQueue::new(1)), video_sender,
-            decode_fps: Arc::new(RwLock::new(None)), frame_count: Arc::new(RwLock::new(0)),
-            discard_queue: Arc::new(RwLock::new(false)), fps_control: FpsControl::default(),
-        });
+        remote.video_threads.insert(
+            0,
+            VideoThread {
+                video_queue: Arc::new(ArrayQueue::new(1)),
+                video_sender,
+                decode_fps: Arc::new(RwLock::new(None)),
+                frame_count: Arc::new(RwLock::new(0)),
+                discard_queue: Arc::new(RwLock::new(false)),
+                fps_control: FpsControl::default(),
+            },
+        );
         for (width, height, reset) in [(1920, 1080, false), (1280, 720, true), (1280, 720, false)] {
             let mut misc = Misc::new();
-            misc.set_switch_display(SwitchDisplay { display: 0, width, height, ..Default::default() });
+            misc.set_switch_display(SwitchDisplay {
+                display: 0,
+                width,
+                height,
+                ..Default::default()
+            });
             let mut message = Message::new();
             message.set_misc(misc);
-            assert!(remote.handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer).await);
+            assert!(
+                remote
+                    .handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer)
+                    .await
+            );
             if reset {
                 assert!(matches!(received.try_recv(), Ok(MediaData::Reset)));
             } else {
-                assert!(received.try_recv().is_err(), "same-size updates must preserve decoder parameters");
+                assert!(
+                    received.try_recv().is_err(),
+                    "same-size updates must preserve decoder parameters"
+                );
             }
         }
     }
@@ -1769,9 +1868,9 @@ mod ui_send_tests {
         let (local, _stopped_reader) = tokio::io::duplex(64);
         let mut stream = Stream::Tcp(FramedStream::from(local, "127.0.0.1:0".parse().unwrap()));
         stream.set_key(Key([0x43; 32]));
-        #[cfg(any(feature = "experimental-quic", feature = "udp-media"))]
+        #[cfg(feature = "udp-media")]
         let mut peer: SessionTransport = stream.into();
-        #[cfg(not(any(feature = "experimental-quic", feature = "udp-media")))]
+        #[cfg(not(feature = "udp-media"))]
         let mut peer = stream;
         peer.set_send_timeout(30);
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -1819,14 +1918,17 @@ mod congestion_recovery_tests {
 
     fn video_thread() -> (VideoThread, std::sync::mpsc::Receiver<MediaData>) {
         let (video_sender, receiver) = std::sync::mpsc::channel();
-        (VideoThread {
-            video_queue: Arc::new(ArrayQueue::new(1)),
-            video_sender,
-            decode_fps: Arc::new(RwLock::new(None)),
-            frame_count: Arc::new(RwLock::new(0)),
-            discard_queue: Arc::new(RwLock::new(false)),
-            fps_control: FpsControl::default(),
-        }, receiver)
+        (
+            VideoThread {
+                video_queue: Arc::new(ArrayQueue::new(1)),
+                video_sender,
+                decode_fps: Arc::new(RwLock::new(None)),
+                frame_count: Arc::new(RwLock::new(0)),
+                discard_queue: Arc::new(RwLock::new(false)),
+                fps_control: FpsControl::default(),
+            },
+            receiver,
+        )
     }
 
     #[test]

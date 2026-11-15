@@ -1,11 +1,14 @@
 //! In-process management lifecycle and native session authorization.
 pub use xscc_native_management::{binding_store as store, enrollment};
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod owner;
 mod transport;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use owner::{DisplayRequest, OwnerRequest};
 #[cfg(all(target_os = "android", feature = "gpui-mobile-session"))]
 mod gpui_android_owner;
-#[cfg(feature = "experimental-quic")]
-pub(crate) mod quic;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use transport::accept;
 pub(crate) use transport::{check_controller, connect};
@@ -86,12 +89,23 @@ impl RustDeskHost for Host {
                 IntegrationState::Unavailable
             },
             rustdesk_version: Some(crate::VERSION.to_owned()),
+            one_kvm_version: None,
         })
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[async_trait]
 impl NativeHost for Host {
+    fn identity(&self) -> xscc_native_management::identity::ApplicationIdentity {
+        xscc_native_management::identity::ApplicationIdentity {
+            backend: xscc::protocol::Backend::Rustdesk,
+            role: if crate::gpui_host::is_host() {
+                xscc::protocol::InstanceRole::Controlled
+            } else {
+                xscc::protocol::InstanceRole::Controller
+            },
+        }
+    }
     async fn addresses(&self, configured: &[HostAddress]) -> Vec<HostAddress> {
         if !crate::direct_server::direct_server_running() {
             return Vec::new();
@@ -160,7 +174,9 @@ pub(crate) async fn start() {
 
 #[cfg(all(target_os = "ios", feature = "gpui-mobile-session"))]
 pub(crate) fn attach_gpui_owner(manager: Arc<NativeManager>) -> ResultType<()> {
-    MANAGER.set(Ok(manager)).map_err(|_| hbb_common::anyhow::anyhow!("Native management owner is already initialized"))
+    MANAGER
+        .set(Ok(manager))
+        .map_err(|_| hbb_common::anyhow::anyhow!("Native management owner is already initialized"))
 }
 
 #[cfg(all(target_os = "android", feature = "gpui-mobile-session"))]
@@ -209,47 +225,29 @@ pub(crate) async fn shutdown() {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) async fn handle(request: Request) -> Reply {
-    if let Request::VirtualDisplays { operation, configuration } = request {
-        #[cfg(all(windows, feature = "gpui-host"))]
-        {
-            let result = tokio::task::spawn_blocking(move || -> ResultType<serde_json::Value> {
-                let state = match operation.as_str() {
-                    "query" if configuration.is_none() => crate::virtual_display_manager::configuration_state(),
-                    "prepare" if configuration.is_none() => crate::virtual_display_manager::prepare_configuration()?,
-                    "configure" => {
-                        let config: base::session_protocol::virtual_display::VirtualDisplayConfiguration =
-                            serde_json::from_value(configuration.ok_or_else(|| hbb_common::anyhow::anyhow!("Missing virtual display configuration"))?)?;
-                        config.validate()?;
-                        crate::virtual_display_manager::configure_displays(&config)?
-                    }
-                    _ => bail!("Invalid virtual display operation"),
-                };
-                Ok(serde_json::to_value(state)?)
-            }).await;
-            return match result {
-                Ok(Ok(value)) => Reply { value: Some(value), error: None },
-                Ok(Err(error)) => Reply::error(format!("{error:#}")),
-                Err(error) => Reply::error(error),
-            };
-        }
-        #[cfg(not(all(windows, feature = "gpui-host")))]
-        {
-            let _ = (operation, configuration);
-            return Reply::error("Local virtual display configuration requires an installed Windows host");
-        }
-    }
-    match owner() {
-        Ok(manager) => manager.handle(request).await,
-        Err(error) => Reply::error(error),
+pub(crate) async fn handle(request: OwnerRequest) -> Reply {
+    match request {
+        OwnerRequest::Display(request) => owner::display(request).await,
+        OwnerRequest::Management(request) => match owner() {
+            Ok(manager) => manager.handle(request).await,
+            Err(error) => Reply::error(error),
+        },
     }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) async fn rpc(request: Request) -> ResultType<serde_json::Value> {
+    rpc_owner(OwnerRequest::Management(request)).await
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) async fn rpc_owner(request: OwnerRequest) -> ResultType<serde_json::Value> {
     let timeout = if matches!(
         &request,
-        Request::Enroll { .. } | Request::Unbind { .. } | Request::Resume {} | Request::VirtualDisplays { .. }
+        OwnerRequest::Display(_)
+            | OwnerRequest::Management(
+                Request::Enroll { .. } | Request::Unbind { .. } | Request::Resume {}
+            )
     ) {
         50_000
     } else {

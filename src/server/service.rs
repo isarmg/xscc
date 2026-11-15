@@ -307,7 +307,7 @@ impl<T: Subscriber + From<ConnInner>> ServiceTmpl<T> {
                     let tm = time::Instant::now();
                     if let Err(err) = callback(sp.clone()) {
                         if let Some(reason) =
-                            err.downcast_ref::<super::video_pipeline::VideoRestart>()
+                            err.downcast_ref::<super::video_lifecycle::VideoRestart>()
                         {
                             #[cfg(windows)]
                             let ready = {

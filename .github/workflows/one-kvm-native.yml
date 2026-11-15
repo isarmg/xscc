@@ -2,9 +2,9 @@ name: One-KVM bare-metal Web host
 on:
   push:
     branches: [main, feat/management-prep]
-    paths: ['one-kvm/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
+    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
   pull_request:
-    paths: ['one-kvm/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
+    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
   workflow_dispatch:
 permissions:
   contents: read

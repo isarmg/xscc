@@ -139,7 +139,7 @@ def smoke(binary, output, text_input_binary=None):
         if udid:
             for args in [('io', udid, 'screenshot', str(output / 'final-state.png')),
                          ('spawn', udid, 'log', 'show', '--last', '15m', '--style', 'compact',
-                          '--predicate', 'process == "xscc-gpui-mobile-management" OR process == "SpringBoard" OR process == "backboardd" OR process == "launchd_sim"'),
+                          '--predicate', 'process == "xscc-mobile" OR process == "SpringBoard" OR process == "backboardd" OR process == "launchd_sim"'),
                          ('shutdown', udid), ('delete', udid)]:
                 try:
                     text = run('xcrun', 'simctl', *args)

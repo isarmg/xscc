@@ -50,7 +50,7 @@ def check_hwcodec_source(snapshot):
 def check():
     check_hwcodec_source(ROOT / 'vendor/hwcodec')
     manifest = tomllib.loads((ROOT / 'Cargo.toml').read_text())
-    for product in ('experiments/gpui-validation', 'experiments/gpui-mobile-management'):
+    for product in ('apps/desktop', 'apps/mobile'):
         if (product not in manifest['workspace']['members']
                 or 'workspace' in tomllib.loads((ROOT / product / 'Cargo.toml').read_text())
                 or (ROOT / product / 'Cargo.lock').exists()):
@@ -76,7 +76,7 @@ def check():
     )
     if legacy.returncode == 0 or 'retired' not in legacy.stderr or 'GPUI' not in legacy.stderr:
         raise ValueError('Legacy build.py must reject packaging and direct users to GPUI')
-    if 'experiments/gpui-validation/Cargo.toml' not in legacy.stderr:
+    if 'apps/desktop/Cargo.toml' not in legacy.stderr:
         raise ValueError('Legacy build.py must identify the native GPUI build manifest')
     for name in REQUIRED:
         if not (WORKFLOWS / name).is_file():

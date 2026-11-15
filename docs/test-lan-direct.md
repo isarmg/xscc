@@ -54,7 +54,7 @@ macOS 仍需系统的屏幕录制与辅助功能权限。结束前台进程即�
 
 ## Android / iOS / iPadOS 控制端
 
-移动 GPUI 测试构建显式启用 `experiments/gpui-mobile-management` 的 `test-lan-direct` feature（同时启用 `mobile-session`）；默认管理构建不包含 IP 输入框或测试握手入口。移动端仍然仅作为控制端，不能启动被控监听。
+移动 GPUI 测试构建显式启用 `apps/mobile` 的 `test-lan-direct` feature（同时启用 `mobile-session`）；默认管理构建不包含 IP 输入框或测试握手入口。移动端仍然仅作为控制端，不能启动被控监听。
 
 无需绑定管理服务器，在标明 TEST ONLY 的“IP 直连（测试）”区域输入上述桌面测试监听的 IPv4 或 IPv6 地址即可发起连接。访问本地网络时仍须允许操作系统的本地网络权限。输入的地址不会保存为管理设备或授权身份。
 

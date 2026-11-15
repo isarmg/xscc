@@ -64,6 +64,7 @@ pub struct RustDeskService {
     rendezvous_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
     tcp_listener_handle: Arc<RwLock<Option<Vec<JoinHandle<()>>>>>,
     listener_start_lock: Arc<tokio::sync::Mutex<()>>,
+    udp_listener: RwLock<Option<xscc_session_transport::host::HostListener>>,
     listen_port: Arc<RwLock<u16>>,
     connection_manager: Arc<ConnectionManager>,
     video_manager: Arc<VideoStreamManager>,
@@ -91,6 +92,7 @@ impl RustDeskService {
             rendezvous_handle: Arc::new(RwLock::new(None)),
             tcp_listener_handle: Arc::new(RwLock::new(None)),
             listener_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+            udp_listener: RwLock::new(None),
             listen_port: Arc::new(RwLock::new(direct_access_port)),
             connection_manager,
             video_manager,
@@ -393,6 +395,10 @@ impl RustDeskService {
             Err(error) => return Err(error),
         };
 
+        let udp_listener = xscc_session_transport::host::bind(listen_port)?;
+        let registration = udp_listener.registration();
+        *self.udp_listener.write() = Some(udp_listener);
+
         *self.listen_port.write() = listen_port;
 
         let connection_manager = self.connection_manager.clone();
@@ -403,6 +409,7 @@ impl RustDeskService {
             info!("RustDesk TCP listener started on {}", local_addr);
 
             let conn_mgr = connection_manager.clone();
+            let registration = registration.clone();
             let mut shutdown_rx = self.shutdown_tx.subscribe();
             let handle = tokio::spawn(async move {
                 loop {
@@ -411,7 +418,7 @@ impl RustDeskService {
                             match result {
                                 Ok((stream, peer_addr)) => {
                                     info!("Accepted direct connection from {}", peer_addr);
-                                    if let Err(e) = conn_mgr.accept_listener_connection(stream, peer_addr).await {
+                                    if let Err(e) = conn_mgr.accept_listener_connection(stream, peer_addr, registration.clone()).await {
                                         warn!("Rejected direct connection from {}: {}", peer_addr, e);
                                     }
                                 }
@@ -485,6 +492,7 @@ impl RustDeskService {
             }
         }
 
+        self.udp_listener.write().take();
         // No listener can admit a new session after this point.
         self.connection_manager.close_all().await;
 

@@ -1,6 +1,7 @@
 use crate::{
     binding_store::FileBindingStore,
     enrollment::{BindingStore, EnrollmentClient, EnrollmentError, ServerOrigin},
+    identity::ApplicationIdentity,
     journal::FileJournal,
     private_fs::PrivateDirectory,
     session::{self, SessionPermit, Transcript},
@@ -21,8 +22,8 @@ use xscc::{
     engine::Executor,
     host::{HostError, RustDeskHost},
     protocol::{
-        self, Backend, Binding, Capabilities, ClientOs, DiagnosticSnapshot, ExecutionMode,
-        HostAddress, InstanceRole, SessionKey,
+        self, Binding, Capabilities, ClientOs, DiagnosticSnapshot, ExecutionMode, HostAddress,
+        InstanceRole, SessionKey,
     },
     transport::{AccessObservation, HealthObservation, TransportError},
 };
@@ -43,6 +44,7 @@ pub enum Error {
 type Result<T> = std::result::Result<T, Error>;
 #[async_trait]
 pub trait NativeHost: RustDeskHost {
+    fn identity(&self) -> ApplicationIdentity;
     async fn addresses(&self, configured: &[HostAddress]) -> Vec<HostAddress>;
 }
 struct Host(Arc<dyn NativeHost>);
@@ -87,10 +89,6 @@ pub struct Target {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Status {},
-    VirtualDisplays {
-        operation: String,
-        configuration: Option<serde_json::Value>,
-    },
     Enroll {
         server: String,
         authorization_code: String,
@@ -139,6 +137,7 @@ pub struct NativeManager {
     store: FileBindingStore,
     installation_id: uuid::Uuid,
     host: Arc<dyn NativeHost>,
+    identity: ApplicationIdentity,
     settings: RwLock<Option<Settings>>,
     phase: RwLock<String>,
     binding: RwLock<Option<Binding>>,
@@ -149,6 +148,12 @@ pub struct NativeManager {
 }
 impl NativeManager {
     pub fn open(root: PrivateDirectory, host: Arc<dyn NativeHost>) -> Result<Arc<Self>> {
+        let identity = host.identity();
+        if cfg!(any(target_os = "android", target_os = "ios"))
+            && identity.role != InstanceRole::Controller
+        {
+            return Err(Error::Denied);
+        }
         let lock = root.lock(".owner.lock").map_err(storage)?;
         let installation_id = match root.read("installation.uuid", 37).map_err(storage)? {
             Some(bytes) => {
@@ -183,6 +188,7 @@ impl NativeManager {
             store,
             installation_id,
             host,
+            identity,
             settings: RwLock::new(settings),
             phase: RwLock::new("offline".into()),
             binding: RwLock::new(None),
@@ -194,6 +200,21 @@ impl NativeManager {
     }
     pub fn configured(&self) -> bool {
         self.settings.read().unwrap().is_some()
+    }
+    pub fn connection_phase(&self) -> String {
+        let access = self.access.read().unwrap();
+        let online = access.as_ref().is_some_and(|receiver| {
+            receiver
+                .borrow()
+                .as_ref()
+                .and_then(AccessObservation::policy)
+                .is_some()
+        });
+        if online {
+            "online".into()
+        } else {
+            self.phase.read().unwrap().clone()
+        }
     }
     pub fn status(&self) -> Status {
         let settings = self.settings.read().unwrap().clone();
@@ -239,7 +260,8 @@ impl NativeManager {
             .as_ref()
             .and_then(AccessObservation::policy)
             .is_some_and(|policy| {
-                policy.role == InstanceRole::Controller
+                policy.role == self.identity.role
+                    && policy.role == InstanceRole::Controller
                     && policy.peers.iter().any(|peer| {
                         peer.binding.device_id == id && peer.online && !peer.addresses.is_empty()
                     })
@@ -252,7 +274,8 @@ impl NativeManager {
             .as_ref()
             .and_then(AccessObservation::policy)
             .ok_or(Error::Unavailable)?;
-        if policy.role != InstanceRole::Controller {
+        if self.identity.role != InstanceRole::Controller || policy.role != InstanceRole::Controller
+        {
             return Err(Error::Denied);
         }
         let peer = policy
@@ -267,6 +290,28 @@ impl NativeManager {
                 epoch: session::epoch(&peer.session_key),
             },
             addresses: peer.addresses.clone(),
+        })
+    }
+    pub fn permit_to(&self, binding: &Binding) -> Result<SessionPermit> {
+        let access = self.access.read().unwrap();
+        let observation = access.as_ref().ok_or(Error::Unavailable)?.borrow();
+        let policy = observation
+            .as_ref()
+            .and_then(AccessObservation::policy)
+            .ok_or(Error::Unavailable)?;
+        if self.identity.role != InstanceRole::Controller || policy.role != InstanceRole::Controller
+        {
+            return Err(Error::Denied);
+        }
+        let peer = policy
+            .peers
+            .iter()
+            .find(|peer| peer.binding == *binding && peer.online)
+            .ok_or(Error::Denied)?;
+        Ok(SessionPermit {
+            controller: policy.binding.clone(),
+            controlled: peer.binding.clone(),
+            epoch: session::epoch(&peer.session_key),
         })
     }
     pub fn grant(&self, permit: &SessionPermit, role: InstanceRole) -> Result<SessionKey> {
@@ -284,7 +329,7 @@ impl NativeManager {
         } else {
             (&permit.controlled, &permit.controller)
         };
-        if policy.role != role || policy.binding != *own {
+        if role != self.identity.role || policy.role != role || policy.binding != *own {
             return Err(Error::Denied);
         }
         let peer = policy
@@ -304,7 +349,6 @@ impl NativeManager {
         let result: Result<serde_json::Value> = async {
             Ok(match request {
                 Request::Status {} => serde_json::to_value(self.status()).map_err(storage)?,
-                Request::VirtualDisplays { .. } => return Err(Error::Denied),
                 Request::Target { device_id } => {
                     serde_json::to_value(self.target(device_id)?).map_err(storage)?
                 }
@@ -412,7 +456,7 @@ impl NativeManager {
             addresses,
         }))
         .await?;
-        let client = EnrollmentClient::new(origin.clone())?;
+        let client = EnrollmentClient::new(origin.clone(), self.identity)?;
         let binding = if self.store.load(&origin).await?.is_some() {
             client.retry_enrollment(&self.store, code).await?
         } else {
@@ -452,7 +496,7 @@ impl NativeManager {
             return Ok(());
         };
         if let Some(saved) = self.store.load(&origin).await? {
-            EnrollmentClient::new(origin.clone())?
+            EnrollmentClient::new(origin.clone(), self.identity)?
                 .unbind(&saved)
                 .await?;
             self.store.forget(&origin).await?;
@@ -505,7 +549,7 @@ impl NativeManager {
             .as_ref()
             .map(|s| s.server.clone())
             .ok_or(Error::Denied)?;
-        let client = EnrollmentClient::new(origin)?;
+        let client = EnrollmentClient::new(origin, self.identity)?;
         let saved = loop {
             let recovered = tokio::select! {_=shutdown.changed()=>return Ok(()),value=client.recover(&self.store)=>value};
             match recovered {
@@ -527,7 +571,7 @@ impl NativeManager {
             .await
             .map_err(storage)?
             .map_err(storage)?;
-        let caps = capabilities()?;
+        let caps = capabilities(self.identity)?;
         let executor = Arc::new(Executor::new_with_capabilities(
             saved.binding().clone(),
             caps.clone(),
@@ -559,9 +603,13 @@ impl NativeManager {
         tokio::select! {result=connection.run(saved.binding().clone(),caps,executor,health,shutdown.clone())=>match result{Ok(())=>Ok(()),Err(TransportError::Revoked)=>Err(EnrollmentError::Unauthorized.into()),Err(_)=>Err(Error::Unavailable)},_=sampler=>Err(Error::Unavailable)}
     }
 }
-fn capabilities() -> Result<Capabilities> {
+fn capabilities(identity: ApplicationIdentity) -> Result<Capabilities> {
     let os = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         ClientOs::LinuxX86_64
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        ClientOs::LinuxAarch64
+    } else if cfg!(all(target_os = "linux", target_arch = "arm")) {
+        ClientOs::LinuxArmv7
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         ClientOs::WindowsX86_64
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
@@ -577,7 +625,8 @@ fn capabilities() -> Result<Capabilities> {
         protocol: protocol::PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         os,
-        backend: Backend::Rustdesk,
+        backend: identity.backend,
+        role: identity.role,
         execution_mode: ExecutionMode::Embedded,
         diagnostics: true,
     })
@@ -590,6 +639,7 @@ fn storage<T>(_: T) -> Error {
 mod tests {
     use super::*;
     use crate::enrollment::SavedBinding;
+    use xscc::protocol::Backend;
     use zeroize::Zeroizing;
 
     struct UnavailableHost;
@@ -601,6 +651,12 @@ mod tests {
     }
     #[async_trait]
     impl NativeHost for UnavailableHost {
+        fn identity(&self) -> ApplicationIdentity {
+            ApplicationIdentity {
+                backend: Backend::Rustdesk,
+                role: InstanceRole::Controller,
+            }
+        }
         async fn addresses(&self, _: &[HostAddress]) -> Vec<HostAddress> {
             Vec::new()
         }
@@ -701,23 +757,14 @@ mod tests {
         root.write("active.json", b"corrupt", false).unwrap();
         assert!(NativeManager::open(root, Arc::new(UnavailableHost)).is_err());
     }
-    #[tokio::test]
-    async fn native_manager_does_not_execute_platform_display_commands() {
-        let temporary = tempfile::tempdir().unwrap();
-        let root = PrivateDirectory::create(temporary.path(), "native").unwrap();
-        let manager = NativeManager::open(root, Arc::new(UnavailableHost)).unwrap();
-        let reply = manager
-            .handle(Request::VirtualDisplays {
-                operation: "configure".into(),
-                configuration: None,
-            })
-            .await;
-        assert!(reply.value.is_none());
-        assert_eq!(
-            reply.error.as_deref(),
-            Some("management authorization denied")
+    #[test]
+    fn management_boundary_rejects_platform_display_commands() {
+        assert!(
+            serde_json::from_value::<Request>(serde_json::json!({
+                "type": "virtual_displays", "operation": "configure", "configuration": null
+            }))
+            .is_err()
         );
-        assert!(!manager.status().configured);
     }
 
     #[tokio::test]

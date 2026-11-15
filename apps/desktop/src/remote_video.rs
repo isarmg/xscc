@@ -1,0 +1,1100 @@
+mod media_controls;
+pub use media_controls::MediaRequest;
+
+use xscc_native_ui::remote_image;
+
+use crate::{input, presentation::VideoPresentation};
+use base::message_proto::Message;
+use gpui::{
+    App, Bounds, Context, CursorStyle, DispatchPhase, EventEmitter, FocusHandle, Focusable,
+    HitboxBehavior, IntoElement, KeyDownEvent, KeyUpEvent, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage, ScrollDelta,
+    ScrollWheelEvent, Subscription, Window, canvas, div, prelude::*, px, rgb,
+};
+use librustdesk::gpui_session::{
+    self, CursorShape, CursorSnapshot, InputCommand, MediaControls, Monitor, SessionEvent,
+    SessionHandle, SessionQuality, TargetFps,
+};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, mpsc},
+};
+
+#[derive(Clone)]
+pub struct VideoState {
+    pub connecting: bool,
+    pub has_session: bool,
+    pub connected: bool,
+    pub target_fps: TargetFps,
+    pub monitors: Vec<Monitor>,
+    pub current_monitor: usize,
+    pub switching_monitor: bool,
+    pub media_controls: MediaControls,
+    pub pending_media: Option<MediaRequest>,
+    pub virtual_display_pending: bool,
+    pub quality: SessionQuality,
+    pub transport: Option<String>,
+    pub notice: String,
+}
+
+enum Reply {
+    Connect(u64, Result<SessionHandle, String>),
+    SessionClosed(u64),
+}
+
+pub struct RemoteVideo {
+    runtime: tokio::runtime::Handle,
+    sender: mpsc::Sender<Reply>,
+    receiver: mpsc::Receiver<Reply>,
+    wake: Arc<tokio::sync::Notify>,
+    session_updates: Option<tokio::task::JoinHandle<()>>,
+    session: Option<SessionHandle>,
+    connecting: bool,
+    generation: u64,
+    connected: bool,
+    keyboard_allowed: bool,
+    target_fps: TargetFps,
+    monitors: Vec<Monitor>,
+    current_monitor: usize,
+    switching_monitor: bool,
+    media_controls: MediaControls,
+    pending_media: Option<media_controls::PendingMedia>,
+    pending_virtual: Option<media_controls::PendingVirtual>,
+    quality: SessionQuality,
+    transport: Option<String>,
+    notice: String,
+    focus: FocusHandle,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
+    extent: (u32, u32),
+    origin: (i32, i32),
+    video: VideoPresentation,
+    cursor_image: Option<(Arc<CursorShape>, Arc<RenderImage>)>,
+    keys: HashMap<String, Message>,
+    buttons: HashMap<i32, Message>,
+    scroll_remainder: (f32, f32),
+    _subscriptions: Vec<Subscription>,
+    _tasks: Vec<gpui::Task<()>>,
+}
+
+impl EventEmitter<VideoState> for RemoteVideo {}
+
+impl RemoteVideo {
+    pub fn new(
+        runtime: tokio::runtime::Handle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let focus = cx.focus_handle();
+        let subscriptions = vec![
+            cx.on_blur(&focus, window, |view: &mut Self, _, cx| {
+                if view.release_input() {
+                    view.publish(cx);
+                }
+            }),
+            cx.observe_window_activation(window, |view: &mut Self, window, cx| {
+                if !window.is_window_active() && view.release_input() {
+                    view.publish(cx);
+                }
+            }),
+        ];
+        let wake = Arc::new(tokio::sync::Notify::new());
+        let ui_wake = wake.clone();
+        let task = cx.spawn(async move |view, cx| {
+            loop {
+                ui_wake.notified().await;
+                if view
+                    .update(cx, |view: &mut Self, cx| {
+                        if view.consume_updates() {
+                            view.publish(cx);
+                        }
+                        cx.notify();
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Self {
+            runtime,
+            sender,
+            receiver,
+            wake,
+            session_updates: None,
+            session: None,
+            connecting: false,
+            generation: 0,
+            connected: false,
+            keyboard_allowed: false,
+            target_fps: TargetFps::FPS_60,
+            monitors: Vec::new(),
+            current_monitor: 0,
+            switching_monitor: false,
+            media_controls: MediaControls::default(),
+            pending_media: None,
+            pending_virtual: None,
+            quality: SessionQuality::default(),
+            transport: None,
+            notice: String::new(),
+            focus,
+            bounds: Rc::new(Cell::new(Bounds::default())),
+            extent: (0, 0),
+            origin: (0, 0),
+            video: VideoPresentation::default(),
+            cursor_image: None,
+            keys: HashMap::new(),
+            buttons: HashMap::new(),
+            scroll_remainder: (0.0, 0.0),
+            _subscriptions: subscriptions,
+            _tasks: vec![task],
+        }
+    }
+
+    pub fn state(&self) -> VideoState {
+        VideoState {
+            connecting: self.connecting,
+            has_session: self.session.is_some(),
+            connected: self.connected,
+            target_fps: self.target_fps,
+            monitors: self.monitors.clone(),
+            current_monitor: self.current_monitor,
+            switching_monitor: self.switching_monitor,
+            media_controls: self.media_controls.clone(),
+            pending_media: self.pending_media.as_ref().map(|pending| pending.request),
+            virtual_display_pending: self.pending_virtual.is_some(),
+            quality: self.quality.clone(),
+            transport: self.transport.clone(),
+            notice: self.notice.clone(),
+        }
+    }
+
+    fn publish(&self, cx: &mut Context<Self>) {
+        cx.emit(self.state());
+    }
+
+    pub fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_connect(device_id);
+        self.focus.focus(window, cx);
+        self.publish(cx);
+        cx.notify();
+    }
+
+    pub fn disconnect(&mut self, cx: &mut Context<Self>) {
+        self.close();
+        self.publish(cx);
+        cx.notify();
+    }
+
+    pub fn switch_monitor(&mut self, index: usize, cx: &mut Context<Self>) {
+        if !self.connected
+            || self.switching_monitor
+            || self.pending_media.is_some()
+            || self.pending_virtual.is_some()
+            || self.current_monitor == index
+        {
+            return;
+        }
+        self.release_input();
+        if let Some(session) = &self.session {
+            match session.switch_monitor(index) {
+                Ok(()) => {
+                    self.switching_monitor = true;
+                    self.quality = SessionQuality::default();
+                    self.extent = (0, 0);
+                    self.video.invalidate();
+                    self.notice = format!(
+                        "正在切换至屏幕 {}… 若主机未响应，请断开后重新连接。",
+                        index + 1
+                    );
+                }
+                Err(error) => self.notice = error.to_string(),
+            }
+        }
+        self.publish(cx);
+        cx.notify();
+    }
+
+    fn start_connect(&mut self, device_id: String) {
+        if self.connecting || self.session.is_some() {
+            return;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
+        self.connecting = true;
+        self.video.invalidate();
+        self.notice = "正在验证授权并连接…".into();
+        let sender = self.sender.clone();
+        let wake = self.wake.clone();
+        self.runtime.spawn(async move {
+            let result = gpui_session::connect(&device_id)
+                .await
+                .map_err(|error| error.to_string());
+            if let Err(error) = sender.send(Reply::Connect(generation, result))
+                && let Reply::Connect(_, Ok(session)) = error.0
+            {
+                session.disconnect();
+            }
+            wake.notify_one();
+        });
+    }
+
+    fn release_input(&mut self) -> bool {
+        self.scroll_remainder = (0.0, 0.0);
+        let Some(session) = &self.session else {
+            self.keys.clear();
+            self.buttons.clear();
+            return false;
+        };
+        let mut failed = false;
+        for (_, pressed) in self.keys.drain() {
+            let message = input::release_key(&pressed);
+            if let Err(error) = session.send_input(InputCommand::Key(message.key_event().clone())) {
+                self.notice = error.to_string();
+                failed = true;
+            }
+        }
+        for (_, mut message) in self.buttons.drain() {
+            let event = message.mut_mouse_event();
+            event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
+            event.modifiers.clear();
+            if let Err(error) =
+                session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
+            {
+                self.notice = error.to_string();
+                failed = true;
+            }
+        }
+        failed
+    }
+
+    fn close(&mut self) {
+        self.release_input();
+        if let Some(task) = self.session_updates.take() {
+            task.abort();
+        }
+        self.generation = self.generation.wrapping_add(1);
+        if let Some(session) = self.session.take() {
+            session.disconnect();
+        }
+        self.connecting = false;
+        self.connected = false;
+        self.monitors.clear();
+        self.current_monitor = 0;
+        self.switching_monitor = false;
+        self.media_controls = MediaControls::default();
+        self.pending_media = None;
+        self.pending_virtual = None;
+        self.quality = SessionQuality::default();
+        self.transport = None;
+        self.keyboard_allowed = false;
+        self.scroll_remainder = (0.0, 0.0);
+        self.extent = (0, 0);
+        self.origin = (0, 0);
+        self.video.invalidate();
+        self.notice.clear();
+    }
+
+    fn consume_updates(&mut self) -> bool {
+        let mut changed = false;
+        let mut closed_generation = None;
+        while let Ok(reply) = self.receiver.try_recv() {
+            changed = true;
+            match reply {
+                Reply::SessionClosed(generation) => closed_generation = Some(generation),
+                Reply::Connect(generation, result) => {
+                    if generation != self.generation {
+                        if let Ok(session) = result {
+                            session.disconnect();
+                        }
+                        continue;
+                    }
+                    self.connecting = false;
+                    match result {
+                        Ok(session) => {
+                            let updates = session.updates();
+                            let wake = self.wake.clone();
+                            let sender = self.sender.clone();
+                            self.session_updates = Some(self.runtime.spawn(async move {
+                                loop {
+                                    let active = updates.wait().await;
+                                    if !active {
+                                        let _ = sender.send(Reply::SessionClosed(generation));
+                                    }
+                                    wake.notify_one();
+                                    if !active {
+                                        break;
+                                    }
+                                }
+                            }));
+                            self.session = Some(session);
+                        }
+                        Err(error) => self.notice = error,
+                    }
+                }
+            }
+        }
+        let events = self
+            .session
+            .as_ref()
+            .map(|session| session.drain_events())
+            .unwrap_or_default();
+        changed |= !events.is_empty();
+        for event in events {
+            match event {
+                SessionEvent::Connecting => self.notice = "正在连接…".into(),
+                SessionEvent::Transport(protocol) => self.transport = Some(protocol),
+                SessionEvent::Connected => {
+                    self.connected = true;
+                    self.notice = "已连接；点击画面后发送键鼠。切换窗口会释放已按下的键。".into();
+                    self.set_target_fps(self.target_fps);
+                    if let Some(session) = &self.session
+                        && let Err(error) = session.subscribe_remote_cursor()
+                    {
+                        self.notice = error.to_string();
+                    }
+                }
+                SessionEvent::Disconnected => {
+                    self.close();
+                    break;
+                }
+                SessionEvent::Error(error) => {
+                    self.close();
+                    self.notice = error;
+                    break;
+                }
+                SessionEvent::Permission { name, enabled } => {
+                    if name == "keyboard" {
+                        if !enabled {
+                            self.release_input();
+                            self.notice = "主机已禁用键鼠控制，当前仅可观看。".into();
+                            if self.pending_media.as_ref().is_some_and(|pending| {
+                                !matches!(pending.request, MediaRequest::Bitrate(_))
+                            }) {
+                                self.pending_media = None;
+                                self.notice = "调节未完成：主机已撤销显示控制权限。".into();
+                            }
+                        } else if self.notice == "主机已禁用键鼠控制，当前仅可观看。"
+                        {
+                            self.notice = "主机已恢复键鼠控制。".into();
+                        }
+                        self.keyboard_allowed = enabled;
+                    }
+                }
+                SessionEvent::Monitors(monitors) => {
+                    if !monitors
+                        .iter()
+                        .any(|monitor| monitor.index == self.current_monitor && monitor.available)
+                    {
+                        self.release_input();
+                        self.extent = (0, 0);
+                        self.quality = SessionQuality::default();
+                        self.video.invalidate();
+                        if !self.switching_monitor {
+                            self.notice = "当前屏幕已离线，请选择可用屏幕。".into();
+                        }
+                    } else if self.notice == "当前屏幕已离线，请选择可用屏幕。" {
+                        self.notice.clear();
+                    }
+                    self.monitors = monitors;
+                }
+                SessionEvent::MediaControls(controls) => {
+                    self.update_media_controls(controls);
+                    // Cross-thread snapshots can enter the queue out of order.
+                    if let Some(session) = &self.session {
+                        self.media_controls = session.media_controls();
+                    }
+                }
+                SessionEvent::VirtualDisplayResult(result) => {
+                    self.finish_virtual_display_result(result)
+                }
+                SessionEvent::ControlError(error) => {
+                    self.pending_media = None;
+                    self.notice = format!("调节未完成：{error}");
+                }
+                SessionEvent::Quality { index, update } => {
+                    if !self.switching_monitor && index == self.current_monitor {
+                        self.quality.merge(update);
+                    }
+                }
+                SessionEvent::Display {
+                    index,
+                    x,
+                    y,
+                    width: _,
+                    height: _,
+                } => {
+                    self.release_input();
+                    if self.current_monitor != index || self.switching_monitor {
+                        self.quality = SessionQuality::default();
+                        self.video.invalidate();
+                        self.extent = (0, 0);
+                    }
+                    self.current_monitor = index;
+                    if self.switching_monitor {
+                        self.notice = format!("已切换至屏幕 {}。", index + 1);
+                    }
+                    self.switching_monitor = false;
+                    self.origin = (x, y);
+                }
+            }
+        }
+        if closed_generation == Some(self.generation) && self.session.is_some() {
+            self.close();
+            changed = true;
+        }
+        changed
+    }
+
+    fn prepare_cursor_image(
+        &mut self,
+        cursor: &CursorSnapshot,
+        window: &mut Window,
+    ) -> Result<Option<Arc<RenderImage>>, String> {
+        let unchanged = match (&self.cursor_image, &cursor.shape) {
+            (Some((previous, _)), Some(next)) => Arc::ptr_eq(previous, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            if let Some((_, previous)) = self.cursor_image.take() {
+                window
+                    .drop_image(previous)
+                    .map_err(|error| error.to_string())?;
+            }
+            if let Some(shape) = &cursor.shape {
+                let image = RenderImage::from_bgra(shape.width, shape.height, shape.bgra.clone())
+                    .map_err(|error| error.to_string())?;
+                self.cursor_image = Some((shape.clone(), Arc::new(image)));
+            }
+        }
+        Ok(self.cursor_image.as_ref().map(|(_, image)| image.clone()))
+    }
+
+    fn set_target_fps(&mut self, target: TargetFps) {
+        if !self.connected {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        match session.set_target_fps(target) {
+            Ok(()) => {
+                self.target_fps = target;
+                self.notice = format!(
+                    "已请求目标 {} FPS；实际帧率取决于主机、网络和显示能力。",
+                    target.value()
+                );
+            }
+            Err(error) => self.notice = error.to_string(),
+        }
+    }
+
+    fn current_monitor_available(&self) -> bool {
+        self.monitors
+            .iter()
+            .any(|monitor| monitor.index == self.current_monitor && monitor.available)
+    }
+
+    fn key(&mut self, key: &gpui::Keystroke, down: bool, cx: &Context<Self>) -> bool {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || !self.current_monitor_available()
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
+        {
+            return false;
+        }
+        let identity = input::key_identity(key, cx.keyboard_mapper().as_ref());
+        let message = if down {
+            input::key(key, true)
+        } else {
+            self.keys.get(&identity).map(input::release_key)
+        };
+        let Some(message) = message else {
+            return false;
+        };
+        if let Some(session) = &self.session {
+            if let Err(error) = session.send_input(InputCommand::Key(message.key_event().clone())) {
+                self.notice = error.to_string();
+                return true;
+            }
+            if down {
+                self.keys.entry(identity).or_insert(message);
+            } else {
+                self.keys.remove(&identity);
+            }
+        }
+        false
+    }
+
+    fn modifiers(&mut self, modifiers: gpui::Modifiers, cx: &Context<Self>) -> bool {
+        let mut failed = false;
+        for (key, down) in [
+            ("control", modifiers.control),
+            ("alt", modifiers.alt),
+            ("shift", modifiers.shift),
+            ("super", modifiers.platform),
+        ] {
+            if down != self.keys.contains_key(key) {
+                failed |= self.key(
+                    &gpui::Keystroke {
+                        key: key.into(),
+                        modifiers,
+                        ..Default::default()
+                    },
+                    down,
+                    cx,
+                );
+            }
+        }
+        failed
+    }
+
+    fn wheel(&mut self, event: &ScrollWheelEvent) -> bool {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || !self.current_monitor_available()
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
+        {
+            return false;
+        }
+        if !scroll_hits_frame(event.position, self.bounds.get(), self.extent) {
+            self.scroll_remainder = (0.0, 0.0);
+            return false;
+        }
+        let (x, y, trackpad) = match event.delta {
+            ScrollDelta::Lines(delta) => (delta.x, delta.y, false),
+            ScrollDelta::Pixels(delta) => (f32::from(delta.x), f32::from(delta.y), true),
+        };
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
+        self.scroll_remainder.0 += x;
+        self.scroll_remainder.1 += y;
+        let x = self.scroll_remainder.0.trunc() as i32;
+        let y = self.scroll_remainder.1.trunc() as i32;
+        self.scroll_remainder.0 -= x as f32;
+        self.scroll_remainder.1 -= y as f32;
+        let bounds = self.bounds.get();
+        if let Some(messages) = input::wheel_at(
+            (
+                f32::from(event.position.x - bounds.origin.x),
+                f32::from(event.position.y - bounds.origin.y),
+            ),
+            (bounds.size.width.into(), bounds.size.height.into()),
+            self.extent,
+            self.origin,
+            (x, y),
+            trackpad,
+            event.modifiers,
+        ) && let Some(session) = &self.session
+        {
+            for (index, message) in messages.iter().enumerate() {
+                if let Err(error) =
+                    session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
+                {
+                    self.notice = error.to_string();
+                    return true;
+                }
+                if index == 0 {
+                    session.update_local_cursor_position(
+                        message.mouse_event().x,
+                        message.mouse_event().y,
+                    );
+                }
+            }
+        }
+        false
+    }
+
+    fn pointer(
+        &mut self,
+        position: Point<Pixels>,
+        kind: i32,
+        button: i32,
+        modifiers: gpui::Modifiers,
+    ) -> bool {
+        if !self.connected
+            || !self.keyboard_allowed
+            || self.switching_monitor
+            || !self.current_monitor_available()
+            || self
+                .pending_media
+                .as_ref()
+                .is_some_and(|pending| matches!(pending.request, MediaRequest::Resolution(_)))
+            || self
+                .pending_virtual
+                .as_ref()
+                .is_some_and(|pending| pending.configure)
+        {
+            return false;
+        }
+        let bounds = self.bounds.get();
+        if kind == 2 && !self.buttons.contains_key(&button) {
+            return false;
+        }
+        let message = input::pointer_with_capture(
+            f32::from(position.x - bounds.origin.x),
+            f32::from(position.y - bounds.origin.y),
+            (bounds.size.width.into(), bounds.size.height.into()),
+            self.extent,
+            kind,
+            button,
+            kind != 1 && !self.buttons.is_empty(),
+        );
+        // Preserve release even if the frame or viewport became unavailable during a drag.
+        let already_absolute = message.is_none();
+        let message = message.or_else(|| {
+            (kind == 2)
+                .then(|| self.buttons.get(&button).cloned())
+                .flatten()
+        });
+        if let Some(mut message) = message {
+            let event = message.mut_mouse_event();
+            event.modifiers = input::modifier_keys(modifiers);
+            if kind == 2 {
+                event.mask = (event.mask & !7) | base::session_protocol::input::MOUSE_TYPE_UP;
+            }
+            // Stored press messages already include the display origin.
+            if !already_absolute {
+                event.x = event.x.saturating_add(self.origin.0);
+                event.y = event.y.saturating_add(self.origin.1);
+            }
+            if let Some(session) = &self.session {
+                if let Some(position) = input::position_before_press(message.mouse_event())
+                    && let Err(error) = session.send_input(InputCommand::Mouse(position))
+                {
+                    self.notice = error.to_string();
+                    return true;
+                }
+                if let Err(error) =
+                    session.send_input(InputCommand::Mouse(message.mouse_event().clone()))
+                {
+                    self.notice = error.to_string();
+                    return true;
+                }
+                session
+                    .update_local_cursor_position(message.mouse_event().x, message.mouse_event().y);
+                // Focus-loss releases should use the last drag position, not jump to its start.
+                for pressed in self.buttons.values_mut() {
+                    pressed.mut_mouse_event().x = message.mouse_event().x;
+                    pressed.mut_mouse_event().y = message.mouse_event().y;
+                }
+                if kind == 1 {
+                    self.buttons.insert(button, message);
+                }
+                if kind == 2 {
+                    self.buttons.remove(&button);
+                }
+            }
+        }
+        false
+    }
+}
+
+fn cursor_placement(
+    viewport: Bounds<Pixels>,
+    extent: (u32, u32),
+    origin: (i32, i32),
+    shape: &CursorShape,
+    position: (i32, i32),
+) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+    let width = f32::from(viewport.size.width);
+    let height = f32::from(viewport.size.height);
+    if !width.is_finite()
+        || !height.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || extent.0 == 0
+        || extent.1 == 0
+    {
+        return None;
+    }
+    let x = i64::from(position.0) - i64::from(origin.0);
+    let y = i64::from(position.1) - i64::from(origin.1);
+    if x < 0 || y < 0 || x >= i64::from(extent.0) || y >= i64::from(extent.1) {
+        return None;
+    }
+    let scale = (width / extent.0 as f32).min(height / extent.1 as f32);
+    let frame = Bounds::new(
+        gpui::point(
+            viewport.origin.x + px((width - extent.0 as f32 * scale) / 2.0),
+            viewport.origin.y + px((height - extent.1 as f32 * scale) / 2.0),
+        ),
+        gpui::size(px(extent.0 as f32 * scale), px(extent.1 as f32 * scale)),
+    );
+    let image = Bounds::new(
+        gpui::point(
+            frame.origin.x + px((x as f32 - shape.hotx as f32) * scale),
+            frame.origin.y + px((y as f32 - shape.hoty as f32) * scale),
+        ),
+        gpui::size(
+            px(shape.width as f32 * scale),
+            px(shape.height as f32 * scale),
+        ),
+    );
+    Some((frame, image))
+}
+
+fn scroll_hits_frame(position: Point<Pixels>, bounds: Bounds<Pixels>, extent: (u32, u32)) -> bool {
+    input::pointer(
+        f32::from(position.x - bounds.origin.x),
+        f32::from(position.y - bounds.origin.y),
+        (bounds.size.width.into(), bounds.size.height.into()),
+        extent,
+        0,
+        0,
+    )
+    .is_some()
+}
+
+impl Focusable for RemoteVideo {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Drop for RemoteVideo {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl Render for RemoteVideo {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let monitor_available = self.current_monitor_available();
+        let frame = self
+            .session
+            .as_ref()
+            .and_then(SessionHandle::take_frame)
+            .filter(|frame| {
+                monitor_available
+                    && !self.switching_monitor
+                    && frame.display == self.current_monitor
+            });
+        match self.video.update(frame, window) {
+            Ok(Some(extent)) => self.extent = extent,
+            Ok(None) => {}
+            Err(error) => {
+                self.notice = error;
+                self.publish(cx);
+            }
+        }
+        let cursor = if self.switching_monitor || self.video.image().is_none() {
+            CursorSnapshot::default()
+        } else {
+            self.session
+                .as_ref()
+                .map(SessionHandle::cursor_snapshot)
+                .unwrap_or_default()
+        };
+        let cursor_image = match self.prepare_cursor_image(&cursor, window) {
+            Ok(image) => image,
+            Err(error) => {
+                self.notice = format!("远程光标图像不可用: {error}");
+                self.publish(cx);
+                None
+            }
+        };
+        let extent = self.extent;
+        let origin = self.origin;
+        let hide_cursor = self.connected && self.keyboard_allowed && monitor_available;
+        let bounds = self.bounds.clone();
+        let drag_move = cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+            if !view.buttons.is_empty()
+                && !view.bounds.get().contains(&event.position)
+                && view.pointer(event.position, 0, 0, event.modifiers)
+            {
+                view.publish(cx);
+            }
+        });
+        div()
+            .id("remote-video")
+            .relative()
+            .size_full()
+            .bg(rgb(0))
+            .text_color(rgb(crate::theme::DARK.muted))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
+                if view.focus.is_focused(window)
+                    && event.keystroke.key == "enter"
+                    && event.keystroke.modifiers.control
+                    && event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.shift
+                    && !event.keystroke.modifiers.platform
+                {
+                    if !event.is_held {
+                        if view.release_input() {
+                            view.publish(cx);
+                        }
+                        window.toggle_fullscreen();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                if view.focus.is_focused(window) && view.key(&event.keystroke, true, cx) {
+                    view.publish(cx);
+                }
+            }))
+            .on_modifiers_changed(
+                cx.listener(|view, event: &ModifiersChangedEvent, window, cx| {
+                    if view.focus.is_focused(window) && view.modifiers(event.modifiers, cx) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_key_up(cx.listener(|view, event: &KeyUpEvent, window, cx| {
+                if view.focus.is_focused(window) && view.key(&event.keystroke, false, cx) {
+                    view.publish(cx);
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    view.focus.focus(window, cx);
+                    if view.pointer(event.position, 1, 1, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 1, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 1, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    view.focus.focus(window, cx);
+                    if view.pointer(event.position, 1, 2, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 2, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Right,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 2, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    view.focus.focus(window, cx);
+                    if view.pointer(event.position, 1, 3, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 3, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Middle,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| {
+                    if view.pointer(event.position, 2, 3, event.modifiers) {
+                        view.publish(cx);
+                    }
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
+                if view.wheel(event) {
+                    view.publish(cx);
+                }
+            }))
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                if view.pointer(event.position, 0, 0, event.modifiers) {
+                    view.publish(cx);
+                }
+            }))
+            .children(
+                self.video
+                    .image()
+                    .map(|frame| remote_image::remote_image(frame.clone())),
+            )
+            .children(
+                self.video
+                    .image()
+                    .is_none()
+                    .then_some(div().p_4().child("尚无远程画面")),
+            )
+            .child(
+                canvas(
+                    move |area, window, _| {
+                        bounds.set(area);
+                        let placement = cursor.shape.as_ref().and_then(|shape| {
+                            cursor_placement(area, extent, origin, shape, cursor.position?)
+                        });
+                        let hitbox = placement
+                            .as_ref()
+                            .filter(|_| cursor_image.is_some())
+                            .map(|(frame, _)| window.insert_hitbox(*frame, HitboxBehavior::Normal));
+                        (placement, hitbox, cursor_image)
+                    },
+                    move |_, (placement, hitbox, cursor_image), window, _| {
+                        if let (Some((frame, image_bounds)), Some(hitbox), Some(image)) =
+                            (placement, hitbox, cursor_image)
+                        {
+                            match window.paint_image(
+                                frame,
+                                image_bounds,
+                                Default::default(),
+                                image,
+                                0,
+                                false,
+                            ) {
+                                Ok(()) => {
+                                    if hide_cursor {
+                                        window.set_cursor_style(CursorStyle::Hidden, &hitbox);
+                                    }
+                                }
+                                Err(error) => {
+                                    gpui_session::log_cursor_render_failure(&error);
+                                }
+                            }
+                        }
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                drag_move(event, window, cx);
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn remote_cursor_tracks_letterbox_display_origin_and_hotspot() {
+        let shape = CursorShape {
+            id: 1,
+            width: 32,
+            height: 32,
+            hotx: 4,
+            hoty: 8,
+            bgra: vec![0; 32 * 32 * 4].into(),
+        };
+        let viewport = Bounds::new(
+            gpui::point(px(50.0), px(20.0)),
+            gpui::size(px(1000.0), px(800.0)),
+        );
+        let (frame, image) =
+            cursor_placement(viewport, (2000, 1000), (-2000, -100), &shape, (-1800, 100)).unwrap();
+        assert_eq!(
+            frame,
+            Bounds::new(
+                gpui::point(px(50.0), px(170.0)),
+                gpui::size(px(1000.0), px(500.0))
+            )
+        );
+        assert_eq!(
+            image,
+            Bounds::new(
+                gpui::point(px(148.0), px(266.0)),
+                gpui::size(px(16.0), px(16.0))
+            )
+        );
+        assert!(
+            cursor_placement(viewport, (2000, 1000), (-2000, -100), &shape, (0, 100)).is_none()
+        );
+        assert!(cursor_placement(viewport, (0, 0), (0, 0), &shape, (0, 0)).is_none());
+    }
+
+    #[test]
+    fn scrolling_only_targets_the_visible_frame_after_resize() {
+        use gpui::{point, px, size};
+
+        let origin = point(px(300.0), px(80.0));
+        let wide = Bounds::new(origin, size(px(1000.0), px(800.0)));
+        let tall = Bounds::new(origin, size(px(1000.0), px(400.0)));
+        for (x, y, bounds, extent, accepted) in [
+            (800.0, 480.0, wide, (1920, 1080), true),
+            (800.0, 81.0, wide, (1920, 1080), false),
+            (301.0, 280.0, tall, (1080, 1920), false),
+            (800.0, 280.0, tall, (1080, 1920), true),
+            (800.0, 480.0, wide, (0, 0), false),
+        ] {
+            assert_eq!(
+                scroll_hits_frame(point(px(x), px(y)), bounds, extent),
+                accepted
+            );
+        }
+    }
+
+    #[test]
+    fn replies_before_ui_wait_coalesce_without_losing_terminal_reply() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let wake = tokio::sync::Notify::new();
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(Reply::Connect(7, Err("Connection failed".into())))
+                .unwrap();
+            wake.notify_one();
+            sender.send(Reply::SessionClosed(7)).unwrap();
+            wake.notify_one();
+            tokio::time::timeout(Duration::from_millis(100), wake.notified())
+                .await
+                .unwrap();
+            assert!(matches!(receiver.try_recv(), Ok(Reply::Connect(7, Err(_)))));
+            assert!(matches!(receiver.try_recv(), Ok(Reply::SessionClosed(7))));
+            assert!(receiver.try_recv().is_err());
+        });
+    }
+}

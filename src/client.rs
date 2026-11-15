@@ -93,10 +93,8 @@ mod audio_state_tests;
 pub(crate) mod hwcodec;
 pub mod helper;
 pub mod io_loop;
-#[cfg(feature = "udp-media")]
-pub(crate) mod udp_media;
-#[cfg(feature = "experimental-quic")]
-pub(crate) mod quic;
+
+
 mod presentation;
 pub mod screenshot;
 mod streaming;
@@ -1953,7 +1951,8 @@ impl LoginConfigHandler {
             version: crate::VERSION.to_string(),
             hwid,
             avatar,
-            supports_udp_media: cfg!(feature = "udp-media"),
+            supports_udp_media: true,
+            session_revision: base::session_protocol::NATIVE_SESSION_REVISION,
             ..Default::default()
         };
         let mut msg_out = Message::new();

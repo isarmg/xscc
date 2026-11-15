@@ -1,7 +1,7 @@
 # GPUI mobile native application
 
 Android ARM64 (API 29+) and iOS / iPadOS 26 ARM64 use the same
-[`gpui-mobile-management`](../experiments/gpui-mobile-management/README.md)
+[`gpui-mobile-management`](../apps/mobile/README.md)
 product UI workspace. The `mobile-management,mobile-session` build includes
 authorized screen sessions, touch, software-keyboard commits and opt-in remote
 audio. The management-only default is a diagnostic variant. The existing
@@ -26,7 +26,7 @@ streaming, touch, IME, audio and lifecycle acceptance remain separate evidence.
 
 ## File and runtime boundaries
 
-- `experiments/gpui-mobile-management`: application-owned Tokio runtime,
+- `apps/mobile`: application-owned Tokio runtime,
   in-process manager adapter, GPUI management/session UI and native sandbox path.
 - Shared desktop `theme.rs`, `text_field.rs` and `presentation.rs`: reuse the
   GPUI appearance, text editing and owned-frame image path.

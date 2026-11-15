@@ -121,10 +121,10 @@ delivery verification record; do not infer 60 FPS merely from a successful build
 
 | Existing file | Changed runtime path and why it is necessary |
 | --- | --- |
-| `experiments/gpui-mobile-management/Cargo.toml` | Android session feature graph enables its existing native decoder; iOS retains its previous feature set. |
-| `experiments/gpui-mobile-management/Cargo.lock` | Add only the existing `ndk 0.7.0` dependency edge to scrap; no package version or checksum changes. |
-| `experiments/gpui-mobile-management/src/android.rs` | Initialize real decoder inventory while the Android VM is available, before connection negotiation. |
-| `experiments/gpui-mobile-management/src/session_view.rs` | Connected event sends the default 60 FPS request through the existing authorized API. |
+| `apps/mobile/Cargo.toml` | Android session feature graph enables its existing native decoder; iOS retains its previous feature set. |
+| `apps/mobile/Cargo.lock` | Add only the existing `ndk 0.7.0` dependency edge to scrap; no package version or checksum changes. |
+| `apps/mobile/src/android.rs` | Initialize real decoder inventory while the Android VM is available, before connection negotiation. |
+| `apps/mobile/src/session_view.rs` | Connected event sends the default 60 FPS request through the existing authorized API. |
 | `libs/scrap/src/android/ffi.rs` | Typed inventory setter for the native startup path; existing Java entry is retained. |
 | `libs/scrap/src/android/mod.rs` | Feature gated export of the Android inventory module. |
 | `src/gpui_session.rs` | Thin Android export and numeric logging from the existing quality snapshot; no new sampling clock. |

@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/management-prep]
     paths:
-      - 'experiments/gpui-validation/**'
+      - 'apps/desktop/**'
       - 'experiments/shared/**'
       - 'vendor/gpui/**'
       - 'vendor/hwcodec/**'
@@ -27,7 +27,7 @@ on:
       package_version:
         description: 'Unsigned beta candidate version (no release publication)'
         required: true
-        default: '1.0.0'
+        default: '4.0.0-beta.1'
         type: string
 permissions:
   contents: read
@@ -36,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 env:
   XSCC_PACKAGE_MODE: managed
-  PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.1' }}
   VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
 jobs:
   linux:
@@ -138,13 +138,13 @@ jobs:
           CARGO_PROFILE_DEV_DEBUG: '0'
           CARGO_PROFILE_TEST_DEBUG: '0'
         run: |
-          output=$(cargo test --locked --manifest-path experiments/gpui-mobile-management/Cargo.toml --bin xscc-gpui-mobile-management --no-default-features --features mobile-management panel::interaction_tests::unbind_confirms_once_and_busy_actions_keep_local_menu_responsive 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          output=$(cargo test --locked --manifest-path apps/mobile/Cargo.toml --bin xscc-mobile --no-default-features --features mobile-management panel::interaction_tests::unbind_confirms_once_and_busy_actions_keep_local_menu_responsive 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output" || { echo 'Native management header touch regression did not run' >&2; exit 1; }
-          output=$(cargo test --locked --manifest-path experiments/gpui-mobile-management/Cargo.toml --bin xscc-gpui-mobile-management --no-default-features --features mobile-management session_chrome::virtual_displays:: 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          output=$(cargo test --locked --manifest-path apps/mobile/Cargo.toml --bin xscc-mobile --no-default-features --features mobile-management session_chrome::virtual_displays:: 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$output" || { echo 'Virtual display count regressions did not run all three tests' >&2; exit 1; }
-          output=$(cargo test --locked --manifest-path experiments/gpui-mobile-management/Cargo.toml --bin xscc-gpui-mobile-management --no-default-features --features mobile-management remote_keyboard::computer::tests::horizontal_swipes_change_keys_without_typing 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          output=$(cargo test --locked --manifest-path apps/mobile/Cargo.toml --bin xscc-mobile --no-default-features --features mobile-management remote_keyboard::computer::tests::horizontal_swipes_change_keys_without_typing 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output" || { echo 'Computer keyboard swipe regression did not run' >&2; exit 1; }
       - name: Test mobile audio queue and mute lifecycle
@@ -156,14 +156,15 @@ jobs:
       - name: Test TCP control and UDP streaming integration
         if: matrix.role == 'controller'
         run: |
-          for filter in client::udp_media::tests udp_host::tests session_transport::udp::tests gpui_session::tests::connection_type_reports_the_actual_transport; do
+          cargo test --locked -p xscc-session-transport --target x86_64-unknown-linux-gnu
+          for filter in gpui_session::tests::connection_type_reports_the_actual_transport; do
             output=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "${{ matrix.core_features }}" --target x86_64-unknown-linux-gnu "$filter" 2>&1) || { printf '%s\n' "$output"; exit 1; }
             printf '%s\n' "$output"
             grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$output" || { echo "No passing TCP/UDP integration tests: $filter" >&2; exit 1; }
           done
       - name: Package and smoke-test unpacked Linux executable
         run: |
-          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/xscc-gpui-validation"
+          binary="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/xscc-desktop"
           ldd "$binary" | tee "$RUNNER_TEMP/dependencies.txt"
           if grep -q 'not found' "$RUNNER_TEMP/dependencies.txt"; then exit 1; fi
           bash .github/scripts/package-gpui-linux.sh '${{ matrix.role }}' "$PACKAGE_VERSION" "$binary" dist
@@ -260,7 +261,7 @@ jobs:
       - name: Package and smoke-test unpacked macOS application
         run: |
           app="XSCC-${{ matrix.role }}.app"
-          python3 .github/scripts/package-gpui-macos.py --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-gpui-validation" --output "$RUNNER_TEMP/$app" --role '${{ matrix.role }}' --version "$PACKAGE_VERSION"
+          python3 .github/scripts/package-gpui-macos.py --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-desktop" --output "$RUNNER_TEMP/$app" --role '${{ matrix.role }}' --version "$PACKAGE_VERSION"
           plutil -lint "$RUNNER_TEMP/$app/Contents/Info.plist"
           mkdir -p dist "$RUNNER_TEMP/unpacked"
           archive="dist/xscc-${{ matrix.role }}-$PACKAGE_VERSION-macos26-arm64-unsigned.zip"

@@ -2,7 +2,7 @@
 
 ## 使用
 
-产品界面统一为 GPUI：桌面入口为 `experiments/gpui-validation`，移动入口为 `experiments/gpui-mobile-management`。目录名沿用开发阶段的名称，实例绑定和授权列表由这些原生应用提供。
+产品界面统一为 GPUI：桌面入口为 `apps/desktop`，移动入口为 `apps/mobile`。目录名沿用开发阶段的名称，实例绑定和授权列表由这些原生应用提供。
 
 1. 在 xscs 网页创建控制端、被控端实例，并设置两者之间的允许控制关系。从任意一侧编辑的是同一份关系。
 2. 在各自 xscc 首页的“XSCC 实例管理”中输入服务端地址和对应实例授权码。正式部署使用 HTTPS；本机或私网测试可以使用 `http://127.0.0.1:18104`、`http://localhost:18104` 或显式私网 IP（例如 `http://192.168.31.245:18104`）。HTTP 只允许本机、RFC1918 IPv4 私网字面地址及 IPv6 ULA，后续管理连接自动使用同一服务地址的 WS；公网 IP 或域名仍须 HTTPS / WSS。
@@ -40,7 +40,7 @@ Unix 存储位于系统账户数据库所给主目录的 `xscc-managed`，忽略
 - `src/server/connection.rs`：保留连接许可，用现有定时器关闭失效会话，并识别已验证实例的登录目标。密码、本地确认和输入权限仍由原生流程检查。
 - `src/client/io_loop.rs`：受管连接走授权列表及双向证明，随后复用原来的会话循环；在现有状态定时器检查授权。未配置及关闭功能时保留原连接路径。
 - `src/ipc.rs`、`src/ipc/auth.rs`：在现有主 IPC 中加入经过用户和程序身份验证的管理请求；正常关闭时停止管理任务。
-- `experiments/gpui-validation/src/client.rs` 与移动 `panel.rs`：提供脱敏管理入口和授权设备列表，复用同一 Rust 原生管理所有者；移动初始化使用系统私有目录。
+- `apps/desktop/src/client.rs` 与移动 `panel.rs`：提供脱敏管理入口和授权设备列表，复用同一 Rust 原生管理所有者；移动初始化使用系统私有目录。
 - `src/gpui_session.rs`、`src/ui_session_interface.rs`：复用原生会话、输入和指标回调。移动应用在初始化边界显式持有一个管理 runtime，界面请求不创建第二份身份。
 - `Cargo.toml`、协议固定 revision 和管理 CI：加入本地原生管理库，桌面三平台单独运行测试，并交叉检查 iOS arm64、Android arm64；应用 CI 在本分支运行完整构建检查。
 

@@ -1,0 +1,13 @@
+[package]
+name = "xscc-session-transport"
+version = "4.0.0"
+edition = "2021"
+rust-version = "1.99.0"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+base = { path = "../../libs/base", features = ["udp-media"] }
+hbb_common = { path = "../../libs/hbb_common" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

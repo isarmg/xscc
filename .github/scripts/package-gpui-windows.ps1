@@ -14,7 +14,7 @@ $stem = "xscc-$role-$env:PACKAGE_VERSION-windows11-x86_64-unsigned"
 $out = Join-Path $root "dist/$role"
 $payload = Join-Path $env:RUNNER_TEMP $stem
 New-Item -ItemType Directory -Force $out, $payload | Out-Null
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-gpui-validation.exe'
+$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-desktop.exe'
 & python "$PSScriptRoot/check-gpui-package-mode.py" $exe --output (Join-Path $payload 'build-capabilities.json')
 if ($LASTEXITCODE -ne 0) { throw 'Package capability gate failed' }
 $bytes = [System.IO.File]::ReadAllBytes($exe)
@@ -42,7 +42,7 @@ Copy-Item $exe (Join-Path $payload $name)
 Copy-Item "$root/LICENCE" $payload
 Copy-Item "$root/packaging/gpui-windows/THIRD_PARTY_NOTICES.txt" $payload
 Copy-Item "$root/packaging/gpui-windows/GPUI-LICENSE-APACHE.txt" $payload
-Copy-Item "$root/experiments/shared/fonts/OFL.txt" (Join-Path $payload 'MAPLE-FONT-OFL.txt')
+Copy-Item "$root/crates/native-ui/assets/fonts/OFL.txt" (Join-Path $payload 'MAPLE-FONT-OFL.txt')
 Copy-Item "$root/packaging/gpui-windows/$readme" (Join-Path $payload 'README.txt')
 if ($role -eq 'host') {
     & "$PSScriptRoot/prepare-gpui-virtual-display.ps1" -PayloadDirectory $payload

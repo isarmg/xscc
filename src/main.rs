@@ -5,6 +5,6 @@
 
 fn main() {
     eprintln!(
-        "The XSCC desktop application uses GPUI. Start it with:\n  cargo run --manifest-path experiments/gpui-validation/Cargo.toml --features live-session"
+        "The XSCC desktop application uses GPUI. Start it with:\n  cargo run --manifest-path apps/desktop/Cargo.toml --features live-session"
     );
 }

@@ -1,0 +1,12 @@
+[package]
+name = "xscc-native-ui"
+version = "4.0.0"
+edition = "2024"
+rust-version = "1.99.0"
+license = "AGPL-3.0-only"
+publish = false
+
+[dependencies]
+gpui = { package = "gpui_platform", path = "../../vendor/gpui/crates/gpui_platform", default-features = false, features = ["font-kit"] }
+xscc-session-model = { path = "../session-model" }
+unicode-segmentation = "1.12"

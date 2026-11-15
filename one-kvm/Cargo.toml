@@ -73,9 +73,15 @@ desktop = [
     "dep:cpal",
     "dep:windows-sys",
     "dep:one-kvm-management",
+    "dep:base",
+    "dep:hbb_common",
+    "dep:xscc-session-transport",
     "dep:url",
 ]
 [dependencies]
+base = { path = "../libs/base", optional = true }
+hbb_common = { path = "../libs/hbb_common", optional = true }
+xscc-session-transport = { path = "../crates/session-transport", optional = true }
 one-kvm-management = { path = "crates/management", optional = true }
 url = { version = "2", optional = true }
 # Async runtime

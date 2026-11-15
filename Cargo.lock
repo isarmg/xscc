@@ -821,9 +821,7 @@ dependencies = [
  "osascript",
  "protobuf",
  "protobuf-codegen",
- "quinn",
  "rcgen",
- "rustls",
  "serde 1.0.229",
  "serde_derive",
  "serde_json 1.0.154",
@@ -8387,6 +8385,8 @@ dependencies = [
  "xkbcommon-dl",
  "xscc",
  "xscc-native-management",
+ "xscc-session-model",
+ "xscc-session-transport",
  "xxhash-rust",
  "zeroize",
  "zstd 0.13.3",
@@ -8629,7 +8629,6 @@ dependencies = [
  "schemars_derive",
  "serde 1.0.229",
  "serde_json 1.0.154",
- "uuid",
 ]
 
 [[package]]
@@ -9616,7 +9615,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.5.0",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -12166,7 +12165,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xscc"
-version = "2.0.0-dev"
+version = "4.0.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -12183,29 +12182,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "xscc-gpui-mobile-management"
-version = "0.1.0"
-dependencies = [
- "android_logger",
- "async-trait",
- "base",
- "gpui",
- "gpui_platform",
- "image 0.25.10",
- "libc",
- "log",
- "objc2-foundation 0.3.2",
- "rustdesk",
- "tempfile",
- "tokio",
- "unicode-segmentation",
- "xscc",
- "xscc-native-management",
-]
-
-[[package]]
-name = "xscc-gpui-validation"
-version = "0.1.0"
+name = "xscc-desktop"
+version = "4.0.0"
 dependencies = [
  "async-trait",
  "base",
@@ -12222,11 +12200,34 @@ dependencies = [
  "winres",
  "xscc",
  "xscc-native-management",
+ "xscc-native-ui",
+]
+
+[[package]]
+name = "xscc-mobile"
+version = "4.0.0"
+dependencies = [
+ "android_logger",
+ "async-trait",
+ "base",
+ "gpui",
+ "gpui_platform",
+ "image 0.25.10",
+ "libc",
+ "log",
+ "objc2-foundation 0.3.2",
+ "rustdesk",
+ "tempfile",
+ "tokio",
+ "unicode-segmentation",
+ "xscc",
+ "xscc-native-management",
+ "xscc-native-ui",
 ]
 
 [[package]]
 name = "xscc-native-management"
-version = "2.0.0-dev"
+version = "4.0.0"
 dependencies = [
  "async-trait",
  "hex",
@@ -12248,12 +12249,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "xscc-native-ui"
+version = "4.0.0"
+dependencies = [
+ "gpui_platform",
+ "unicode-segmentation",
+ "xscc-session-model",
+]
+
+[[package]]
+name = "xscc-session-model"
+version = "4.0.0"
+
+[[package]]
+name = "xscc-session-transport"
+version = "4.0.0"
+dependencies = [
+ "base",
+ "hbb_common",
+ "serde 1.0.229",
+ "serde_json 1.0.154",
+]
+
+[[package]]
 name = "xscs-protocol"
-version = "2.0.0-dev"
-source = "git+https://github.com/isarmg/xscs.git?rev=e57cdaad4c701aef63afacf1b200c48011358603#e57cdaad4c701aef63afacf1b200c48011358603"
+version = "4.0.0"
+source = "git+https://github.com/isarmg/xscs.git?rev=567a8df7e883b5a9a86af58a6a5d88898a535e01#567a8df7e883b5a9a86af58a6a5d88898a535e01"
 dependencies = [
  "hex",
- "schemars",
  "serde 1.0.229",
  "serde_json 1.0.154",
  "sha2 0.11.1",

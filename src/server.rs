@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use base::message_proto::*;
 pub use connection::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::config::Config2;
@@ -16,10 +17,8 @@ use hbb_common::{
     log,
     protobuf::{Enum, Message as _},
     rendezvous_proto::{ControlPermissions, ControlledContext},
-    timeout, tokio,
-    ResultType, Stream,
+    timeout, tokio, ResultType, Stream,
 };
-use base::message_proto::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use service::ServiceTmpl;
 use service::{EmptyExtraFieldService, GenericService, Service, Subscriber};
@@ -64,8 +63,8 @@ pub mod display_service;
 #[cfg(windows)]
 pub mod portable_service;
 mod service;
+mod video_lifecycle;
 mod video_qos;
-mod video_pipeline;
 pub mod video_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
@@ -73,13 +72,17 @@ type ConnMap = HashMap<i32, ConnInner>;
 
 #[derive(Clone, Default)]
 pub struct ConnectionMeta {
-    #[cfg(feature = "experimental-quic")]
-    pub(crate) quic_accepted_at: Option<tokio::time::Instant>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) media_registration: Option<xscc_session_transport::host::Registration>,
+
     #[cfg(feature = "test-lan-direct")]
     pub(crate) test_lan: bool,
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
-    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    #[cfg(all(
+        feature = "managed",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
     pub managed_permit: Option<crate::management::SessionPermit>,
 }
 
@@ -170,7 +173,10 @@ pub async fn create_tcp_connection(
         bail!("Encrypted direct handshake is required");
     }
 
-    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    #[cfg(all(
+        feature = "managed",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
     let meta = {
         let mut meta = meta;
         #[cfg(feature = "test-lan-direct")]
@@ -199,9 +205,16 @@ pub async fn create_tcp_connection(
         }
         log::info!("wake up macos");
     }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let transport = crate::session_transport::SessionTransport::accepted(
+        stream,
+        meta.media_registration.clone(),
+    );
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let transport = stream.into();
     Connection::start(
         addr,
-        stream.into(),
+        transport,
         id,
         Arc::downgrade(&server),
         meta,
@@ -210,7 +223,6 @@ pub async fn create_tcp_connection(
     .await;
     Ok(())
 }
-
 
 impl Server {
     fn is_video_service_name(name: &str) -> bool {

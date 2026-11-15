@@ -38,8 +38,7 @@ impl DirectServer {
             allow_err!(super::lan::start_listening());
         });
         scrap::codec::test_av1();
-        #[cfg(all(feature = "experimental-quic", not(any(target_os = "android", target_os = "ios"))))]
-        tokio::spawn(crate::quic_host::run(server.clone()));
+
         direct_server(server).await;
     }
 }
@@ -63,7 +62,10 @@ async fn direct_server(server: ServerPtr) {
     let mut port = 0;
     loop {
         #[cfg(feature = "udp-media")]
-        if _udp_listener.as_ref().is_some_and(crate::udp_host::HostListener::is_finished) {
+        if _udp_listener
+            .as_ref()
+            .is_some_and(xscc_session_transport::host::HostListener::is_finished)
+        {
             log::warn!("Restarting direct listener after UDP media receive task stopped");
             listener = None;
             _udp_listener = None;
@@ -78,7 +80,9 @@ async fn direct_server(server: ServerPtr) {
         if disabled || port != requested_port || restarted {
             listener = None;
             #[cfg(feature = "udp-media")]
-            { _udp_listener = None; }
+            {
+                _udp_listener = None;
+            }
             DIRECT_SERVER_RUNNING.store(false, Ordering::Release);
         }
         if disabled {
@@ -91,14 +95,18 @@ async fn direct_server(server: ServerPtr) {
             match hbb_common::tcp::listen_any(port).await {
                 Ok(bound) => {
                     #[cfg(feature = "udp-media")]
-                    match crate::udp_host::bind(port) {
+                    match xscc_session_transport::host::bind(port) {
                         Ok(udp) => {
                             match udp.local_addr() {
-                                Ok(address) => log::info!("Encrypted UDP media listening on {address}"),
-                                Err(error) => log::warn!("Unable to inspect UDP listener address: {error}"),
+                                Ok(address) => {
+                                    log::info!("Encrypted UDP media listening on {address}")
+                                }
+                                Err(error) => {
+                                    log::warn!("Unable to inspect UDP listener address: {error}")
+                                }
                             }
                             _udp_listener = Some(udp);
-                        },
+                        }
                         Err(error) => {
                             hbb_common::throttled_log!(
                                 std::time::Duration::from_secs(60),
@@ -141,12 +149,18 @@ async fn direct_server(server: ServerPtr) {
                     }
                 };
                 let server = server.clone();
+                let media_registration = _udp_listener
+                    .as_ref()
+                    .map(|listener| listener.registration());
                 tokio::spawn(async move {
                     if let Err(err) = crate::server::create_tcp_connection(
                         server,
                         hbb_common::Stream::from(stream, local_addr),
                         addr,
-                        ConnectionMeta::default(),
+                        ConnectionMeta {
+                            media_registration,
+                            ..Default::default()
+                        },
                     )
                     .await
                     {

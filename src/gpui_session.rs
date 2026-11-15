@@ -62,6 +62,17 @@ impl AsRef<[u8]> for Frame {
         &self.bgra
     }
 }
+impl xscc_session_model::FrameBuffer for Frame {
+    fn extent(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+    fn stride(&self) -> usize {
+        self.stride
+    }
+    fn submission(&self) -> impl FnOnce() + 'static {
+        Frame::submission(self)
+    }
+}
 impl Drop for Frame {
     fn drop(&mut self) {
         // Bound both the number and size of allocations retained after resolution changes.

@@ -1,0 +1,134 @@
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod display_state;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod keyboard_action;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod keyboard_input;
+mod management;
+mod panel;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod pointer_input;
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
+use xscc_native_ui::presentation;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod remote_cursor;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod remote_image;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod remote_keyboard;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_chrome;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_input;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod session_layout;
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "mobile-session"
+))]
+mod session_view;
+use xscc_native_ui::text_field;
+use xscc_native_ui::theme;
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "ios", target_os = "android"),
+        feature = "mobile-session"
+    )
+))]
+mod touch_input;
+
+use gpui::{App, AppContext, WindowOptions};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Runtime ownership belongs to the executable, never to a request or the manager library.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    let directory = management::application_directory();
+    let handle = runtime.handle().clone();
+    gpui::application().run(move |cx: &mut App| {
+        eprintln!("XSCC_GPUI_LAUNCH_CALLBACK_REACHED");
+        #[cfg(not(target_os = "android"))]
+        if let Err(error) = cx.text_system().add_fonts(theme::embedded_fonts()) {
+            eprintln!("Could not load Maple client fonts: {error}");
+            cx.quit();
+            return;
+        }
+        text_field::init(cx);
+        if let Err(error) = cx.open_window(WindowOptions::default(), |window, cx| {
+            cx.new(|cx| panel::Panel::new(directory, handle, window, cx))
+        }) {
+            eprintln!("Could not open the management preview: {error}");
+            cx.quit();
+        } else {
+            eprintln!("XSCC_GPUI_WINDOW_CREATED");
+        }
+    });
+    runtime.shutdown_timeout(std::time::Duration::from_secs(3));
+    Ok(())
+}

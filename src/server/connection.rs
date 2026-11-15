@@ -1,10 +1,7 @@
 mod media_controls;
+use crate::session_transport::{MediaSender, SessionTransport};
 
-use super::{
-    input_service::*,
-    video_pipeline::{ConnectionTransport, VideoWriter},
-    *,
-};
+use super::{input_service::*, *};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::clipboard::{update_clipboard, ClipboardSide};
 #[cfg(target_os = "android")]
@@ -20,8 +17,8 @@ use base::{
     config::keys,
     message_proto::{option_message::BoolOption, permission_info::Permission},
     session_protocol::{
-        LOGIN_MSG_2FA_WRONG, LOGIN_MSG_NO_PASSWORD_ACCESS, LOGIN_MSG_OFFLINE, LOGIN_MSG_PASSWORD_WRONG,
-        LOGIN_SCREEN_WAYLAND, REQUIRE_2FA,
+        LOGIN_MSG_2FA_WRONG, LOGIN_MSG_NO_PASSWORD_ACCESS, LOGIN_MSG_OFFLINE,
+        LOGIN_MSG_PASSWORD_WRONG, LOGIN_SCREEN_WAYLAND, REQUIRE_2FA,
     },
 };
 use cidr_utils::cidr::IpCidr;
@@ -209,7 +206,7 @@ pub struct ConnInner {
     id: i32,
     tx: Option<Sender>,
     tx_video: Option<Sender>,
-    video_writer: Arc<Mutex<Option<VideoWriter>>>,
+    video_writer: Arc<Mutex<Option<MediaSender>>>,
 }
 
 struct InputMouse {
@@ -272,7 +269,7 @@ impl AuthConnType {
 pub struct Connection {
     inner: ConnInner,
     display_idx: usize,
-    stream: ConnectionTransport,
+    stream: SessionTransport,
     rx_video: mpsc::UnboundedReceiver<(Instant, Arc<Message>)>,
     server: super::ServerPtrWeak,
     hash: Hash,
@@ -281,7 +278,10 @@ pub struct Connection {
     authorized: bool,
     #[cfg(feature = "test-lan-direct")]
     test_lan: bool,
-    #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+    #[cfg(all(
+        feature = "managed",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
     managed_permit: Option<crate::management::SessionPermit>,
     // The place among the unauthorized connections; given back at authorization.
     unauthorized_id: Option<UnauthorizedID>,
@@ -420,6 +420,30 @@ fn drm_can_serve_login_screen() -> bool {
 }
 
 impl Connection {
+    fn publish_media_sender(&mut self) -> ResultType<()> {
+        let slot = self.inner.video_writer.clone();
+        let mut published = slot.lock().unwrap();
+        let writer = self
+            .stream
+            .media_sender()
+            .ok_or_else(|| hbb_common::anyhow::anyhow!("UDP media sender unavailable"))?;
+        let id = self.inner.id();
+        let acknowledge = !self.video_ack_required;
+        writer.migrate_video(&mut self.rx_video, |instant, message| {
+            if acknowledge {
+                if let Some(message::Union::VideoFrame(frame)) = &message.union {
+                    video_service::notify_video_frame_fetched(
+                        frame.display as usize,
+                        id,
+                        Some(instant.into()),
+                    );
+                }
+            }
+        })?;
+        *published = Some(writer);
+        Ok(())
+    }
+
     pub async fn start(
         addr: SocketAddr,
         stream: crate::session_transport::SessionTransport,
@@ -428,8 +452,6 @@ impl Connection {
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
     ) {
-        #[cfg(feature = "experimental-quic")]
-        let quic_accepted_at = meta.quic_accepted_at;
         let super::ConnectionMeta {
             control_permissions,
             ..
@@ -468,7 +490,7 @@ impl Connection {
             // Defer display enumeration until login succeeds. Monitor login replaces this
             // with the primary index returned with the refreshed display snapshot.
             display_idx: 0,
-            stream: ConnectionTransport::new(stream),
+            stream,
             rx_video,
             server,
             hash,
@@ -477,7 +499,10 @@ impl Connection {
             authorized: false,
             #[cfg(feature = "test-lan-direct")]
             test_lan: meta.test_lan,
-            #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
+            #[cfg(all(
+                feature = "managed",
+                not(any(target_os = "android", target_os = "ios"))
+            ))]
             managed_permit: meta.managed_permit,
             unauthorized_id: Some(unauthorized),
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
@@ -566,8 +591,6 @@ impl Connection {
             crate::rustdesk_interval(time::interval_at(Instant::now(), TEST_DELAY_TIMEOUT));
         let mut last_recv_time = Instant::now();
         let started = Instant::now();
-        #[cfg(feature = "experimental-quic")]
-        let started = quic_accepted_at.unwrap_or(started);
 
         conn.stream.set_send_timeout(SEND_TIMEOUT_VIDEO);
 
@@ -576,13 +599,7 @@ impl Connection {
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
 
         loop {
-            let video_refresh = conn.stream.video_refresh_requested();
             tokio::select! {
-                displays = video_refresh => {
-                    for display in displays {
-                        conn.refresh_video_display(Some(display));
-                    }
-                }
                 // Both end an unauthorized connection at once, not on the next timer tick:
                 // told to go to make room, or past the grace for its authorization. Neither
                 // fires once the connection has authorized.
@@ -1223,7 +1240,9 @@ impl Connection {
                 self::raii::AuthedConnID::new_when_display_idle(id, auth_conn_type, key, sender)
             })
             .await
-            .map_err(|error| hbb_common::anyhow::anyhow!("Display session registration failed: {error}"))
+            .map_err(|error| {
+                hbb_common::anyhow::anyhow!("Display session registration failed: {error}")
+            })
             .and_then(|result| result);
             match registered {
                 Ok(connection) => self.authed_conn_id = Some(connection),
@@ -1237,7 +1256,8 @@ impl Connection {
             if !self.session_authority_valid() {
                 self.authorized = false;
                 self.authed_conn_id = None;
-                self.send_login_error("Management authorization expired").await;
+                self.send_login_error("Management authorization expired")
+                    .await;
                 return false;
             }
         }
@@ -1321,8 +1341,7 @@ impl Connection {
                 msg = LOGIN_SCREEN_WAYLAND.to_owned()
             } else {
                 let dtype = crate::platform::linux::get_display_server();
-                if dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND
-                {
+                if dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND {
                     msg = format!(
                         "Unsupported display server type \"{}\", wayland expected",
                         dtype
@@ -1385,33 +1404,55 @@ impl Connection {
                     self.display_idx = primary_display_idx;
                     pi.displays = displays;
                     pi.current_display = self.display_idx as _;
+                    pi.session_revision = base::session_protocol::NATIVE_SESSION_REVISION;
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     {
-                        pi.resolutions = Some(pi
-                            .displays
-                            .get(self.display_idx)
-                            .map(|d| crate::platform::session_resolutions(&d.name))
-                            .unwrap_or_default())
-                            .into();
+                        pi.resolutions = Some(
+                            pi.displays
+                                .get(self.display_idx)
+                                .map(|d| crate::platform::session_resolutions(&d.name))
+                                .unwrap_or_default(),
+                        )
+                        .into();
                     }
                     #[cfg(feature = "udp-media")]
                     if self.lr.supports_udp_media {
-                        match self.stream.offer_udp().await {
+                        match self.stream.offer_host().await {
                             Ok(Some(offer)) => {
-                                let limit = self.lr.option.as_ref()
-                                    .and_then(|option| option.bitrate_limit_kbps).unwrap_or(0);
+                                let limit = self
+                                    .lr
+                                    .option
+                                    .as_ref()
+                                    .and_then(|option| option.bitrate_limit_kbps)
+                                    .unwrap_or(0);
                                 if let Err(error) = self.stream.set_media_bitrate_limit(limit) {
-                                    self.send_login_error(&format!("UDP bitrate setup failed: {error:#}")).await;
+                                    self.send_login_error(&format!(
+                                        "UDP bitrate setup failed: {error:#}"
+                                    ))
+                                    .await;
                                     return false;
                                 }
                                 pi.udp_media = Some(offer).into();
-                            },
+                                if let Err(error) = self.publish_media_sender() {
+                                    self.send_login_error(&format!(
+                                        "UDP producer setup failed: {error:#}"
+                                    ))
+                                    .await;
+                                    return false;
+                                }
+                            }
                             Ok(None) => {
-                                self.send_login_error("UDP media is not available on this authenticated connection").await;
+                                self.send_login_error(
+                                    "UDP media is not available on this authenticated connection",
+                                )
+                                .await;
                                 return false;
-                            },
+                            }
                             Err(error) => {
-                                self.send_login_error(&format!("UDP media setup failed: {error:#}")).await;
+                                self.send_login_error(&format!(
+                                    "UDP media setup failed: {error:#}"
+                                ))
+                                .await;
                                 return false;
                             }
                         }
@@ -2022,6 +2063,13 @@ impl Connection {
         }
         // After handling CloseReason messages, proceed to process other message types
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
+            if let Err(error) = base::session_protocol::require_current_session(
+                lr.session_revision,
+                lr.supports_udp_media,
+            ) {
+                self.send_login_error(error).await;
+                return false;
+            }
             if !Self::supports_login_request(&lr) {
                 self.send_login_error("Only remote desktop sessions are supported")
                     .await;
@@ -2065,17 +2113,20 @@ impl Connection {
                 not(any(target_os = "android", target_os = "ios"))
             )))]
             let managed_target = false;
-            if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id() && !managed_target
+            if !crate::common::is_direct_ip_access(&lr.username)
+                && lr.username != Config::get_id()
+                && !managed_target
             {
-                self.send_login_error(LOGIN_MSG_OFFLINE)
-                    .await;
+                self.send_login_error(LOGIN_MSG_OFFLINE).await;
                 return false;
             }
 
             #[cfg(feature = "gpui-host")]
             {
-                if !managed_target || !crate::management::permits_host(self.managed_permit.as_ref()) {
-                    self.send_login_error("Managed authorization is required").await;
+                if !managed_target || !crate::management::permits_host(self.managed_permit.as_ref())
+                {
+                    self.send_login_error("Managed authorization is required")
+                        .await;
                     return false;
                 }
                 // The server-issued permit is the host application's sole admission authority.
@@ -2117,8 +2168,7 @@ impl Connection {
                 if hbb_common::get_version_number(&lr.version)
                     >= hbb_common::get_version_number("1.2.0")
                 {
-                    self.send_login_error(LOGIN_MSG_NO_PASSWORD_ACCESS)
-                        .await;
+                    self.send_login_error(LOGIN_MSG_NO_PASSWORD_ACCESS).await;
                 }
                 return true;
             } else if self.is_recent_session(false) {
@@ -2136,8 +2186,7 @@ impl Connection {
                 if !self.validate_password(allow_logon_screen_password) {
                     self.update_failure(failure, false, 0);
                     self.check_update_temporary_password(false);
-                    self.send_login_error(LOGIN_MSG_PASSWORD_WRONG)
-                        .await;
+                    self.send_login_error(LOGIN_MSG_PASSWORD_WRONG).await;
                     self.try_start_cm(lr.my_id, lr.my_name, false);
                 } else {
                     self.update_failure(failure, true, 0);
@@ -2183,8 +2232,7 @@ impl Connection {
                         }
                     } else {
                         self.update_failure(failure, false, 1);
-                        self.send_login_error(LOGIN_MSG_2FA_WRONG)
-                            .await;
+                        self.send_login_error(LOGIN_MSG_2FA_WRONG).await;
                     }
                 }
             }
@@ -2515,7 +2563,11 @@ impl Connection {
                     }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeDisplayResolution(dr)) => {
-                        self.request_resolution(Some(dr.display as _), dr.resolution.unwrap_or_default()).await;
+                        self.request_resolution(
+                            Some(dr.display as _),
+                            dr.resolution.unwrap_or_default(),
+                        )
+                        .await;
                     }
                     Some(misc::Union::AutoAdjustFps(fps)) => video_service::VIDEO_QOS
                         .lock()
@@ -3008,30 +3060,6 @@ impl Connection {
         if let Ok(mode) = o.streaming_mode.enum_value() {
             if mode != BoolOption::NotSet {
                 let enabled = mode == BoolOption::Yes;
-                let writer_slot = self.inner.video_writer.clone();
-                let mut published = writer_slot.lock().unwrap();
-                let writer = self.stream.set_streaming(enabled);
-                if let Some(writer) = writer.as_ref() {
-                    let id = self.inner.id();
-                    let acknowledge = !self.video_ack_required;
-                    // Old queued reference frames must precede all direct producer frames.
-                    // Discarded references enter keyframe recovery, but still release their old barrier.
-                    allow_err!(
-                        writer.migrate_video(&mut self.rx_video, |instant, message| {
-                            if acknowledge {
-                                if let Some(message::Union::VideoFrame(frame)) = &message.union {
-                                    video_service::notify_video_frame_fetched(
-                                        frame.display as usize,
-                                        id,
-                                        Some(instant.into()),
-                                    );
-                                }
-                            }
-                        })
-                    );
-                }
-                *published = writer;
-                drop(published);
                 video_service::VIDEO_QOS
                     .lock()
                     .unwrap()
@@ -3884,12 +3912,15 @@ pub(crate) fn finish_session_display() -> ResultType<()> {
     }
     let started = Instant::now();
     hbb_common::throttled_log!(
-        Duration::from_secs(1), info, "session_display_cleanup path=host_exit stage=begin"
+        Duration::from_secs(1),
+        info,
+        "session_display_cleanup path=host_exit stage=begin"
     );
     let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))
         .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
     hbb_common::throttled_log!(
-        Duration::from_secs(1), info,
+        Duration::from_secs(1),
+        info,
         "session_display_cleanup path=host_exit stage=capture_idle elapsed_ms={}",
         started.elapsed().as_millis()
     );
@@ -4106,7 +4137,9 @@ mod raii {
             }
             let started = Instant::now();
             hbb_common::throttled_log!(
-                Duration::from_secs(1), info, "session_display_cleanup path=disconnect stage=begin"
+                Duration::from_secs(1),
+                info,
+                "session_display_cleanup path=disconnect stage=begin"
             );
             let _idle = match video_service::wait_for_capture_idle(Duration::from_secs(5)) {
                 Ok(idle) => idle,
@@ -4123,7 +4156,8 @@ mod raii {
                 return;
             }
             hbb_common::throttled_log!(
-                Duration::from_secs(1), info,
+                Duration::from_secs(1),
+                info,
                 "session_display_cleanup path=disconnect stage=capture_idle elapsed_ms={}",
                 started.elapsed().as_millis()
             );
@@ -4138,7 +4172,9 @@ mod raii {
                     }
                 };
             if let Err(error) = virtual_display_manager::prepare_session_display_removal(&_idle) {
-                log::error!("Virtual display topology preparation failed; devices retained: {error:#}");
+                log::error!(
+                    "Virtual display topology preparation failed; devices retained: {error:#}"
+                );
                 return;
             }
             display_service::discard_detached_resolution_changes(&temporary_resolutions);
@@ -4501,8 +4537,7 @@ mod test {
             let addr: SocketAddr = format!("192.0.2.{}:1", i + 1).parse().unwrap();
             let server = server.clone();
             handshakes.push(tokio::spawn(async move {
-                crate::server::create_tcp_connection(server, served, addr, Default::default())
-                    .await
+                crate::server::create_tcp_connection(server, served, addr, Default::default()).await
             }));
         }
         for _ in 0..200 {
@@ -4559,8 +4594,7 @@ mod test {
         let (mut controller, (accepted, addr)) = (controller.unwrap(), accepted.unwrap());
         let served = Stream::Tcp(hbb_common::tcp::FramedStream::from(accepted, addr));
         let handshake = tokio::spawn(async move {
-            crate::server::create_tcp_connection(server, served, addr, Default::default())
-                .await
+            crate::server::create_tcp_connection(server, served, addr, Default::default()).await
         });
         let n = MAX_UNAUTHORIZED_MESSAGE + 1;
         controller

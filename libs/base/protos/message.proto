@@ -78,8 +78,9 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
-  // Media remains on TCP for older peers that do not advertise this capability.
+  // Current native sessions require authenticated UDP media.
   bool supports_udp_media = 18;
+  uint32 session_revision = 19;
 }
 
 // Public nonce only. Keys are derived locally from the authenticated TCP session.
@@ -150,6 +151,7 @@ message PeerInfo {
   string platform_additions = 12;
   WindowsSessions windows_sessions = 13;
   UdpMediaOffer udp_media = 14;
+  uint32 session_revision = 15;
 }
 
 message WindowsSession {  

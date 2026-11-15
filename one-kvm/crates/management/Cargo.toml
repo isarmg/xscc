@@ -7,7 +7,7 @@ license = "AGPL-3.0-only"
 publish = false
 
 [workspace]
-members = ["vendor/client", "vendor/native", "vendor/protocol"]
+members = []
 resolver = "3"
 
 [dependencies]
@@ -22,8 +22,8 @@ thiserror = "2.0.21"
 tokio = { version = "~1.53.2", features = ["rt", "sync", "time", "macros"] }
 uuid = { version = "1.27.0", features = ["v4", "serde"] }
 zeroize = "1.9.1"
-xscc = { path = "vendor/client" }
-xscc-native-management = { path = "vendor/native" }
+xscc = { path = "../../../crates/management" }
+xscc-native-management = { path = "../../../crates/native-management" }
 
 [dev-dependencies]
 axum = { version = "0.8.9", features = ["ws"] }

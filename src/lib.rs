@@ -1,4 +1,8 @@
-#[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session", feature = "flutter"))]
+#[cfg(all(
+    any(target_os = "ios", target_os = "android"),
+    feature = "gpui-mobile-session",
+    feature = "flutter"
+))]
 compile_error!("GPUI mobile sessions must be built without the Flutter feature");
 
 #[cfg(not(any(
@@ -19,8 +23,8 @@ pub mod management;
 pub mod platform;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use platform::{
-    clip_cursor, get_cursor, get_cursor_data, get_cursor_pos, get_focused_display,
-    set_cursor_pos, start_os_service,
+    clip_cursor, get_cursor, get_cursor_data, get_cursor_pos, get_focused_display, set_cursor_pos,
+    start_os_service,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 /// cbindgen:ignore
@@ -29,39 +33,50 @@ mod server;
 pub use self::server::*;
 #[cfg(all(
     feature = "gpui-session",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+pub mod gpui_host;
+#[cfg(all(
+    feature = "gpui-session",
+    not(any(target_os = "android", target_os = "ios"))
+))]
+pub mod gpui_management;
+#[cfg(all(
+    feature = "gpui-session",
     any(
         not(any(target_os = "android", target_os = "ios")),
-        all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")
+        all(
+            any(target_os = "ios", target_os = "android"),
+            feature = "gpui-mobile-session"
+        )
     )
 ))]
 pub mod gpui_session;
-#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
-pub mod gpui_host;
-#[cfg(all(feature = "gpui-session", not(any(target_os = "android", target_os = "ios"))))]
-pub mod gpui_management;
-#[cfg(all(feature = "test-lan-direct", any(feature = "gpui-mobile-session", not(any(target_os = "android", target_os = "ios")))))]
+#[cfg(all(
+    feature = "test-lan-direct",
+    any(
+        feature = "gpui-mobile-session",
+        not(any(target_os = "android", target_os = "ios"))
+    )
+))]
 mod test_lan;
-#[cfg(all(feature = "udp-media", feature = "experimental-quic"))]
-compile_error!("UDP media and the archived QUIC experiment are mutually exclusive");
-#[cfg(all(feature = "udp-media", not(any(target_os = "android", target_os = "ios"))))]
-mod udp_host;
+
 mod client;
-pub(crate) mod session_transport;
-#[cfg(all(feature = "experimental-quic", not(any(target_os = "android", target_os = "ios"))))]
-mod quic_host;
-mod lan;
+pub(crate) use xscc_session_transport as session_transport;
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod direct_server;
+mod lan;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub use self::direct_server::*;
 /// cbindgen:ignore
 pub mod common;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod ipc;
-pub(crate) mod update_metadata;
-pub(crate) mod update_hash;
 #[cfg(target_os = "macos")]
 mod manual_update;
+pub(crate) mod update_hash;
+pub(crate) mod update_metadata;
 mod version;
 pub use version::*;
 #[cfg(feature = "flutter")]

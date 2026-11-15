@@ -2,6 +2,17 @@ use crate::message_proto::{message, misc, Message};
 
 pub mod virtual_display;
 
+pub const NATIVE_SESSION_REVISION: u32 = 4;
+
+/// The native contract has no legacy TCP-media or version negotiation path.
+pub fn require_current_session(revision: u32, udp_media: bool) -> hbb_common::ResultType<()> {
+    if revision != NATIVE_SESSION_REVISION || !udp_media {
+        hbb_common::bail!("Native session v4 with UDP media is required; update both endpoints");
+    }
+    Ok(())
+}
+
+
 /// Millisecond-based capture pacing must retain a nonzero frame interval.
 /// This transport bound is independent of the display's supported refresh rates.
 pub const MAX_SESSION_FPS: u32 = 1000;
@@ -100,5 +111,16 @@ mod retired_role_switch_tests {
         let mut delay = Message::new();
         delay.set_test_delay(TestDelay::default());
         assert!(!is_legacy_role_switch_message(&delay));
+    }
+}
+
+#[cfg(test)]
+mod current_session_tests {
+    use super::*;
+    #[test]
+    fn native_contract_rejects_old_future_and_tcp_only_peers() {
+        require_current_session(NATIVE_SESSION_REVISION,true).unwrap();
+        for revision in [0,1,2,3,5,u32::MAX] { assert!(require_current_session(revision,true).is_err()); }
+        assert!(require_current_session(NATIVE_SESSION_REVISION,false).is_err());
     }
 }

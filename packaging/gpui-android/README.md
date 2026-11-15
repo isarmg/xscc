@@ -62,7 +62,7 @@ alone is not evidence. Physical-device IME behavior and logcat still need testin
 
 The management flavor uses `org.sarmg.xscc.gpui.preview` and displays
 “XSCC 控制端预览”. It builds the Android library from
-`experiments/gpui-mobile-management` with `mobile-management,mobile-session`, reusing the
+`apps/mobile` with `mobile-management,mobile-session`, reusing the
 native management UI. This preview includes the existing software-video receive/decode path and
 pointer/touch controls, natural software-keyboard commits and a control-key bar,
 but no desktop hosting. Unmodified, non-repeating Enter/Tab events also support

@@ -18,6 +18,9 @@ impl RustDeskHost for ProbeHost {
 }
 #[async_trait]
 impl NativeHost for ProbeHost {
+    fn identity(&self) -> xscc_native_management::identity::ApplicationIdentity {
+        xscc_native_management::identity::ApplicationIdentity { backend: xscc::protocol::Backend::Rustdesk, role: xscc::protocol::InstanceRole::Controller }
+    }
     async fn addresses(&self, _: &[HostAddress]) -> Vec<HostAddress> {
         Vec::new()
     }

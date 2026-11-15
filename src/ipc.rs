@@ -217,7 +217,7 @@ pub enum DataPortableService {
 #[serde(tag = "t", content = "c")]
 pub enum Data {
     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
-    Managed(crate::management::Request),
+    Managed(crate::management::OwnerRequest),
     #[cfg(all(feature = "managed", not(any(target_os = "android", target_os = "ios"))))]
     ManagedReply(crate::management::Reply),
     Login {

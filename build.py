@@ -3,8 +3,8 @@
 if __name__ == "__main__":
     raise SystemExit(
         "Legacy Flutter packaging has been retired; XSCC uses GPUI.\n"
-        "Controller: cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features live-session\n"
-        "Host: cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features native-host\n"
+        "Controller: cargo run --locked --manifest-path apps/desktop/Cargo.toml --features live-session\n"
+        "Host: cargo run --locked --manifest-path apps/desktop/Cargo.toml --features native-host\n"
         "Native packages are built by the gpui-* platform workflows."
     )
 

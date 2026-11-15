@@ -14,39 +14,39 @@ use xscs_protocol::*;
 #[test]
 fn cleartext_management_connections_are_limited_to_loopback_and_private_ip_literals() {
     for endpoint in [
-        "wss://manager.example/xscc/v2/connect",
-        "ws://localhost:18104/xscc/v2/connect",
-        "ws://127.0.0.1:18104/xscc/v2/connect",
-        "ws://[::1]:18104/xscc/v2/connect",
-        "ws://10.0.0.1:18104/xscc/v2/connect",
-        "ws://172.16.0.1:18104/xscc/v2/connect",
-        "ws://172.31.255.254:18104/xscc/v2/connect",
-        "ws://192.168.31.245:18104/xscc/v2/connect",
-        "ws://[fc00::1]:18104/xscc/v2/connect",
-        "ws://[fdff::1]:18104/xscc/v2/connect",
+        "wss://manager.example/xscc/v4/connect",
+        "ws://localhost:18104/xscc/v4/connect",
+        "ws://127.0.0.1:18104/xscc/v4/connect",
+        "ws://[::1]:18104/xscc/v4/connect",
+        "ws://10.0.0.1:18104/xscc/v4/connect",
+        "ws://172.16.0.1:18104/xscc/v4/connect",
+        "ws://172.31.255.254:18104/xscc/v4/connect",
+        "ws://192.168.31.245:18104/xscc/v4/connect",
+        "ws://[fc00::1]:18104/xscc/v4/connect",
+        "ws://[fdff::1]:18104/xscc/v4/connect",
     ] {
         assert!(ManagerConnection::new(endpoint, Zeroizing::new("a".repeat(64))).is_ok());
     }
     for endpoint in [
-        "ws://manager.example/xscc/v2/connect",
-        "ws://8.8.8.8:18104/xscc/v2/connect",
-        "ws://0.0.0.0:18104/xscc/v2/connect",
-        "ws://172.15.255.255:18104/xscc/v2/connect",
-        "ws://172.32.0.0:18104/xscc/v2/connect",
-        "ws://192.169.0.0:18104/xscc/v2/connect",
-        "ws://169.254.1.1:18104/xscc/v2/connect",
-        "ws://100.64.0.1:18104/xscc/v2/connect",
-        "ws://[2001:db8::1]:18104/xscc/v2/connect",
-        "ws://[fe80::1]:18104/xscc/v2/connect",
-        "ws://[::ffff:192.168.31.245]:18104/xscc/v2/connect",
-        "ws://192.168.31.245.example.com:18104/xscc/v2/connect",
-        "ws://user:secret@192.168.31.245:18104/xscc/v2/connect",
-        "ws://192.168.31.245:18104/xscc/v2/connect?token=x",
-        "ws://192.168.31.245:18104/xscc/v2/connect#fragment",
+        "ws://manager.example/xscc/v4/connect",
+        "ws://8.8.8.8:18104/xscc/v4/connect",
+        "ws://0.0.0.0:18104/xscc/v4/connect",
+        "ws://172.15.255.255:18104/xscc/v4/connect",
+        "ws://172.32.0.0:18104/xscc/v4/connect",
+        "ws://192.169.0.0:18104/xscc/v4/connect",
+        "ws://169.254.1.1:18104/xscc/v4/connect",
+        "ws://100.64.0.1:18104/xscc/v4/connect",
+        "ws://[2001:db8::1]:18104/xscc/v4/connect",
+        "ws://[fe80::1]:18104/xscc/v4/connect",
+        "ws://[::ffff:192.168.31.245]:18104/xscc/v4/connect",
+        "ws://192.168.31.245.example.com:18104/xscc/v4/connect",
+        "ws://user:secret@192.168.31.245:18104/xscc/v4/connect",
+        "ws://192.168.31.245:18104/xscc/v4/connect?token=x",
+        "ws://192.168.31.245:18104/xscc/v4/connect#fragment",
         "ws://192.168.31.245:18104/other",
-        "ws://localhost.example.com:18104/xscc/v2/connect",
-        "ws://user:secret@localhost:18104/xscc/v2/connect",
-        "ws://localhost:18104/xscc/v2/connect?token=x",
+        "ws://localhost.example.com:18104/xscc/v4/connect",
+        "ws://user:secret@localhost:18104/xscc/v4/connect",
+        "ws://localhost:18104/xscc/v4/connect?token=x",
         "ws://localhost:18104/other",
     ] {
         assert!(ManagerConnection::new(endpoint, Zeroizing::new("a".repeat(64))).is_err());
@@ -137,6 +137,7 @@ async fn revoked_session_finishes_owned_execution_before_returning() {
             installation_id: uuid::Uuid::new_v4(),
         };
         let caps = Capabilities {
+            role: xscs_protocol::InstanceRole::Controlled,
             protocol: PROTOCOL.into(),
             client_version: "test".into(),
             os: ClientOs::LinuxX86_64,
@@ -236,6 +237,7 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
             installation_id: uuid::Uuid::new_v4(),
         };
         let caps = Capabilities {
+            role: xscs_protocol::InstanceRole::Controller,
             protocol: PROTOCOL.into(),
             client_version: "test".into(),
             os: ClientOs::LinuxX86_64,
@@ -265,7 +267,7 @@ async fn embedded_execution_survives_socket_replacement_and_commits_the_receipt(
             facts.clone(),
         ));
         let connection = ManagerConnection::new(
-            "wss://manager.example/xscc/v2/connect",
+            "wss://manager.example/xscc/v4/connect",
             Zeroizing::new("a".repeat(64)),
         )
         .unwrap();
@@ -452,6 +454,7 @@ async fn address_heartbeats_follow_role_and_observation_freshness() {
             installation_id: uuid::Uuid::new_v4(),
         };
         let caps = Capabilities {
+            role,
             protocol: PROTOCOL.into(),
             client_version: "test".into(),
             os: ClientOs::LinuxX86_64,
@@ -470,7 +473,7 @@ async fn address_heartbeats_follow_role_and_observation_freshness() {
             Facts::default(),
         ));
         let connection = ManagerConnection::new(
-            "wss://manager.example/xscc/v2/connect",
+            "wss://manager.example/xscc/v4/connect",
             Zeroizing::new("a".repeat(64)),
         )
         .unwrap();

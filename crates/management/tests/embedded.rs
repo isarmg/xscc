@@ -57,6 +57,7 @@ fn fixture() -> (Binding, Capabilities, Task) {
         installation_id: uuid::Uuid::new_v4(),
     };
     let capabilities = Capabilities {
+        role: xscs_protocol::InstanceRole::Controlled,
         protocol: PROTOCOL.into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         os: ClientOs::LinuxX86_64,
@@ -163,15 +164,15 @@ async fn inspection_without_host_execution_facts_stays_unknown() {
 fn manager_endpoint_remains_a_protected_tls_channel() {
     use xscc::transport::{ManagerConnection, validate_manager_endpoint};
     for endpoint in [
-        "ws://manager.example/xscc/v2/connect",
-        "wss://user:password@manager.example/xscc/v2/connect",
+        "ws://manager.example/xscc/v4/connect",
+        "wss://user:password@manager.example/xscc/v4/connect",
         "wss://manager.example/xscc/v1/connect",
     ] {
         assert!(validate_manager_endpoint(&url::Url::parse(endpoint).unwrap()).is_err());
     }
     assert!(
         ManagerConnection::new(
-            "wss://manager.example/xscc/v2/connect",
+            "wss://manager.example/xscc/v4/connect",
             zeroize::Zeroizing::new("a".repeat(64))
         )
         .is_ok()

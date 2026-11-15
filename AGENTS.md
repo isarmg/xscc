@@ -11,8 +11,8 @@
 * `src/` Rust app
 * `src/server/` audio / clipboard / input / video / network
 * `src/platform/` platform-specific code
-* `experiments/gpui-validation/` GPUI desktop controller and host application
-* `experiments/gpui-mobile-management/` GPUI Android and iOS client
+* `apps/desktop/` GPUI desktop controller and host application
+* `apps/mobile/` GPUI Android and iOS client
 * `flutter/` archived frontend source and fixtures; outside product builds
 * `libs/hbb_common/` shared with the server: rendezvous proto, sockets, `Config` core
 * `libs/base/` (crate `base`) application-shared: option keys, message proto, platform code
@@ -35,9 +35,9 @@ host or client application code.
 
 ### UI Architecture
 - **UI**: GPUI native applications.
-  - Desktop: `experiments/gpui-validation/`; `live-session` builds the controller and `native-host` builds the host.
-  - Mobile client: `experiments/gpui-mobile-management/` with `mobile-session`.
-  - Framework source: `vendor/gpui/`; shared application presentation and interaction live in `experiments/shared/`.
+  - Desktop: `apps/desktop/`; `live-session` builds the controller and `native-host` builds the host.
+  - Mobile client: `apps/mobile/` with `mobile-session`.
+  - Framework source: `vendor/gpui/`; shared application presentation and interaction live in `crates/native-ui/`; frame ownership contracts live in `crates/session-model/`.
   - The root `rustdesk` crate supplies core/media APIs; its old binary is not a GUI entry point.
 
 ## Rust Rules

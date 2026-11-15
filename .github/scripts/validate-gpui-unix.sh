@@ -4,7 +4,7 @@ set -euo pipefail
 target=$1
 features=$2
 core_features=$3
-manifest=experiments/gpui-validation/Cargo.toml
+manifest=apps/desktop/Cargo.toml
 cargo fmt --manifest-path "$manifest" -- --check
 # Preserve the codec-only feature boundary previously checked by the retired UI build.
 cargo check --locked -p scrap --lib --no-default-features --target "$target"
@@ -91,5 +91,5 @@ case "${XSCC_PACKAGE_MODE:-managed}" in
     test-lan-direct) features+=,test-lan-direct ;;
     *) echo 'Invalid package mode' >&2; exit 2 ;;
 esac
-cargo build --locked --release --manifest-path "$manifest" --no-default-features --features "$features" --bin xscc-gpui-validation --target "$target"
-python3 .github/scripts/test-gpui-unix-cli.py "${CARGO_TARGET_DIR:?}/$target/release/xscc-gpui-validation"
+cargo build --locked --release --manifest-path "$manifest" --no-default-features --features "$features" --bin xscc-desktop --target "$target"
+python3 .github/scripts/test-gpui-unix-cli.py "${CARGO_TARGET_DIR:?}/$target/release/xscc-desktop"

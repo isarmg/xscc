@@ -28,10 +28,10 @@ From the repository root:
 .github/scripts/check-gpui-linux.sh preflight
 .github/scripts/check-gpui-linux.sh check all
 .github/scripts/check-gpui-linux.sh test all
-cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features live-session
-.github/scripts/package-gpui-linux.sh controller 0.1.0-beta.5 /path/to/release/xscc-gpui-validation /path/to/artifacts
-cargo build --locked --release --manifest-path experiments/gpui-validation/Cargo.toml --features native-host
-.github/scripts/package-gpui-linux.sh host 0.1.0-beta.5 /path/to/release/xscc-gpui-validation /path/to/artifacts
+cargo build --locked --release --manifest-path apps/desktop/Cargo.toml --features live-session
+.github/scripts/package-gpui-linux.sh controller 0.1.0-beta.5 /path/to/release/xscc-desktop /path/to/artifacts
+cargo build --locked --release --manifest-path apps/desktop/Cargo.toml --features native-host
+.github/scripts/package-gpui-linux.sh host 0.1.0-beta.5 /path/to/release/xscc-desktop /path/to/artifacts
 ```
 
 Package each executable immediately after its role-specific build: both builds

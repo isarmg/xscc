@@ -16,6 +16,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
           toolchain: 1.99.0
+      - name: Validate system ownership boundaries
+        run: python3 .github/scripts/check-system-architecture.py
       - name: Validate workspace layout
         shell: bash
         run: |
@@ -55,9 +57,9 @@ jobs:
         with:
           toolchain: 1.99.0
           components: rustfmt,clippy
-      - run: cargo fmt -p xscc -p xscc-native-management -- --check
-      - run: cargo clippy --locked -p xscc -p xscc-native-management --all-targets -- -D warnings
-      - run: cargo test --locked -p xscc -p xscc-native-management
+      - run: cargo fmt -p xscc -p xscc-native-management -p xscc-session-model -p xscc-session-transport -- --check
+      - run: cargo clippy --locked --no-deps -p xscc -p xscc-native-management -p xscc-session-model -p xscc-session-transport --all-targets -- -D warnings
+      - run: cargo test --locked -p xscc -p xscc-native-management -p xscc-session-model -p xscc-session-transport
   mobile:
     strategy:
       fail-fast: false
@@ -90,4 +92,4 @@ jobs:
         run: |
           echo "CC_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
-      - run: cargo clippy --locked -p xscc -p xscc-native-management --target ${{ matrix.target }} --all-targets -- -D warnings
+      - run: cargo clippy --locked --no-deps -p xscc -p xscc-native-management --target ${{ matrix.target }} --all-targets -- -D warnings

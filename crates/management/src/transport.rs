@@ -329,6 +329,7 @@ impl ManagerConnection {
                             ManagerMessage::Revoked {} => return Err(TransportError::Revoked),
                             ManagerMessage::AccessPolicy { policy } => {
                                 policy.validate(binding).map_err(|_| TransportError::Protocol)?;
+                                if policy.role != capabilities.role { return Err(TransportError::Protocol); }
                                 publish_policy(&self.access, Some(AccessObservation { policy: *policy, received_at: Instant::now(), current: Arc::new(AtomicBool::new(true)) }));
                             }
                             ManagerMessage::ResultAccepted { operation_id, fingerprint, report_digest, finalized } => {

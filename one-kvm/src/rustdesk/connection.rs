@@ -6,14 +6,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use futures::StreamExt;
 use parking_lot::RwLock;
 use protobuf::Message as ProtobufMessage;
 use sodiumoxide::crypto::box_;
+#[cfg(test)]
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
-use tokio_util::codec::FramedRead;
 use tracing::{debug, error, info, warn};
 
 use crate::audio::AudioController;
@@ -25,8 +24,7 @@ use crate::video::codec_constraints::{encoder_codec_to_id, encoder_codec_to_vide
 use crate::video::stream_manager::VideoStreamManager;
 
 #[cfg(test)]
-use super::bytes_codec::read_frame_with_limit;
-use super::bytes_codec::{write_frame_vectored, BytesCodec};
+use super::bytes_codec::write_frame_vectored;
 use super::config::RustDeskConfig;
 use super::crypto::{self, KeyPair, SigningKeyPair};
 use super::frame_adapters::{AudioFrameAdapter, VideoCodec, VideoFrameAdapter};
@@ -82,7 +80,7 @@ impl RustDeskCompatibilityPlatform {
 }
 
 const RUSTDESK_COMPATIBILITY: RustDeskCompatibility = RustDeskCompatibility {
-    version: "1.4.5",
+    version: "4.0.0",
     platform: RustDeskCompatibilityPlatform::Windows,
 };
 
@@ -161,6 +159,7 @@ pub enum ConnectionMode {
 pub struct Connection {
     managed: Option<Arc<one_kvm_management::ManagedKvm>>,
     managed_permit: Option<one_kvm_management::SessionPermit>,
+    media_registration: Option<xscc_session_transport::host::Registration>,
     /// Connection ID
     id: u32,
     /// Our device ID (RustDesk ID)
@@ -274,6 +273,7 @@ impl Connection {
         Self {
             managed: None,
             managed_permit: None,
+            media_registration: None,
             id,
             device_id: config.device_id.clone(),
             peer_id: String::new(),
@@ -330,187 +330,101 @@ impl Connection {
     /// Handle an incoming TCP connection
     pub async fn handle_tcp(
         &mut self,
-        mut stream: TcpStream,
+        stream: TcpStream,
         peer_addr: SocketAddr,
     ) -> anyhow::Result<()> {
-        info!("New connection from {}", peer_addr);
+        use xscc_session_transport::SessionTransport;
         stream.set_nodelay(true)?;
         *self.state.write() = ConnectionState::Handshaking;
-
-        let managed_transport = if let Some(manager) = &self.managed {
-            let signing = self
-                .signing_keypair
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Managed host signing identity unavailable"))?;
-            Some(super::managed::accept(&mut stream, manager, signing, &self.device_id).await?)
-        } else {
-            None
-        };
-
-        let (reader, writer) = stream.into_split();
-        // Retain both the partially consumed header and buffered payload when
-        // timers or shutdown checks win select! before the next frame arrives.
-        let mut reader = FramedRead::new(reader, BytesCodec::new());
-        let mut shutdown_rx = self.shutdown_tx.subscribe();
-        if *shutdown_rx.borrow() {
-            *self.state.write() = ConnectionState::Closed;
-            return Ok(());
-        }
-
-        // Keep socket writes out of the input loop. A congested video path must
-        // never prevent us from reading keyboard and mouse events.
-        let (control_tx, control_rx) = mpsc::channel::<WriterCommand>(32);
-        // Absorb short encoder/socket scheduling bursts without treating a
-        // momentarily busy writer as a broken inter-frame sequence.
-        let (video_tx, video_rx) = mpsc::channel::<Bytes>(4);
-        let (audio_tx, audio_rx) = mpsc::channel::<Bytes>(8);
-        let mut writer_task = tokio::spawn(run_connection_writer(
-            writer, control_rx, video_rx, audio_rx,
-        ));
-
-        if let Some(transport) = managed_transport {
-            self.session_key = Some(transport.receive_key);
-            self.dec_seqnum = 2;
-            self.managed_permit = Some(transport.permit);
-            self.password.clear();
-            control_tx
-                .send(WriterCommand::SetManagedKey(transport.send_key))
-                .await
-                .map_err(|_| anyhow::anyhow!("Managed writer unavailable"))?;
-            let hash = self.create_hash_message().write_to_bytes()?;
-            self.send_encrypted(&control_tx, &hash).await?;
-        } else {
-            match self.mode {
-                ConnectionMode::Secure => {
-                    // ID-server and relay connections authenticate our ephemeral key through hbbs.
-                    let signed_id_msg = self.create_signed_id_message(&self.device_id.clone());
-                    let signed_id_bytes = signed_id_msg
-                        .write_to_bytes()
-                        .map_err(|e| anyhow::anyhow!("Failed to encode SignedId: {}", e))?;
-                    debug!("Sending SignedId with device_id={}", self.device_id);
-                    self.send_framed(&control_tx, &signed_id_bytes).await?;
-                }
-                ConnectionMode::DirectIp => {
-                    // Standard RustDesk direct-IP clients do not perform the signed-ID handshake.
-                    // They expect password authentication to start immediately.
-                    let hash_msg = self.create_hash_message();
-                    let hash_bytes = hash_msg
-                        .write_to_bytes()
-                        .map_err(|e| anyhow::anyhow!("Failed to encode Hash: {}", e))?;
-                    debug!("Sending password challenge for direct IP connection");
-                    self.send_framed(&control_tx, &hash_bytes).await?;
-                }
-            }
-        }
-
+        let manager = self
+            .managed
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("managed native session required"))?;
+        let signing = self
+            .signing_keypair
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("host signing identity unavailable"))?;
+        let local = stream.local_addr()?;
+        let (stream, permit) = super::managed::accept(
+            hbb_common::Stream::from(stream, local),
+            &manager,
+            signing,
+            &self.device_id,
+        )
+        .await?;
+        self.managed_permit = Some(permit);
+        self.password.clear();
+        let mut transport = SessionTransport::accepted(stream, self.media_registration.clone());
+        transport.set_send_timeout(10_000);
+        transport.send(&self.create_hash_message()).await?;
+        let mut shutdown = self.shutdown_tx.subscribe();
+        let (control_tx, mut control) = mpsc::channel::<WriterCommand>(32);
+        let (video_tx, mut video) = mpsc::channel::<Bytes>(4);
+        let (audio_tx, mut audio) = mpsc::channel::<Bytes>(8);
         let mut video_streaming = false;
         let mut audio_streaming = false;
-
-        // Timer for sending TestDelay to measure round-trip latency
-        // RustDesk clients display this delay information
-        let mut test_delay_interval = tokio::time::interval(Duration::from_secs(1));
-        test_delay_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut mouse_flush_interval =
-            tokio::time::interval(Duration::from_millis(DEFAULT_MOUSE_THROTTLE_MS));
-        mouse_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        let handshake_deadline = tokio::time::sleep(HANDSHAKE_TIMEOUT);
-        tokio::pin!(handshake_deadline);
-
-        loop {
-            let packet_limit = if self.state() == ConnectionState::Active {
-                MAX_AUTHENTICATED_PACKET_LENGTH
-            } else {
-                MAX_UNAUTHENTICATED_PACKET_LENGTH
-            };
-            reader.decoder_mut().set_max_packet_length(packet_limit);
-            tokio::select! {
-                // Read framed message from client using RustDesk's variable-length encoding
-                result = reader.next() => {
-                    match result {
-                        Some(Ok(msg_buf)) => {
-                            if let Err(e) = self.handle_message_arc(&msg_buf, &control_tx, &video_tx, &mut video_streaming, &audio_tx, &mut audio_streaming).await {
-                                error!("Error handling message: {}", e);
-                                break;
+        let mut delay = tokio::time::interval(Duration::from_secs(1));
+        delay.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut mouse = tokio::time::interval(Duration::from_millis(DEFAULT_MOUSE_THROTTLE_MS));
+        mouse.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let deadline = tokio::time::sleep(HANDSHAKE_TIMEOUT);
+        tokio::pin!(deadline);
+        let result: anyhow::Result<()> = async {
+            loop {
+                if *shutdown.borrow() {break;}
+                transport.set_max_packet_length(if self.state()==ConnectionState::Active {MAX_AUTHENTICATED_PACKET_LENGTH} else {MAX_UNAUTHENTICATED_PACKET_LENGTH});
+                tokio::select! {
+                    biased;
+                    _=shutdown.changed()=>break,
+                    _=&mut deadline,if self.state()!=ConnectionState::Active=>anyhow::bail!("native login timed out"),
+                    command=control.recv()=>match command {
+                        Some(WriterCommand::Send {data,..})=>{
+                            let mut message=HbbMessage::parse_from_tokio_bytes(&data)?;
+                            if let Some(message::Union::LoginResponse(response))=&mut message.union {
+                                if let Some(login_response::Union::PeerInfo(peer))=&mut response.union {
+                                    peer.session_revision=base::session_protocol::NATIVE_SESSION_REVISION;
+                                    peer.udp_media=transport.offer_host().await?.ok_or_else(||anyhow::anyhow!("UDP media listener required"))?.into();
+                                }
                             }
+                            transport.send(&message).await?;
                         }
-                        None => {
-                            if self.state() == ConnectionState::Handshaking {
-                                warn!("Connection closed by peer DURING HANDSHAKE - signature verification likely failed on client side");
-                            } else {
-                                info!("Connection closed by peer");
-                            }
-                            break;
-                        }
-                        Some(Err(e)) => {
-                            error!("Read error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                // Send TestDelay periodically to measure latency
-                _ = test_delay_interval.tick() => {
-                    if !self.managed_authorized() { break; }
-                    if self.state() == ConnectionState::Active && self.last_test_delay_sent.is_none() {
-                        if let Err(e) = self.send_test_delay(&control_tx).await {
-                            warn!("Failed to send TestDelay: {}", e);
-                        }
-                    }
-                }
-
-                _ = mouse_flush_interval.tick(), if self.pending_mouse_move.is_some() => {
-                    if let Some(mouse_event) = self.pending_mouse_move.take() {
-                        self.send_mouse_event_to_hid(&mouse_event).await;
-                        self.input_throttler.mark_mouse_sent();
-                    }
-                }
-
-                _ = &mut handshake_deadline, if self.state() != ConnectionState::Active => {
-                    warn!("RustDesk handshake timed out for {}", peer_addr);
-                    break;
-                }
-
-                result = &mut writer_task => {
-                    match result {
-                        Ok(Ok(())) => debug!("RustDesk writer stopped for {}", peer_addr),
-                        Ok(Err(error)) => warn!("RustDesk writer failed for {}: {}", peer_addr, error),
-                        Err(error) => warn!("RustDesk writer task failed for {}: {}", peer_addr, error),
-                    }
-                    break;
-                }
-
-                // Shutdown signal
-                _ = shutdown_rx.changed() => {
-                    info!("Connection shutdown requested");
-                    break;
+                        Some(WriterCommand::Shutdown)|None=>break,
+                        _=>anyhow::bail!("key exchange already completed"),
+                    },
+                    packet=transport.next()=>{
+                        let Some(packet)=packet else {break;};let packet=packet?;
+                        self.handle_message_arc(&packet,&control_tx,&video_tx,&mut video_streaming,&audio_tx,&mut audio_streaming).await?;
+                    },
+                    _=delay.tick()=>{
+                        if !self.managed_authorized(){anyhow::bail!("session authorization expired");}
+                        if self.state()==ConnectionState::Active && self.last_test_delay_sent.is_none(){self.send_test_delay(&control_tx).await?;}
+                    },
+                    _=mouse.tick(),if self.pending_mouse_move.is_some()=>{
+                        if let Some(event)=self.pending_mouse_move.take(){self.send_mouse_event_to_hid(&event).await;self.input_throttler.mark_mouse_sent();}
+                    },
+                    Some(bytes)=audio.recv()=>transport.send(&HbbMessage::parse_from_tokio_bytes(&bytes)?).await?,
+                    Some(bytes)=video.recv()=>transport.send(&HbbMessage::parse_from_tokio_bytes(&bytes)?).await?,
                 }
             }
-        }
-
-        // Stop video streaming task if running
+            Ok(())
+        }.await;
+        transport.revoke_media();
         if let Some(task) = self.video_task.take() {
             task.abort();
+            let _ = task.await;
         }
-
-        // Stop audio streaming task if running
         if let Some(task) = self.audio_task.take() {
             task.abort();
+            let _ = task.await;
         }
-
-        let _ = control_tx.try_send(WriterCommand::Shutdown);
-        if !writer_task.is_finished() {
-            match tokio::time::timeout(Duration::from_secs(1), &mut writer_task).await {
-                Ok(_) => {}
-                Err(_) => {
-                    writer_task.abort();
-                    let _ = writer_task.await;
-                }
-            }
-        }
-
         *self.state.write() = ConnectionState::Closed;
-        Ok(())
+        if let Err(error) = &result {
+            warn!(
+                "Native connection {} ({}) ended: {error:#}",
+                self.id, peer_addr
+            );
+        }
+        result
     }
 
     async fn send_framed(
@@ -654,6 +568,9 @@ impl Connection {
                 // Log the actual message type for debugging
                 let type_name = match other {
                     message::Union::SignedId(ref si) => {
+                        if self.managed.is_some() {
+                            anyhow::bail!("key exchange already completed");
+                        }
                         // Client sends SignedId as first message in handshake
                         // We should respond with our IdPk (ID + public key)
                         info!("Received SignedId from peer, id_len={}", si.id.len());
@@ -695,6 +612,10 @@ impl Connection {
             lr.password.len()
         );
 
+        base::session_protocol::require_current_session(
+            lr.session_revision,
+            lr.supports_udp_media,
+        )?;
         // Check if our server requires a password
         if !self.password.is_empty() {
             // Server requires password
@@ -1505,6 +1426,7 @@ impl Connection {
     }
 }
 
+#[cfg(test)]
 async fn run_connection_writer(
     mut writer: OwnedWriteHalf,
     mut control_rx: mpsc::Receiver<WriterCommand>,
@@ -1708,12 +1630,13 @@ impl ConnectionManager {
         &self,
         stream: TcpStream,
         peer_addr: SocketAddr,
+        registration: xscc_session_transport::host::Registration,
     ) -> anyhow::Result<u32> {
         let mode = match self.config.read().mode {
             super::config::RustDeskMode::Id => ConnectionMode::Secure,
             super::config::RustDeskMode::DirectIp => ConnectionMode::DirectIp,
         };
-        self.accept_connection_with_mode(stream, peer_addr, mode)
+        self.accept_connection_owned(stream, peer_addr, mode, Some(registration))
             .await
     }
 
@@ -1722,6 +1645,17 @@ impl ConnectionManager {
         stream: TcpStream,
         peer_addr: SocketAddr,
         mode: ConnectionMode,
+    ) -> anyhow::Result<u32> {
+        self.accept_connection_owned(stream, peer_addr, mode, None)
+            .await
+    }
+
+    async fn accept_connection_owned(
+        &self,
+        stream: TcpStream,
+        peer_addr: SocketAddr,
+        mode: ConnectionMode,
+        registration: Option<xscc_session_transport::host::Registration>,
     ) -> anyhow::Result<u32> {
         if self.connection_count() >= MAX_CONNECTIONS {
             anyhow::bail!("RustDesk connection limit ({MAX_CONNECTIONS}) reached");
@@ -1749,6 +1683,7 @@ impl ConnectionManager {
             video_manager,
         );
         conn.managed = Some(self.managed.clone());
+        conn.media_registration = registration;
 
         // Track connection state for external access
         let state = conn.state.clone();
@@ -2184,34 +2119,6 @@ mod tests {
         )
     }
 
-    async fn first_server_message(mode: ConnectionMode) -> HbbMessage {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test listener should bind");
-        let address = listener
-            .local_addr()
-            .expect("listener should have an address");
-        let client = tokio::spawn(async move {
-            TcpStream::connect(address)
-                .await
-                .expect("client should connect")
-        });
-        let (server_stream, peer_addr) = listener.accept().await.expect("server should accept");
-        let mut client_stream = client.await.expect("client task should finish");
-        let mut server_connection = connection(mode);
-        let server =
-            tokio::spawn(
-                async move { server_connection.handle_tcp(server_stream, peer_addr).await },
-            );
-
-        let bytes = read_frame_with_limit(&mut client_stream, MAX_UNAUTHENTICATED_PACKET_LENGTH)
-            .await
-            .expect("client should receive the first frame");
-        drop(client_stream);
-        let _ = tokio::time::timeout(Duration::from_secs(1), server).await;
-        decode_message(&bytes).expect("first frame should contain a RustDesk message")
-    }
-
     #[test]
     fn direct_ip_password_challenge_is_non_empty_and_verifiable() {
         let connection = connection(ConnectionMode::DirectIp);
@@ -2246,15 +2153,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_ip_connection_starts_with_password_hash() {
-        let message = first_server_message(ConnectionMode::DirectIp).await;
-        assert!(matches!(message.union, Some(message::Union::Hash(_))));
-    }
-
-    #[tokio::test]
-    async fn secure_connection_starts_with_signed_id() {
-        let message = first_server_message(ConnectionMode::Secure).await;
-        assert!(matches!(message.union, Some(message::Union::SignedId(_))));
+    async fn native_connections_reject_unmanaged_peers_before_sending_data() {
+        for mode in [ConnectionMode::DirectIp, ConnectionMode::Secure] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut client = TcpStream::connect(address).await.unwrap();
+            let (server, peer) = listener.accept().await.unwrap();
+            let result = connection(mode).handle_tcp(server, peer).await;
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("managed native session required"));
+            let mut data = [0; 1];
+            assert_eq!(
+                tokio::io::AsyncReadExt::read(&mut client, &mut data)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
     }
 
     #[tokio::test]
@@ -2331,6 +2248,8 @@ mod tests {
         let (writer, _reader) = mpsc::channel(32);
         let mut login = LoginRequest::new();
         login.my_id = "attacker".to_string();
+        login.session_revision = base::session_protocol::NATIVE_SESSION_REVISION;
+        login.supports_udp_media = true;
         login.password = vec![0u8; 32].into();
 
         for _ in 1..MAX_PASSWORD_ATTEMPTS {

@@ -1,4 +1,4 @@
-> Historical packaging notes. The Flutter candidate workflows have been retired from the GPUI product path. Current Android and iOS applications use [the GPUI mobile workspace](../../experiments/gpui-mobile-management/README.md) and its dedicated native package gates. The instructions below describe older artifacts only.
+> Historical packaging notes. The Flutter candidate workflows have been retired from the GPUI product path. Current Android and iOS applications use [the GPUI mobile workspace](../../apps/mobile/README.md) and its dedicated native package gates. The instructions below describe older artifacts only.
 
 # XSCC Flutter mobile test candidates
 

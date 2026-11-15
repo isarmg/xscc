@@ -60,9 +60,9 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 | `libs/scrap/Cargo.toml`、根 `Cargo.toml` 与各受影响 `Cargo.lock` | 固定 hwcodec 改为仓库内相同 revision；Windows 配置解析使用已锁定 XML 库，启用实际 WinTrust API；没有无关依赖升级。 |
 | `src/virtual_display_manager.rs` | 为 Windows Host 增加新后端薄路由，公告实际数量，旧后端实现保留。 |
 | `src/server/display_service.rs` | 新驱动沿用既有按需无头补屏语义，普通无会话轮询不提前安装。 |
-| `experiments/gpui-validation/src/client.rs` | 持有本地编辑控件，并在主机确认或能力变化时同步；不更改登录折叠或管理逻辑。 |
-| `experiments/gpui-validation/src/client/media_controls.rs`、`remote_video/media_controls.rs` | 分段上限滑杆、精确输入、按对端范围启用、Hz 标签与确认、正确区分新旧驱动说明。 |
-| `experiments/gpui-mobile-management/src/session_chrome.rs`、`session_view.rs` | 同样的分段上限滑杆、精确输入与模式投影/请求转发，不改变视频区域或输入门禁。 |
+| `apps/desktop/src/client.rs` | 持有本地编辑控件，并在主机确认或能力变化时同步；不更改登录折叠或管理逻辑。 |
+| `apps/desktop/src/client/media_controls.rs`、`remote_video/media_controls.rs` | 分段上限滑杆、精确输入、按对端范围启用、Hz 标签与确认、正确区分新旧驱动说明。 |
+| `apps/mobile/src/session_chrome.rs`、`session_view.rs` | 同样的分段上限滑杆、精确输入与模式投影/请求转发，不改变视频区域或输入门禁。 |
 | `.github/scripts/package-gpui-windows.ps1`、`packaging/gpui-windows/host-installer.nsi` | 仅 Host 校验并分发新驱动，卸载不递归删除配置，不安装显示驱动。 |
 | `packaging/gpui-windows/README-host.txt`、`THIRD_PARTY_NOTICES.txt`、`docs/gpui-windows-beta.md` | 说明新默认后端、原始许可、能力范围及按需安装行为。 |
 | `.gitattributes` | 新许可固定 LF，确保 Windows checkout 后仍符合原始许可证摘要。 |
@@ -95,8 +95,8 @@ Windows 虚拟屏设备的停用、重初始化和回滚之前，现在先申请
 | `src/server/connection.rs`、`connection/media_controls.rs`、`video_service.rs` 及其 `capture_lifecycle.rs` | Windows 连接登记、最后会话清理、捕获退出和恢复之间的释放屏障；非 Windows 保留原路径。 |
 | `src/virtual_display_manager/mtt_vdd.rs`、`mtt_vdd/configuration.rs` | 所有已识别适配器变更入口持独占屏障；0 数量持久化、失败及自动无头行为修复；其他驱动不接管。 |
 | `libs/base/src/session_protocol.rs`、`src/gpui_session.rs`、`src/client/io_loop.rs`、`src/client/streaming.rs`、`src/server/video_qos.rs`、`libs/scrap/src/common/codec.rs` | 原有 FPS 选项的合法范围及原生目标类型；沿用消息格式、QoS 和解码反馈；旧非流模式偏好范围保留。 |
-| `experiments/gpui-validation/src/client.rs`、`client/toolbar_controls.rs`、`remote_video.rs`、`remote_video/media_controls.rs` | 真实 Hz、显示器下拉及实际模式确认后的目标同步；删除旧手动 FPS 入口。 |
-| `experiments/gpui-mobile-management/src/remote_cursor.rs`、`session_view.rs`、`session_chrome.rs` | 可见本地指针、同坐标点击、真实 Hz/显示器菜单及纯黑留空；主页配色不变。 |
+| `apps/desktop/src/client.rs`、`client/toolbar_controls.rs`、`remote_video.rs`、`remote_video/media_controls.rs` | 真实 Hz、显示器下拉及实际模式确认后的目标同步；删除旧手动 FPS 入口。 |
+| `apps/mobile/src/remote_cursor.rs`、`session_view.rs`、`session_chrome.rs` | 可见本地指针、同坐标点击、真实 Hz/显示器菜单及纯黑留空；主页配色不变。 |
 | `packaging/gpui-android/app/src/main/java/org/xscc/gpui/RemoteSessionPresentation.java`、`app/build.gradle` | 会话内临时高刷新率请求及恢复、beta20 包版本；签名、包名和绑定格式不变。 |
 | Windows 工作流及既有 FPS/菜单测试 | 将生命周期释放和任意合法目标 FPS 回归纳入原生构建验证，避免空测试过滤通过。 |
 

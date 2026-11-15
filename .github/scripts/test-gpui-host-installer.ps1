@@ -72,7 +72,7 @@ try {
     $fontLicense = Join-Path $installed 'MAPLE-FONT-OFL.txt'
     if (-not (Test-Path $fontLicense) -or
         (Get-FileHash $fontLicense -Algorithm SHA256).Hash -ne
-        (Get-FileHash (Join-Path $root 'experiments/shared/fonts/OFL.txt') -Algorithm SHA256).Hash) {
+        (Get-FileHash (Join-Path $root 'crates/native-ui/assets/fonts/OFL.txt') -Algorithm SHA256).Hash) {
         throw 'Installed Maple font license is missing or differs from its source'
     }
     $service = Get-HostService

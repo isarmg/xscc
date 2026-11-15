@@ -19,13 +19,13 @@
 ## Scope / 范围
 
 The independent `GPUI Windows beta candidates` workflow builds two variants of
-`experiments/gpui-validation` for `x86_64-pc-windows-msvc`:
+`apps/desktop` for `x86_64-pc-windows-msvc`:
 
 - Controller: `--features live-session`, packaged as `xscc-controller.exe`.
 - Host: `--features native-host`, packaged as `xscc-host.exe`.
 
 Each variant uses an isolated Cargo target directory. Both use the original
-`xscc-gpui-validation` binary target before packaging. The workflow builds the GPUI application and native Rust core directly. Driver
+`xscc-desktop` binary target before packaging. The workflow builds the GPUI application and native Rust core directly. Driver
 installers, signing services and update-feed publishers are outside this candidate
 build. Native libraries use the root vcpkg manifest and pinned revision, matching the
 existing Windows native dependency set. Actual codec capability depends on the
@@ -218,7 +218,7 @@ revisions. This workflow does not automate publication or create placeholders.
 
 ## Existing paths / 现有路径
 
-The GPUI Cargo package remains `xscc-gpui-validation` at `0.1.0`, while the
+The GPUI Cargo package remains `xscc-desktop` at `0.1.0`, while the
 management crates use `2.0.0-dev`. The candidate `PACKAGE_VERSION` and actual
 source SHA are recorded separately by packaging. A Cargo package version does
 not identify a published release or establish a signed-build claim. The desktop

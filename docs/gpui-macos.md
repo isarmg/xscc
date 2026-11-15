@@ -16,10 +16,10 @@ export MACOSX_DEPLOYMENT_TARGET=26.0
 export VCPKG_DEFAULT_TRIPLET=arm64-osx
 export CARGO_TARGET_DIR="$PWD/target/gpui-macos-controller"
 cargo build --locked --release \
-  --manifest-path experiments/gpui-validation/Cargo.toml \
+  --manifest-path apps/desktop/Cargo.toml \
   --target aarch64-apple-darwin --features live-session
 python3 .github/scripts/package-gpui-macos.py \
-  --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-gpui-validation" \
+  --binary "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/xscc-desktop" \
   --role controller --version 0.1.0-beta.5 \
   --output "$PWD/dist/XSCC Controller.app"
 ```

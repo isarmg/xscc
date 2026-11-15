@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-gpui-validation.exe'
+$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-desktop.exe'
 
 function Invoke-NativeProbe([string[]] $ProbeArguments, [int] $TimeoutMilliseconds) {
     $info = [Diagnostics.ProcessStartInfo]::new()

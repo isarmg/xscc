@@ -105,7 +105,7 @@ def required_native_jobs(workflow):
         # GitHub truncates the default matrix job names to 100 characters.
         return {
             'android (smoke, Smoke, experiments/gpui-android-smoke, xscc_gpui_android_smoke, org.xscc.gpui.smo...': common,
-            'android (management, Management, experiments/gpui-mobile-management, xscc_gpui_android_management...': common + (
+            'android (management, Management, apps/mobile, xscc_gpui_android_management...': common + (
                 'Build Android native codec dependencies', 'Prepare stable management-preview signature'),
         }
     return {

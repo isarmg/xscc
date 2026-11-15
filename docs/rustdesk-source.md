@@ -7,8 +7,8 @@ xscc/
   Cargo.toml / Cargo.lock     统一的原生应用工作区
   src/                       原生应用，包括 management 进程适配层
   libs/                      共享协议、直接传输、捕获等
-  experiments/gpui-validation/          桌面 GPUI 控制端 / 被控端
-  experiments/gpui-mobile-management/   移动 GPUI 控制端
+  apps/desktop/          桌面 GPUI 控制端 / 被控端
+  apps/mobile/   移动 GPUI 控制端
   vendor/gpui/                本仓库维护的原生 GUI 框架
   flutter/                   旧前端源码与历史回归夹具，非产品入口
   crates/management/

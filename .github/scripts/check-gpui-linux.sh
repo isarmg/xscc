@@ -29,5 +29,5 @@ for selected in "${roles[@]}"; do
     feature=live-session
     [[ $selected != host ]] || feature=native-host
     echo "Validating Linux $selected ($mode)"
-    cargo "$mode" --locked --manifest-path "$root/experiments/gpui-validation/Cargo.toml" --features "$feature"
+    cargo "$mode" --locked --manifest-path "$root/apps/desktop/Cargo.toml" --features "$feature"
 done

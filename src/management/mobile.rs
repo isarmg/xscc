@@ -26,11 +26,15 @@ impl RustDeskHost for Host {
             execution_mode: ExecutionMode::Embedded,
             integration_state: IntegrationState::Unavailable,
             rustdesk_version: Some(crate::VERSION.into()),
+            one_kvm_version: None,
         })
     }
 }
 #[async_trait]
 impl NativeHost for Host {
+    fn identity(&self) -> xscc_native_management::identity::ApplicationIdentity {
+        xscc_native_management::identity::ApplicationIdentity { backend: xscc::protocol::Backend::Rustdesk, role: xscc::protocol::InstanceRole::Controller }
+    }
     async fn addresses(&self, _: &[HostAddress]) -> Vec<HostAddress> {
         Vec::new()
     }

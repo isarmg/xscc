@@ -5,16 +5,13 @@ on:
       package_version:
         description: 'Candidate version, e.g. 1.0.1'
         required: true
-        default: '1.0.0'
+        default: '4.0.0-beta.1'
         type: string
   push:
     branches: [main, feat/management-prep]
     paths:
-      - 'experiments/gpui-mobile-management/**'
+      - 'apps/mobile/**'
       - 'experiments/shared/**'
-      - 'experiments/gpui-validation/src/dashboard.rs'
-      - 'experiments/gpui-validation/src/text_field.rs'
-      - 'experiments/gpui-validation/src/theme.rs'
       - 'vendor/gpui/**'
       - 'crates/**'
       - 'src/**'
@@ -45,8 +42,8 @@ jobs:
             features: mobile-session
             package_flags: --playback-preview
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/experiments/gpui-mobile-management/target
-      PACKAGE_VERSION: ${{ inputs.package_version || '1.0.0' }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/mobile/target
+      PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.1' }}
       VCPKG_DEFAULT_TRIPLET: arm64-ios
       VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
       VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
@@ -117,25 +114,25 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: |
-            experiments/gpui-mobile-management
+            apps/mobile
             vendor/gpui
           key: gpui-ios26-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}
           cache-on-failure: true
       - name: Check formatting and host management and keyboard tests
-        working-directory: experiments/gpui-mobile-management
+        working-directory: apps/mobile
         run: |
           cargo fmt --check
-          cargo test --locked --bin xscc-gpui-mobile-management
-          count_tests=$(cargo test --locked --bin xscc-gpui-mobile-management count_buttons 2>&1) || { printf '%s\n' "$count_tests"; exit 1; }
+          cargo test --locked --bin xscc-mobile
+          count_tests=$(cargo test --locked --bin xscc-mobile count_buttons 2>&1) || { printf '%s\n' "$count_tests"; exit 1; }
           printf '%s\n' "$count_tests"
           grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$count_tests" || { echo 'Virtual display count controls did not run both tests' >&2; exit 1; }
-          retry_test=$(cargo test --locked --bin xscc-gpui-mobile-management failed_enrollment_keeps_retry_form 2>&1) || { printf '%s\n' "$retry_test"; exit 1; }
+          retry_test=$(cargo test --locked --bin xscc-mobile failed_enrollment_keeps_retry_form 2>&1) || { printf '%s\n' "$retry_test"; exit 1; }
           printf '%s\n' "$retry_test"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$retry_test" || { echo 'Enrollment retry interaction test did not run' >&2; exit 1; }
-          lifecycle_test=$(cargo test --locked --bin xscc-gpui-mobile-management unchanged_status_is_republished_only_on_foreground_or_refresh 2>&1) || { printf '%s\n' "$lifecycle_test"; exit 1; }
+          lifecycle_test=$(cargo test --locked --bin xscc-mobile unchanged_status_is_republished_only_on_foreground_or_refresh 2>&1) || { printf '%s\n' "$lifecycle_test"; exit 1; }
           printf '%s\n' "$lifecycle_test"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$lifecycle_test" || { echo 'Foreground and refresh status regression did not run' >&2; exit 1; }
-          scroll_test=$(cargo test --locked --bin xscc-gpui-mobile-management touch_input::tests::tap_drag_scroll_and_cancellation_have_balanced_edges -- --exact 2>&1) || { printf '%s\n' "$scroll_test"; exit 1; }
+          scroll_test=$(cargo test --locked --bin xscc-mobile touch_input::tests::tap_drag_scroll_and_cancellation_have_balanced_edges -- --exact 2>&1) || { printf '%s\n' "$scroll_test"; exit 1; }
           printf '%s\n' "$scroll_test"
           grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$scroll_test" || { echo 'Direct touch scroll regression did not run' >&2; exit 1; }
       - name: Run GPUI raw touch regression tests
@@ -164,22 +161,22 @@ jobs:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Check and build native device application
-        working-directory: experiments/gpui-mobile-management
+        working-directory: apps/mobile
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '26.0'
         run: |
           test "$(rustc --print deployment-target --target aarch64-apple-ios)" = 'IPHONEOS_DEPLOYMENT_TARGET=26.0'
-          cargo check --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
+          cargo check --locked --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-mobile
           cargo check --tests --locked --target aarch64-apple-ios --features "${{ matrix.features }}"
-          cargo clippy --locked --no-deps --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
-          cargo build --locked --release --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-gpui-mobile-management
+          cargo clippy --locked --no-deps --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-mobile
+          cargo build --locked --release --target aarch64-apple-ios --features "${{ matrix.features }}" --bin xscc-mobile
       - name: Validate and package unsigned preview
         run: |
-          python3 .github/scripts/package-gpui-ios.py experiments/gpui-mobile-management/target/aarch64-apple-ios/release/xscc-gpui-mobile-management dist-gpui-ios ${{ matrix.package_flags }}
+          python3 .github/scripts/package-gpui-ios.py apps/mobile/target/aarch64-apple-ios/release/xscc-mobile dist-gpui-ios ${{ matrix.package_flags }}
           if [ "${{ matrix.mode }}" = TEST-IP-direct ]; then
             cat dist-gpui-ios/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"
           fi
-          cp experiments/gpui-mobile-management/README.md dist-gpui-ios/README.md
+          cp apps/mobile/README.md dist-gpui-ios/README.md
           echo 'Native GPUI interactive playback preview: management, software video, direct control or view-only, software-keyboard text and control keys. Foreground audio playback is opt-in per session and initially off; microphone and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input, audio playback, interruptions and route changes remain unverified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -190,7 +187,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}/experiments/gpui-mobile-management/target
+      CARGO_TARGET_DIR: ${{ github.workspace }}/apps/mobile/target
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -202,14 +199,14 @@ jobs:
           targets: aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          workspaces: experiments/gpui-mobile-management
+          workspaces: apps/mobile
           key: gpui-ios26-management-simulator
           cache-on-failure: true
       - name: Build management-only Simulator application
-        working-directory: experiments/gpui-mobile-management
+        working-directory: apps/mobile
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '26.0'
-        run: cargo build --locked --target aarch64-apple-ios-sim --bin xscc-gpui-mobile-management
+        run: cargo build --locked --target aarch64-apple-ios-sim --bin xscc-mobile
       - name: Build native UIKit editing regression executable
         env:
           IPHONEOS_DEPLOYMENT_TARGET: '26.0'
@@ -232,7 +229,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p simulator-evidence
-          python3 .github/scripts/smoke-gpui-ios-simulator.py experiments/gpui-mobile-management/target/aarch64-apple-ios-sim/debug/xscc-gpui-mobile-management simulator-evidence --text-input-executable "$(cat simulator-evidence/native-text-input-executable.txt)" 2>&1 | tee simulator-evidence/commands.log
+          python3 .github/scripts/smoke-gpui-ios-simulator.py apps/mobile/target/aarch64-apple-ios-sim/debug/xscc-mobile simulator-evidence --text-input-executable "$(cat simulator-evidence/native-text-input-executable.txt)" 2>&1 | tee simulator-evidence/commands.log
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

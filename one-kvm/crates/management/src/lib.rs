@@ -126,6 +126,12 @@ impl RustDeskHost for KvmHost {
 }
 #[async_trait::async_trait]
 impl NativeHost for KvmHost {
+    fn identity(&self) -> xscc_native_management::identity::ApplicationIdentity {
+        xscc_native_management::identity::ApplicationIdentity {
+            backend: Backend::OneKvm,
+            role: self.role,
+        }
+    }
     async fn addresses(&self, configured: &[HostAddress]) -> Vec<HostAddress> {
         match self.role {
             InstanceRole::Controlled => configured.to_vec(),
@@ -248,12 +254,11 @@ impl BrowserControllerPool {
                 }
                 let directory = PrivateDirectory::open(&entry.path())?;
                 if directory.read("logout.pending", 1)?.is_some() {
-                    let manager = NativeManager::open_for_role(
+                    let manager = NativeManager::open(
                         directory.clone(),
                         Arc::new(KvmHost {
                             role: InstanceRole::Controller,
                         }),
-                        InstanceRole::Controller,
                     )?;
                     pending.insert(
                         name,
@@ -332,12 +337,11 @@ impl ManagedKvm {
         let device = tokio::task::spawn_blocking(move || -> Result<_> {
             let path = path.canonicalize()?;
             let root = PrivateDirectory::create(&path, "xscs-managed")?;
-            Ok(NativeManager::open_for_role(
+            Ok(NativeManager::open(
                 root.child("device")?,
                 Arc::new(KvmHost {
                     role: InstanceRole::Controlled,
                 }),
-                InstanceRole::Controlled,
             )?)
         })
         .await??;
@@ -457,9 +461,12 @@ impl ManagedKvm {
                 })
                 .await??;
                 if !exists {
-                    EnrollmentClient::for_kvm_role(
+                    EnrollmentClient::new(
                         ServerOrigin::parse(&server)?,
-                        InstanceRole::Controller,
+                        xscc_native_management::identity::ApplicationIdentity {
+                            backend: Backend::OneKvm,
+                            role: InstanceRole::Controller,
+                        },
                     )?
                     .check_pairing_code(code)
                     .await
@@ -476,12 +483,11 @@ impl ManagedKvm {
                         return Err(Error::Capacity);
                     }
                     let directory = profiles.child(&profile_name)?;
-                    let manager = NativeManager::open_for_role(
+                    let manager = NativeManager::open(
                         directory.clone(),
                         Arc::new(KvmHost {
                             role: InstanceRole::Controller,
                         }),
-                        InstanceRole::Controller,
                     )?;
                     Ok(Arc::new(ControllerOwner {
                         manager,

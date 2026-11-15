@@ -1,3 +1,4 @@
+use crate::identity::ApplicationIdentity;
 use rand::{TryRng, rngs::SysRng};
 use reqwest::{
     Client, Response, StatusCode,
@@ -5,11 +6,11 @@ use reqwest::{
     redirect::Policy,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 use thiserror;
 use url::Url;
 use uuid::Uuid;
-use xscc::protocol::{self, Binding};
+use xscc::protocol::{self, Binding, EnrollmentRequest, PairingRequest, PairingResponse};
 use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -34,6 +35,8 @@ pub enum EnrollmentError {
     Protocol,
     #[error("this platform supports controller instances only")]
     RoleUnsupported,
+    #[error("the instance role or backend does not match this application")]
+    InstanceMismatch,
 }
 
 type Result<T> = std::result::Result<T, EnrollmentError>;
@@ -171,10 +174,11 @@ pub trait BindingStore: Send + Sync {
 pub struct EnrollmentClient {
     http: Client,
     server: ServerOrigin,
+    identity: ApplicationIdentity,
 }
 
 impl EnrollmentClient {
-    pub fn new(server: ServerOrigin) -> Result<Self> {
+    pub fn new(server: ServerOrigin, identity: ApplicationIdentity) -> Result<Self> {
         let http = Client::builder()
             .https_only(server.0.scheme() == "https")
             .use_rustls_tls()
@@ -183,7 +187,19 @@ impl EnrollmentClient {
             .timeout(Duration::from_secs(15))
             .build()
             .map_err(|_| EnrollmentError::Configuration)?;
-        Ok(Self { http, server })
+        Ok(Self {
+            http,
+            server,
+            identity,
+        })
+    }
+
+    pub async fn check_pairing_code(&self, code: &str) -> Result<()> {
+        if !protocol::is_valid_authorization_code(code) {
+            return Err(EnrollmentError::Configuration);
+        }
+        self.pairing(code).await?;
+        Ok(())
     }
 
     /// installation_id must come from base::managed_identity in the service's
@@ -202,7 +218,7 @@ impl EnrollmentClient {
         }
         let pairing = self.pairing(authorization_code).await?;
         if cfg!(any(target_os = "android", target_os = "ios"))
-            && pairing.role != Some(protocol::InstanceRole::Controller)
+            && pairing.role != protocol::InstanceRole::Controller
         {
             return Err(EnrollmentError::RoleUnsupported);
         }
@@ -300,20 +316,18 @@ impl EnrollmentClient {
         Ok(saved)
     }
 
-    async fn pairing(&self, code: &str) -> Result<Pairing> {
+    async fn pairing(&self, code: &str) -> Result<PairingResponse> {
         let response = self
             .http
             .post(self.server.endpoint(protocol::PAIRING_PATH))
             .json(&PairingRequest {
-                authorization_code: code,
+                authorization_code: Cow::Borrowed(code),
             })
             .send()
             .await
             .map_err(|_| EnrollmentError::Unavailable)?;
-        let pairing: Pairing = decode(response).await?;
-        if pairing.manager_id.is_nil() || pairing.device_id.is_nil() {
-            return Err(EnrollmentError::Protocol);
-        }
+        let pairing: PairingResponse = decode(response).await?;
+        self.identity.verify(&pairing)?;
         Ok(pairing)
     }
 
@@ -344,8 +358,8 @@ impl EnrollmentClient {
             .json(&EnrollmentRequest {
                 device_id: saved.binding.device_id,
                 installation_id: saved.binding.installation_id,
-                token: code,
-                credential: saved.credential(),
+                token: Cow::Borrowed(code),
+                credential: Cow::Borrowed(saved.credential()),
             })
             .send()
             .await
@@ -355,27 +369,6 @@ impl EnrollmentClient {
         store.mark_enrolled(saved).await?;
         Ok(binding)
     }
-}
-
-// These HTTP envelopes are server-private structs, not exported by xscc::protocol.
-#[derive(Serialize)]
-struct PairingRequest<'a> {
-    authorization_code: &'a str,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Pairing {
-    manager_id: Uuid,
-    device_id: Uuid,
-    #[serde(default)]
-    role: Option<protocol::InstanceRole>,
-}
-#[derive(Serialize)]
-struct EnrollmentRequest<'a> {
-    device_id: Uuid,
-    installation_id: Uuid,
-    token: &'a str,
-    credential: &'a str,
 }
 
 fn verify_binding(expected: &Binding, actual: &Binding) -> Result<()> {
@@ -422,6 +415,10 @@ async fn decode<T: DeserializeOwned>(mut response: Response) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TEST_IDENTITY: ApplicationIdentity = ApplicationIdentity {
+        backend: protocol::Backend::Rustdesk,
+        role: protocol::InstanceRole::Controlled,
+    };
 
     struct RefusingStore(bool);
 
@@ -452,8 +449,11 @@ mod tests {
 
     #[tokio::test]
     async fn existing_or_unreadable_binding_prevents_network_and_identity_rotation() {
-        let client =
-            EnrollmentClient::new(ServerOrigin::parse("https://example.invalid").unwrap()).unwrap();
+        let client = EnrollmentClient::new(
+            ServerOrigin::parse("https://example.invalid").unwrap(),
+            TEST_IDENTITY,
+        )
+        .unwrap();
         for (store, expected) in [
             (RefusingStore(true), EnrollmentError::Storage),
             (RefusingStore(false), EnrollmentError::ExistingBinding),
@@ -549,7 +549,7 @@ mod tests {
             let server = ServerOrigin::parse(&format!("http://{host}:18104")).unwrap();
             assert_eq!(
                 server.connection_url().as_str(),
-                format!("ws://{host}:18104/xscc/v2/connect")
+                format!("ws://{host}:18104/xscc/v4/connect")
             );
         }
         let server = ServerOrigin::parse("https://EXAMPLE.com:443").unwrap();
@@ -562,7 +562,7 @@ mod tests {
         );
         assert_eq!(
             server.connection_url().as_str(),
-            "wss://example.com/xscc/v2/connect"
+            "wss://example.com/xscc/v4/connect"
         );
     }
 
@@ -572,16 +572,16 @@ mod tests {
         assert_eq!(server.as_str(), "http://192.168.31.245:18104/");
         assert_eq!(
             server.connection_url().as_str(),
-            "ws://192.168.31.245:18104/xscc/v2/connect"
+            "ws://192.168.31.245:18104/xscc/v4/connect"
         );
         // Build the real enrollment client/request without depending on a
         // particular LAN interface being present on the test runner.
-        let client = EnrollmentClient::new(server.clone()).unwrap();
+        let client = EnrollmentClient::new(server.clone(), TEST_IDENTITY).unwrap();
         let request = client
             .http
             .post(client.server.endpoint(protocol::PAIRING_PATH))
             .json(&PairingRequest {
-                authorization_code: &"a".repeat(36),
+                authorization_code: Cow::Owned("a".repeat(36)),
             })
             .build()
             .unwrap();
@@ -622,7 +622,7 @@ mod tests {
                     .starts_with(&format!("POST {} ", protocol::PAIRING_PATH))
             );
             let body =
-                serde_json::json!({"manager_id": manager_id, "device_id": device_id}).to_string();
+                serde_json::json!({"manager_id": manager_id, "device_id": device_id, "role": "controlled", "backend": "rustdesk"}).to_string();
             stream
                 .write_all(
                     format!(
@@ -634,9 +634,11 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let client =
-            EnrollmentClient::new(ServerOrigin::parse(&format!("http://{address}")).unwrap())
-                .unwrap();
+        let client = EnrollmentClient::new(
+            ServerOrigin::parse(&format!("http://{address}")).unwrap(),
+            TEST_IDENTITY,
+        )
+        .unwrap();
         let pairing = client.pairing(&"a".repeat(36)).await.unwrap();
         assert_eq!(pairing.manager_id, manager_id);
         assert_eq!(pairing.device_id, device_id);
@@ -698,7 +700,7 @@ mod tests {
                 .unwrap();
             stream.write_all(&response).await.unwrap();
         });
-        let (recovered, identity) = EnrollmentClient::new(origin.clone())
+        let (recovered, identity) = EnrollmentClient::new(origin.clone(), TEST_IDENTITY)
             .unwrap()
             .recover(&store)
             .await

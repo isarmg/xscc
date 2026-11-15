@@ -10,9 +10,9 @@ XSCC 的原生控制端和被控端使用 **GPUI 界面**，复用本仓库的 R
 
 | 产品 | 源码入口 | 构建特性 |
 | --- | --- | --- |
-| Windows / Linux / macOS 控制端 | `experiments/gpui-validation` | `live-session` |
-| Windows / Linux / macOS 被控端 | `experiments/gpui-validation` | `native-host` |
-| Android / iOS / iPadOS 控制端 | `experiments/gpui-mobile-management` | `mobile-management,mobile-session` |
+| Windows / Linux / macOS 控制端 | `apps/desktop` | `live-session` |
+| Windows / Linux / macOS 被控端 | `apps/desktop` | `native-host` |
+| Android / iOS / iPadOS 控制端 | `apps/mobile` | `mobile-management,mobile-session` |
 
 `experiments/` 是沿用的目录名称，上述路径是当前 GPUI 产品源码入口。桌面不带 `live-session` 的构建是本地渲染诊断；移动不带 `mobile-session` 的构建只验证实例管理。`gpui-android-smoke` 是独立的平台测试应用。
 
@@ -20,9 +20,9 @@ XSCC 的原生控制端和被控端使用 **GPUI 界面**，复用本仓库的 R
 
 ```sh
 # 控制端
-cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features live-session
+cargo run --locked --manifest-path apps/desktop/Cargo.toml --features live-session
 # 被控端：独立角色构建
-cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features native-host
+cargo run --locked --manifest-path apps/desktop/Cargo.toml --features native-host
 ```
 
 两种角色构建的原始二进制同名，打包时分别生成控制端和被控端。平台依赖、独立输出目录及安装方式见 [Windows](docs/gpui-windows-beta.md)、[Linux Wayland](docs/gpui-linux.md)、[macOS](docs/gpui-macos.md)；移动构建与包验证见 [移动端](docs/gpui-mobile.md)。根 Cargo 包提供复用的原生核心和后台命令，图形应用从上表的 manifest 启动。

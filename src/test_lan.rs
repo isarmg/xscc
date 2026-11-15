@@ -97,6 +97,7 @@ pub(crate) async fn run_host(address: SocketAddr) -> ResultType<()> {
     tokio::task::spawn_blocking(crate::client::get_hwcodec_config).await?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     let address = listener.local_addr()?;
+    let udp = xscc_session_transport::host::bind(address.port())?;
     crate::server::check_zombie();
     #[cfg(target_os = "linux")]
     eprintln!("Linux foreground LAN testing uses portal capture/input; audio is disabled to avoid sharing the installed host's audio IPC.");
@@ -110,9 +111,11 @@ pub(crate) async fn run_host(address: SocketAddr) -> ResultType<()> {
         socket.set_nodelay(true)?;
         let local = socket.local_addr()?;
         let server = server.clone();
+        let media_registration = Some(udp.registration());
         tokio::spawn(async move {
             let meta = crate::server::ConnectionMeta {
                 test_lan: true,
+                media_registration,
                 ..Default::default()
             };
             if let Err(error) = crate::server::create_tcp_connection(

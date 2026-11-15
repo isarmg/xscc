@@ -1,10 +1,12 @@
 //! Protobuf wrappers (`protos/` → `OUT_DIR`).
 
+pub use hbb_common::rendezvous_proto::IdPk;
 use protobuf::Message;
 
 #[path = ""]
 pub mod hbb {
     include!(concat!(env!("OUT_DIR"), "/protos/mod.rs"));
+    pub use base::message_proto as message;
 }
 
 pub use hbb::rendezvous::{
@@ -18,10 +20,9 @@ pub use hbb::rendezvous::{
 pub use hbb::message::{
     key_event, login_response, message, misc, AudioFormat, AudioFrame, Auth2FA, Clipboard,
     ControlKey, CursorData, CursorPosition, DisplayInfo, EncodedVideoFrame, EncodedVideoFrames,
-    Features, Hash, IdPk, KeyEvent, KeyboardMode, LoginRequest, LoginResponse,
-    Message as HbbMessage, Misc, MouseEvent, OptionMessage, PeerInfo, PublicKey, SignedId,
-    SupportedDecoding, SupportedEncoding, SupportedResolutions, TestDelay, VideoFrame,
-    WindowsSessions,
+    Features, Hash, KeyEvent, KeyboardMode, LoginRequest, LoginResponse, Message as HbbMessage,
+    Misc, MouseEvent, OptionMessage, PeerInfo, PublicKey, SignedId, SupportedDecoding,
+    SupportedEncoding, SupportedResolutions, TestDelay, VideoFrame, WindowsSessions,
 };
 
 pub fn make_register_peer(id: &str, serial: i32) -> RendezvousMessage {

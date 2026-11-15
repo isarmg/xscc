@@ -32,7 +32,7 @@ mod frame_pacing;
 #[cfg(feature = "gpui-host")]
 mod metrics;
 
-use super::video_pipeline::VideoRestart;
+use super::video_lifecycle::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
 #[cfg(target_os = "linux")]
 use crate::common::SimpleCallOnReturn;

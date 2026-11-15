@@ -415,14 +415,7 @@ impl ConnectionTransport {
                 return None;
             }
         };
-        #[cfg(feature = "experimental-quic")]
-        let stream = match stream {
-            SessionTransport::Legacy(stream) => *stream,
-            stream @ SessionTransport::Quic(_) => {
-                *self = Self::Legacy(stream);
-                return None;
-            }
-        };
+
         let stream = match stream {
             hbb_common::Stream::Tcp(stream) => stream,
             stream @ hbb_common::Stream::WebSocket(_) => {

@@ -41,7 +41,7 @@ Linux Deb packaging measures GLIBC requirements from all staged ELF files and re
 The controller, host and mobile management applications build without sibling
 `xcss` or `xcsc` checkouts, Git dependencies or package downloads. The contour
 implementation and palettes used by both GPUI applications live in
-`experiments/gpui-validation/src/theme.rs`; its source URL records attribution.
+`apps/desktop/src/theme.rs`; its source URL records attribution.
 The `xscs-protocol` dependency remains pinned to the server protocol crate and
 does not import the server support library. Native management CI checks this
 dependency boundary alongside the workspace layout.
@@ -60,7 +60,7 @@ administrator passwords are not instance binding passwords.
 
 Prepare native dependencies using `.github/workflows/gpui-windows-beta.yml`, `gpui-unix-beta.yml`, `gpui-android-smoke.yml` or `gpui-ios-management.yml` for the target platform. Windows binary codec caches are scoped to the hosted toolchain image to avoid reusing incompatible MSVC/CRT artifacts.
 
-Desktop applications use `experiments/gpui-validation/Cargo.toml`: `live-session` for Controller and `native-host` for Host. Mobile applications use `experiments/gpui-mobile-management/Cargo.toml` with `mobile-management,mobile-session`. A management-only or rendering probe build is a diagnostic variant, not the complete controller.
+Desktop applications use `apps/desktop/Cargo.toml`: `live-session` for Controller and `native-host` for Host. Mobile applications use `apps/mobile/Cargo.toml` with `mobile-management,mobile-session`. A management-only or rendering probe build is a diagnostic variant, not the complete controller.
 
 From the repository root:
 

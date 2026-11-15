@@ -27,11 +27,11 @@ Linux DRM 光标 IPC 的每条 `DrmCursor` 消息必须明确携带布尔字段 
 ## GPUI 产品构建
 
 ```sh
-cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features live-session
-cargo run --locked --manifest-path experiments/gpui-validation/Cargo.toml --features native-host
+cargo run --locked --manifest-path apps/desktop/Cargo.toml --features live-session
+cargo run --locked --manifest-path apps/desktop/Cargo.toml --features native-host
 ```
 
-移动应用在 `experiments/gpui-mobile-management` 构建，安装包必须经过对应 Android / iOS 原生打包与验证；见 [移动维护说明](gpui-mobile.md)。这些路径沿用 `experiments/` 目录名，产品界面均为 GPUI。
+移动应用在 `apps/mobile` 构建，安装包必须经过对应 Android / iOS 原生打包与验证；见 [移动维护说明](gpui-mobile.md)。这些路径沿用 `experiments/` 目录名，产品界面均为 GPUI。
 
 ## GPUI 桌面应用
 
