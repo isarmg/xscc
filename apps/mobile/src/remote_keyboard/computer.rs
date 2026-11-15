@@ -615,7 +615,7 @@ fn portrait_symbol_rows() -> Vec<Vec<(&'static str, Key)>> {
     ]
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 mod tests {
     use super::*;
     use crate::remote_keyboard::{KeyboardControl, KeyboardPage};
