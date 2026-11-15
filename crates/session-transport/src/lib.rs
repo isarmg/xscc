@@ -1165,6 +1165,22 @@ mod tests {
         host.set_key(Key([11; 32]));
         (client, host, listener)
     }
+    async fn media_streams<T>(
+        mut bind: impl FnMut(u16) -> ResultType<T>,
+    ) -> (Stream, Stream, tokio::net::TcpListener, T) {
+        for _ in 0..16 {
+            let (client, host, listener) = streams().await;
+            match bind(listener.local_addr().unwrap().port()) {
+                Ok(media) => return (client, host, listener, media),
+                Err(error)
+                    if error
+                        .downcast_ref::<io::Error>()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::AddrInUse) => {}
+                Err(error) => panic!("cannot reserve TCP/UDP test endpoints: {error:#}"),
+            }
+        }
+        panic!("cannot reserve a common TCP/UDP test port");
+    }
     fn backpressured_streams() -> (Stream, Stream) {
         let (client, host) = tokio::io::duplex(8192);
         let local = std::net::SocketAddr::from(([0, 0, 0, 0], 0));
@@ -1278,8 +1294,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_audio_backlog_drains_before_the_next_live_packet() {
-        let (client, host, listener) = streams().await;
-        let udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+        let (client, host, _listener, udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(udp.registration()));
         let offer = host.offer_host().await.unwrap().unwrap();
         let mut client: SessionTransport = client.into();
@@ -1371,8 +1386,7 @@ mod tests {
 
     #[tokio::test]
     async fn hybrid_fragmented_video_audio_and_control_use_real_sockets() {
-        let (client, host, listener) = streams().await;
-        let _udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+        let (client, host, _listener, _udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(_udp.registration()));
         let offer = host.offer_host().await.unwrap().unwrap();
         let mut client: SessionTransport = client.into();
@@ -1507,8 +1521,7 @@ mod tests {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[tokio::test]
     async fn udp_encoder_budget_tracks_backlogged_deltas_without_limiting_idle_keyframes() {
-        let (client, host, listener) = streams().await;
-        let _udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+        let (client, host, _listener, _udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(_udp.registration()));
         let offer = host.offer_host().await.unwrap().unwrap();
         let mut client: SessionTransport = client.into();
@@ -1552,9 +1565,13 @@ mod tests {
 
     #[tokio::test]
     async fn dropped_udp_response_is_retried_before_tcp_ready() {
-        let (client, mut host, listener) = streams().await;
+        let (client, mut host, listener, socket) = media_streams(|port| {
+            let socket = std::net::UdpSocket::bind(("127.0.0.1", port))?;
+            socket.set_nonblocking(true)?;
+            Ok(tokio::net::UdpSocket::from_std(socket)?)
+        })
+        .await;
         let address = listener.local_addr().unwrap();
-        let socket = tokio::net::UdpSocket::bind(address).await.unwrap();
         let seed = host.udp_media_seed().unwrap().unwrap();
         let sid = SessionId([8; 16]);
         let offer = UdpMediaOffer {
@@ -1870,8 +1887,7 @@ mod tests {
     #[tokio::test]
     async fn tcp_eof_or_revoke_unregisters_udp_before_transport_drop() {
         for mode in 0..3 {
-            let (mut client, host, listener) = streams().await;
-            let _udp = udp_host::bind(listener.local_addr().unwrap().port()).unwrap();
+            let (mut client, host, _listener, _udp) = media_streams(udp_host::bind).await;
             let session = _udp
                 .registration()
                 .register(host.udp_media_seed().unwrap().unwrap())
