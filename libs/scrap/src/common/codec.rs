@@ -813,7 +813,7 @@ impl Decoder {
         let decoder = decoder.ok_or_else(|| anyhow!("MediaCodec decoder is unavailable"))?;
         let mut decoded = false;
         for frame in &frames.frames {
-            decoded |= decoder.decode_with_callback(&frame.data, rgb, on_frame)?;
+            decoded |= decoder.decode_with_callback(&frame.data, frame.pts, rgb, on_frame)?;
         }
         Ok(decoded)
     }
@@ -1010,7 +1010,7 @@ impl Decoder {
     ) -> ResultType<bool> {
         let mut ret = false;
         for frame in &frames.frames {
-            ret |= decoder.decode(&frame.data, rgb)?;
+            ret |= decoder.decode(&frame.data, frame.pts, rgb)?;
         }
         Ok(ret)
     }

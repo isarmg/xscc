@@ -18,6 +18,7 @@ SOURCE = ROOT / 'libs/scrap/src/common/mediacodec.rs'
 METHODS = ('decode', 'decode_with_callback', 'has_pending_output',
            'take_decoded_output_count', 'poll_output', 'poll_output_with_callback')
 TEST_NAMES = {
+    'presentation_timestamps_reach_the_codec_in_microseconds',
     'every_output_before_and_after_input_is_released_then_published_without_overwrite',
     'backpressure_keeps_input_borrowed_and_drains_each_output_before_retrying',
     'format_notifications_empty_buffers_and_release_errors_never_publish_fake_outputs',
@@ -60,12 +61,12 @@ enum Event { Frame(u8), Empty, Changed, BuffersChanged, Again }
 struct FakeCodec {
     events: RefCell<VecDeque<Event>>, after_queue: RefCell<Vec<Event>>,
     on_miss: RefCell<VecDeque<Vec<Event>>>, inputs: RefCell<VecDeque<bool>>,
-    queued: RefCell<Vec<Vec<u8>>>, trace: Rc<RefCell<Vec<String>>>, release_fails: bool, queue_fails: bool,
+    queued: RefCell<Vec<Vec<u8>>>, timestamps: RefCell<Vec<u64>>, trace: Rc<RefCell<Vec<String>>>, release_fails: bool, queue_fails: bool,
 }
 impl Default for FakeCodec {
     fn default() -> Self { Self { events: Default::default(), after_queue: Default::default(),
         on_miss: Default::default(), inputs: Default::default(), queued: Default::default(),
-        trace: Default::default(), release_fails: false, queue_fails: false } }
+        timestamps: Default::default(), trace: Default::default(), release_fails: false, queue_fails: false } }
 }
 impl FakeCodec {
     fn dequeue_output_buffer(&self, _: Duration) -> Result<Option<Output>, NdkMediaError> {
@@ -88,9 +89,10 @@ impl FakeCodec {
         self.events.borrow_mut().extend(self.on_miss.borrow_mut().pop_front().unwrap_or_default());
         Ok(None)
     }
-    fn queue_input_buffer(&self, input: Input, _: usize, size: usize, _: u64, _: u32) -> Result<(), NdkMediaError> {
+    fn queue_input_buffer(&self, input: Input, _: usize, size: usize, pts: u64, _: u32) -> Result<(), NdkMediaError> {
         if self.queue_fails { return Err(NdkMediaError::Queue); }
         self.queued.borrow_mut().push(input.bytes[..size].to_vec());
+        self.timestamps.borrow_mut().push(pts);
         self.trace.borrow_mut().push("queue-input".into());
         self.events.borrow_mut().extend(self.after_queue.borrow_mut().drain(..));
         Ok(())
@@ -111,6 +113,16 @@ impl MediaCodecDecoder {
 TESTS = r"""
 }
 #[test]
+fn presentation_timestamps_reach_the_codec_in_microseconds() {
+    let mut decoder = MediaCodecDecoder::default();
+    let mut rgb = ImageRgb::default();
+    for pts in [0, 8, 17] { decoder.decode(&[1], pts, &mut rgb).unwrap(); }
+    assert_eq!(*decoder.decoder.timestamps.borrow(), vec![0, 8_000, 17_000]);
+    for pts in [-1, i64::MAX] { assert!(decoder.decode(&[1], pts, &mut rgb).is_err()); }
+    assert_eq!(decoder.decoder.queued.borrow().len(), 3);
+}
+
+#[test]
 fn every_output_before_and_after_input_is_released_then_published_without_overwrite() {
     let mut decoder = MediaCodecDecoder::default();
     decoder.decoder.events.borrow_mut().extend([Event::Changed, Event::Frame(1), Event::Again]);
@@ -118,7 +130,7 @@ fn every_output_before_and_after_input_is_released_then_published_without_overwr
     let trace = decoder.decoder.trace.clone();
     let mut images = Vec::new();
     let mut rgb = ImageRgb::default();
-    assert!(decoder.decode_with_callback(&[7,8,9], &mut rgb, &mut |image| {
+    assert!(decoder.decode_with_callback(&[7,8,9], 8, &mut rgb, &mut |image| {
         let value = image.raw[0];
         assert_eq!(trace.borrow().last().unwrap(), &format!("release:{value}"));
         trace.borrow_mut().push(format!("publish:{value}"));
@@ -141,14 +153,14 @@ fn backpressure_keeps_input_borrowed_and_drains_each_output_before_retrying() {
     decoder.decoder.on_miss.borrow_mut().push_back(vec![Event::Changed,Event::Frame(6),Event::Again]);
     let mut rgb = ImageRgb::default();
     let mut published = 0;
-    assert!(decoder.decode_with_callback(&[42], &mut rgb, &mut |_| published += 1).unwrap());
+    assert!(decoder.decode_with_callback(&[42], 16, &mut rgb, &mut |_| published += 1).unwrap());
     assert_eq!(published,1);
     assert_eq!(*decoder.decoder.queued.borrow(), vec![vec![42]]);
     assert_eq!(decoder.take_decoded_output_count(),1);
     // A failed later input cannot undo an actual output already drained before it.
     decoder.decoder.queue_fails = true;
     decoder.decoder.events.borrow_mut().extend([Event::Frame(8), Event::Again]);
-    assert!(decoder.decode_with_callback(&[43], &mut rgb, &mut |_| published += 1).is_err());
+    assert!(decoder.decode_with_callback(&[43], 24, &mut rgb, &mut |_| published += 1).is_err());
     assert_eq!(published,2);
     assert_eq!(decoder.take_decoded_output_count(),1);
     assert_eq!(*decoder.decoder.queued.borrow(), vec![vec![42]]);
@@ -195,8 +207,8 @@ def main():
             raise SystemExit('MediaCodec per-output regression selection differs: ' + repr(selected))
         result = subprocess.run([str(executable), '--nocapture'], check=True, capture_output=True, text=True)
         print(result.stdout, end='')
-        if not re.search(r'^test result: ok\. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;', result.stdout, re.M):
-            raise SystemExit('All three MediaCodec per-output regressions must actually pass.')
+        if not re.search(r'^test result: ok\. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;', result.stdout, re.M):
+            raise SystemExit('All four MediaCodec per-output regressions must actually pass.')
     print('Production delivery methods SHA256: ' + hashlib.sha256(methods.encode()).hexdigest())
 
 

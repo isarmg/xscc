@@ -101,19 +101,23 @@ impl MediaCodecDecoder {
         Ok(())
     }
 
-    pub fn decode(&mut self, data: &[u8], rgb: &mut ImageRgb) -> ResultType<bool> {
-        self.decode_with_callback(data, rgb, &mut |_| {})
+    pub fn decode(&mut self, data: &[u8], pts_ms: i64, rgb: &mut ImageRgb) -> ResultType<bool> {
+        self.decode_with_callback(data, pts_ms, rgb, &mut |_| {})
     }
 
     pub fn decode_with_callback(
         &mut self,
         data: &[u8],
+        pts_ms: i64,
         rgb: &mut ImageRgb,
         on_frame: &mut dyn FnMut(&mut ImageRgb),
     ) -> ResultType<bool> {
         if self.configuration.is_none() {
             bail!("MediaCodec input dimensions are not configured");
         }
+        let Some(presentation_time_us) = u64::try_from(pts_ms).ok().and_then(|pts| pts.checked_mul(1000)) else {
+            bail!("Invalid MediaCodec presentation timestamp: {pts_ms}");
+        };
         let deadline = Instant::now() + Duration::from_millis(100);
         let mut decoded = self.poll_output_with_callback(rgb, on_frame)?;
         loop {
@@ -129,7 +133,7 @@ impl MediaCodecDecoder {
                 }
                 input.buffer_mut()[..data.len()].copy_from_slice(data);
                 self.decoder
-                    .queue_input_buffer(input, 0, data.len(), 0, 0)?;
+                    .queue_input_buffer(input, 0, data.len(), presentation_time_us, 0)?;
                 true
             } else {
                 false

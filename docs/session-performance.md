@@ -1,5 +1,28 @@
 # Native session performance
 
+## 2026-11-15: preserve Android hardware-decoder presentation timestamps
+
+MediaCodec's input path discarded each encoded frame's millisecond PTS and
+submitted zero for every buffer. It now passes that same timestamp to the NDK
+in microseconds, with checked conversion before acquiring an input buffer. Both
+Android AVC/HEVC decoder entry points carry their existing frame PTS; other
+platform codec APIs and the wire format are unchanged. No new scheduling queue,
+frame clock or timestamp state is added. Existing buffer release, pending-output
+accounting and per-output publication remain.
+
+The Xiaomi logs repeatedly report a 60-FPS player hint and stop/start estimates
+despite a 120-Hz window request. Zero input timestamps are a concrete data-loss
+bug; whether they trigger that OEM display policy requires device verification.
+The temporary 30-second Android minimum-refresh comparison did not remove the
+60-Hz vote, and its original unset value was verified restored.
+
+Changed runtime files: `libs/scrap/src/common/mediacodec.rs` accepts and validates
+PTS for the Android NDK; `libs/scrap/src/common/codec.rs` forwards PTS in its two
+MediaCodec-only branches. The existing NDK-boundary regression verifies actual
+submitted timestamps (0, 8000, 17000 us), rejects negative/overflow values before
+queueing and retains the existing output/backpressure cases. Android's package
+code advances to 40004 for an in-place update retaining app data.
+
 ## 2026-11-15: restore delta overlap after beta.3 regression
 
 The beta.3 device samples exposed a cost the transport-only fixture did not
