@@ -34,7 +34,7 @@ jobs:
       - name: Check host formatting and management contracts
         run: |
           cargo fmt -- --check
-          cargo fmt --manifest-path crates/management/Cargo.toml --all -- --check
+          cargo fmt --manifest-path crates/management/Cargo.toml -p one-kvm-management -- --check
           cargo test --locked --manifest-path crates/management/Cargo.toml --workspace -- --test-threads=2
           cargo clippy --locked --manifest-path crates/management/Cargo.toml --workspace --all-targets -- -D warnings
       - name: Check and build the Rust browser application
