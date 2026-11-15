@@ -43,7 +43,7 @@ use std::{
     io,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -497,14 +497,31 @@ struct WorkerChannels {
     failed: watch::Sender<Option<String>>,
 }
 
+type VideoReleased = Box<dyn Fn(u32, Instant) + Send + Sync>;
+
+fn video_released(callback: &OnceLock<VideoReleased>, kind: MediaKind, display: u32, queued: Instant) {
+    if kind == MediaKind::Video {
+        if let Some(callback) = callback.get() {
+            callback(display, queued);
+        }
+    }
+}
+
 /// A producer lease of the same bounded UDP sender used by the connection.
 /// Clones share epoch/frame counters; dropping or revoking the TCP owner closes all clones.
 #[derive(Clone)]
 pub struct MediaSender {
     inner: Arc<Mutex<Outbound>>,
     failure: watch::Sender<Option<String>>,
+    released: Arc<OnceLock<VideoReleased>>,
 }
 impl MediaSender {
+    /// Releases the producer after initial sending or discard; the callback must not block.
+    pub fn on_video_released(&self, callback: impl Fn(u32, Instant) + Send + Sync + 'static) -> ResultType<()> {
+        self.released.set(Box::new(callback)).map_err(|_| {
+            hbb_common::anyhow::anyhow!("Video release callback already registered")
+        })
+    }
     pub fn send_video(&self, message: Arc<Message>) -> ResultType<()> {
         let result = self
             .inner
@@ -527,12 +544,9 @@ impl MediaSender {
     pub fn migrate_video<T>(
         &self,
         previous: &mut mpsc::UnboundedReceiver<(T, Arc<Message>)>,
-        mut fetched: impl FnMut(T, &Message),
     ) -> ResultType<()> {
-        while let Ok((instant, message)) = previous.try_recv() {
-            let result = self.send_video(message.clone());
-            fetched(instant, &message);
-            result?;
+        while let Ok((_, message)) = previous.try_recv() {
+            self.send_video(message)?;
         }
         Ok(())
     }
@@ -547,6 +561,7 @@ struct Outbound {
     outgoing: mpsc::Sender<QueuedFrame>,
     audio: mpsc::Sender<QueuedFrame>,
     sending: BTreeMap<StreamKey, SendStream>,
+    released: Arc<OnceLock<VideoReleased>>,
 }
 impl Outbound {
     fn command(&self, command: Command) -> ResultType<()> {
@@ -602,6 +617,7 @@ impl Outbound {
                 bail!("Controller media transmission is unavailable");
             }
             if !self.ready.load(Ordering::Acquire) {
+                video_released(&self.released, kind, display, Instant::now());
                 return Ok(true);
             }
             let current = self.sending.get(&(kind, display));
@@ -641,6 +657,7 @@ impl Outbound {
             }) {
                 Ok(()) => Ok(true),
                 Err(mpsc::error::TrySendError::Full(frame)) => {
+                    video_released(&self.released, kind, display, frame.queued);
                     if kind == MediaKind::Video {
                         self.notice(FrameNotice::Abandoned(frame.plan.descriptor().metadata))?;
                     }
@@ -736,6 +753,7 @@ impl HybridTransport {
         let (failed, failure) = watch::channel(None);
         let (limits, limit_rx) = watch::channel(None);
         let (reader, tcp_writer) = stream.into_split();
+        let released = Arc::new(OnceLock::new());
         let tasks = vec![
             tokio::spawn(tcp_write(
                 tcp_writer,
@@ -759,8 +777,10 @@ impl HybridTransport {
                         outgoing,
                         audio,
                         sending: BTreeMap::new(),
+                        released: released.clone(),
                     })),
                     failure: failed.clone(),
+                    released,
                 },
                 session_id: sid,
                 host,
@@ -809,6 +829,7 @@ impl HybridTransport {
             transport.writer.clone(),
             transport.ready.clone(),
             transport.bitrate_budget.clone(),
+            transport.outbound.released.clone(),
         )));
         Ok(transport)
     }
@@ -1967,6 +1988,89 @@ mod tests {
         assert!(first.send_video(Arc::new(video(true, 64))).is_err());
         assert!(second.send_video(Arc::new(video(true, 64))).is_err());
     }
+    #[tokio::test]
+    async fn video_producer_is_released_for_pre_ready_and_full_queue_discards() {
+        let (_client, host) = backpressured_streams();
+        let (transport, _channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
+        let producer = transport.outbound.clone();
+        let (released, mut notifications) = mpsc::unbounded_channel();
+        producer.on_video_released(move |display, _| { released.send(display).unwrap(); }).unwrap();
+        producer.send_video(Arc::new(video(true, 64))).unwrap();
+        assert_eq!(notifications.try_recv().unwrap(), 0);
+        transport.ready.store(true, Ordering::Release);
+        producer.send_video(Arc::new(video(true, 64))).unwrap();
+        producer.send_video(Arc::new(video(false, 64))).unwrap();
+        assert!(notifications.try_recv().is_err(), "enqueue must not release the producer before sending");
+        producer.send_video(Arc::new(video(false, 64))).unwrap();
+        assert_eq!(notifications.try_recv().unwrap(), 0);
+        drop(transport);
+        assert!(producer.send_video(Arc::new(video(true, 64))).is_err());
+        assert!(notifications.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn continuous_video_recovers_from_a_large_initial_keyframe() {
+        let (client, host, _listener, _udp) = media_streams(udp_host::bind).await;
+        let mut host = SessionTransport::accepted(host, Some(_udp.registration()));
+        let offer = host.offer_host().await.unwrap().unwrap();
+        let mut client: SessionTransport = client.into();
+        client.enable_client(&offer).await.unwrap();
+        timeout(Duration::from_secs(3), client.next()).await.unwrap().unwrap().unwrap();
+        host.set_media_bitrate_limit(8_000).unwrap();
+        let released = Arc::new(Notify::new());
+        let notify = released.clone();
+        host.media_sender().unwrap().on_video_released(move |_, _| notify.notify_one()).unwrap();
+        let serving = tokio::spawn(async move {
+            let mut refresh = true;
+            let mut refreshes = 0;
+            let mut produced = 0;
+            let mut fetched = true;
+            let mut tick = interval(Duration::from_nanos(8_333_333));
+            tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = released.notified() => fetched = true,
+                    _ = tick.tick(), if fetched => {
+                        fetched = false;
+                        let key = std::mem::take(&mut refresh);
+                        host.send(&video(key, if key { 300_000 } else { 4_000 })).await.unwrap();
+                        produced += 1;
+                    }
+                    packet = host.next() => {
+                        let Some(Ok(bytes)) = packet else { break; };
+                        let message = Message::parse_from_bytes(&bytes).unwrap();
+                        if terminal(&message) { break; }
+                        if matches!(message.union, Some(message::Union::Misc(misc))
+                            if matches!(misc.union, Some(misc::Union::RefreshVideoDisplay(_)))) {
+                            refresh = true;
+                            refreshes += 1;
+                        }
+                    }
+                }
+            }
+            (produced, refreshes)
+        });
+        let end = tokio::time::sleep(Duration::from_secs(3));
+        tokio::pin!(end);
+        let mut delivered = 0;
+        loop {
+            tokio::select! {
+                _ = &mut end => break,
+                packet = client.next() => {
+                    let bytes = packet.unwrap().unwrap();
+                    if matches!(Message::parse_from_bytes(&bytes).unwrap().union,
+                        Some(message::Union::VideoFrame(_))) { delivered += 1; }
+                }
+            }
+        }
+        client.send(&close()).await.unwrap();
+        let (produced, refreshes) = timeout(Duration::from_secs(3), serving).await.unwrap().unwrap();
+        eprintln!("continuous video produced={produced} delivered={delivered} refreshes={refreshes}");
+        assert!(produced >= 120, "producer stalled: produced={produced}");
+        assert!(delivered + 3 >= produced && refreshes <= 1,
+            "large initial keyframe must not trap the stream in recovery: produced={produced}, delivered={delivered}, refreshes={refreshes}");
+    }
+
 }
 fn bounded_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> ResultType<T> {
     if bytes.len() > CONTROL_LIMIT {
@@ -2292,6 +2396,7 @@ async fn host_media(
     writer: ReliableWriter,
     ready: Arc<AtomicBool>,
     bitrate_budget: Arc<AtomicU64>,
+    released: Arc<OnceLock<VideoReleased>>,
 ) {
     let WorkerChannels {
         mut frames,
@@ -2333,7 +2438,12 @@ async fn host_media(
                             for metadata in cached.iter().copied().filter(|metadata| (metadata.kind, metadata.display_id) == key) { cache.complete(KeyframeComplete { metadata }); }
                             cached.retain(|metadata| (metadata.kind, metadata.display_id) != key);
                             retries.retain(|retry: &Transmission| (retry.plan.descriptor().metadata.kind, retry.plan.descriptor().metadata.display_id) != key);
-                            if current.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) { current = None; }
+                            if current.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) {
+                                if current.as_ref().is_some_and(|frame| frame.initial) {
+                                    video_released(&released, epoch.kind, epoch.display, Instant::now());
+                                }
+                                current = None;
+                            }
                             if sound.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) { sound = None; }
                         }
                     }
@@ -2393,7 +2503,10 @@ async fn host_media(
                     let queued = frame.queued;
                     let frame = frame.plan;
                     let metadata = frame.descriptor().metadata;
-                    if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) { continue; }
+                    if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) {
+                        video_released(&released, metadata.kind, metadata.display_id, queued);
+                        continue;
+                    }
                     if metadata.keyframe {
                         for evicted in cache.insert(frame.clone(), Instant::now())? {
                             cached.retain(|metadata| *metadata != evicted); frame_notice(&writer, sid, FrameNotice::Abandoned(evicted))?;
@@ -2409,7 +2522,9 @@ async fn host_media(
                     if !ready.load(Ordering::Acquire) && now.duration_since(started) >= Duration::from_millis(CONNECT_TIMEOUT) { bail!("UDP host path validation timed out"); }
                     for slot in [&mut current, &mut sound] {
                         if slot.as_ref().is_some_and(|frame| frame.deadline <= now) {
-                            let metadata = slot.take().expect("invariant: expired transmission exists").plan.descriptor().metadata;
+                            let expired = slot.take().expect("invariant: expired transmission exists");
+                            let metadata = expired.plan.descriptor().metadata;
+                            if expired.initial { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
                         }
@@ -2442,6 +2557,7 @@ async fn host_media(
                             next_send = now + media::REPORT_INTERVAL; break;
                         }
                         SendDecision::Expired => {
+                            if frame.initial { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
                         }
@@ -2453,6 +2569,7 @@ async fn host_media(
                                 if frame.initial {
                                     if metadata.keyframe { cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?; }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
+                                    video_released(&released, metadata.kind, metadata.display_id, Instant::now());
                                 }
                                 *active = None;
                             }

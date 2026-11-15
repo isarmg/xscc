@@ -362,9 +362,7 @@ impl ConnInner {
     pub(super) fn send_video(&self, message: Arc<Message>) -> bool {
         let writer = self.video_writer.lock().unwrap();
         if let Some(writer) = writer.as_ref() {
-            // Congested displays resume only on a newly queued keyframe.
-            let _ = writer.send_video(message);
-            false
+            writer.send_video(message).is_ok()
         } else {
             self.tx_video
                 .as_ref()
@@ -428,18 +426,12 @@ impl Connection {
             .media_sender()
             .ok_or_else(|| hbb_common::anyhow::anyhow!("UDP media sender unavailable"))?;
         let id = self.inner.id();
-        let acknowledge = !self.video_ack_required;
-        writer.migrate_video(&mut self.rx_video, |instant, message| {
-            if acknowledge {
-                if let Some(message::Union::VideoFrame(frame)) = &message.union {
-                    video_service::notify_video_frame_fetched(
-                        frame.display as usize,
-                        id,
-                        Some(instant.into()),
-                    );
-                }
-            }
-        })?;
+        if !self.video_ack_required {
+            writer.on_video_released(move |display, queued| {
+                video_service::notify_video_frame_fetched(display as usize, id, Some(queued));
+            })?;
+        }
+        writer.migrate_video(&mut self.rx_video)?;
         *published = Some(writer);
         Ok(())
     }

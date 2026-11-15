@@ -1,5 +1,40 @@
 # Native session performance
 
+## 2026-11-15: bound UDP production to initial transmission completion
+
+On the Xiaomi 13, the 1080p/120 Hz/8 Mbps session configured Qualcomm HEVC at
+120 FPS, but Android recorded only 784 decoder outputs over 51.307 seconds.
+During the same session the host produced and enqueued 115–119 frames/s for
+several seconds. Enqueue counts do not prove delivery. A physical-screen
+comparison received and decoded approximately 60 frames/s with the phone display
+running at 120 Hz; this does not validate the high-rate virtual-screen case.
+
+The v4 UDP publication path excluded its producer from the existing frame-fetched
+barrier. At 120 FPS, a large initial keyframe filled the two-frame queue; admitted
+deltas could also expire behind that keyframe. Dropping reference frames forced
+another keyframe and repeated the cycle. A real loopback socket regression at
+8 Mbps with a 300 KB initial keyframe and 4 KB deltas produced 361 frames but
+delivered only 9 over three seconds before the correction.
+
+The host now participates in the existing producer barrier. Its UDP sender
+releases that barrier after a frame's initial transmission completes or is
+discarded, rather than at enqueue or dequeue. Retransmissions do not release a
+subsequent frame's barrier. Frames discarded before UDP readiness, full queue
+admission and format replacement also release the producer. The old queue bound,
+wire bitrate ceiling, delta deadlines, authenticated delivery and keyframe gap
+checks remain. This prevents production of dependent frames while the initial
+keyframe is still being serialized; it does not grow the queue or weaken loss
+recovery. The same regression delivered 313 of 314 produced frames with zero
+refresh requests over three seconds after the correction. Those are transport
+fixture measurements, not an Android high-refresh acceptance result.
+
+Changed runtime paths: `crates/session-transport/src/lib.rs` adds the host
+producer's release notification at initial-send completion/discard;
+`src/server/connection.rs` registers that notification and restores participation
+in the existing capture/encode barrier. TCP-only sending and client decode/render
+behavior are unchanged. No primary-display change or driver installation is part
+of this correction.
+
 ## 2026-11-04: Windows virtual-display content cadence
 
 On this Windows host, VSync paced native drawing near 60 FPS with a 60 Hz physical
