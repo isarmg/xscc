@@ -326,7 +326,7 @@ impl PersistentDisplayChangeGuard {
         let ids = [screen.id];
         // The supplied CCD path sets desktop and target rates together, without
         // the legacy DEVMODE call retaining a 60 Hz virtual desktop rate.
-        Topology::configure(&ids, Some(mode), Some(mode))?;
+        Topology::query(false)?.configure(&ids, Some(mode), Some(mode))?;
         let actual = Topology::query(false)?.screens(&ids)?;
         if !actual.iter().any(|screen| {
             screen.active

@@ -400,16 +400,29 @@ impl Topology {
         Ok(())
     }
 
+    fn retained_layout(&self, available: &[DISPLAYCONFIG_PATH_INFO]) -> Self {
+        let mut retained = self.clone();
+        retained.paths.retain(|path| {
+            available.iter().any(|candidate| {
+                candidate.targetInfo.targetAvailable != FALSE
+                    && candidate.targetInfo.adapterId.HighPart == path.targetInfo.adapterId.HighPart
+                    && candidate.targetInfo.adapterId.LowPart == path.targetInfo.adapterId.LowPart
+                    && candidate.targetInfo.id == path.targetInfo.id
+            })
+        });
+        retained
+    }
+
     pub(super) fn configure(
+        &self,
         ids: &[String],
         preferred: Option<VirtualDisplayMode>,
         requested: Option<VirtualDisplayMode>,
     ) -> ResultType<()> {
-        let mut topology = Self::query(true)?;
-        let all = topology.paths.clone();
-        topology
-            .paths
-            .retain(|path| path.flags & DISPLAYCONFIG_PATH_ACTIVE != 0);
+        let all = Self::query(true)?.paths;
+        // PnP can restore a cached primary screen before CCD configuration runs.
+        // Start with the pre-operation layout, not that already changed desktop.
+        let mut topology = self.retained_layout(&all);
         let mut used: BTreeSet<_> = topology
             .paths
             .iter()
@@ -940,6 +953,35 @@ mod tests {
             pixelFormat: DISPLAYCONFIG_PIXELFORMAT_32BPP,
             position: winapi::shared::windef::POINTL { x, y },
         }
+    }
+
+    #[test]
+    fn creation_retains_pre_pnp_primary_and_ignores_cached_new_layout() {
+        let mut physical: DISPLAYCONFIG_PATH_INFO = unsafe { std::mem::zeroed() };
+        physical.flags = DISPLAYCONFIG_PATH_ACTIVE;
+        physical.targetInfo.targetAvailable = TRUE;
+        physical.sourceInfo.modeInfoIdx = 0;
+        physical.targetInfo.id = 1;
+        let mut removed = physical;
+        removed.targetInfo.id = 2;
+        let mut original_mode: DISPLAYCONFIG_MODE_INFO = unsafe { std::mem::zeroed() };
+        original_mode.infoType = DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
+        *unsafe { original_mode.u.sourceMode_mut() } = source(1920, 1080, 0, 0);
+        let original = Topology {
+            paths: vec![physical, removed],
+            modes: vec![original_mode],
+        };
+        let mut cached_new_primary = physical;
+        cached_new_primary.targetInfo.id = 3;
+        cached_new_primary.sourceInfo.modeInfoIdx = 1;
+        let mut unavailable = removed;
+        unavailable.targetInfo.targetAvailable = FALSE;
+        let retained = original.retained_layout(&[cached_new_primary, physical, unavailable]);
+        assert_eq!(retained.paths.len(), 1);
+        assert_eq!(retained.paths[0].targetInfo.id, physical.targetInfo.id);
+        let source = unsafe { retained.modes[0].u.sourceMode() };
+        assert_eq!((source.position.x, source.position.y), (0, 0));
+        assert_eq!((source.width, source.height), (1920, 1080));
     }
 
     #[test]

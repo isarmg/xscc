@@ -147,6 +147,9 @@ try {
         try {
             # Keep the production Program Files check intact while exercising this build's backend.
             Copy-Item -LiteralPath $testArtifacts[0].executable -Destination $exe -Force -ErrorAction Stop
+            Write-Host 'VDD_CI_STAGE=run-layout-regressions'
+            & $exe 'virtual_display_manager::mtt_vdd::topology::tests::' --nocapture 2>&1 | Tee-Object -FilePath $driverLog -Append
+            if ($LASTEXITCODE -ne 0) { throw 'Native display topology regressions failed' }
             Write-Host 'VDD_CI_STAGE=run-driver-check'
             & $exe 'virtual_display_manager::mtt_vdd::topology::tests::disposable_runner_applies_high_refresh_and_removes_the_display' --exact --ignored --nocapture 2>&1 | Tee-Object -FilePath $driverLog -Append
             $driverExit = $LASTEXITCODE

@@ -1,5 +1,28 @@
 # Native session performance
 
+## 2026-11-16: retain the layout captured before virtual monitor arrival
+
+A protected local test caught Windows restoring its cached VDD layout during
+PnP arrival: the existing physical primary became secondary before our CCD
+configuration began. The test aborted and confirmed withdrawal after 17 seconds.
+Configuration had captured the original layout for rollback but built its
+successful layout from the already changed desktop.
+
+VDD count changes now seed CCD configuration from that existing pre-operation
+snapshot, retaining only targets still available after PnP. New owned monitors
+are placed by the existing adjacent-screen algorithm. Mode-only changes take
+a current snapshot and retain their existing placement behavior. There is no
+extra detach/reattach, primary promotion, registry reset or retained lifecycle
+state. The pure topology regression covers cached new-primary paths and removed
+targets; the existing disposable-runner test verifies surviving display modes
+and positions across real 60/120/240-Hz changes and withdrawal.
+
+Regression surface: `configuration.rs` passes its existing snapshot;
+`topology.rs` builds the owned-display layout from it; `presentation.rs` captures
+the current layout for a mode-only change. The installer test script runs the
+existing topology test executable before its isolated driver check. No Android,
+transport, driver binary, authentication or binding format changes.
+
 ## 2026-11-16: repaint the mobile session when its content changes
 
 A second ordinary-screen sample had the Xiaomi display at 120 Hz with no UID
