@@ -1244,8 +1244,10 @@ mod tests {
     }
 
     #[test]
-    fn latest_frame_replacement_recycles_and_is_counted() {
-        let handler = Handler::default();
+    fn single_slot_latest_frame_replacement_recycles_and_is_counted() {
+        let handler = Handler(Arc::new(Mailbox {
+            frame: ArrayQueue::new(1), ..Default::default()
+        }));
         handler.set_displays(&vec![DisplayInfo { width: 1, height: 1, online: true, ..Default::default() }]);
         let mut image = scrap::ImageRgb {
             raw: vec![1; 4],
@@ -1527,9 +1529,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn latest_frame_replaces_old_frame_without_waiting() {
+    async fn single_slot_latest_frame_replaces_old_frame_without_waiting() {
         let handle = SessionHandle {
-            session: Session::default(),
+            session: Session {
+                ui_handler: Handler(Arc::new(Mailbox {
+                    frame: ArrayQueue::new(1), ..Default::default()
+                })),
+                ..Default::default()
+            },
         };
         let handler = &handle.session.ui_handler;
         handler.set_displays(&vec![DisplayInfo { width: 1, height: 1, online: true, ..Default::default() }]);
