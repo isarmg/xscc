@@ -3891,7 +3891,7 @@ pub(crate) fn cleanup_orphaned_virtual_displays() {
         && (state.present_count > 0 || state.configured_count > 0)
         && state.status != "external_owned"
     {
-        raii::AuthedConnID::cleanup_last_remote_session();
+        raii::AuthedConnID::cleanup_last_remote_session(true);
     }
 }
 
@@ -4123,7 +4123,7 @@ mod raii {
         }
 
         #[cfg(windows)]
-        pub(super) fn cleanup_last_remote_session() {
+        pub(super) fn cleanup_last_remote_session(remove_virtual_displays: bool) {
             if Self::remote_conn_count() != 0 {
                 return;
             }
@@ -4153,6 +4153,10 @@ mod raii {
                 "session_display_cleanup path=disconnect stage=capture_idle elapsed_ms={}",
                 started.elapsed().as_millis()
             );
+            if !remove_virtual_displays {
+                display_service::restore_session_resolutions();
+                return;
+            }
             let temporary_resolutions =
                 match display_service::temporary_resolution_changes_before_removal() {
                     Ok(names) => names,
@@ -4320,7 +4324,9 @@ mod raii {
                 display_service::restore_resolutions();
                 #[cfg(windows)]
                 if self.1 == AuthConnType::Remote {
-                    tokio::task::spawn_blocking(Self::cleanup_last_remote_session);
+                    tokio::task::spawn_blocking(|| {
+                        Self::cleanup_last_remote_session(!cfg!(feature = "gpui-host"));
+                    });
                 }
                 #[cfg(target_os = "linux")]
                 if self.1 == AuthConnType::Remote {

@@ -666,41 +666,39 @@ pub(super) fn discard_detached_resolution_changes(removed: &[String]) {
     }
 }
 
+#[cfg(any(windows, test))]
+fn retained_virtual_display(
+    state: &base::session_protocol::virtual_display::VirtualDisplayState,
+    name: &str,
+) -> bool {
+    state.driver == "mtt_vdd"
+        && state.status == "ready"
+        && state.displays.iter().any(|display| {
+            display.active
+                && display
+                    .name
+                    .trim_end_matches('\0')
+                    .eq_ignore_ascii_case(name.trim_end_matches('\0'))
+        })
+}
+
 #[cfg(windows)]
 pub(super) fn restore_session_resolutions() {
     if CHANGED_RESOLUTIONS.read().unwrap().is_empty() {
         return;
     }
     let state = virtual_display_manager::configuration_state();
-    if state.driver == "mtt_vdd" && state.status == "ready" && !state.persistent {
-        match Display::all() {
-            Ok(displays) => {
-                let skipped = {
-                    let mut changed = CHANGED_RESOLUTIONS.write().unwrap();
-                    let before = changed.len();
-                    changed.retain(|name, _| {
-                        !temporary_display_will_be_removed(&state, displays.len(), name)
-                    });
-                    before - changed.len()
-                };
-                if skipped > 0 {
-                    hbb_common::throttled_log!(
-                        Duration::from_secs(1), info,
-                        "session_display_cleanup stage=resolution_restore_skipped count={skipped} reason=temporary_display_removal"
-                    );
-                }
-            }
-            Err(error) => hbb_common::throttled_log!(
-                Duration::from_secs(1), warn,
-                "Temporary display resolution restore classification failed: {error:#}"
-            ),
-        }
-    } else if state.driver == "mtt_vdd" && state.status == "error" {
+    if state.driver == "mtt_vdd" && state.status == "error" {
         hbb_common::throttled_log!(
             Duration::from_secs(1), warn,
-            "Temporary display resolution restore classification failed: {}", state.message
+            "Retained display resolution classification failed: {}", state.message
         );
+        return;
     }
+    CHANGED_RESOLUTIONS
+        .write()
+        .unwrap()
+        .retain(|name, _| !retained_virtual_display(&state, name));
     restore_resolutions();
 }
 
@@ -749,11 +747,32 @@ pub fn restore_resolutions() {
 #[cfg(test)]
 mod session_resolution_cleanup_tests {
     use super::{
-        discard_resolution_changes_for_removed_displays, temporary_display_will_be_removed,
-        ChangedResolution,
+        discard_resolution_changes_for_removed_displays, retained_virtual_display,
+        temporary_display_will_be_removed, ChangedResolution,
     };
     use base::session_protocol::virtual_display::{VirtualDisplayScreen, VirtualDisplayState};
     use std::collections::HashMap;
+
+    #[test]
+    fn disconnect_keeps_owned_virtual_modes_and_still_restores_physical_modes() {
+        let mut state = VirtualDisplayState {
+            driver: "mtt_vdd".into(),
+            status: "ready".into(),
+            displays: vec![VirtualDisplayScreen {
+                name: r"\\.\DISPLAY2".into(),
+                active: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        for persistent in [false, true] {
+            state.persistent = persistent;
+            assert!(retained_virtual_display(&state, r"\\.\display2"));
+            assert!(!retained_virtual_display(&state, r"\\.\DISPLAY1"));
+        }
+        state.status = "external_owned".into();
+        assert!(!retained_virtual_display(&state, r"\\.\DISPLAY2"));
+    }
 
     #[test]
     fn exit_preserves_physical_resolution_restore_and_skips_only_current_temporary_display() {

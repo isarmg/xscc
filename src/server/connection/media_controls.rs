@@ -334,7 +334,8 @@ impl Connection {
                             Some(config) => {
                                 let result = virtual_display_manager::configure_displays(&config);
                                 // The connection can close while this blocking operation continues.
-                                super::raii::AuthedConnID::cleanup_last_remote_session();
+                                #[cfg(not(feature = "gpui-host"))]
+                                super::raii::AuthedConnID::cleanup_last_remote_session(true);
                                 result
                             }
                             None => Ok(virtual_display_manager::configuration_state()),
