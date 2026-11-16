@@ -401,21 +401,30 @@ fn change_device(state: u32) -> ResultType<()> {
     change.ClassInstallHeader.cbSize = std::mem::size_of::<SP_CLASSINSTALL_HEADER>() as _;
     change.ClassInstallHeader.InstallFunction = DIF_PROPERTYCHANGE;
     change.StateChange = state;
-    change.Scope = DICS_FLAG_CONFIGSPECIFIC;
-    if unsafe {
-        SetupDiSetClassInstallParamsW(
-            devices.0,
-            &mut data,
-            &mut change.ClassInstallHeader,
-            std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as _,
-        )
-    } == FALSE
-        || unsafe { SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, devices.0, &mut data) } == FALSE
-    {
-        bail!(
-            "Change VDD device state failed: {}",
-            std::io::Error::last_os_error()
-        );
+    // A current-profile enable does not clear an installer/device-manager global disable.
+    let scopes: &[u32] = if state == DICS_ENABLE {
+        &[DICS_FLAG_GLOBAL, DICS_FLAG_CONFIGSPECIFIC]
+    } else {
+        &[DICS_FLAG_CONFIGSPECIFIC]
+    };
+    for &scope in scopes {
+        change.Scope = scope;
+        if unsafe {
+            SetupDiSetClassInstallParamsW(
+                devices.0,
+                &mut data,
+                &mut change.ClassInstallHeader,
+                std::mem::size_of::<SP_PROPCHANGE_PARAMS>() as _,
+            )
+        } == FALSE
+            || unsafe { SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, devices.0, &mut data) }
+                == FALSE
+        {
+            bail!(
+                "Change VDD device state failed (state {state}, scope {scope}): {}",
+                std::io::Error::last_os_error()
+            );
+        }
     }
     let mut parameters: SP_DEVINSTALL_PARAMS_W = unsafe { std::mem::zeroed() };
     parameters.cbSize = std::mem::size_of::<SP_DEVINSTALL_PARAMS_W>() as _;
