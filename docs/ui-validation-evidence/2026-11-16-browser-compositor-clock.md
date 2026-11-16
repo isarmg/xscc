@@ -29,3 +29,5 @@ Chromium [DXGI 同步实现](https://raw.githubusercontent.com/chromium/chromium
 用户随后明确同意创建桌面“Chrome 高刷”入口并重启现有 Chrome。已正常退出旧 Chrome，以同一用户配置加上 UseCompositorClockVSyncInterval 与 restore-last-session 启动，原 UFO 标签页恢复。恢复后小窗口已还原为虚拟屏内的普通最大化窗口。隔离测试窗口已关闭，原有浏览器配置、原快捷方式未改；新入口保留该启动参数。正常启动而未带该参数时，旧路径仍可能恢复 60FPS。
 
 重启后的原 UFO 页面约 111FPS，60 的硬上限已突破；仍出现 Browser unable to VSYNC，同步校验尚未通过，不能宣称全程稳定 120FPS。远控已暂时断开用于隔离编码负载，虚拟屏继续保留。
+
+追加的独立诊断线程对照：仅在该线程 8 秒采样期间提高一级优先级并自动恢复，平均合成时钟唤醒 111.24Hz，中位数 8.337ms、p95 16.611ms。未改善上述间隔延长，也未更改 Chrome、Host 或全局进程优先级。该结果不支持继续用优先级设置掩盖问题。

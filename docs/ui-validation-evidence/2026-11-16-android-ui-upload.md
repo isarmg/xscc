@@ -64,3 +64,5 @@ Android [构建 43873483437](https://github.com/isarmg/xscc/actions/runs/4387348
 最终回归面：现有 android_image_upload.rs 的提交改为记录到传入 encoder；wgpu_atlas.rs 的 Android 大图替换与刷入改为保留最新快照、在绘制前编码；wgpu_renderer.rs 的 Android 绘制入口接入复制和按秒耗时汇总。gpui_wgpu.rs 只注册模块；.github/workflows/gpui-android-smoke.yml 只把无 GPU 布局测试路径改到抽出的文件。其他平台产品 atlas 路径保留，未改协议、Windows 安装、驱动或显示器布局。现有 8 项 atlas 回归、2 项纯布局回归均通过；渲染像素回归实际覆盖大图映射、非对齐行宽、多次替换及删除。模块声明后续仅按 rustfmt 排序，运行语义不变。
 
 beta.11 管理 APK SHA-256：c533d93f0a003345f47adc2b92eef526cb3340cb72fa384d80d039b11a44d35c。后续 UFO 浏览器专项另记，不把原生窗口源达到高刷当成浏览器验收通过。
+
+本轮收尾：原生测试源和隔离浏览器已退出，保留用户日常 Chrome 的已授权高刷启动与桌面入口。USB 测试常亮恢复原值 0；现有虚拟屏保留。删除本轮临时测试构建 3,264,131,072 字节、旧对照包及浏览器临时资料等 257,544,110 字节，合计约 3.52GB 文件；未声称 WSL 虚拟磁盘已在宿主物理回收等量空间。保留当前 beta.11 包、上一版 beta.10 回退包及聚合测量记录。
