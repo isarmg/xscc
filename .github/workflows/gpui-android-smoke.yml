@@ -185,6 +185,12 @@ jobs:
           "$RUNNER_TEMP/gpui-presentation-tests" --list | grep -Fx "$presentation_test: test"
           "$RUNNER_TEMP/gpui-presentation-tests" --exact "$presentation_test"
 
+          rustc --edition 2024 --test vendor/gpui/crates/gpui_wgpu/src/android_image_upload.rs -o "$RUNNER_TEMP/gpui-image-upload-tests"
+          for upload_test in packed_and_custom_widths_have_valid_gpu_copy_rows empty_and_overflowing_copy_rows_are_rejected; do
+            "$RUNNER_TEMP/gpui-image-upload-tests" --list | grep -Fx "tests::$upload_test: test"
+            "$RUNNER_TEMP/gpui-image-upload-tests" --exact "tests::$upload_test"
+          done
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           workspaces: ${{ matrix.workspace }}

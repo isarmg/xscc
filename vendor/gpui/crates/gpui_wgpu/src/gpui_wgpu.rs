@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "android", test))]
+mod android_image_upload;
 mod cosmic_text_system;
 mod wgpu_atlas;
 mod wgpu_context;

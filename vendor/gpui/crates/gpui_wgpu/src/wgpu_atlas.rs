@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+use crate::android_image_upload::ImageUpload;
 use anyhow::{Context as _, Result};
 use etagere::{BucketedAtlasAllocator, size2};
 use gpui::{
@@ -38,6 +40,8 @@ struct WgpuAtlasTextures {
     pending_uploads: Vec<PendingUpload>,
     upload_buffers: Vec<Vec<u8>>,
     next_texture_generation: u64,
+    #[cfg(target_os = "android")]
+    image_upload: ImageUpload,
 }
 
 pub struct WgpuTextureInfo {
@@ -62,6 +66,8 @@ impl WgpuAtlas {
             pending_uploads: Vec::new(),
             upload_buffers: Vec::new(),
             next_texture_generation: 0,
+            #[cfg(target_os = "android")]
+            image_upload: ImageUpload::default(),
         })))
     }
 
@@ -97,6 +103,10 @@ impl WgpuAtlas {
         self.0.lock().clear(|textures| {
             textures.storage = WgpuAtlasStorage::default();
             textures.pending_uploads.clear();
+            #[cfg(target_os = "android")]
+            {
+                textures.image_upload = ImageUpload::default();
+            }
         });
     }
 
@@ -109,6 +119,10 @@ impl WgpuAtlas {
             textures.color_texture_format = context.color_texture_format();
             textures.storage = WgpuAtlasStorage::default();
             textures.pending_uploads.clear();
+            #[cfg(target_os = "android")]
+            {
+                textures.image_upload = ImageUpload::default();
+            }
         });
     }
 }
@@ -159,6 +173,35 @@ impl AtlasBackend for WgpuAtlasTextures {
                 .iter()
                 .any(|upload| upload.id == tile.texture_id && upload.bounds == tile.bounds)
         {
+            #[cfg(target_os = "android")]
+            if bytes.len() >= 1024 * 1024 {
+                self.image_upload.write(
+                    &self.device,
+                    &self.queue,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: tile.bounds.origin.x.0 as u32,
+                            y: tile.bounds.origin.y.0 as u32,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: tile.bounds.size.width.0 as u32,
+                        height: tile.bounds.size.height.0 as u32,
+                        depth_or_array_layers: 1,
+                    },
+                    bytes,
+                )?;
+                self.pending_uploads.push(PendingUpload {
+                    id: tile.texture_id,
+                    bounds: tile.bounds,
+                    data: None,
+                });
+                return Ok(true);
+            }
             // write_texture snapshots the borrowed pixels; another CPU copy is unnecessary.
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
