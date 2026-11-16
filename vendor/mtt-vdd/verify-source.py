@@ -1,6 +1,6 @@
-"""Offline, read-only verification; never executes driver code or native APIs."""
+"""Offline verification; optionally export CPU-test code, never execute driver APIs."""
 from pathlib import Path
-import difflib,hashlib,json
+import argparse,difflib,hashlib,json
 ROOT=Path(__file__).resolve().parent
 REV='d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77'
 DRIVER='Virtual Display Driver (HDR)/MttVDD/Driver.cpp'
@@ -12,7 +12,7 @@ def physical(path):
         if part==ROOT.parent: break
         assert not part.is_symlink() and not getattr(part,'is_junction',lambda:False)(), 'Source traverses a reparse point'
     return path
-def main():
+def main(timing_test_header=None):
     meta=json.loads((ROOT/'upstream.json').read_text())
     assert meta['revision']==REV and meta['tag']=='25.7.23' and meta['source_file_count']==16
     expected=set()
@@ -51,5 +51,12 @@ def main():
     for item in meta['maintained_files']:
         assert digest((ROOT/item['path']).read_bytes())==item['sha256']
     assert (ROOT/'LICENSE').read_bytes()==(ROOT/'upstream/LICENSE').read_bytes()
-    print(json.dumps({'verified_files':len(expected),'revision':REV,'patches':['stop-priority-only','isolated-windows11-umdf-inf'],'native_driver_executed':False}))
-if __name__=='__main__': main()
+    if timing_test_header is not None:
+        monitor = changed[changed.index('constexpr DISPLAYCONFIG_VIDEO_SIGNAL_INFO dispinfo('):changed.index('vector<BYTE> hardcodedEdid')]
+        target = changed[changed.index('void CreateTargetMode(DISPLAYCONFIG_VIDEO_SIGNAL_INFO&'):changed.index('void CreateTargetMode(IDDCX_TARGET_MODE&')]
+        Path(timing_test_header).write_text(monitor + target, encoding='utf-8')
+    print(json.dumps({'verified_files':len(expected),'revision':REV,'patches':['stop-priority-and-current-monitor-timing','isolated-windows11-umdf-inf'],'native_driver_executed':False}))
+if __name__=='__main__':
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--timing-test-header',type=Path)
+    main(parser.parse_args().timing_test_header)

@@ -36,7 +36,7 @@ foreach ($name in @('MttVDD.vcxproj', 'packages.config')) {
         throw ("Required driver source is missing: " + $name)
     }
 }
-Invoke-LoggedTool 'python' @((Join-Path $vendorRoot 'verify-source.py')) (Join-Path $logs 'source-verification.log')
+Invoke-LoggedTool 'python' @((Join-Path $vendorRoot 'verify-source.py'), '--timing-test-header', (Join-Path $buildRoot 'ModeTimingUnderTest.h')) (Join-Path $logs 'source-verification.log')
 $vswhere = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
 $msbuildCandidates = @(& $vswhere -version '[17.0,18.0)' -products '*' -requires Microsoft.Component.MSBuild -find 'MSBuild\Current\Bin\amd64\MSBuild.exe')
 if ($LASTEXITCODE -ne 0 -or $msbuildCandidates.Count -eq 0) {
@@ -97,12 +97,15 @@ foreach ($path in @(
 $vsDevCmd = [IO.Path]::GetFullPath((Join-Path (Split-Path $msbuild -Parent) '../../../../Common7/Tools/VsDevCmd.bat'))
 if (-not (Test-Path -LiteralPath $vsDevCmd -PathType Leaf)) { throw 'Visual Studio 2022 developer environment script is missing' }
 $timingBinary = Join-Path $buildRoot 'SwapChainStopTests.exe'
+$modeTimingBinary = Join-Path $buildRoot 'ModeTimingTests.exe'
 $compileBatch = Join-Path $buildRoot 'compile-timing-tests.cmd'
 @"
 @echo off
 call "$vsDevCmd" -no_logo -arch=x64 -host_arch=x64
 if errorlevel 1 exit /b %errorlevel%
 cl.exe /nologo /std:c++20 /EHsc /W4 /WX /O2 /UNDEBUG /I"$sdkHeaders/um" /I"$sdkHeaders/shared" /I"$sdkHeaders/ucrt" "$vendorRoot/tests/SwapChainStopTests.cpp" /Fo"$buildRoot/SwapChainStopTests.obj" /Fe"$timingBinary" /link /INCREMENTAL:NO /LIBPATH:"$sdkLibraries/um/x64" /LIBPATH:"$sdkLibraries/ucrt/x64"
+if errorlevel 1 exit /b %errorlevel%
+cl.exe /nologo /std:c++20 /EHsc /W4 /WX /O2 /UNDEBUG /I"$buildRoot" /I"$sdkHeaders/um" /I"$sdkHeaders/shared" /I"$sdkHeaders/ucrt" "$vendorRoot/tests/ModeTimingTests.cpp" /Fo"$buildRoot/ModeTimingTests.obj" /Fe"$modeTimingBinary" /link /INCREMENTAL:NO /LIBPATH:"$sdkLibraries/um/x64" /LIBPATH:"$sdkLibraries/ucrt/x64"
 exit /b %errorlevel%
 "@ | Set-Content -LiteralPath $compileBatch -Encoding ascii
 Write-Host 'MTT_MAINTENANCE_STAGE=compile-cpu-cancellation-tests'
@@ -113,6 +116,13 @@ Invoke-LoggedTool -FilePath $timingBinary -Arguments @() -LogPath $timingLog
 $timingOutput = Get-Content -LiteralPath $timingLog -Raw
 if ([regex]::Matches($timingOutput, '(?m)^3 MTT cancellation CPU tests passed\r?$').Count -ne 1) {
     throw 'The MSVC CPU test executable did not confirm all three cancellation groups'
+}
+
+Write-Host 'MTT_MAINTENANCE_STAGE=run-cpu-mode-timing-tests'
+$modeTimingLog = Join-Path $logs 'mode-timing-tests.log'
+Invoke-LoggedTool -FilePath $modeTimingBinary -Arguments @() -LogPath $modeTimingLog
+if ((Get-Content -LiteralPath $modeTimingLog -Raw) -notmatch '(?m)^3 MTT mode timing CPU tests passed\r?$') {
+    throw 'Native mode timing CPU tests did not confirm all three groups'
 }
 
 Write-Host 'MTT_MAINTENANCE_STAGE=compile-and-validate-api'
@@ -168,6 +178,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to record source revision' }
     msbuild_version = [Diagnostics.FileVersionInfo]::GetVersionInfo($msbuild).ProductVersion
     toolchain_packages = $packageHashes
     cpu_cancellation_tests = '3 passed'
+    cpu_mode_timing_tests = '3 passed'
     inf_validation = 'passed'
     api_validation = 'passed'
     device_tests = 'not-run'

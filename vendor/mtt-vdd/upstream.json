@@ -120,7 +120,7 @@
   "maintained_files": [
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
-      "sha256": "fa246ddf34db8d06b42e7011fa22eb8885e8d736f912f5c3ee0477465fd532a2"
+      "sha256": "4b509081ad47e2c9b3450bcfebd58f2628191a2c85cb340f2fe22dc025b42039"
     },
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
@@ -128,7 +128,7 @@
     },
     {
       "path": "patches/0001-prioritize-swapchain-stop.patch",
-      "sha256": "eeb02ffff54641314b60d6ea6e7797bbe278b1b93c33bbbe79d3e907275aaaf1"
+      "sha256": "f62acb62ccb22a83df346117f8fd70ba044cee0d6a8c475f534700d78c8801cc"
     },
     {
       "path": "tests/SwapChainStopTests.cpp",
@@ -141,6 +141,10 @@
     {
       "path": "patches/0002-use-isolated-windows11-umdf-inf.patch",
       "sha256": "f3934453d5cef0199c9dcab37e2929855516bd75f4c73e420eea31df96f2ece8"
+    },
+    {
+      "path": "tests/ModeTimingTests.cpp",
+      "sha256": "ded730d674a0951c94e7e0d734b289cbad819eb787eb06ebc33d7c1e694d8485"
     }
   ],
   "inf_reference": {

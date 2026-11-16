@@ -6,12 +6,19 @@ VirtualDrivers/Virtual-Display-Driver tag `25.7.23`, commit
 SHA256, size and exact import scope. `SOURCE_FILES.sha256` covers the original
 snapshot; all original source, MIT license and Microsoft sample notices remain.
 
-`source` is an independently maintained candidate. Its only driver behavior
-change is cancellation priority: test stop before every acquisition and prefer
-stop over simultaneously ready frame events. No format, refresh, monitor count,
-HDR, EDID, rendering or control behavior is intentionally changed. The original
-worker join remains: a timeout never frees a live worker or permits a use-after-free.
-This addresses event-starvation; it does not bound a stuck Windows/GPU/DDI call.
+`source` is independently maintained. Stop is checked before every acquisition
+and preferred over simultaneously ready frame events. The original worker join
+remains: a timeout never frees a live worker or permits a use-after-free. This
+addresses event starvation; it does not bound a stuck Windows/GPU/DDI call.
+
+Monitor timing now uses horizontal and vertical totals for the pixel clock,
+with exact declared refresh rationals. Target pixel-clock multiplication also
+uses 64 bits. Both monitor-description callbacks generate their output from the
+current configured mode list instead of appending to a process-global cache
+whose first entries could outlive the configuration. The existing driver source
+patch records these timing changes together with cancellation priority; no
+upstream file is rewritten. This is a candidate correction, not evidence that
+secondary-output application presentation has exceeded 60 FPS on real hardware.
 
 The patch is recorded under `patches`; the small stop-decision header is local
 MIT code used by both the driver and deterministic device-free CPU tests.

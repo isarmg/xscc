@@ -87,7 +87,6 @@ struct
 	AdapterOption Adapter;
 } Options;
 vector<tuple<int, int, int, int>> monitorModes;
-vector< DISPLAYCONFIG_VIDEO_SIGNAL_INFO> s_KnownMonitorModes2;
 UINT numVirtualDisplays;
 wstring gpuname;
 wstring confpath = L"C:\\VirtualDisplayDriver";
@@ -2333,11 +2332,11 @@ const UINT64 MHZ = 1000000;
 const UINT64 KHZ = 1000;
 
 constexpr DISPLAYCONFIG_VIDEO_SIGNAL_INFO dispinfo(UINT32 h, UINT32 v, UINT32 rn, UINT32 rd) {
-	const UINT32 clock_rate = rn * (v + 4) * (v + 4) / rd + 1000;
+	const UINT64 clock_rate = static_cast<UINT64>(rn) * (h + 4) * (v + 4) / rd;
 	return {
 	  clock_rate,                                      // pixel clock rate [Hz]
-	{ clock_rate, v + 4 },                         // fractional horizontal refresh rate [Hz]
-	{ clock_rate, (v + 4) * (v + 4) },          // fractional vertical refresh rate [Hz]
+	{ rn * (v + 4), rd },                         // fractional horizontal refresh rate [Hz]
+	{ rn, rd },                                  // fractional vertical refresh rate [Hz]
 	{ h, v },                                    // (horizontal, vertical) active pixel resolution
 	{ h + 4, v + 4 },                         // (horizontal, vertical) total pixel resolution
 	{ { 255, 0 }},                                   // video standard and vsync divider
@@ -2808,9 +2807,6 @@ NTSTATUS VirtualDisplayDriverParseMonitorDescription(const IDARG_IN_PARSEMONITOR
 	logStream << "Parsing monitor description. Input buffer count: " << pInArgs->MonitorModeBufferInputCount;
 	vddlog("d", logStream.str().c_str());
 
-	for (int i = 0; i < monitorModes.size(); i++) {
-		s_KnownMonitorModes2.push_back(dispinfo(std::get<0>(monitorModes[i]), std::get<1>(monitorModes[i]), std::get<2>(monitorModes[i]), std::get<3>(monitorModes[i])));
-	}
 	pOutArgs->MonitorModeBufferOutputCount = (UINT)monitorModes.size();
 
 	logStream.str("");
@@ -2832,7 +2828,8 @@ NTSTATUS VirtualDisplayDriverParseMonitorDescription(const IDARG_IN_PARSEMONITOR
 		{
 			pInArgs->pMonitorModes[ModeIndex].Size = sizeof(IDDCX_MONITOR_MODE);
 			pInArgs->pMonitorModes[ModeIndex].Origin = IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR;
-			pInArgs->pMonitorModes[ModeIndex].MonitorVideoSignalInfo = s_KnownMonitorModes2[ModeIndex];
+			const auto& mode = monitorModes[ModeIndex];
+			pInArgs->pMonitorModes[ModeIndex].MonitorVideoSignalInfo = dispinfo(std::get<0>(mode), std::get<1>(mode), std::get<2>(mode), std::get<3>(mode));
 		}
 
 		// Set the preferred mode as represented in the EDID
@@ -2882,7 +2879,7 @@ void CreateTargetMode(DISPLAYCONFIG_VIDEO_SIGNAL_INFO& Mode, UINT Width, UINT He
 	Mode.hSyncFreq.Numerator = VSyncNum * Height;
 	Mode.hSyncFreq.Denominator = VSyncDen;
 	Mode.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
-	Mode.pixelRate = VSyncNum * Width * Height / VSyncDen;
+	Mode.pixelRate = static_cast<UINT64>(VSyncNum) * Width * Height / VSyncDen;
 
 	logStream.str("");
 	logStream << "Target mode configured with:"
@@ -3097,9 +3094,6 @@ NTSTATUS VirtualDisplayDriverEvtIddCxParseMonitorDescription2(
 	}
 	vddlog("d", logStream.str().c_str());
 
-	for (int i = 0; i < monitorModes.size(); i++) {
-		s_KnownMonitorModes2.push_back(dispinfo(std::get<0>(monitorModes[i]), std::get<1>(monitorModes[i]), std::get<2>(monitorModes[i]), std::get<3>(monitorModes[i])));
-	}
 	pOutArgs->MonitorModeBufferOutputCount = (UINT)monitorModes.size();
 
 	if (pInArgs->MonitorModeBufferInputCount < monitorModes.size())
@@ -3116,7 +3110,8 @@ NTSTATUS VirtualDisplayDriverEvtIddCxParseMonitorDescription2(
 		{
 			pInArgs->pMonitorModes[ModeIndex].Size = sizeof(IDDCX_MONITOR_MODE2);
 			pInArgs->pMonitorModes[ModeIndex].Origin = IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR;
-			pInArgs->pMonitorModes[ModeIndex].MonitorVideoSignalInfo = s_KnownMonitorModes2[ModeIndex];
+			const auto& mode = monitorModes[ModeIndex];
+			pInArgs->pMonitorModes[ModeIndex].MonitorVideoSignalInfo = dispinfo(std::get<0>(mode), std::get<1>(mode), std::get<2>(mode), std::get<3>(mode));
 
 
 			if (ColourFormat == L"RGB") {

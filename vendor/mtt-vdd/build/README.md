@@ -17,6 +17,16 @@ c++ -std=c++17 -Wall -Wextra -Werror -UNDEBUG vendor/mtt-vdd/tests/SwapChainStop
 /tmp/mtt-stop-tests
 ```
 
+The Windows build additionally exports the actual maintained `dispinfo` and
+target-signal function bodies to a temporary header and compiles
+`tests/ModeTimingTests.cpp` against the fixed Windows SDK. Only the function's
+logger is stubbed; no driver API, device or swapchain is executed. The three
+groups check landscape/portrait 60/120/240-Hz timings, fractional refresh and
+pixel clocks above 32 bits. They compare pixel-clock/total-pixel and horizontal
+frequency invariants with the declared refresh, rather than trusting the rate
+field alone. Source-only verification remains read-only unless a test-header
+destination is explicitly supplied.
+
 The same source has also passed native MSVC 14.42 with /W4 /WX /UNDEBUG locally.
 No complete driver build is claimed by that CPU result. The manual-only
 `.github/workflows/mtt-vdd-maintenance.yml` prepares an unsigned x64 UMDF package
