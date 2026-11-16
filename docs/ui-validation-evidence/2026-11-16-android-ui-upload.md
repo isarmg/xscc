@@ -36,8 +36,31 @@ beta.10 完成两轮各 45 秒的原生源测试，均自行退出。无剖析�
 
 核心算法后续抽为独立生产模块，语义未变；[整合源码 b22319fea 的 Android 构建](https://github.com/isarmg/xscc/actions/runs/43866974023)、iOS 构建与 GPUI 框架验证均通过。手机安装包仍明确记录上述 a92cfe75a920 源码，未将源码整合后的自动候选覆盖到手机。
 
-## 后续候选：合并 Android 上传和绘制提交（待真机验收）
+## 已测：合并 Android 上传和绘制提交
 
 USB 连续测试继续。将 Android 大图最新快照的映射上传记录进主绘制 encoder，随绘制一次提交，取消原来每帧单独的上传提交。新增按秒汇总的 acquire / upload / render / finish / submit / present 墙钟耗时；render 包含其中的上传与提交，不应把这些列相加。尚未据此声称达到 120 FPS。
 
 回归范围：`android_image_upload.rs`、`wgpu_atlas.rs` 的 Android 大图上传及 `wgpu_renderer.rs` 的 Android 编码/提交入口；其他平台产品沿原 atlas 上传路径。纯布局算法移入 `image_upload_layout.rs`，保持无 GPU 的独立测试；原像素回归使用 641×480 大图以覆盖映射上传、行对齐、连续替换及删除后不绘制。GPU 回收仍由提交完成后的回调控制。
+
+Android [构建 43873483437](https://github.com/isarmg/xscc/actions/runs/43873483437) 的 smoke、management 均成功。管理 APK 源码 b28a86835b481f50d5c1b857213a76f487f13b87，版本名称 4.0.0-beta.11，实际 versionCode 仍是打包脚本固定的 40010，不误记为 40011。已校验产物外层摘要、APK 内层摘要、来源及原签名身份，通过 USB 成功覆盖安装，绑定保留。
+
+两轮均运行同一原生窗口测试源 45 秒，随后 3 秒静止尾帧并自动退出；稳态仍取开始后第 10–40 秒。
+
+| beta.11 稳态指标 | 第一轮 | 复测 |
+| --- | ---: | ---: |
+| 接收 / 解码 FPS 中位数 | 118.5 / 118.5 | 116 / 116 |
+| UI 接受帧 FPS 中位数 | 118 | 115.5 |
+| UI 接受帧 FPS 范围 | 103–120 | 77–119 |
+| 接收 / 解码 / UI 平均 FPS | 117.95 / 117.95 / 117.10 | 113.41 / 113.32 / 112.68 |
+| 完整 UI 回调平均耗时的中位数 ms | 3.72 | 3.95 |
+| 排队 p95 的中位数 ms | 13.94 | 12.69 |
+
+相比 beta.10 的 UI 中位数 94、回调 9.29ms，界面现在基本跟上接收/解码，回调低于 120FPS 的 8.33ms 预算。第一轮 Android GPU 分段平均耗时的窗口中位数：取显示缓冲 0.082ms，上传 0.752ms，render 2.093ms，encoder finish 0.558ms，queue submit 0.481ms，present 0.562ms。render 包含上传、finish 和 submit，不把各列相加。
+
+复测第 25 秒只读采集本应用 SurfaceFlinger 时间戳。126 个有效已呈现缓冲覆盖 1.065 秒，实际呈现频率约 117.33Hz；间隔中位数 8.258ms、p95 8.259ms，3 个间隔超过 12ms。此为短窗口系统呈现证据，不扩写为整场面板扫描或长时稳定 120FPS。
+
+复测有一次接收/解码/UI 同时降至 78 / 76 / 77FPS，UI mailbox dropped 为 0。对应主机日志仍输出约 116–119FPS；剩余波动位于主机输出到客户端接收/解码之间，当前证据不能区分传输与接收调度，也没有证明 UDP 丢包。未据此猜测原因后调整拥塞控制、降低画质或修改驱动。
+
+最终回归面：现有 android_image_upload.rs 的提交改为记录到传入 encoder；wgpu_atlas.rs 的 Android 大图替换与刷入改为保留最新快照、在绘制前编码；wgpu_renderer.rs 的 Android 绘制入口接入复制和按秒耗时汇总。gpui_wgpu.rs 只注册模块；.github/workflows/gpui-android-smoke.yml 只把无 GPU 布局测试路径改到抽出的文件。其他平台产品 atlas 路径保留，未改协议、Windows 安装、驱动或显示器布局。现有 8 项 atlas 回归、2 项纯布局回归均通过；渲染像素回归实际覆盖大图映射、非对齐行宽、多次替换及删除。模块声明后续仅按 rustfmt 排序，运行语义不变。
+
+beta.11 管理 APK SHA-256：c533d93f0a003345f47adc2b92eef526cb3340cb72fa384d80d039b11a44d35c。后续 UFO 浏览器专项另记，不把原生窗口源达到高刷当成浏览器验收通过。

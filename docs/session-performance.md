@@ -311,3 +311,7 @@ The Android path enables its previously declared NDK dependency.
 Platform references: [MediaCodecInfo](https://developer.android.com/reference/android/media/MediaCodecInfo),
 [MediaCodecList](https://developer.android.com/reference/android/media/MediaCodecList),
 [NDK Choreographer](https://developer.android.com/ndk/reference/group/choreographer).
+
+### Android beta.11：上传随绘制一次提交
+
+小米 13、现有 1080p/120Hz 虚拟屏、物理屏继续为主屏。大图映射上传合并进绘制 encoder，减少独立提交和同步；最新替换快照仍合并，缓冲完成后才回收。两轮 45 秒测试的 UI 接受帧中位数由 beta.10 的 94 提升至 118 / 115.5，接收/解码分别为 118.5 / 116；完整 UI 回调中位数 3.72 / 3.95ms。系统 Surface 短窗口实际呈现约 117.3Hz。仍有一次接收、解码和 UI 同步降至约 76–78FPS，不声称全程稳定 120FPS，未通过放宽计数或降低画质取得结果。详见同日 UI 上传实测记录。
