@@ -1166,6 +1166,8 @@ impl WgpuRenderer {
             self.failed_frame_count = 0;
         }
 
+        #[cfg(target_os = "android")]
+        let acquired = std::time::Instant::now();
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -1187,6 +1189,12 @@ impl WgpuRenderer {
             }
         };
 
+        #[cfg(target_os = "android")]
+        crate::android_render_timing::record(
+            crate::android_render_timing::Stage::Acquire,
+            acquired,
+        );
+
         // The acquired texture is the authority on frame dimensions; the surface
         // configuration is only a request.
         let size = Size {
@@ -1198,6 +1206,8 @@ impl WgpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let premultiplied_alpha =
             self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied;
+        #[cfg(target_os = "android")]
+        let render_started = std::time::Instant::now();
         if let Err(error) = core.render_frame(
             scene,
             &frame_view,
@@ -1209,7 +1219,22 @@ impl WgpuRenderer {
             return false;
         }
 
+        #[cfg(target_os = "android")]
+        crate::android_render_timing::record(
+            crate::android_render_timing::Stage::Render,
+            render_started,
+        );
+        #[cfg(target_os = "android")]
+        let present_started = std::time::Instant::now();
         core.resources.queue.present(frame);
+        #[cfg(target_os = "android")]
+        {
+            crate::android_render_timing::record(
+                crate::android_render_timing::Stage::Present,
+                present_started,
+            );
+            crate::android_render_timing::finish_frame();
+        }
         true
     }
 }
@@ -1507,6 +1532,16 @@ impl WgpuRendererCore {
                     label: Some("main_encoder"),
                 });
 
+        #[cfg(target_os = "android")]
+        let upload_started = std::time::Instant::now();
+        #[cfg(any(target_os = "android", test))]
+        self.atlas.encode_uploads(&mut encoder)?;
+        #[cfg(target_os = "android")]
+        crate::android_render_timing::record(
+            crate::android_render_timing::Stage::Upload,
+            upload_started,
+        );
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main_pass"),
@@ -1618,10 +1653,22 @@ impl WgpuRendererCore {
             }
         }
 
-        let submission = self
-            .resources()
-            .queue
-            .submit(std::iter::once(encoder.finish()));
+        #[cfg(target_os = "android")]
+        let finish_started = std::time::Instant::now();
+        let commands = encoder.finish();
+        #[cfg(target_os = "android")]
+        crate::android_render_timing::record(
+            crate::android_render_timing::Stage::Finish,
+            finish_started,
+        );
+        #[cfg(target_os = "android")]
+        let submit_started = std::time::Instant::now();
+        let submission = self.resources().queue.submit(std::iter::once(commands));
+        #[cfg(target_os = "android")]
+        crate::android_render_timing::record(
+            crate::android_render_timing::Stage::Submit,
+            submit_started,
+        );
         Ok(submission)
     }
 

@@ -1,4 +1,4 @@
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 use crate::android_image_upload::ImageUpload;
 use anyhow::{Context as _, Result};
 use etagere::{BucketedAtlasAllocator, size2};
@@ -41,7 +41,7 @@ struct WgpuAtlasTextures {
     pending_uploads: Vec<PendingUpload>,
     upload_buffers: Vec<Vec<u8>>,
     next_texture_generation: u64,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     image_upload: ImageUpload,
 }
 
@@ -83,7 +83,7 @@ impl WgpuAtlas {
             pending_uploads: Vec::new(),
             upload_buffers: Vec::new(),
             next_texture_generation: 0,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", test))]
             image_upload: ImageUpload::default(),
         })))
     }
@@ -97,8 +97,15 @@ impl WgpuAtlas {
     }
 
     pub fn before_frame(&self) {
+        #[cfg(not(any(target_os = "android", test)))]
         let mut lock = self.0.lock();
+        #[cfg(not(any(target_os = "android", test)))]
         lock.backend.flush_uploads();
+    }
+
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn encode_uploads(&self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        self.0.lock().backend.encode_uploads(encoder)
     }
 
     /// Returns the view backing `id`, or `None` once every tile in it has been
@@ -120,7 +127,7 @@ impl WgpuAtlas {
         self.0.lock().clear(|textures| {
             textures.storage = WgpuAtlasStorage::default();
             textures.pending_uploads.clear();
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", test))]
             {
                 textures.image_upload = ImageUpload::default();
             }
@@ -136,7 +143,7 @@ impl WgpuAtlas {
             textures.color_texture_format = context.color_texture_format();
             textures.storage = WgpuAtlasStorage::default();
             textures.pending_uploads.clear();
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", test))]
             {
                 textures.image_upload = ImageUpload::default();
             }
@@ -190,35 +197,10 @@ impl AtlasBackend for WgpuAtlasTextures {
                 .iter()
                 .any(|upload| upload.id == tile.texture_id && upload.bounds == tile.bounds)
         {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", test))]
             if bytes.len() >= 1024 * 1024 {
-                if self.image_upload.write(
-                    &self.device,
-                    &self.queue,
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: tile.bounds.origin.x.0 as u32,
-                            y: tile.bounds.origin.y.0 as u32,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: tile.bounds.size.width.0 as u32,
-                        height: tile.bounds.size.height.0 as u32,
-                        depth_or_array_layers: 1,
-                    },
-                    bytes,
-                )? {
-                    self.pending_uploads.push(PendingUpload {
-                        id: tile.texture_id,
-                        bounds: tile.bounds,
-                        data: None,
-                    });
-                    return Ok(true);
-                }
+                self.upload_texture(tile.texture_id, tile.bounds, bytes);
+                return Ok(true);
             }
             // write_texture snapshots the borrowed pixels; another CPU copy is unnecessary.
             self.queue.write_texture(
@@ -409,6 +391,54 @@ impl WgpuAtlasTextures {
         });
     }
 
+    #[cfg(any(target_os = "android", test))]
+    fn encode_uploads(&mut self, encoder: &mut wgpu::CommandEncoder) -> Result<()> {
+        for upload in self.pending_uploads.drain(..) {
+            let Some(data) = upload.data else {
+                continue;
+            };
+            if let Some(texture) = self.storage.get(upload.id) {
+                let target = wgpu::TexelCopyTextureInfo {
+                    texture: &texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: upload.bounds.origin.x.0 as u32,
+                        y: upload.bounds.origin.y.0 as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                };
+                let extent = wgpu::Extent3d {
+                    width: upload.bounds.size.width.0 as u32,
+                    height: upload.bounds.size.height.0 as u32,
+                    depth_or_array_layers: 1,
+                };
+                let mapped = texture.upload_format == wgpu::TextureFormat::Bgra8Unorm
+                    && data.len() >= 1024 * 1024
+                    && self
+                        .image_upload
+                        .write(&self.device, encoder, target, extent, &data)?;
+                if !mapped {
+                    self.queue.write_texture(
+                        target,
+                        &data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(extent.width * texture.bytes_per_pixel() as u32),
+                            rows_per_image: None,
+                        },
+                        extent,
+                    );
+                }
+            }
+            if self.upload_buffers.len() < 3 && data.capacity() <= 64 * 1024 * 1024 {
+                self.upload_buffers.push(data);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "android", test)))]
     fn flush_uploads(&mut self) {
         for upload in self.pending_uploads.drain(..) {
             let Some(data) = upload.data else {
@@ -718,8 +748,8 @@ mod tests {
         let mut renderer = crate::WgpuHeadlessRenderer::new()?;
         let atlas = renderer.sprite_atlas();
         let size = Size {
-            width: DevicePixels(2),
-            height: DevicePixels(2),
+            width: DevicePixels(641),
+            height: DevicePixels(480),
         };
         let make_key = |image_id| {
             AtlasKey::Image(RenderImageParams {
@@ -730,14 +760,14 @@ mod tests {
         let mut key = make_key(0);
         let tile = atlas
             .get_or_insert_with(key.clone(), &mut || {
-                Ok(Some((size, Cow::Owned(vec![255; 16]))))
+                Ok(Some((size, Cow::Owned(vec![255; 641 * 480 * 4]))))
             })?
             .expect("tile should be created");
         let bounds = Bounds {
             origin: Point::default(),
             size: Size {
-                width: 2.0.into(),
-                height: 2.0.into(),
+                width: 641.0.into(),
+                height: 480.0.into(),
             },
         };
         let mut scene = Scene::default();
@@ -762,7 +792,7 @@ mod tests {
                     1 => [0, 255, 0, 255],
                     _ => [0, 0, 255, 255],
                 };
-                let mut pixels = bgra.repeat(4);
+                let mut pixels = bgra.repeat(641 * 480);
                 let next = make_key(image_id);
                 assert!(atlas.replace(&key, next.clone(), size, &pixels)?);
                 key = next;
@@ -773,7 +803,7 @@ mod tests {
             assert!(image.pixels().all(|pixel| pixel.0 == expected));
         }
         let next = make_key(image_id + 1);
-        assert!(atlas.replace(&key, next.clone(), size, &[255; 16])?);
+        assert!(atlas.replace(&key, next.clone(), size, &vec![255; 641 * 480 * 4])?);
         atlas.remove(&next);
         let image = renderer.render_scene_to_image(&scene, size)?;
         assert!(image.pixels().all(|pixel| pixel.0 == [0, 0, 0, 255]));

@@ -1,5 +1,9 @@
 #[cfg(any(target_os = "android", test))]
 mod android_image_upload;
+#[cfg(any(target_os = "android", test))]
+mod image_upload_layout;
+#[cfg(target_os = "android")]
+mod android_render_timing;
 mod cosmic_text_system;
 mod wgpu_atlas;
 mod wgpu_context;

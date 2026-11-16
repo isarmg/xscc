@@ -35,3 +35,9 @@ beta.10 完成两轮各 45 秒的原生源测试，均自行退出。无剖析�
 测试结束已断开会话，临时 USB 常亮配置已恢复原值 0。虚拟屏继续保留 1920×1080、120Hz，物理主屏仍为 1920×1080、60Hz。未创建/撤销虚拟屏，未操作浏览器或桌面全屏，无测试源进程遗留。
 
 核心算法后续抽为独立生产模块，语义未变；[整合源码 b22319fea 的 Android 构建](https://github.com/isarmg/xscc/actions/runs/43866974023)、iOS 构建与 GPUI 框架验证均通过。手机安装包仍明确记录上述 a92cfe75a920 源码，未将源码整合后的自动候选覆盖到手机。
+
+## 后续候选：合并 Android 上传和绘制提交（待真机验收）
+
+USB 连续测试继续。将 Android 大图最新快照的映射上传记录进主绘制 encoder，随绘制一次提交，取消原来每帧单独的上传提交。新增按秒汇总的 acquire / upload / render / finish / submit / present 墙钟耗时；render 包含其中的上传与提交，不应把这些列相加。尚未据此声称达到 120 FPS。
+
+回归范围：`android_image_upload.rs`、`wgpu_atlas.rs` 的 Android 大图上传及 `wgpu_renderer.rs` 的 Android 编码/提交入口；其他平台产品沿原 atlas 上传路径。纯布局算法移入 `image_upload_layout.rs`，保持无 GPU 的独立测试；原像素回归使用 641×480 大图以覆盖映射上传、行对齐、连续替换及删除后不绘制。GPU 回收仍由提交完成后的回调控制。
