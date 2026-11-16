@@ -1443,6 +1443,10 @@ extern "C" NTSTATUS DriverEntry(
 	alphaCursorSupport = EnabledQuery(L"AlphaCursorSupport");
 	CursorMaxX = GetIntegerSetting(L"CursorMaxX");
 	CursorMaxY = GetIntegerSetting(L"CursorMaxY");
+	if (hardwareCursor && (CursorMaxX < 1 || CursorMaxX > 512 || CursorMaxY < 1 || CursorMaxY > 512)) {
+		hardwareCursor = false;
+		vddlog("w", "Invalid hardware cursor dimensions; retaining the Windows composited cursor");
+	}
 
 	int xorCursorSupportLevelInt = GetIntegerSetting(L"XorCursorSupportLevel");
 	std::string xorCursorSupportLevelName;
@@ -2234,17 +2238,20 @@ void SwapChainProcessor::RunCore()
 		IDARG_IN_RELEASEANDACQUIREBUFFER2 BufferInArgs = {};
 		BufferInArgs.Size = sizeof(BufferInArgs);
 		IDXGIResource* pSurface;
+		UINT frameNumber = 0;
 
 		if (IDD_IS_FUNCTION_AVAILABLE(IddCxSwapChainReleaseAndAcquireBuffer2)) {
 			IDARG_OUT_RELEASEANDACQUIREBUFFER2 Buffer = {};
 			hr = IddCxSwapChainReleaseAndAcquireBuffer2(m_hSwapChain, &BufferInArgs, &Buffer);
 			pSurface = Buffer.MetaData.pSurface;
+			frameNumber = Buffer.MetaData.PresentationFrameNumber;
 		}
 		else
 		{
 			IDARG_OUT_RELEASEANDACQUIREBUFFER Buffer = {};
 			hr = IddCxSwapChainReleaseAndAcquireBuffer(m_hSwapChain, &Buffer);
 			pSurface = Buffer.MetaData.pSurface;
+			frameNumber = Buffer.MetaData.PresentationFrameNumber;
 		}
 		// AcquireBuffer immediately returns STATUS_PENDING if no buffer is yet available
 		logStream.str("");
@@ -2286,6 +2293,11 @@ void SwapChainProcessor::RunCore()
 		else if (SUCCEEDED(hr))
 		{
 			AcquiredBuffer.Attach(pSurface);
+			LARGE_INTEGER acquiredAt{};
+			if (!QueryPerformanceCounter(&acquiredAt)) {
+				vddlog("e", "Cannot timestamp acquired virtual display frame");
+				break;
+			}
 
 			// ==============================
 			// TODO: Process the frame here
@@ -2306,12 +2318,20 @@ void SwapChainProcessor::RunCore()
 				break;
 			}
 
-			// ==============================
-			// TODO: Report frame statistics once the asynchronous encode/send work is completed
-			//
-			// Drivers should report information about sub-frame timings, like encode time, send time, etc.
-			// ==============================
-			// IddCxSwapChainReportFrameStatistics(m_hSwapChain, ...);
+			IDARG_IN_REPORTFRAMESTATISTICS report{};
+			report.FrameStatistics.Size = sizeof(report.FrameStatistics);
+			report.FrameStatistics.PresentationFrameNumber = frameNumber;
+			report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_COMPLETED;
+			report.FrameStatistics.FrameSliceTotal = 1;
+			report.FrameStatistics.FrameAcquireQpcTime = acquiredAt.QuadPart;
+			// This virtual sink has no encoder or transport; do not invent send timings.
+			const NTSTATUS status = IddCxSwapChainReportFrameStatistics(m_hSwapChain, &report);
+			if (FAILED(status)) {
+				logStream.str("");
+				logStream << "Failed to report virtual display frame statistics: " << status;
+				vddlog("e", logStream.str().c_str());
+				break;
+			}
 		}
 		else
 		{

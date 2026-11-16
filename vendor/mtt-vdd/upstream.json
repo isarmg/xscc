@@ -110,7 +110,8 @@
   "maintained_changes": [
     "Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
     "Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
-    "Virtual Display Driver (HDR)/MttVDD/MttVDD.inf"
+    "Virtual Display Driver (HDR)/MttVDD/MttVDD.inf",
+    "Common/Include/AdapterOption.h"
   ],
   "signed_payloads_imported": false,
   "product_manifest_changed": false,
@@ -120,7 +121,7 @@
   "maintained_files": [
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
-      "sha256": "4b509081ad47e2c9b3450bcfebd58f2628191a2c85cb340f2fe22dc025b42039"
+      "sha256": "2009b29a1ce693cfaa7c4a10c38635d5cd4c0f4f7e23e4158ea5f48f3f36d801"
     },
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
@@ -128,7 +129,7 @@
     },
     {
       "path": "patches/0001-prioritize-swapchain-stop.patch",
-      "sha256": "f62acb62ccb22a83df346117f8fd70ba044cee0d6a8c475f534700d78c8801cc"
+      "sha256": "5505c996146a5f747e0027e21c13e25cb188355f2e5b1e6fc1fd2d7f1828bb17"
     },
     {
       "path": "tests/SwapChainStopTests.cpp",
@@ -145,6 +146,14 @@
     {
       "path": "tests/ModeTimingTests.cpp",
       "sha256": "ded730d674a0951c94e7e0d734b289cbad819eb787eb06ebc33d7c1e694d8485"
+    },
+    {
+      "path": "source/Common/Include/AdapterOption.h",
+      "sha256": "6897649bc3662bde2f089aa760f5c760b1940f22848db04d731f0435f73a3a1f"
+    },
+    {
+      "path": "patches/0003-select-render-capable-adapters.patch",
+      "sha256": "52d472c2aa88581fc3e53c23053c036ff701efa5a8371781351825a23a65b7f0"
     }
   ],
   "inf_reference": {

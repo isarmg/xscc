@@ -6,6 +6,7 @@ REV='d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77'
 DRIVER='Virtual Display Driver (HDR)/MttVDD/Driver.cpp'
 HELPER='Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h'
 INF='Virtual Display Driver (HDR)/MttVDD/MttVDD.inf'
+ADAPTER='Common/Include/AdapterOption.h'
 def digest(data): return hashlib.sha256(data).hexdigest()
 def physical(path):
     for part in [path,*path.parents]:
@@ -22,13 +23,17 @@ def main(timing_test_header=None):
         data=physical(ROOT/'upstream'/name).read_bytes()
         assert len(data)==item['bytes'] and digest(data)==item['sha256']
         assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==item['git_blob']
-        if name not in {DRIVER,INF}: assert physical(ROOT/'source'/name).read_bytes()==data
+        if name not in {DRIVER,INF,ADAPTER}: assert physical(ROOT/'source'/name).read_bytes()==data
     assert {str(p.relative_to(ROOT/'upstream')).replace('\\','/') for p in (ROOT/'upstream').rglob('*') if p.is_file()}==expected
     assert {str(p.relative_to(ROOT/'source')).replace('\\','/') for p in (ROOT/'source').rglob('*') if p.is_file()}==expected|{HELPER}
     original=(ROOT/'upstream'/DRIVER).read_text(encoding='utf-8')
     changed=(ROOT/'source'/DRIVER).read_text(encoding='utf-8')
     delta=''.join(difflib.unified_diff(original.splitlines(keepends=True),changed.splitlines(keepends=True),fromfile='a/'+DRIVER,tofile='b/'+DRIVER))
     assert delta==(ROOT/'patches/0001-prioritize-swapchain-stop.patch').read_text()
+    adapter_original=(ROOT/'upstream'/ADAPTER).read_text()
+    adapter_changed=(ROOT/'source'/ADAPTER).read_text()
+    adapter_delta=''.join(difflib.unified_diff(adapter_original.splitlines(keepends=True),adapter_changed.splitlines(keepends=True),fromfile='a/'+ADAPTER,tofile='b/'+ADAPTER))
+    assert adapter_delta==(ROOT/'patches/0003-select-render-capable-adapters.patch').read_text()
     original_inf=(ROOT/'upstream'/INF).read_bytes().decode('utf-16').replace('\r\n','\n')
     changed_inf=(ROOT/'source'/INF).read_bytes().decode('utf-16').replace('\r\n','\n')
     inf_delta=''.join(difflib.unified_diff(original_inf.splitlines(keepends=True),changed_inf.splitlines(keepends=True),fromfile='a/'+INF,tofile='b/'+INF))
@@ -55,7 +60,7 @@ def main(timing_test_header=None):
         monitor = changed[changed.index('constexpr DISPLAYCONFIG_VIDEO_SIGNAL_INFO dispinfo('):changed.index('vector<BYTE> hardcodedEdid')]
         target = changed[changed.index('void CreateTargetMode(DISPLAYCONFIG_VIDEO_SIGNAL_INFO&'):changed.index('void CreateTargetMode(IDDCX_TARGET_MODE&')]
         Path(timing_test_header).write_text(monitor + target, encoding='utf-8')
-    print(json.dumps({'verified_files':len(expected),'revision':REV,'patches':['stop-priority-and-current-monitor-timing','isolated-windows11-umdf-inf'],'native_driver_executed':False}))
+    print(json.dumps({'verified_files':len(expected),'revision':REV,'patches':['stop-priority-and-current-monitor-timing','isolated-windows11-umdf-inf','render-capable-adapters'],'native_driver_executed':False}))
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--timing-test-header',type=Path)
