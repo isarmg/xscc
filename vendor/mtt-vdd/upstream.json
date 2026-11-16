@@ -121,7 +121,7 @@
   "maintained_files": [
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/Driver.cpp",
-      "sha256": "2009b29a1ce693cfaa7c4a10c38635d5cd4c0f4f7e23e4158ea5f48f3f36d801"
+      "sha256": "b569065ddead017c3001da84f34404200456ea93d2370aa750813e77ca1a106c"
     },
     {
       "path": "source/Virtual Display Driver (HDR)/MttVDD/SwapChainStop.h",
@@ -129,7 +129,7 @@
     },
     {
       "path": "patches/0001-prioritize-swapchain-stop.patch",
-      "sha256": "5505c996146a5f747e0027e21c13e25cb188355f2e5b1e6fc1fd2d7f1828bb17"
+      "sha256": "f4f34622dee1e9f269f41e90b9ca11979b169bd330fb45da89fd65706a5b0377"
     },
     {
       "path": "tests/SwapChainStopTests.cpp",

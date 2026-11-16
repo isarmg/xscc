@@ -2321,10 +2321,11 @@ void SwapChainProcessor::RunCore()
 			IDARG_IN_REPORTFRAMESTATISTICS report{};
 			report.FrameStatistics.Size = sizeof(report.FrameStatistics);
 			report.FrameStatistics.PresentationFrameNumber = frameNumber;
-			report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_COMPLETED;
+			report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_DROPPED;
 			report.FrameStatistics.FrameSliceTotal = 1;
 			report.FrameStatistics.FrameAcquireQpcTime = acquiredAt.QuadPart;
-			// This virtual sink has no encoder or transport; do not invent send timings.
+			// This driver discards the acquired surface; Host capture sends video separately.
+			// A completed-send status would require nonzero send timestamps.
 			const NTSTATUS status = IddCxSwapChainReportFrameStatistics(m_hSwapChain, &report);
 			if (FAILED(status)) {
 				logStream.str("");

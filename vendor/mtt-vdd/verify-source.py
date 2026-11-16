@@ -50,6 +50,9 @@ def main(timing_test_header=None):
     assert 'm_hTerminateEvent.Get(),\n\t\t\t\tm_hAvailableBufferEvent' in changed
     run=changed[changed.index('void SwapChainProcessor::RunCore()'):]
     assert run.index('xscc_mtt::before_acquire(')<run.index('IddCxSwapChainReleaseAndAcquireBuffer')
+    report=run[run.index('IDARG_IN_REPORTFRAMESTATISTICS report{};'):run.index('const NTSTATUS status = IddCxSwapChainReportFrameStatistics')]
+    # The local discard sink does not perform a transmission. COMPLETED requires send timestamps.
+    assert 'FrameStatus = IDDCX_FRAME_STATUS_DROPPED;' in report, 'Local discard sink must not claim a completed send'
     # Preserve sole worker ownership: no timed-out join, detach, or thread termination is introduced.
     destructor=lambda s:s[s.index('SwapChainProcessor::~SwapChainProcessor()'):s.index('DWORD CALLBACK SwapChainProcessor::RunThread')]
     assert destructor(original)==destructor(changed)

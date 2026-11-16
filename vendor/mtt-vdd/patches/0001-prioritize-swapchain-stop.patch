@@ -100,7 +100,7 @@
  
  			// ==============================
  			// TODO: Process the frame here
-@@ -2297,12 +2318,20 @@
+@@ -2297,12 +2318,21 @@
  				break;
  			}
  
@@ -113,10 +113,11 @@
 +			IDARG_IN_REPORTFRAMESTATISTICS report{};
 +			report.FrameStatistics.Size = sizeof(report.FrameStatistics);
 +			report.FrameStatistics.PresentationFrameNumber = frameNumber;
-+			report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_COMPLETED;
++			report.FrameStatistics.FrameStatus = IDDCX_FRAME_STATUS_DROPPED;
 +			report.FrameStatistics.FrameSliceTotal = 1;
 +			report.FrameStatistics.FrameAcquireQpcTime = acquiredAt.QuadPart;
-+			// This virtual sink has no encoder or transport; do not invent send timings.
++			// This driver discards the acquired surface; Host capture sends video separately.
++			// A completed-send status would require nonzero send timestamps.
 +			const NTSTATUS status = IddCxSwapChainReportFrameStatistics(m_hSwapChain, &report);
 +			if (FAILED(status)) {
 +				logStream.str("");
@@ -127,7 +128,7 @@
  		}
  		else
  		{
-@@ -2323,11 +2352,11 @@
+@@ -2323,11 +2353,11 @@
  const UINT64 KHZ = 1000;
  
  constexpr DISPLAYCONFIG_VIDEO_SIGNAL_INFO dispinfo(UINT32 h, UINT32 v, UINT32 rn, UINT32 rd) {
@@ -142,7 +143,7 @@
  	{ h, v },                                    // (horizontal, vertical) active pixel resolution
  	{ h + 4, v + 4 },                         // (horizontal, vertical) total pixel resolution
  	{ { 255, 0 }},                                   // video standard and vsync divider
-@@ -2798,9 +2827,6 @@
+@@ -2798,9 +2828,6 @@
  	logStream << "Parsing monitor description. Input buffer count: " << pInArgs->MonitorModeBufferInputCount;
  	vddlog("d", logStream.str().c_str());
  
@@ -152,7 +153,7 @@
  	pOutArgs->MonitorModeBufferOutputCount = (UINT)monitorModes.size();
  
  	logStream.str("");
-@@ -2822,7 +2848,8 @@
+@@ -2822,7 +2849,8 @@
  		{
  			pInArgs->pMonitorModes[ModeIndex].Size = sizeof(IDDCX_MONITOR_MODE);
  			pInArgs->pMonitorModes[ModeIndex].Origin = IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR;
@@ -162,7 +163,7 @@
  		}
  
  		// Set the preferred mode as represented in the EDID
-@@ -2872,7 +2899,7 @@
+@@ -2872,7 +2900,7 @@
  	Mode.hSyncFreq.Numerator = VSyncNum * Height;
  	Mode.hSyncFreq.Denominator = VSyncDen;
  	Mode.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
@@ -171,7 +172,7 @@
  
  	logStream.str("");
  	logStream << "Target mode configured with:"
-@@ -3087,9 +3114,6 @@
+@@ -3087,9 +3115,6 @@
  	}
  	vddlog("d", logStream.str().c_str());
  
@@ -181,7 +182,7 @@
  	pOutArgs->MonitorModeBufferOutputCount = (UINT)monitorModes.size();
  
  	if (pInArgs->MonitorModeBufferInputCount < monitorModes.size())
-@@ -3106,7 +3130,8 @@
+@@ -3106,7 +3131,8 @@
  		{
  			pInArgs->pMonitorModes[ModeIndex].Size = sizeof(IDDCX_MONITOR_MODE2);
  			pInArgs->pMonitorModes[ModeIndex].Origin = IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR;
