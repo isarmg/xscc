@@ -2016,6 +2016,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn due_udp_send_slots_do_not_wait_for_timer_ticks() {
+        use std::{future::Future, task::{Context, Poll, Waker}};
+        let mut context = Context::from_waker(Waker::noop());
+        for _ in 0..32 {
+            let mut due = std::pin::pin!(wait_for_media_send(Instant::now()));
+            assert_eq!(due.as_mut().poll(&mut context), Poll::Ready(()));
+        }
+        let mut later = std::pin::pin!(wait_for_media_send(Instant::now() + Duration::from_secs(30)));
+        assert_eq!(later.as_mut().poll(&mut context), Poll::Pending);
+    }
+
+    #[tokio::test]
     async fn continuous_video_recovers_from_a_large_initial_keyframe() {
         let (client, host, _listener, _udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(_udp.registration()));
@@ -2403,6 +2415,13 @@ fn frame_notice(writer: &ReliableWriter, sid: SessionId, notice: FrameNotice) ->
     writer.notice(sid, notice)
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn wait_for_media_send(deadline: Instant) {
+    // Tokio rounds even an already-due timer up to a millisecond tick.
+    if deadline > Instant::now() {
+        tokio::time::sleep_until(deadline.into()).await;
+    }
+}
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn host_media(
     mut session: HostSession,
     channels: WorkerChannels,
@@ -2551,7 +2570,7 @@ async fn host_media(
                     if let Some(report) = session.take_report(now) { udp.send_report(&report).await?; }
                     if current.is_none() { current = retries.pop_front(); if current.is_some() { next_send = now; } }
                 }
-                _ = tokio::time::sleep_until(next_send.into()), if current.is_some() || sound.is_some() => {
+                _ = wait_for_media_send(next_send), if current.is_some() || sound.is_some() => {
                     for _ in 0..16 {
                     let now = Instant::now();
                     let sound_ready = sound.as_ref().is_some_and(|frame| {
@@ -2564,7 +2583,7 @@ async fn host_media(
                     if !ready.load(Ordering::Acquire) || !epochs.get(&(metadata.kind, metadata.display_id)).is_some_and(|(epoch, ack)| *epoch == metadata.epoch && *ack) { next_send = now + media::REPORT_INTERVAL; break; }
                     let Some(&index) = frame.indices.front() else { *active = None; break; };
                     match pacer.decide(frame.plan.packet_len(index)?, frame.deadline, now, false) {
-                        SendDecision::Wait(wait) => { next_send = if wait < Duration::from_millis(1) { now } else { now + wait }; break; }
+                        SendDecision::Wait(wait) => { next_send = now + wait; break; }
                         SendDecision::FeedbackRequired => {
                             if probe.is_none_or(|(_, sent)| sent.elapsed() >= Duration::from_millis(500)) {
                                 let mut token = [0; 16]; randombytes::randombytes_into(&mut token);

@@ -1,5 +1,29 @@
 # Native session performance
 
+## 2026-11-16: do not delay ready UDP batches behind timer ticks
+
+The beta.4 Xiaomi session was reported at 80–90 received/decoded FPS and about
+70 UI submissions/s. Its matching 120-FPS Host samples produced roughly 80–100
+fresh frames/s: capture cost 4–5 ms, encoding 3–4 ms and producer handoff about
+3 ms. These measurements do not establish a fixed 60-Hz renderer limit.
+
+The Host UDP loop waited on `sleep_until(Instant::now())` even when a batch was
+ready to send. Tokio rounds that deadline up to its next millisecond tick; the
+existing 16-datagram fairness budget therefore acquired an unintended timer
+delay between ready batches. The loop now waits only for future deadlines.
+Actual pacer waits, including waits below one millisecond, retain their deadline
+instead of repeatedly treating them as immediately sendable. The existing task
+yield remains; no spin loop, extra media queue, bitrate increase or congestion
+bypass is introduced.
+
+Changed runtime file: `crates/session-transport/src/lib.rs`, Host UDP scheduling
+only. A regression polls an already-due send slot and a future send slot: the
+old timer path returns pending for a due slot, while the corrected path is ready
+and preserves future pacing. Device FPS after installation must be recorded
+separately; this scheduling correction alone does not prove 120-FPS acceptance.
+Android decoding, UI submission accounting, display configuration, primary-screen
+selection and GPU-retirement guards are unchanged.
+
 ## 2026-11-15: preserve Android hardware-decoder presentation timestamps
 
 MediaCodec's input path discarded each encoded frame's millisecond PTS and
