@@ -290,7 +290,9 @@ impl Default for Mailbox {
         Self {
             #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
             platform: RwLock::new(String::new()),
-            frame: ArrayQueue::new(1),
+            // Android hardware output can arrive in pairs between two UI vsyncs.
+            // Keep one spare frame; stale backlog is skipped at the UI boundary.
+            frame: ArrayQueue::new(if cfg!(target_os = "android") { 2 } else { 1 }),
             recycle: Arc::new(ArrayQueue::new(3)),
             metrics: Arc::new(Mutex::new(metrics::Metrics::default())),
             events: ArrayQueue::new(64),
@@ -307,6 +309,22 @@ impl Default for Mailbox {
     }
 }
 impl Mailbox {
+    fn clear_frames(&self) {
+        while self.frame.pop().is_some() {}
+    }
+
+    fn take_fresh_frame(&self, now: Instant, budget: Duration) -> Option<Frame> {
+        loop {
+            let frame = self.frame.pop()?;
+            if now.saturating_duration_since(frame.ready_at) > budget && !self.frame.is_empty() {
+                self.metrics.lock().unwrap().dropped();
+                continue;
+            }
+            // Preserve the last frame even after an idle interval.
+            return Some(frame);
+        }
+    }
+
     fn drain_events(&self) -> Vec<SessionEvent> {
         let mut events: Vec<_> = (0..64).map_while(|_| self.events.pop()).collect();
         if let Some((index, update)) = self.quality.lock().unwrap().take() {
@@ -360,13 +378,18 @@ impl SessionHandle {
     pub fn take_frame(&self) -> Option<Frame> {
         let mailbox = &self.session.ui_handler.0;
         if mailbox.closed.load(Ordering::Acquire) {
-            mailbox.frame.pop();
+            mailbox.clear_frames();
             return None;
         }
+        #[cfg(target_os = "android")]
+        let budget = Duration::from_secs_f64(
+            2.0 / self.session.lc.read().unwrap().streaming_target_fps().max(1) as f64,
+        );
+        #[cfg(not(target_os = "android"))]
+        let budget = Duration::MAX;
         let monitors = mailbox.monitors.read().unwrap();
         mailbox
-            .frame
-            .pop()
+            .take_fresh_frame(Instant::now(), budget)
             .filter(|frame| monitors.pending.is_none() && frame.display == monitors.current)
     }
     pub fn cursor_snapshot(&self) -> CursorSnapshot {
@@ -517,7 +540,7 @@ impl SessionHandle {
             }
             monitors.pending = Some(index);
             mailbox.quality.lock().unwrap().take();
-            mailbox.frame.pop();
+            mailbox.clear_frames();
         }
         self.session.switch_display(index as i32);
         Ok(())
@@ -618,7 +641,7 @@ impl SessionHandle {
             .connected
             .store(false, Ordering::Release);
         self.session.close();
-        self.session.ui_handler.0.frame.pop();
+        self.session.ui_handler.0.clear_frames();
         self.session.ui_handler.0.updates.notify_one();
     }
 }
@@ -699,7 +722,7 @@ async fn connect_mode(device_id: &str, _touch_enabled: bool, _keyboard_enabled: 
         }
         handler.0.closed.store(true, Ordering::Release);
         handler.0.connected.store(false, Ordering::Release);
-        handler.0.frame.pop();
+        handler.0.clear_frames();
         handler.event(SessionEvent::Disconnected);
         handler.0.updates.notify_one();
     });
@@ -771,7 +794,7 @@ async fn connect_test_lan_mode(endpoint: &str, _interactive: bool) -> ResultType
         }
         handler.0.closed.store(true, Ordering::Release);
         handler.0.connected.store(false, Ordering::Release);
-        handler.0.frame.pop();
+        handler.0.clear_frames();
         handler.event(SessionEvent::Disconnected);
         handler.0.updates.notify_one();
     });
@@ -873,7 +896,7 @@ impl InvokeUiSession for Handler {
             let mut monitors = self.0.monitors.write().unwrap();
             monitors.current = display.display as usize;
             monitors.pending = None;
-            self.0.frame.pop();
+            self.0.clear_frames();
             self.0.metrics.lock().unwrap().reset();
         }
         self.set_display(
@@ -994,7 +1017,7 @@ impl InvokeUiSession for Handler {
             if !monitors.list.iter().any(|monitor| {
                 monitor.index == monitors.current && monitor.available
             }) {
-                self.0.frame.pop();
+                self.0.clear_frames();
             }
             pending_unavailable
         };
@@ -1245,6 +1268,38 @@ mod tests {
                 .mailbox_dropped,
             19
         );
+    }
+
+    #[test]
+    fn two_slot_video_queue_preserves_bursts_but_skips_stale_backlog() {
+        let mailbox = Mailbox { frame: ArrayQueue::new(2), ..Default::default() };
+        let mut image = scrap::ImageRgb {
+            raw: vec![1; 4], w: 1, h: 1, fmt: scrap::ImageFormat::ARGB, align: 1,
+        };
+        let now = Instant::now();
+        let mut publish = |value, age| {
+            image.raw.fill(value);
+            let mut frame = take_frame(0, &mut image, &mailbox).unwrap();
+            frame.ready_at = now - Duration::from_millis(age);
+            assert!(mailbox.frame.push(frame).is_ok());
+        };
+        let budget = Duration::from_millis(16);
+        publish(1, 7);
+        publish(2, 2);
+        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 1);
+        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 2);
+        publish(3, 40);
+        publish(4, 1);
+        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 4);
+        assert!(mailbox.frame.is_empty());
+        publish(5, 1000);
+        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 5);
+        publish(6, 2);
+        publish(7, 1);
+        mailbox.clear_frames();
+        assert!(mailbox.frame.is_empty());
+        assert_eq!(mailbox.metrics.lock().unwrap()
+            .snapshot(now + Duration::from_secs(1)).unwrap().mailbox_dropped, 1);
     }
 
     #[test]
