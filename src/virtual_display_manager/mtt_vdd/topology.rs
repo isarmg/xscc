@@ -957,6 +957,8 @@ mod tests {
 
     #[test]
     fn creation_retains_pre_pnp_primary_and_ignores_cached_new_layout() {
+        use winapi::shared::minwindef::TRUE;
+
         let mut physical: DISPLAYCONFIG_PATH_INFO = unsafe { std::mem::zeroed() };
         physical.flags = DISPLAYCONFIG_PATH_ACTIVE;
         physical.targetInfo.targetAvailable = TRUE;
