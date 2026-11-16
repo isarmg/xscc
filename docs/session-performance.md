@@ -1,5 +1,16 @@
 # Native session performance
 
+## 2026-11-16: Android atlas uploads and bounded frame bursts
+
+Android now uses swizzled RGBA atlas storage when supported, avoiding the costly
+BGRA transfer path observed on the Xiaomi 13 while preserving packed BGRA input.
+Real-device beta.9 measurements reduced UI queue delay, but UI acceptance remained
+below decode FPS. The next candidate admits one spare decoded frame and skips
+overdue backlog without losing the final static image. Device verification of
+that admission change remains pending at the user's request. See the
+[measurement and validation limits](ui-validation-evidence/2026-11-16-android-ui-upload.md).
+
+
 ## 2026-11-16: retain the layout captured before virtual monitor arrival
 
 A protected local test caught Windows restoring its cached VDD layout during

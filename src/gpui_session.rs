@@ -15,6 +15,7 @@ pub use controls::{BitrateMode, MediaControls, ResolutionMode, VirtualDisplayReq
 mod cursor;
 pub use cursor::{log_cursor_render_failure, CursorShape, CursorSnapshot};
 mod metrics;
+mod frames;
 mod pixels;
 
 #[cfg(all(
@@ -310,19 +311,14 @@ impl Default for Mailbox {
 }
 impl Mailbox {
     fn clear_frames(&self) {
-        while self.frame.pop().is_some() {}
+        frames::clear(&self.frame);
     }
 
     fn take_fresh_frame(&self, now: Instant, budget: Duration) -> Option<Frame> {
-        loop {
-            let frame = self.frame.pop()?;
-            if now.saturating_duration_since(frame.ready_at) > budget && !self.frame.is_empty() {
-                self.metrics.lock().unwrap().dropped();
-                continue;
-            }
-            // Preserve the last frame even after an idle interval.
-            return Some(frame);
-        }
+        frames::take_fresh(
+            &self.frame, now, budget, |frame| frame.ready_at,
+            || self.metrics.lock().unwrap().dropped(),
+        )
     }
 
     fn drain_events(&self) -> Vec<SessionEvent> {
@@ -1270,38 +1266,6 @@ mod tests {
                 .mailbox_dropped,
             19
         );
-    }
-
-    #[test]
-    fn two_slot_video_queue_preserves_bursts_but_skips_stale_backlog() {
-        let mailbox = Mailbox { frame: ArrayQueue::new(2), ..Default::default() };
-        let mut image = scrap::ImageRgb {
-            raw: vec![1; 4], w: 1, h: 1, fmt: scrap::ImageFormat::ARGB, align: 1,
-        };
-        let now = Instant::now();
-        let mut publish = |value, age| {
-            image.raw.fill(value);
-            let mut frame = take_frame(0, &mut image, &mailbox).unwrap();
-            frame.ready_at = now - Duration::from_millis(age);
-            assert!(mailbox.frame.push(frame).is_ok());
-        };
-        let budget = Duration::from_millis(16);
-        publish(1, 7);
-        publish(2, 2);
-        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 1);
-        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 2);
-        publish(3, 40);
-        publish(4, 1);
-        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 4);
-        assert!(mailbox.frame.is_empty());
-        publish(5, 1000);
-        assert_eq!(mailbox.take_fresh_frame(now, budget).unwrap().bgra[0], 5);
-        publish(6, 2);
-        publish(7, 1);
-        mailbox.clear_frames();
-        assert!(mailbox.frame.is_empty());
-        assert_eq!(mailbox.metrics.lock().unwrap()
-            .snapshot(now + Duration::from_secs(1)).unwrap().mailbox_dropped, 1);
     }
 
     #[test]
