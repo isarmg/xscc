@@ -64,11 +64,11 @@ impl ImageUpload {
                 if layout.row_bytes == layout.padded_row {
                     mapped.copy_from_slice(bytes);
                 } else {
-                    for (source, destination) in bytes
-                        .chunks_exact(layout.row_bytes as usize)
-                        .zip(mapped.chunks_exact_mut(layout.padded_row as usize))
-                    {
-                        destination[..source.len()].copy_from_slice(source);
+                    for (row, source) in bytes.chunks_exact(layout.row_bytes as usize).enumerate() {
+                        let start = row * layout.padded_row as usize;
+                        mapped
+                            .slice(start..start + source.len())
+                            .copy_from_slice(source);
                     }
                 }
             }
