@@ -175,7 +175,7 @@ impl AtlasBackend for WgpuAtlasTextures {
         {
             #[cfg(target_os = "android")]
             if bytes.len() >= 1024 * 1024 {
-                self.image_upload.write(
+                if self.image_upload.write(
                     &self.device,
                     &self.queue,
                     wgpu::TexelCopyTextureInfo {
@@ -194,13 +194,14 @@ impl AtlasBackend for WgpuAtlasTextures {
                         depth_or_array_layers: 1,
                     },
                     bytes,
-                )?;
-                self.pending_uploads.push(PendingUpload {
-                    id: tile.texture_id,
-                    bounds: tile.bounds,
-                    data: None,
-                });
-                return Ok(true);
+                )? {
+                    self.pending_uploads.push(PendingUpload {
+                        id: tile.texture_id,
+                        bounds: tile.bounds,
+                        data: None,
+                    });
+                    return Ok(true);
+                }
             }
             // write_texture snapshots the borrowed pixels; another CPU copy is unnecessary.
             self.queue.write_texture(

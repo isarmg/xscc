@@ -22,14 +22,16 @@ impl ImageUpload {
         target: wgpu::TexelCopyTextureInfo<'_>,
         extent: wgpu::Extent3d,
         bytes: &[u8],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let layout = layout(extent.width, extent.height).context("Invalid image upload layout")?;
         ensure!(
             extent.depth_or_array_layers == 1
-                && u64::from(layout.row_bytes) * u64::from(extent.height) == bytes.len() as u64
-                && layout.size <= device.limits().max_buffer_size,
-            "Image upload exceeds its packed pixels or device buffer limit"
+                && u64::from(layout.row_bytes) * u64::from(extent.height) == bytes.len() as u64,
+            "Image upload requires complete packed pixels"
         );
+        if layout.size > device.limits().max_buffer_size {
+            return Ok(false);
+        }
         // Poll without waiting so completed maps return buffers to the belt before allocation.
         device
             .poll(wgpu::PollType::Poll)
@@ -88,7 +90,7 @@ impl ImageUpload {
         // Only GPU-completed buffers are re-mapped. Never recycle a buffer still being read.
         pool.belt.finish_and_recall_on_submit(&encoder);
         queue.submit(std::iter::once(encoder.finish()));
-        Ok(())
+        Ok(true)
     }
 }
 
