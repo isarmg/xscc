@@ -5,9 +5,10 @@
 Android now uses swizzled RGBA atlas storage when supported, avoiding the costly
 BGRA transfer path observed on the Xiaomi 13 while preserving packed BGRA input.
 Real-device beta.9 measurements reduced UI queue delay, but UI acceptance remained
-below decode FPS. The next candidate admits one spare decoded frame and skips
-overdue backlog without losing the final static image. Device verification of
-that admission change remains pending at the user's request. See the
+below decode FPS. A bounded spare decoded frame improved measured UI acceptance
+from a median of 85.5 to 94 FPS, with an additional approximately 7.4ms of queue
+latency. It skips overdue backlog without losing the final static image, but
+does not yet sustain 120 FPS. See the
 [measurement and validation limits](ui-validation-evidence/2026-11-16-android-ui-upload.md).
 
 

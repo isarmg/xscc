@@ -499,7 +499,12 @@ struct WorkerChannels {
 
 type VideoReleased = Box<dyn Fn(u32, Instant) + Send + Sync>;
 
-fn video_released(callback: &OnceLock<VideoReleased>, kind: MediaKind, display: u32, queued: Instant) {
+fn video_released(
+    callback: &OnceLock<VideoReleased>,
+    kind: MediaKind,
+    display: u32,
+    queued: Instant,
+) {
     if kind == MediaKind::Video {
         if let Some(callback) = callback.get() {
             callback(display, queued);
@@ -517,10 +522,13 @@ pub struct MediaSender {
 }
 impl MediaSender {
     /// Releases deltas at dequeue and keyframes after sending; the callback must not block.
-    pub fn on_video_released(&self, callback: impl Fn(u32, Instant) + Send + Sync + 'static) -> ResultType<()> {
-        self.released.set(Box::new(callback)).map_err(|_| {
-            hbb_common::anyhow::anyhow!("Video release callback already registered")
-        })
+    pub fn on_video_released(
+        &self,
+        callback: impl Fn(u32, Instant) + Send + Sync + 'static,
+    ) -> ResultType<()> {
+        self.released
+            .set(Box::new(callback))
+            .map_err(|_| hbb_common::anyhow::anyhow!("Video release callback already registered"))
     }
     pub fn send_video(&self, message: Arc<Message>) -> ResultType<()> {
         let result = self
@@ -1578,7 +1586,10 @@ mod tests {
         host.set_media_bitrate_limit(1_000).unwrap();
         let released = Arc::new(Notify::new());
         let notify = released.clone();
-        host.media_sender().unwrap().on_video_released(move |_, _| notify.notify_one()).unwrap();
+        host.media_sender()
+            .unwrap()
+            .on_video_released(move |_, _| notify.notify_one())
+            .unwrap();
         let mut serving = tokio::spawn(async move {
             host.send(&video(true, 100)).await.unwrap();
             // A producer waiting for wire completion has no queued successor.
@@ -2023,13 +2034,20 @@ mod tests {
         let (transport, _channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
         let producer = transport.outbound.clone();
         let (released, mut notifications) = mpsc::unbounded_channel();
-        producer.on_video_released(move |display, _| { released.send(display).unwrap(); }).unwrap();
+        producer
+            .on_video_released(move |display, _| {
+                released.send(display).unwrap();
+            })
+            .unwrap();
         producer.send_video(Arc::new(video(true, 64))).unwrap();
         assert_eq!(notifications.try_recv().unwrap(), 0);
         transport.ready.store(true, Ordering::Release);
         producer.send_video(Arc::new(video(true, 64))).unwrap();
         producer.send_video(Arc::new(video(false, 64))).unwrap();
-        assert!(notifications.try_recv().is_err(), "enqueue must not release the producer before sending");
+        assert!(
+            notifications.try_recv().is_err(),
+            "enqueue must not release the producer before sending"
+        );
         producer.send_video(Arc::new(video(false, 64))).unwrap();
         assert_eq!(notifications.try_recv().unwrap(), 0);
         drop(transport);
@@ -2039,13 +2057,18 @@ mod tests {
 
     #[tokio::test]
     async fn due_udp_send_slots_do_not_wait_for_timer_ticks() {
-        use std::{future::Future, task::{Context, Poll, Waker}};
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
         let mut context = Context::from_waker(Waker::noop());
         for _ in 0..32 {
             let mut due = std::pin::pin!(wait_for_media_send(Instant::now()));
             assert_eq!(due.as_mut().poll(&mut context), Poll::Ready(()));
         }
-        let mut later = std::pin::pin!(wait_for_media_send(Instant::now() + Duration::from_secs(30)));
+        let mut later = std::pin::pin!(wait_for_media_send(
+            Instant::now() + Duration::from_secs(30)
+        ));
         assert_eq!(later.as_mut().poll(&mut context), Poll::Pending);
     }
 
@@ -2056,11 +2079,18 @@ mod tests {
         let offer = host.offer_host().await.unwrap().unwrap();
         let mut client: SessionTransport = client.into();
         client.enable_client(&offer).await.unwrap();
-        timeout(Duration::from_secs(3), client.next()).await.unwrap().unwrap().unwrap();
+        timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
         host.set_media_bitrate_limit(8_000).unwrap();
         let released = Arc::new(Notify::new());
         let notify = released.clone();
-        host.media_sender().unwrap().on_video_released(move |_, _| notify.notify_one()).unwrap();
+        host.media_sender()
+            .unwrap()
+            .on_video_released(move |_, _| notify.notify_one())
+            .unwrap();
         let serving = tokio::spawn(async move {
             let mut refresh = true;
             let mut refreshes = 0;
@@ -2111,13 +2141,17 @@ mod tests {
             }
         }
         client.send(&close()).await.unwrap();
-        let (produced, refreshes) = timeout(Duration::from_secs(3), serving).await.unwrap().unwrap();
-        eprintln!("continuous video produced={produced} delivered={delivered} refreshes={refreshes}");
+        let (produced, refreshes) = timeout(Duration::from_secs(3), serving)
+            .await
+            .unwrap()
+            .unwrap();
+        eprintln!(
+            "continuous video produced={produced} delivered={delivered} refreshes={refreshes}"
+        );
         assert!(produced >= 120, "producer stalled: produced={produced}");
         assert!(delivered + 3 >= produced && refreshes <= 1,
             "large initial keyframe must not trap the stream in recovery: produced={produced}, delivered={delivered}, refreshes={refreshes}");
     }
-
 }
 fn bounded_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> ResultType<T> {
     if bytes.len() > CONTROL_LIMIT {
