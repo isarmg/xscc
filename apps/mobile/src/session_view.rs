@@ -866,7 +866,6 @@ impl SessionView {
                     return;
                 }
                 view.prepare_frame(window, cx);
-                cx.notify();
             });
         }
     }
@@ -913,6 +912,7 @@ impl SessionView {
         }
         match self.presentation.update(frame, window) {
             Ok(Some(_)) => {
+                cx.notify();
                 if first_image {
                     self.notice.clear();
                     changed = true;
@@ -941,6 +941,7 @@ impl SessionView {
         changed |= had_frame != self.presentation.image().is_some();
         if changed {
             self.publish_chrome(cx);
+            cx.notify();
         }
     }
 }

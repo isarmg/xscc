@@ -1,5 +1,26 @@
 # Native session performance
 
+## 2026-11-16: repaint the mobile session when its content changes
+
+A second ordinary-screen sample had the Xiaomi display at 120 Hz with no UID
+frame-rate override. SurfaceFlinger recorded about 88 application buffer
+presentations/s while the remote source was 60 FPS. The mobile session's
+next-frame pump unconditionally invalidated the full session view on every
+display callback, including callbacks that consumed no image. This is additional
+rendering work; buffer presentations are not unique remote frames or scanout.
+
+The pump still runs on the display clock, but consuming a new video frame now
+invalidates the session view. First-image/error transitions retain invalidation,
+and the existing asynchronous mailbox/event wake still invalidates cursor and
+session-state changes. Input, keyboard, menu, rotation and animation handlers
+retain their explicit notifications. No new queue, timer, shared API or retained
+state is introduced.
+
+Changed runtime file: `apps/mobile/src/session_view.rs`, Android/iOS native
+session redraw demand only. Android package code advances to 40005 to permit an
+in-place update. End-to-end throughput and these interactive paths require
+physical-device verification of the resulting candidate.
+
 ## 2026-11-16: do not delay ready UDP batches behind timer ticks
 
 The beta.4 Xiaomi session was reported at 80–90 received/decoded FPS and about
