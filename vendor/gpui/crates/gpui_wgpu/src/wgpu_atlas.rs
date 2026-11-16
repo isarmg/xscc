@@ -36,6 +36,7 @@ struct WgpuAtlasTextures {
     queue: Arc<wgpu::Queue>,
     max_texture_size: u32,
     color_texture_format: wgpu::TextureFormat,
+    color_view_swizzle: wgpu::TextureComponentSwizzle,
     storage: WgpuAtlasStorage,
     pending_uploads: Vec<PendingUpload>,
     upload_buffers: Vec<Vec<u8>>,
@@ -57,11 +58,27 @@ impl WgpuAtlas {
         color_texture_format: wgpu::TextureFormat,
     ) -> Self {
         let max_texture_size = device.limits().max_texture_dimension_2d;
+        let color_view_swizzle = if cfg!(any(target_os = "android", test))
+            && color_texture_format == wgpu::TextureFormat::Rgba8Unorm
+            && device
+                .features()
+                .contains(wgpu::Features::TEXTURE_COMPONENT_SWIZZLE)
+        {
+            wgpu::TextureComponentSwizzle {
+                r: wgpu::ComponentSwizzle::B,
+                g: wgpu::ComponentSwizzle::G,
+                b: wgpu::ComponentSwizzle::R,
+                a: wgpu::ComponentSwizzle::A,
+            }
+        } else {
+            wgpu::TextureComponentSwizzle::default()
+        };
         WgpuAtlas(Mutex::new(AtlasState::new(WgpuAtlasTextures {
             device,
             queue,
             max_texture_size,
             color_texture_format,
+            color_view_swizzle,
             storage: WgpuAtlasStorage::default(),
             pending_uploads: Vec::new(),
             upload_buffers: Vec::new(),
@@ -167,7 +184,7 @@ impl AtlasBackend for WgpuAtlasTextures {
         let Some(texture) = self.storage.get(tile.texture_id) else {
             return Ok(false);
         };
-        if texture.format == wgpu::TextureFormat::Bgra8Unorm
+        if texture.upload_format == wgpu::TextureFormat::Bgra8Unorm
             && !self
                 .pending_uploads
                 .iter()
@@ -318,7 +335,20 @@ impl WgpuAtlasTextures {
             view_formats: &[],
         });
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let swizzle = if kind == AtlasTextureKind::Monochrome {
+            wgpu::TextureComponentSwizzle::default()
+        } else {
+            self.color_view_swizzle
+        };
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            swizzle,
+            ..Default::default()
+        });
+        let upload_format = if swizzle != wgpu::TextureComponentSwizzle::default() {
+            wgpu::TextureFormat::Bgra8Unorm
+        } else {
+            format
+        };
 
         let texture_list = &mut self.storage[kind];
         let index = texture_list.free_list.pop();
@@ -333,6 +363,7 @@ impl WgpuAtlasTextures {
             generation,
             allocator: BucketedAtlasAllocator::new(device_size_to_etagere(size)),
             format,
+            upload_format,
             texture,
             view,
             live_atlas_keys: 0,
@@ -356,7 +387,7 @@ impl WgpuAtlasTextures {
     }
 
     fn upload_texture(&mut self, id: AtlasTextureId, bounds: Bounds<DevicePixels>, bytes: &[u8]) {
-        let format = self.storage.get(id).map(|texture| texture.format);
+        let format = self.storage.get(id).map(|texture| texture.upload_format);
         // Multiple updates before a draw need only the newest bytes for this tile.
         if let Some(upload) = self
             .pending_uploads
@@ -463,6 +494,8 @@ struct WgpuAtlasTexture {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     format: wgpu::TextureFormat,
+    // Input channel order can differ from storage when the view performs the swizzle.
+    upload_format: wgpu::TextureFormat,
     live_atlas_keys: u32,
 }
 

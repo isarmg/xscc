@@ -433,6 +433,14 @@ impl WgpuContext {
             );
         }
 
+        #[cfg(any(target_os = "android", test))]
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPONENT_SWIZZLE)
+        {
+            required_features |= wgpu::Features::TEXTURE_COMPONENT_SWIZZLE;
+        }
+
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
         #[cfg(target_family = "wasm")]
         let required_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
@@ -692,6 +700,16 @@ impl WgpuContext {
         if adapter.get_info().backend == wgpu::Backend::Gl
             && rgba_features.allowed_usages.contains(required_usages)
         {
+            return Ok(wgpu::TextureFormat::Rgba8Unorm);
+        }
+        #[cfg(any(target_os = "android", test))]
+        if adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPONENT_SWIZZLE)
+            && rgba_features.allowed_usages.contains(required_usages)
+        {
+            // Preserve packed BGRA bytes, but let the texture view restore channel order.
+            // Some Android Vulkan drivers allocate temporary memory for each BGRA image copy.
             return Ok(wgpu::TextureFormat::Rgba8Unorm);
         }
         if bgra_features.allowed_usages.contains(required_usages) {
