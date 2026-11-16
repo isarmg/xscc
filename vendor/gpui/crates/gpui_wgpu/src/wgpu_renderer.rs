@@ -467,6 +467,14 @@ impl WgpuRenderer {
         // Configure the surface immediately. The adapter selection process already validated
         // that this adapter can successfully configure this surface.
         surface.configure(&context.device, &surface_config);
+        #[cfg(target_os = "android")]
+        log::info!(
+            "Android surface configured: {}x{}, present_mode={:?}, supported={:?}",
+            surface_config.width,
+            surface_config.height,
+            surface_config.present_mode,
+            surface_caps.present_modes,
+        );
 
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
 

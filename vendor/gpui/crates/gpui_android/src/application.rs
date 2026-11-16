@@ -4,12 +4,20 @@ use android_activity::{
     input::{InputEvent, KeyAction, Keycode},
 };
 use gpui::AppLifecyclePhase;
-use std::rc::Rc;
+use std::{
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
     let mut launched = Some(launched);
     let mut input = InputState::default();
     let frame_clock = FrameClock::new(&state.app);
+    let mut reported = Instant::now();
+    let mut frames = 0u32;
+    let mut frame_time = Duration::ZERO;
+    let mut longest_frame = Duration::ZERO;
+    let mut dispatch_time = Duration::ZERO;
     while !state.destroyed.get() {
         if state
             .window()
@@ -128,7 +136,9 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                 window.sync_ime();
             }
         });
+        let dispatch_started = Instant::now();
         state.dispatcher.drain();
+        dispatch_time += dispatch_started.elapsed();
         if let Some(window) = state.window() {
             window.refresh_insets();
             window.sync_ime();
@@ -140,7 +150,12 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             match frame_clock.take_ready() {
                 Ok(true) => {
                     frame_clock.request();
+                    let started = Instant::now();
                     window.request_frame(false);
+                    let elapsed = started.elapsed();
+                    frame_time += elapsed;
+                    longest_frame = longest_frame.max(elapsed);
+                    frames += 1;
                 }
                 Ok(false) => {}
                 Err(error) => {
@@ -153,6 +168,23 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
         }
         if let Some(window) = state.window() {
             window.sync_ime();
+        }
+        if reported.elapsed() >= Duration::from_secs(1) {
+            if frames > 0 {
+                log::info!(
+                    "android_frame_pipeline callbacks={} elapsed_ms={:.1} frame_avg_ms={:.2} frame_max_ms={:.2} dispatch_ms={:.2}",
+                    frames,
+                    reported.elapsed().as_secs_f64() * 1000.,
+                    frame_time.as_secs_f64() * 1000. / f64::from(frames),
+                    longest_frame.as_secs_f64() * 1000.,
+                    dispatch_time.as_secs_f64() * 1000.,
+                );
+            }
+            reported = Instant::now();
+            frames = 0;
+            frame_time = Duration::ZERO;
+            longest_frame = Duration::ZERO;
+            dispatch_time = Duration::ZERO;
         }
     }
     state.dispatcher.shutdown();
