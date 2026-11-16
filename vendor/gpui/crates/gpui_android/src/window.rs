@@ -95,7 +95,7 @@ impl AndroidWindow {
             WgpuSurfaceConfig {
                 size,
                 transparent: false,
-                preferred_present_mode: Some(gpui_wgpu::wgpu::PresentMode::Mailbox),
+                preferred_present_mode: None,
             },
             None,
         )?;
@@ -225,7 +225,7 @@ impl WindowState {
             WgpuSurfaceConfig {
                 size,
                 transparent: false,
-                preferred_present_mode: Some(gpui_wgpu::wgpu::PresentMode::Mailbox),
+                preferred_present_mode: None,
             },
             &instance,
         )?;

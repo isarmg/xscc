@@ -460,7 +460,7 @@ impl WgpuRenderer {
                 .preferred_present_mode
                 .filter(|mode| surface_caps.present_modes.contains(mode))
                 .unwrap_or(wgpu::PresentMode::Fifo),
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: if cfg!(target_os = "android") { 3 } else { 2 },
             alpha_mode,
             view_formats: vec![],
         };
@@ -469,11 +469,12 @@ impl WgpuRenderer {
         surface.configure(&context.device, &surface_config);
         #[cfg(target_os = "android")]
         log::info!(
-            "Android surface configured: {}x{}, present_mode={:?}, supported={:?}",
+            "Android surface configured: {}x{}, present_mode={:?}, supported={:?}, requested_frame_latency={}",
             surface_config.width,
             surface_config.height,
             surface_config.present_mode,
             surface_caps.present_modes,
+            surface_config.desired_maximum_frame_latency,
         );
 
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
