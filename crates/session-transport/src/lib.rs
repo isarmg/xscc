@@ -894,7 +894,11 @@ impl HybridTransport {
             self.reliable_send(message, false).await
         }
     }
-    fn control(&mut self, control: UdpMediaControl) -> ResultType<Option<BytesMut>> {
+    fn control(
+        &mut self,
+        control: UdpMediaControl,
+        permit: mpsc::OwnedPermit<Command>,
+    ) -> ResultType<Option<BytesMut>> {
         if control.session_id.as_ref() != self.session_id.0 {
             bail!("UDP media control session mismatch");
         }
@@ -921,7 +925,7 @@ impl HybridTransport {
                     if !epoch.ack || epoch.format.is_some() {
                         bail!("Expected UDP media epoch acknowledgement");
                     }
-                    self.command(Command::Epoch(epoch))?;
+                    permit.send(Command::Epoch(epoch));
                 } else {
                     if epoch.ack {
                         bail!("Unexpected UDP media epoch acknowledgement");
@@ -943,7 +947,7 @@ impl HybridTransport {
                     }
                     // The worker consumes queued commands before receiving UDP packets.
                     // Queue the epoch before its ACK without yielding to a cancellable caller.
-                    self.command(Command::Epoch(epoch.clone()))?;
+                    permit.send(Command::Epoch(epoch.clone()));
                     if epoch.kind == MediaKind::Video {
                         self.video_recovery.lock().unwrap().set_epoch(
                             epoch.display,
@@ -976,7 +980,7 @@ impl HybridTransport {
                 if self.host {
                     bail!("Unexpected UDP media frame notice");
                 }
-                self.command(Command::Notice(bounded_json(&bytes)?))?;
+                permit.send(Command::Notice(bounded_json(&bytes)?));
             }
             udp_media_control::Union::Nack(bytes) => {
                 if !self.host {
@@ -984,7 +988,7 @@ impl HybridTransport {
                 }
                 let nack: KeyframeNack = bounded_json(&bytes)?;
                 nack.validate()?;
-                self.command(Command::Nack(nack))?;
+                permit.send(Command::Nack(nack));
             }
             udp_media_control::Union::Complete(bytes) => {
                 if !self.host {
@@ -994,7 +998,7 @@ impl HybridTransport {
                 if complete.metadata.kind != MediaKind::Video || !complete.metadata.keyframe {
                     bail!("Invalid UDP keyframe completion");
                 }
-                self.command(Command::Complete(complete))?;
+                permit.send(Command::Complete(complete));
             }
             _ => bail!("Unsupported UDP media control payload"),
         }
@@ -1006,8 +1010,15 @@ impl HybridTransport {
             tokio::select! {
                 biased;
                 changed = self.failure.changed() => { changed.context("UDP session workers stopped")?; self.check()?; }
-                bytes = self.reliable.recv() => {
-                    let bytes = bytes.context("TCP peer closed")?.into_bytes();
+                packet = async {
+                    // Reserve before consuming TCP: cancelling next() must not lose an epoch.
+                    let permit = self.commands.clone().reserve_owned().await
+                        .context("UDP media command owner stopped")?;
+                    let bytes = self.reliable.recv().await.context("TCP peer closed")?;
+                    Ok::<_, hbb_common::anyhow::Error>((bytes, permit))
+                } => {
+                    let (bytes, permit) = packet?;
+                    let bytes = bytes.into_bytes();
                     let message = Message::parse_from_bytes(&bytes)?;
                     let control = match &message.union {
                         Some(message::Union::Misc(misc)) => match &misc.union {
@@ -1016,7 +1027,7 @@ impl HybridTransport {
                     };
                     if let Some(control) = control {
                         let ready = matches!(control.union, Some(udp_media_control::Union::Ready(_)));
-                        if let Some(format) = self.control(control)? { return Ok(format); }
+                        if let Some(format) = self.control(control, permit)? { return Ok(format); }
                         if ready { return Ok(bytes); }
                         continue;
                     }
@@ -1026,7 +1037,7 @@ impl HybridTransport {
                             if let Some(misc::Union::Option(option)) = &misc.union {
                                 if let Some(kbps) = option.bitrate_limit_kbps {
                                     let bps = if kbps == 0 { 1_000_000_000 } else { u64::from(kbps) * 1000 };
-                                    self.command(Command::Limit(bps))?;
+                                    permit.send(Command::Limit(bps));
                                 }
                             }
                         }
@@ -1277,6 +1288,17 @@ mod tests {
         message.set_misc(control);
         host.send(&message).await.unwrap();
         host.send(&close()).await.unwrap();
+
+        for _ in 0..CONTROL_QUEUE {
+            client.command(Command::Limit(8_000_000)).unwrap();
+        }
+        // Backpressure must wait, and cancelling that wait must leave the epoch on TCP.
+        assert!(timeout(Duration::from_millis(20), client.next())
+            .await
+            .is_err());
+        for _ in 0..CONTROL_QUEUE {
+            channels.commands.recv().await.unwrap();
+        }
 
         // A queued worker command makes the competing branch ready before an async ACK wait.
         let delivered = timeout(Duration::from_secs(2), async {
