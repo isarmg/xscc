@@ -5139,7 +5139,7 @@ impl Window {
         }
 
         if data.nv12_planes().is_some() {
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", target_os = "linux"))]
             {
                 let surface = crate::PaintSurface {
                     order: 0,
@@ -5156,8 +5156,8 @@ impl Window {
                 self.next_frame.scene.insert_primitive(surface);
                 return Ok(());
             }
-            #[cfg(not(target_os = "android"))]
-            anyhow::bail!("NV12 video images require the Android renderer");
+            #[cfg(not(any(target_os = "android", target_os = "linux")))]
+            anyhow::bail!("Owned NV12 video images require the Android or Linux renderer");
         }
 
         let params = RenderImageParams {

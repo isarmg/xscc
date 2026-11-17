@@ -16,7 +16,7 @@ mod cursor;
 pub use cursor::{log_cursor_render_failure, CursorShape, CursorSnapshot};
 mod metrics;
 mod frames;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 mod nv12;
 mod pixels;
 
@@ -36,11 +36,11 @@ pub struct Frame {
     pub display: usize,
     pub width: u32,
     pub height: u32,
-    /// Bytes per row: width * 4 for BGRA8, width for Android NV12 luma.
+    /// Bytes per row: width * 4 for BGRA8, width for owned NV12 luma.
     pub stride: usize,
-    /// Decoder-owned pixels (BGRA8 or Android NV12), returned to the bounded pool on drop.
+    /// Decoder-owned pixels (BGRA8 or NV12), returned to the bounded pool on drop.
     pub bgra: Vec<u8>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     nv12: bool,
     ready_at: Instant,
     metrics_epoch: u64,
@@ -77,7 +77,7 @@ impl xscc_session_model::FrameBuffer for Frame {
     fn submission(&self) -> impl FnOnce() + 'static {
         Frame::submission(self)
     }
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     fn is_nv12(&self) -> bool {
         self.nv12
     }
@@ -1120,7 +1120,7 @@ impl InvokeUiSession for Handler {
 }
 
 fn take_frame(display: usize, image: &mut scrap::ImageRgb, mailbox: &Mailbox) -> Option<Frame> {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     if matches!(image.fmt, scrap::ImageFormat::NV12) {
         return nv12::take_frame(display, image, mailbox);
     }
@@ -1139,7 +1139,7 @@ fn take_frame(display: usize, image: &mut scrap::ImageRgb, mailbox: &Mailbox) ->
         height: image.h as u32,
         stride: layout.row,
         bgra,
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         nv12: false,
         ready_at: Instant::now(),
         metrics_epoch: mailbox.metrics.lock().unwrap().epoch(),

@@ -33,9 +33,9 @@ impl VideoPresentation {
         }
         let Some(frame) = frame else { return Ok(None) };
         let (width, height) = frame.extent();
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         let nv12 = frame.is_nv12();
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "linux")))]
         let nv12 = false;
         if (nv12 && frame.stride() != width as usize)
             || (!nv12 && !packed_bgra(width, height, frame.stride(), frame.as_ref().len()))
@@ -70,9 +70,41 @@ fn packed_bgra(width: u32, height: u32, stride: usize, len: usize) -> bool {
         && stride.checked_mul(height as usize) == Some(len)
 }
 
+/// Limit streaming work to a reported display rate; an unknown rate retains
+/// the remote request. Native variable-refresh displays report their maximum.
+pub fn stream_fps(remote_hz: u32, display_interval: Option<std::time::Duration>) -> u32 {
+    display_interval
+        .filter(|interval| !interval.is_zero())
+        .map(|interval| interval.as_secs_f64().recip().round() as u32)
+        .filter(|hertz| *hertz > 0)
+        .map_or(remote_hz, |limit| remote_hz.min(limit))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::packed_bgra;
+    use super::{packed_bgra, stream_fps};
+
+    #[test]
+    fn stream_fps_uses_reported_display_limits_and_preserves_unknown_rates() {
+        use std::time::Duration;
+
+        for (remote, hertz, expected) in [
+            (90, 120., 90),
+            (120, 120., 120),
+            (144, 120., 120),
+            (240, 120., 120),
+            (240, 240., 240),
+            (120, 59.94, 60),
+        ] {
+            assert_eq!(
+                stream_fps(remote, Some(Duration::from_secs_f64(1. / hertz))),
+                expected
+            );
+        }
+        assert_eq!(stream_fps(144, None), 144);
+        assert_eq!(stream_fps(144, Some(Duration::ZERO)), 144);
+        assert_eq!(stream_fps(0, Some(Duration::from_secs_f64(1. / 120.))), 0);
+    }
 
     #[test]
     fn accepts_only_complete_tightly_packed_bgra() {

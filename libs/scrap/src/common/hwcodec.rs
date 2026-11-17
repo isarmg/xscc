@@ -419,6 +419,29 @@ impl HwRamDecoderImage<'_> {
         let frame = self.frame;
         let width = frame.width;
         let height = frame.height;
+        #[cfg(target_os = "linux")]
+        if matches!(rgb.fmt(), ImageFormat::NV12) {
+            use std::convert::TryFrom;
+
+            let width = usize::try_from(width).context("Invalid decoded NV12 width")?;
+            let height = usize::try_from(height).context("Invalid decoded NV12 height")?;
+            let planar = match frame.pixfmt {
+                AVPixelFormat::AV_PIX_FMT_NV12 => false,
+                AVPixelFormat::AV_PIX_FMT_YUV420P => true,
+            };
+            super::nv12::copy_yuv420(
+                &frame.data,
+                &frame.linesize,
+                width,
+                height,
+                planar,
+                &mut rgb.raw,
+            )
+            .context("Invalid decoded YUV420 planes")?;
+            rgb.w = width;
+            rgb.h = height;
+            return Ok(());
+        }
         rgb.w = width as _;
         rgb.h = height as _;
         let dst_align = rgb.align();
@@ -723,7 +746,7 @@ pub fn start_check_process() {
     });
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 mod nv12_conversion_tests {
     use super::*;
 
@@ -784,6 +807,25 @@ mod nv12_conversion_tests {
                 assert_eq!((image.w, image.h), (width, height));
                 assert_eq!(image.raw, expected);
                 assert!(scratch.len() <= width * 64);
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let mut image = ImageRgb::new(ImageFormat::NV12, 16);
+                HwRamDecoderImage { frame: &frame }
+                    .to_fmt(&mut image, &mut Vec::new())
+                    .unwrap();
+                let expected: Vec<_> = frame.data[0]
+                    .chunks(y_stride)
+                    .flat_map(|row| &row[..width])
+                    .chain(
+                        frame.data[1]
+                            .chunks(uv_stride)
+                            .flat_map(|row| &row[..width.div_ceil(2) * 2]),
+                    )
+                    .copied()
+                    .collect();
+                assert_eq!((image.w, image.h), (width, height));
+                assert_eq!(image.raw, expected);
             }
         }
     }

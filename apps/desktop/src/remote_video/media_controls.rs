@@ -131,12 +131,39 @@ impl RemoteVideo {
             self.pending_media = None;
         }
         self.media_controls = controls;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        self.update_local_target_fps();
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         if let Some(target) = self.media_controls.current_resolution.and_then(|mode| {
             TargetFps::new(
                 mode.refresh_rate
                     .min(base::session_protocol::MAX_SESSION_FPS),
             )
         }) && target != self.target_fps
+            && self.connected
+            && let Some(session) = &self.session
+        {
+            match session.set_target_fps(target) {
+                Ok(()) => self.target_fps = target,
+                Err(error) => self.notice = error.to_string(),
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(super) fn update_local_target_fps(&mut self) {
+        let Some(target) = self.media_controls.current_resolution.and_then(|mode| {
+            TargetFps::new(
+                xscc_native_ui::presentation::stream_fps(
+                    mode.refresh_rate,
+                    self.local_refresh_interval,
+                )
+                .min(base::session_protocol::MAX_SESSION_FPS),
+            )
+        }) else {
+            return;
+        };
+        if target != self.target_fps
             && self.connected
             && let Some(session) = &self.session
         {

@@ -39,7 +39,7 @@ pub struct RenderImageParams {
     pub frame_index: usize,
 }
 
-/// A cached image in BGRA format, or owned NV12 planes for Android video.
+/// A cached image in BGRA format, or owned NV12 planes for Android/Linux video.
 pub struct RenderImage {
     /// The ID associated with this image
     pub id: ImageId,
@@ -109,7 +109,7 @@ impl RenderImage {
         Ok(image)
     }
 
-    /// Own packed, BT.601 limited-range NV12 planes for Android video rendering.
+    /// Own packed, BT.601 limited-range NV12 planes for Android/Linux video rendering.
     /// Y rows have `width` bytes; interleaved UV rows have `2 * ceil(width / 2)`.
     /// The allocation remains owned until the final image/scene reference drops.
     pub fn from_nv12(

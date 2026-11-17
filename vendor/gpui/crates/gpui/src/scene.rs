@@ -766,15 +766,15 @@ impl From<PolychromeSprite> for Primitive {
 #[derive(Clone, Debug)]
 #[allow(missing_docs)]
 pub struct PaintSurface {
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub nv12_image: std::sync::Arc<crate::RenderImage>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub image_bounds: Bounds<ScaledPixels>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub corner_radii: Corners<ScaledPixels>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub grayscale: bool,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "linux"))]
     pub opacity: f32,
     #[cfg(target_os = "windows")]
     pub opacity: f32,

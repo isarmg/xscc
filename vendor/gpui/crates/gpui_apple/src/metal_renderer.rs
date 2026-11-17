@@ -490,37 +490,56 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
-        let layer = match &self.layer {
-            Some(l) => l.clone(),
-            None => {
-                log::error!(
-                    "draw() called on headless renderer - use render_scene_to_image() instead"
-                );
-                return;
+        // Drawables belong to a limited pool; release autoreleased references
+        // at submission instead of waiting for the surrounding run loop.
+        objc2::rc::autoreleasepool(|_| {
+            if let Err(error) = self.draw_in_pool(scene) {
+                log::error!("failed to render: {error:#}");
             }
-        };
+        });
+    }
+
+    fn draw_in_pool(&mut self, scene: &Scene) -> Result<()> {
+        let layer = self
+            .layer
+            .clone()
+            .context("draw() called on headless renderer - use render_scene_to_image() instead")?;
         let viewport_size = layer.drawable_size();
         let viewport_size: Size<DevicePixels> = size(
             (viewport_size.width.ceil() as i32).into(),
             (viewport_size.height.ceil() as i32).into(),
         );
-        let drawable = if let Some(drawable) = layer.next_drawable() {
-            drawable
-        } else {
-            log::error!(
-                "failed to retrieve next drawable, drawable size: {:?}",
-                viewport_size
-            );
-            return;
-        };
+        // Prepare CPU data before taking a drawable so it stays available to
+        // Core Animation until encoding the onscreen render pass actually needs it.
+        let mut writer = InstanceBufferWriter::new(
+            &self.device,
+            &self.instance_buffer_pool,
+            self.is_unified_memory,
+        );
+        let instance_bindings = write_instances(scene, &mut writer)?;
+        let drawable = layer.next_drawable().with_context(|| {
+            format!("failed to retrieve next drawable, drawable size: {viewport_size:?}")
+        })?;
+        let command_buffer = self.draw_primitives_to_texture(
+            scene,
+            &instance_bindings,
+            &mut writer,
+            drawable.texture(),
+            viewport_size,
+        )?;
 
-        let command_buffer = match self.render_frame(scene, drawable.texture(), viewport_size) {
-            Ok(command_buffer) => command_buffer,
-            Err(error) => {
-                log::error!("failed to render: {error:#}");
-                return;
+        let instance_buffer_pool = self.instance_buffer_pool.clone();
+        let instance_buffer = Cell::new(Some(writer.finish()));
+        let block = RcBlock::new(move |_: ptr::NonNull<AnyObject>| {
+            if let Some(instance_buffer) = instance_buffer.take() {
+                instance_buffer_pool.lock().release(instance_buffer);
             }
-        };
+        });
+        // SAFETY: Both types view the same Objective-C block ABI. The buffer
+        // returns to the pool only after the GPU completes this command buffer.
+        unsafe {
+            command_buffer.add_completed_handler(&*RcBlock::as_ptr(&block).cast());
+        }
 
         if self.presents_with_transaction {
             command_buffer.commit();
@@ -530,6 +549,7 @@ impl MetalRenderer {
             command_buffer.present_drawable(drawable);
             command_buffer.commit();
         }
+        Ok(())
     }
 
     fn render_frame(

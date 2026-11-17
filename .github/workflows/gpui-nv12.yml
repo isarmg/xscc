@@ -2,9 +2,9 @@ name: GPUI NV12 pixel regressions
 on:
   push:
     branches: [main]
-    paths: ['vendor/gpui/**', '.github/workflows/gpui-nv12.yml']
+    paths: ['vendor/gpui/**', 'libs/scrap/src/common/nv12.rs', '.github/workflows/gpui-nv12.yml']
   pull_request:
-    paths: ['vendor/gpui/**', '.github/workflows/gpui-nv12.yml']
+    paths: ['vendor/gpui/**', 'libs/scrap/src/common/nv12.rs', '.github/workflows/gpui-nv12.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -45,3 +45,13 @@ jobs:
           output=$(cargo +1.99.0 test --locked -p gpui_wgpu --lib wgpu_renderer::nv12::tests -- --test-threads=1 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 2 passed; 0 failed; 1 ignored;' <<< "$output" || { echo 'Both NV12 GPU regressions must run' >&2; exit 1; }
+      - name: Verify Linux decoder plane layout and scene presentation
+        run: |
+          printf '#[path = "%s/libs/scrap/src/common/nv12.rs"] mod nv12;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/yuv-plane-tests.rs"
+          rustc --edition 2018 --test "$RUNNER_TEMP/yuv-plane-tests.rs" -o "$RUNNER_TEMP/yuv-plane-tests"
+          output=$("$RUNNER_TEMP/yuv-plane-tests" 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          printf '%s\n' "$output"
+          grep -Eq '^test result: ok\. 4 passed; 0 failed;' <<< "$output"
+          output=$(cargo +1.99.0 test --locked --manifest-path vendor/gpui/Cargo.toml -p gpui_wgpu --lib wgpu_renderer::tests::headless_renderer_presents_owned_nv12_surfaces_through_the_scene -- --exact 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          printf '%s\n' "$output"
+          grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output"

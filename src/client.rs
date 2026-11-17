@@ -931,13 +931,25 @@ impl VideoHandler {
         pixelbuffer: &mut bool,
         chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
-        #[cfg(all(target_os = "android", feature = "gpui-session"))]
+        #[cfg(all(
+            any(target_os = "android", target_os = "linux"),
+            feature = "gpui-session"
+        ))]
         if matches!(self.rgb.fmt, ImageFormat::NV12) {
             self.rgb.fmt = ImageFormat::ARGB;
         }
         let format = CodecFormat::from(&vf);
         if format != self.decoder.format() {
             self.reset(Some(format));
+        }
+        #[cfg(all(
+            target_os = "linux",
+            feature = "hwcodec",
+            feature = "gpui-session",
+            not(feature = "flutter")
+        ))]
+        if matches!(format, CodecFormat::H264 | CodecFormat::H265) {
+            self.rgb.fmt = ImageFormat::NV12;
         }
         match &vf.union {
             Some(frame) => {

@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", target_os = "linux", test))]
 mod nv12;
 
 const MAX_INSTANCE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
@@ -127,7 +127,7 @@ pub struct WgpuSurfaceConfig {
 }
 
 struct WgpuPipelines {
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(any(target_os = "android", target_os = "linux", test))]
     nv12: wgpu::RenderPipeline,
     quads: wgpu::RenderPipeline,
     shadows: wgpu::RenderPipeline,
@@ -162,7 +162,7 @@ struct InstanceBindings {
 }
 
 struct WgpuBindGroupLayouts {
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(any(target_os = "android", target_os = "linux", test))]
     nv12: wgpu::BindGroupLayout,
     globals: wgpu::BindGroupLayout,
     instances: wgpu::BindGroupLayout,
@@ -218,7 +218,7 @@ impl WgpuResources {
 }
 
 struct WgpuRendererCore {
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(any(target_os = "android", target_os = "linux", test))]
     nv12: nv12::Nv12Surfaces,
     resources: WgpuResources,
     atlas: Arc<WgpuAtlas>,
@@ -653,7 +653,7 @@ impl WgpuRendererCore {
         });
 
         WgpuBindGroupLayouts {
-            #[cfg(any(target_os = "android", test))]
+            #[cfg(any(target_os = "android", target_os = "linux", test))]
             nv12: nv12::bind_group_layout(device),
             globals,
             instances,
@@ -950,7 +950,7 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
-        #[cfg(any(target_os = "android", test))]
+        #[cfg(any(target_os = "android", target_os = "linux", test))]
         let nv12 = create_pipeline(
             "nv12_surfaces",
             "vs_nv12",
@@ -978,7 +978,7 @@ impl WgpuRendererCore {
         );
 
         WgpuPipelines {
-            #[cfg(any(target_os = "android", test))]
+            #[cfg(any(target_os = "android", target_os = "linux", test))]
             nv12,
             quads,
             shadows,
@@ -1461,7 +1461,7 @@ impl WgpuRendererCore {
                 path_msaa_texture: None,
                 path_msaa_view: None,
             },
-            #[cfg(any(target_os = "android", test))]
+            #[cfg(any(target_os = "android", target_os = "linux", test))]
             nv12: nv12::Nv12Surfaces::default(),
             atlas,
             path_globals_offset,
@@ -1579,7 +1579,7 @@ impl WgpuRendererCore {
 
         self.record_frame(scene, target_view, clear_color)
             .inspect_err(|_| {
-                #[cfg(any(target_os = "android", test))]
+                #[cfg(any(target_os = "android", target_os = "linux", test))]
                 self.nv12.discard_uploads();
                 // Queue writes are staged before encoding; flush them even if the frame fails.
                 self.resources.queue.submit(std::iter::empty());
@@ -1617,7 +1617,7 @@ impl WgpuRendererCore {
                     label: Some("main_encoder"),
                 });
 
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "linux"))]
         self.nv12.prepare(
             &self.resources,
             &mut encoder,
@@ -1746,10 +1746,9 @@ impl WgpuRendererCore {
                             &mut pass,
                         )?;
                     }
-                    // Android video uses owned NV12 planes; other WGPU backends
-                    // do not produce surface primitives.
+                    // Android and Linux video use owned NV12 planes.
                     PrimitiveBatch::Surfaces(_surfaces) => {
-                        #[cfg(target_os = "android")]
+                        #[cfg(any(target_os = "android", target_os = "linux"))]
                         self.nv12.draw(&self.resources, _surfaces, &mut pass);
                     }
                 }
@@ -2867,6 +2866,46 @@ mod tests {
         let image = renderer.render_scene_to_image(&Scene::default(), device_size(13, 7))?;
         assert_eq!(image.dimensions(), (13, 7));
         assert!(image.pixels().all(|pixel| pixel.0 == BLACK));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_presents_owned_nv12_surfaces_through_the_scene() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let bounds = Bounds {
+            origin: Point::default(),
+            size: Size {
+                width: ScaledPixels(3.0),
+                height: ScaledPixels(3.0),
+            },
+        };
+        for value in [16, 235] {
+            let mut pixels = vec![value; 9];
+            pixels.resize(17, 128);
+            let frame = Arc::new(gpui::RenderImage::from_nv12(3, 3, pixels)?);
+            let mut scene = Scene::default();
+            scene.insert_primitive(gpui::PaintSurface {
+                order: 0,
+                bounds,
+                image_bounds: bounds,
+                content_mask: ContentMask { bounds },
+                corner_radii: Corners::default(),
+                opacity: 1.,
+                grayscale: false,
+                nv12_image: frame,
+            });
+            scene.finish();
+            let expected = if value == 16 {
+                BLACK
+            } else {
+                [255, 255, 255, 255]
+            };
+            for _ in 0..2 {
+                let image = renderer.render_scene_to_image(&scene, device_size(3, 3))?;
+                assert_pixel(&image, 1, 1, expected);
+            }
+        }
         Ok(())
     }
 

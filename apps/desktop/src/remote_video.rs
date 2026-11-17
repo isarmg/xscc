@@ -56,6 +56,8 @@ pub struct RemoteVideo {
     connected: bool,
     keyboard_allowed: bool,
     target_fps: TargetFps,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    local_refresh_interval: Option<std::time::Duration>,
     monitors: Vec<Monitor>,
     current_monitor: usize,
     switching_monitor: bool,
@@ -100,6 +102,21 @@ impl RemoteVideo {
                 }
             }),
         ];
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let subscriptions = {
+            let mut subscriptions = subscriptions;
+            let view = cx.entity().downgrade();
+            subscriptions.push(window.observe_window_display(move |window, cx| {
+                let interval = window.refresh_interval(cx);
+                let _ = view.update(cx, |view, cx| {
+                    view.local_refresh_interval = interval;
+                    view.update_local_target_fps();
+                    view.publish(cx);
+                    cx.notify();
+                });
+            }));
+            subscriptions
+        };
         let wake = Arc::new(tokio::sync::Notify::new());
         let ui_wake = wake.clone();
         let task = cx.spawn(async move |view, cx| {
@@ -130,6 +147,8 @@ impl RemoteVideo {
             connected: false,
             keyboard_allowed: false,
             target_fps: TargetFps::FPS_60,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            local_refresh_interval: window.refresh_interval(cx),
             monitors: Vec::new(),
             current_monitor: 0,
             switching_monitor: false,

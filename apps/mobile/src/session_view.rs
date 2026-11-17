@@ -810,6 +810,11 @@ impl SessionView {
                 SessionEvent::MediaControls(controls) => {
                     if let Some(target) = controls.current_resolution.and_then(|mode| {
                         let refresh_rate = mode.refresh_rate;
+                        #[cfg(target_os = "ios")]
+                        let refresh_rate = xscc_native_ui::presentation::stream_fps(
+                            refresh_rate,
+                            window.refresh_interval(cx),
+                        );
                         #[cfg(target_os = "android")]
                         let refresh_rate = crate::display_state::stream_fps(
                             refresh_rate,
