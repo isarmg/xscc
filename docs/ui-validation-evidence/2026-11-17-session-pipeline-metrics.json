@@ -1,0 +1,1020 @@
+{
+  "status": "not accepted; further performance work stopped at maintainer request",
+  "host": {
+    "version": "4.0.0-beta.17",
+    "source": "00e5999a269c1e7067692ff0e007b7e93a40fa17"
+  },
+  "android": {
+    "version": "4.0.0-beta.21",
+    "code": 40021,
+    "source": "74bf4a30e61279d328dc1cde0c95b409c7894987",
+    "installation": "verified replacement install; bindings retained; Mailbox observed",
+    "performance": "not retested after replacement; runtime source matches beta.19"
+  },
+  "samples": [
+    {
+      "label": "host17-app14-switch90",
+      "received_fps": {
+        "median": 89,
+        "min": 76,
+        "max": 91,
+        "samples": 19
+      },
+      "decoded_fps": {
+        "median": 89,
+        "min": 77,
+        "max": 91,
+        "samples": 19
+      },
+      "submitted_fps": {
+        "median": 89,
+        "min": 76,
+        "max": 89,
+        "samples": 19
+      },
+      "decode_p95_ms": {
+        "median": 12.797,
+        "min": 11.812999725341797,
+        "max": 13.274999618530273,
+        "samples": 19
+      },
+      "ui_queue_p95_ms": {
+        "median": 19.005,
+        "min": 14.911999702453613,
+        "max": 22.341999053955078,
+        "samples": 19
+      },
+      "mailbox_dropped": {
+        "median": 1,
+        "min": 0,
+        "max": 3,
+        "samples": 19
+      },
+      "acquire_ms": {
+        "median": 0.126,
+        "min": 0.122,
+        "max": 0.139,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.101,
+        "min": 0.97,
+        "max": 1.217,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.443,
+        "min": 2.376,
+        "max": 2.832,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.224,
+        "min": 5.978,
+        "max": 7.428,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.89,
+        "min": 7.77,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app14-switch144",
+      "received_fps": {
+        "median": 110,
+        "min": 76,
+        "max": 115,
+        "samples": 19
+      },
+      "decoded_fps": {
+        "median": 111,
+        "min": 78,
+        "max": 113,
+        "samples": 19
+      },
+      "submitted_fps": {
+        "median": 89,
+        "min": 61,
+        "max": 89,
+        "samples": 19
+      },
+      "decode_p95_ms": {
+        "median": 16.933,
+        "min": 16.16900062561035,
+        "max": 18.7450008392334,
+        "samples": 19
+      },
+      "ui_queue_p95_ms": {
+        "median": 16.619,
+        "min": 16.05699920654297,
+        "max": 18.108999252319336,
+        "samples": 19
+      },
+      "mailbox_dropped": {
+        "median": 24,
+        "min": 16,
+        "max": 53,
+        "samples": 19
+      },
+      "acquire_ms": {
+        "median": 0.124,
+        "min": 0.116,
+        "max": 0.131,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.101,
+        "min": 1.058,
+        "max": 1.317,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.506,
+        "min": 2.368,
+        "max": 2.831,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.123,
+        "min": 6.447,
+        "max": 7.45,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.56,
+        "min": 7.09,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app14-switch240",
+      "received_fps": {
+        "median": 112.0,
+        "min": 93,
+        "max": 118,
+        "samples": 16
+      },
+      "decoded_fps": {
+        "median": 112.5,
+        "min": 93,
+        "max": 118,
+        "samples": 16
+      },
+      "submitted_fps": {
+        "median": 89.0,
+        "min": 71,
+        "max": 89,
+        "samples": 16
+      },
+      "decode_p95_ms": {
+        "median": 18.774,
+        "min": 16.791000366210938,
+        "max": 21.687000274658203,
+        "samples": 16
+      },
+      "ui_queue_p95_ms": {
+        "median": 20.488,
+        "min": 18.804000854492188,
+        "max": 21.788999557495117,
+        "samples": 16
+      },
+      "mailbox_dropped": {
+        "median": 39.0,
+        "min": 16,
+        "max": 51,
+        "samples": 16
+      },
+      "acquire_ms": {
+        "median": 0.122,
+        "min": 0.116,
+        "max": 0.133,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.093,
+        "min": 1.038,
+        "max": 1.242,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.471,
+        "min": 2.295,
+        "max": 2.787,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.249,
+        "min": 6.934,
+        "max": 7.483,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.9,
+        "min": 6.84,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app14-return120-before18",
+      "received_fps": {
+        "median": 118,
+        "min": 101,
+        "max": 120,
+        "samples": 17
+      },
+      "decoded_fps": {
+        "median": 118,
+        "min": 99,
+        "max": 121,
+        "samples": 17
+      },
+      "submitted_fps": {
+        "median": 89,
+        "min": 78,
+        "max": 90,
+        "samples": 17
+      },
+      "decode_p95_ms": {
+        "median": 18.29,
+        "min": 16.857999801635742,
+        "max": 21.613000869750977,
+        "samples": 17
+      },
+      "ui_queue_p95_ms": {
+        "median": 19.922,
+        "min": 17.27899932861328,
+        "max": 20.87700080871582,
+        "samples": 17
+      },
+      "mailbox_dropped": {
+        "median": 32,
+        "min": 16,
+        "max": 64,
+        "samples": 17
+      },
+      "acquire_ms": {
+        "median": 0.119,
+        "min": 0.114,
+        "max": 0.126,
+        "samples": 24
+      },
+      "upload_ms": {
+        "median": 1.063,
+        "min": 0.864,
+        "max": 1.145,
+        "samples": 24
+      },
+      "render_ms": {
+        "median": 2.415,
+        "min": 2.265,
+        "max": 2.634,
+        "samples": 24
+      },
+      "present_ms": {
+        "median": 7.385,
+        "min": 6.457,
+        "max": 7.585,
+        "samples": 24
+      },
+      "frame_avg_ms": {
+        "median": 11.14,
+        "min": 8.4,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app18-ufo120-first",
+      "received_fps": {
+        "median": 114.5,
+        "min": 73,
+        "max": 119,
+        "samples": 44
+      },
+      "decoded_fps": {
+        "median": 113.5,
+        "min": 75,
+        "max": 120,
+        "samples": 44
+      },
+      "submitted_fps": {
+        "median": 88.0,
+        "min": 58,
+        "max": 90,
+        "samples": 44
+      },
+      "decode_p95_ms": {
+        "median": 14.979,
+        "min": 10.800000190734863,
+        "max": 21.011999130249023,
+        "samples": 44
+      },
+      "ui_queue_p95_ms": {
+        "median": 16.577,
+        "min": 15.454000473022461,
+        "max": 17.42300033569336,
+        "samples": 44
+      },
+      "mailbox_dropped": {
+        "median": 28.5,
+        "min": 16,
+        "max": 62,
+        "samples": 44
+      },
+      "acquire_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 59
+      },
+      "upload_ms": {
+        "median": 7.857,
+        "min": 4.678,
+        "max": 8.699,
+        "samples": 59
+      },
+      "render_ms": {
+        "median": 9.48,
+        "min": 6.285,
+        "max": 10.336,
+        "samples": 59
+      },
+      "present_enqueue_ms": {
+        "median": 0.055,
+        "min": 0.048,
+        "max": 0.06,
+        "samples": 59
+      },
+      "frame_avg_ms": {
+        "median": 10.02,
+        "min": 4.44,
+        "max": 11.75,
+        "samples": 59
+      },
+      "native_present_worker": {
+        "frames": {
+          "median": 89.0,
+          "min": 43.0,
+          "max": 90.0,
+          "samples": 59
+        },
+        "elapsed_ms": {
+          "median": 1001.3,
+          "min": 1000.0,
+          "max": 1197.3,
+          "samples": 59
+        },
+        "average_ms": {
+          "median": 8.675,
+          "min": 6.751,
+          "max": 9.172,
+          "samples": 59
+        },
+        "max_ms": {
+          "median": 10.916,
+          "min": 9.445,
+          "max": 14.466,
+          "samples": 59
+        }
+      }
+    },
+    {
+      "label": "host17-app19-ufo120-minute",
+      "received_fps": {
+        "median": 116.5,
+        "min": 7,
+        "max": 120,
+        "samples": 42
+      },
+      "decoded_fps": {
+        "median": 116.0,
+        "min": 5,
+        "max": 120,
+        "samples": 42
+      },
+      "submitted_fps": {
+        "median": 105.5,
+        "min": 5,
+        "max": 115,
+        "samples": 42
+      },
+      "decode_p95_ms": {
+        "median": 16.558,
+        "min": 11.192000389099121,
+        "max": 20.6200008392334,
+        "samples": 42
+      },
+      "ui_queue_p95_ms": {
+        "median": 15.859,
+        "min": 12.196999549865723,
+        "max": 17.489999771118164,
+        "samples": 42
+      },
+      "mailbox_dropped": {
+        "median": 11.0,
+        "min": 0,
+        "max": 34,
+        "samples": 42
+      },
+      "acquire_ms": {
+        "median": 0.12,
+        "min": 0.099,
+        "max": 0.365,
+        "samples": 60
+      },
+      "upload_ms": {
+        "median": 0.996,
+        "min": 0.851,
+        "max": 1.187,
+        "samples": 60
+      },
+      "render_ms": {
+        "median": 2.333,
+        "min": 2.051,
+        "max": 7.165,
+        "samples": 60
+      },
+      "present_ms": {
+        "median": 0.851,
+        "min": 0.512,
+        "max": 5.73,
+        "samples": 60
+      },
+      "frame_avg_ms": {
+        "median": 4.17,
+        "min": 1.36,
+        "max": 9.42,
+        "samples": 60
+      }
+    },
+    {
+      "label": "host17-app19-ufo120-cpu-profile",
+      "received_fps": {
+        "median": 117.0,
+        "min": 104,
+        "max": 121,
+        "samples": 18
+      },
+      "decoded_fps": {
+        "median": 117.0,
+        "min": 104,
+        "max": 122,
+        "samples": 18
+      },
+      "submitted_fps": {
+        "median": 103.0,
+        "min": 87,
+        "max": 118,
+        "samples": 18
+      },
+      "decode_p95_ms": {
+        "median": 16.601,
+        "min": 15.331999778747559,
+        "max": 20.566999435424805,
+        "samples": 18
+      },
+      "ui_queue_p95_ms": {
+        "median": 15.73,
+        "min": 13.223999977111816,
+        "max": 17.197999954223633,
+        "samples": 18
+      },
+      "mailbox_dropped": {
+        "median": 14.5,
+        "min": 2,
+        "max": 33,
+        "samples": 18
+      },
+      "acquire_ms": {
+        "median": 0.119,
+        "min": 0.11,
+        "max": 0.13,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.084,
+        "min": 0.909,
+        "max": 1.16,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.286,
+        "min": 2.105,
+        "max": 2.5,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 5.18,
+        "min": 0.582,
+        "max": 5.766,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 7.09,
+        "min": 3.84,
+        "max": 9.29,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app19-switch90",
+      "received_fps": {
+        "median": 90.0,
+        "min": 89,
+        "max": 91,
+        "samples": 18
+      },
+      "decoded_fps": {
+        "median": 90.0,
+        "min": 88,
+        "max": 91,
+        "samples": 18
+      },
+      "submitted_fps": {
+        "median": 88.0,
+        "min": 85,
+        "max": 90,
+        "samples": 18
+      },
+      "decode_p95_ms": {
+        "median": 12.913,
+        "min": 11.425000190734863,
+        "max": 17.191999435424805,
+        "samples": 18
+      },
+      "ui_queue_p95_ms": {
+        "median": 20.096,
+        "min": 17.972000122070312,
+        "max": 21.35700035095215,
+        "samples": 18
+      },
+      "mailbox_dropped": {
+        "median": 2.0,
+        "min": 0,
+        "max": 4,
+        "samples": 18
+      },
+      "acquire_ms": {
+        "median": 0.13,
+        "min": 0.12,
+        "max": 0.15,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.108,
+        "min": 1.026,
+        "max": 1.194,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.494,
+        "min": 2.338,
+        "max": 2.774,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.05,
+        "min": 6.395,
+        "max": 7.366,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.7,
+        "min": 9.32,
+        "max": 11.15,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app19-switch144",
+      "received_fps": {
+        "median": 110.0,
+        "min": 102,
+        "max": 115,
+        "samples": 18
+      },
+      "decoded_fps": {
+        "median": 110.0,
+        "min": 103,
+        "max": 116,
+        "samples": 18
+      },
+      "submitted_fps": {
+        "median": 88.0,
+        "min": 83,
+        "max": 89,
+        "samples": 18
+      },
+      "decode_p95_ms": {
+        "median": 17.398,
+        "min": 13.701000213623047,
+        "max": 20.358999252319336,
+        "samples": 18
+      },
+      "ui_queue_p95_ms": {
+        "median": 16.969,
+        "min": 16.134000778198242,
+        "max": 17.288999557495117,
+        "samples": 18
+      },
+      "mailbox_dropped": {
+        "median": 25.5,
+        "min": 17,
+        "max": 49,
+        "samples": 18
+      },
+      "acquire_ms": {
+        "median": 0.125,
+        "min": 0.12,
+        "max": 0.131,
+        "samples": 24
+      },
+      "upload_ms": {
+        "median": 1.07,
+        "min": 1.048,
+        "max": 1.196,
+        "samples": 24
+      },
+      "render_ms": {
+        "median": 2.401,
+        "min": 2.311,
+        "max": 2.64,
+        "samples": 24
+      },
+      "present_ms": {
+        "median": 7.145,
+        "min": 6.57,
+        "max": 7.336,
+        "samples": 24
+      },
+      "frame_avg_ms": {
+        "median": 10.52,
+        "min": 9.03,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app19-switch240",
+      "received_fps": {
+        "median": 109,
+        "min": 91,
+        "max": 117,
+        "samples": 19
+      },
+      "decoded_fps": {
+        "median": 111,
+        "min": 91,
+        "max": 115,
+        "samples": 19
+      },
+      "submitted_fps": {
+        "median": 89,
+        "min": 80,
+        "max": 89,
+        "samples": 19
+      },
+      "decode_p95_ms": {
+        "median": 17.481,
+        "min": 16.138999938964844,
+        "max": 20.46500015258789,
+        "samples": 19
+      },
+      "ui_queue_p95_ms": {
+        "median": 20.713,
+        "min": 19.44700050354004,
+        "max": 22.218000411987305,
+        "samples": 19
+      },
+      "mailbox_dropped": {
+        "median": 24,
+        "min": 8,
+        "max": 52,
+        "samples": 19
+      },
+      "acquire_ms": {
+        "median": 0.126,
+        "min": 0.12,
+        "max": 0.137,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.091,
+        "min": 1.054,
+        "max": 1.196,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.411,
+        "min": 2.325,
+        "max": 2.692,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.257,
+        "min": 6.037,
+        "max": 7.459,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.765,
+        "min": 8.68,
+        "max": 11.14,
+        "samples": 24
+      }
+    },
+    {
+      "label": "host17-app19-return120",
+      "received_fps": {
+        "median": 114,
+        "min": 100,
+        "max": 117,
+        "samples": 19
+      },
+      "decoded_fps": {
+        "median": 114,
+        "min": 101,
+        "max": 118,
+        "samples": 19
+      },
+      "submitted_fps": {
+        "median": 89,
+        "min": 79,
+        "max": 90,
+        "samples": 19
+      },
+      "decode_p95_ms": {
+        "median": 17.167,
+        "min": 15.10099983215332,
+        "max": 20.577999114990234,
+        "samples": 19
+      },
+      "ui_queue_p95_ms": {
+        "median": 20.112,
+        "min": 18.39299964904785,
+        "max": 21.461000442504883,
+        "samples": 19
+      },
+      "mailbox_dropped": {
+        "median": 28,
+        "min": 21,
+        "max": 55,
+        "samples": 19
+      },
+      "acquire_ms": {
+        "median": 0.125,
+        "min": 0.109,
+        "max": 0.172,
+        "samples": 25
+      },
+      "upload_ms": {
+        "median": 1.094,
+        "min": 1.011,
+        "max": 1.2,
+        "samples": 25
+      },
+      "render_ms": {
+        "median": 2.385,
+        "min": 2.207,
+        "max": 2.68,
+        "samples": 25
+      },
+      "present_ms": {
+        "median": 7.324,
+        "min": 6.346,
+        "max": 7.619,
+        "samples": 25
+      },
+      "frame_avg_ms": {
+        "median": 10.94,
+        "min": 7.87,
+        "max": 11.14,
+        "samples": 25
+      }
+    },
+    {
+      "label": "host17-app20-ufo120-minute",
+      "received_fps": {
+        "median": 99.5,
+        "min": 65,
+        "max": 113,
+        "samples": 42
+      },
+      "decoded_fps": {
+        "median": 99.0,
+        "min": 67,
+        "max": 114,
+        "samples": 42
+      },
+      "submitted_fps": {
+        "median": 86.0,
+        "min": 60,
+        "max": 90,
+        "samples": 42
+      },
+      "decode_p95_ms": {
+        "median": 15.093,
+        "min": 5.748000144958496,
+        "max": 17.55900001525879,
+        "samples": 42
+      },
+      "ui_queue_p95_ms": {
+        "median": 16.273,
+        "min": 13.048999786376953,
+        "max": 17.194000244140625,
+        "samples": 42
+      },
+      "mailbox_dropped": {
+        "median": 18.5,
+        "min": 0,
+        "max": 48,
+        "samples": 42
+      },
+      "acquire_ms": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "samples": 60
+      },
+      "upload_ms": {
+        "median": 0.808,
+        "min": 0.683,
+        "max": 0.91,
+        "samples": 60
+      },
+      "render_ms": {
+        "median": 8.705,
+        "min": 3.985,
+        "max": 9.925,
+        "samples": 60
+      },
+      "present_enqueue_ms": {
+        "median": 0.027,
+        "min": 0.019,
+        "max": 0.046,
+        "samples": 60
+      },
+      "frame_avg_ms": {
+        "median": 9.02,
+        "min": 2.36,
+        "max": 11.15,
+        "samples": 59
+      },
+      "native_present_worker": {
+        "frames": {
+          "median": 89.0,
+          "min": 58.0,
+          "max": 90.0,
+          "samples": 60
+        },
+        "elapsed_ms": {
+          "median": 1009.05,
+          "min": 1000.1,
+          "max": 1077.8,
+          "samples": 60
+        },
+        "average_ms": {
+          "median": 10.633,
+          "min": 5.585,
+          "max": 11.158,
+          "samples": 60
+        },
+        "max_ms": {
+          "median": 13.188,
+          "min": 11.528,
+          "max": 17.634,
+          "samples": 60
+        }
+      }
+    }
+  ],
+  "surfaceflinger": {
+    "host17-app18-ufo120-steady-actual": {
+      "windows": [
+        {
+          "count": 126,
+          "seconds": 1.405259218,
+          "presented_hz": 88.9515602522808,
+          "interval_median_ms": 8.266771,
+          "interval_p95_ms": 16.533436,
+          "gaps_over_12ms": 44
+        },
+        {
+          "count": 126,
+          "seconds": 1.397025207,
+          "presented_hz": 89.47583721014419,
+          "interval_median_ms": 8.266719,
+          "interval_p95_ms": 16.533957,
+          "gaps_over_12ms": 43
+        },
+        {
+          "count": 126,
+          "seconds": 1.40517974,
+          "presented_hz": 88.9565914179776,
+          "interval_median_ms": 8.266199,
+          "interval_p95_ms": 16.53203,
+          "gaps_over_12ms": 45
+        }
+      ],
+      "median_presented_hz": 88.9565914179776
+    },
+    "host17-app19-ufo120-start-actual": {
+      "windows": [
+        {
+          "count": 126,
+          "seconds": 1.230627135,
+          "presented_hz": 101.57422703018815,
+          "interval_median_ms": 8.259582,
+          "interval_p95_ms": 16.519114,
+          "gaps_over_12ms": 22
+        },
+        {
+          "count": 126,
+          "seconds": 1.065492969,
+          "presented_hz": 117.3165883180971,
+          "interval_median_ms": 8.259739,
+          "interval_p95_ms": 8.260678,
+          "gaps_over_12ms": 4
+        },
+        {
+          "count": 126,
+          "seconds": 1.098418333,
+          "presented_hz": 113.79999426866813,
+          "interval_median_ms": 8.258854,
+          "interval_p95_ms": 8.260416,
+          "gaps_over_12ms": 7
+        }
+      ],
+      "median_presented_hz": 113.79999426866813
+    },
+    "host17-app19-ufo120-end-actual": {
+      "windows": [
+        {
+          "count": 126,
+          "seconds": 1.263769271,
+          "presented_hz": 98.91046005659683,
+          "interval_median_ms": 8.260052,
+          "interval_p95_ms": 16.520469,
+          "gaps_over_12ms": 24
+        },
+        {
+          "count": 126,
+          "seconds": 1.313129479,
+          "presented_hz": 95.19244065344755,
+          "interval_median_ms": 8.258959,
+          "interval_p95_ms": 16.517656,
+          "gaps_over_12ms": 23
+        },
+        {
+          "count": 125,
+          "seconds": 1.205809635,
+          "presented_hz": 102.83546954739667,
+          "interval_median_ms": 8.259167,
+          "interval_p95_ms": 16.518021,
+          "gaps_over_12ms": 21
+        }
+      ],
+      "median_presented_hz": 98.91046005659683
+    },
+    "host17-app20-ufo120-start-actual": {
+      "windows": [
+        {
+          "count": 126,
+          "seconds": 1.43886302,
+          "presented_hz": 86.87414872890402,
+          "interval_median_ms": 8.269895,
+          "interval_p95_ms": 16.539636,
+          "gaps_over_12ms": 46
+        },
+        {
+          "count": 126,
+          "seconds": 1.422235469,
+          "presented_hz": 87.88980638198386,
+          "interval_median_ms": 8.269375,
+          "interval_p95_ms": 16.538594,
+          "gaps_over_12ms": 45
+        },
+        {
+          "count": 126,
+          "seconds": 1.405662865,
+          "presented_hz": 88.92601712146674,
+          "interval_median_ms": 8.269115,
+          "interval_p95_ms": 16.538126,
+          "gaps_over_12ms": 45
+        }
+      ],
+      "median_presented_hz": 87.88980638198386
+    }
+  },
+  "limits": [
+    "Samples include transient stalls; medians are not sustained minimums.",
+    "UI submission is not GPU completion or physical scanout.",
+    "Different candidate runs are observations, not a fully controlled causal benchmark.",
+    "Xiaomi13 panel maximum is 120Hz; selecting a 144/240Hz host mode cannot make the phone panel exceed 120Hz."
+  ]
+}
