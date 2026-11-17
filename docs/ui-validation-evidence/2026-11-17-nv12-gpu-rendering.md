@@ -97,8 +97,8 @@ cargo test --locked --manifest-path vendor/gpui/Cargo.toml -p gpui_wgpu --lib co
 ```
 
 The Android workflow also compiles the production `common/nv12.rs` directly with
-`rustc --test`, verifies both test names are selected, and runs them. The Windows
-GPU workflow requires both NV12 pixel regressions to pass; the manual timing
+`rustc --test`, verifies both test names are selected, and runs them. The Vulkan
+pixel workflow requires both NV12 pixel regressions to pass; the manual timing
 fixture stays ignored in regular CI. Cases cover padded/cropped odd dimensions,
 truncated planes, exact plane ownership, GPU color channel order and clipping,
 same-size replacement, resize, static final-image redraw and resource clearing.
@@ -163,7 +163,8 @@ SurfaceFlinger, battery, thermal or sustained-120-FPS result is claimed.
 | GPUI `assets.rs`, `scene.rs`, `window.rs` | Retain original NV12 allocation and put Android video in the existing surface primitive stream; apply current crop, mask, radii, opacity and ordering. BGRA uses its existing path. |
 | WGPU `wgpu_renderer.rs`, `shaders.wgsl` | Prepare/draw Android Y/UV planes within the existing frame submission. New implementation lives in `wgpu_renderer/nv12.rs`; other platforms do not enable this surface path. |
 | `vendor/gpui/upstream.json` | Record the maintained vendor patch. |
-| Android and Windows GPU workflows | Run the plane-layout and real GPU pixel regressions with nonempty selection checks. |
+| Android workflow; new NV12 Vulkan workflow | Run the plane-layout and shader pixel regressions with nonempty selection checks. CI uses explicit software Vulkan; local Vega 8 tests use a physical GPU. |
+| `.github/scripts/test-gpui-android-ime.py` | Supply missing display API declarations in the pre-existing JVM fixture, which otherwise prevents APK builds from reaching packaging. Production IME/display behavior is unchanged. |
 
 New application/codec logic lives in `src/gpui_session/nv12.rs` and
 `libs/scrap/src/common/nv12.rs`. No transport/protocol, bitrate, frame-rate

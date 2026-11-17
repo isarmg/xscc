@@ -1,0 +1,47 @@
+name: GPUI NV12 pixel regressions
+on:
+  push:
+    branches: [main]
+    paths: ['vendor/gpui/**', '.github/workflows/gpui-nv12.yml']
+  pull_request:
+    paths: ['vendor/gpui/**', '.github/workflows/gpui-nv12.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nv12-vulkan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/nv12-pixels
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install Vulkan software renderer and font build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers vulkan-tools
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.99.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: vendor/gpui -> ../../target/nv12-pixels
+          key: nv12-vulkan-pixels
+      - name: Select and verify software Vulkan
+        run: |
+          export VK_DRIVER_FILES="$(python3 -c 'from pathlib import Path; print(next(Path("/usr/share/vulkan/icd.d").glob("lvp*.json")))')"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/gpui-nv12-runtime"
+          mkdir -m 700 -p "$XDG_RUNTIME_DIR"
+          printf 'VK_DRIVER_FILES=%s\nXDG_RUNTIME_DIR=%s\n' "$VK_DRIVER_FILES" "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          vulkaninfo --summary
+      - name: Verify NV12 shader pixels and owned-image replacement
+        working-directory: vendor/gpui
+        run: |
+          echo 'Software Vulkan pixel correctness only; no physical GPU, decoder, presentation or FPS claim.'
+          output=$(cargo +1.99.0 test --locked -p gpui_wgpu --lib wgpu_renderer::nv12::tests -- --test-threads=1 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          printf '%s\n' "$output"
+          grep -Eq '^test result: ok\. 2 passed; 0 failed; 1 ignored;' <<< "$output" || { echo 'Both NV12 GPU regressions must run' >&2; exit 1; }

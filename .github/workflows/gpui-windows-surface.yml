@@ -44,16 +44,6 @@ jobs:
               throw "GPUI test filter matched no passing tests: $filter"
             }
           }
-      - name: Test NV12 plane uploads and GPU video pixels
-        working-directory: xscc/vendor/gpui
-        run: |
-          $output = & cargo +1.99.0 test --locked -p gpui_wgpu --lib wgpu_renderer::nv12::tests -- --test-threads=1 2>&1
-          $exitCode = $LASTEXITCODE
-          $output | Write-Output
-          if ($exitCode -ne 0) { throw "NV12 GPU regression failed: $exitCode" }
-          if (($output -join "`n") -notmatch 'test result: ok\. 2 passed; 0 failed; 1 ignored;') {
-            throw "Expected both NV12 GPU regressions and the ignored manual timing fixture"
-          }
       - name: Build the private WARP draw test without running it
         working-directory: xscc/vendor/gpui
         run: |
