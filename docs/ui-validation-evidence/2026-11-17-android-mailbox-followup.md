@@ -30,7 +30,7 @@ removes that policy and its timestamp plumbing rather than adding a second pacin
 layer. Android prefers Mailbox when advertised; FIFO remains the synchronized
 fallback. Explicit supported surface preferences retain their existing priority.
 No future presentation timestamp is supplied in either mode. Android 15 support,
-the existing Choreographer callback, the single-slot decoded-frame mailbox, NV12
+the existing Choreographer callback, the two-slot Android decoded-frame mailbox, NV12
 upload reuse, GPU fences, and the requested swapchain latency are retained.
 
 This is a rollback candidate for device comparison. Neither the Vulkan semantics
@@ -95,6 +95,31 @@ CI verified the actual management APK metadata:
 Artifact identity and package checks are established by CI; no local binary
 redownload, physical installation, scanout measurement or sustained-FPS
 acceptance is claimed.
+
+## Source audit correction
+
+The Android production mailbox has capacity two (`Mailbox::default` in
+`src/gpui_session.rs`), while other platforms use capacity one. The Android
+consumer uses a two-frame age budget and skips an older frame only when another
+frame is available. It preserves the final image of a static desktop. A queue
+age near two display intervals alone is therefore not proof of an unbounded
+queue or the cause of a presentation stall.
+
+Both existing production admission tests in `src/gpui_session/frames.rs` were
+run directly on the Windows host and passed. The burst test explicitly shows
+that replacing the two-slot policy with a single slot can discard one output
+from each pair. These are admission-policy checks, not a device throughput test.
+
+UI frame acceptance runs in the mobile next-frame callback before the same
+thread calls GPUI presentation, WGPU `Queue::present`, and the Vulkan HAL. The
+pinned WGPU core holds the device command-index write lock around HAL
+presentation, serializing it with subsequent GPU submissions. This identifies
+how a long presentation call stalls UI acceptance; it does not identify which
+lock, driver operation, fence or compositor operation caused that call to wait.
+
+The two present-mode tests validate mode selection only. They do not reproduce
+the reported high-refresh stall. This candidate removes a presentation policy
+change; it must not be treated as an established root-cause fix.
 
 ## Changed runtime surfaces
 
