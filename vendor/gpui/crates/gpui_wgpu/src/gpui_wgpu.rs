@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+mod android_presenter;
 #[cfg(any(target_os = "android", test))]
 mod android_image_upload;
 #[cfg(target_os = "android")]

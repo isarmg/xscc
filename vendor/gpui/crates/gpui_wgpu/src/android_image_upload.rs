@@ -29,10 +29,6 @@ impl ImageUpload {
         if layout.size > device.limits().max_buffer_size {
             return Ok(false);
         }
-        // Poll without waiting so completed maps return buffers to the belt before allocation.
-        device
-            .poll(wgpu::PollType::Poll)
-            .context("Poll image upload completion")?;
         let dimensions = (extent.width, extent.height);
         if self
             .pool
