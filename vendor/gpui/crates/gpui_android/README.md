@@ -21,9 +21,9 @@ gates are verified and device acceptance passes.
 
 Only draw a surface between InitWindow and TerminateWindow. The latter releases
 the WGPU surface before returning to Android. Device loss uses WGPU recovery.
-Frame requests are coalesced and bounded at a 60 Hz fallback cadence; background,
-idle, and detached windows block waiting for events. Display-native Choreographer
-pacing is a later improvement, not claimed by this slice.
+Frame requests are coalesced through Choreographer's preferred frame timeline.
+Its expected presentation timestamp is supplied to supported Vulkan surfaces;
+background, idle, and detached windows block waiting for events.
 
 The smoke app lives in `experiments/gpui-android-smoke`; Android packaging and the
 pinned build instructions live in `packaging/gpui-android`. The Android facade is
@@ -54,7 +54,7 @@ was copied into this crate. Keep dependency licenses/notices when distributing.
 
 Cross-build the real ARM64 library and inspect the APK/ELF using the dedicated
 CI workflow. A successful Cargo check does not establish APK link success or
-on-device operation. Device QA must cover API29 and modern target36 devices,
+on-device operation. Device QA must cover Android 15 / API 35 and newer devices,
 first frame, English/Chinese text, tap counter, list scrolling, delayed async
 wake, Back, Home/resume, lock/unlock, rotation and surface replacement. Confirm
 no blank/stale atlas rendering or GPU work while backgrounded.
@@ -108,5 +108,5 @@ keyboard text/selection behavior also require device verification.
 
 The Activity retains GameTextInput’s edge-to-edge configuration and GameActivity’s
 soft-input window policy. Insets are converted from physical to logical pixels
-once. Surface resizing and keyboard occlusion on API29 and current Android
+once. Surface resizing and keyboard occlusion on Android 15 and newer Android
 versions remain explicit device acceptance checks.

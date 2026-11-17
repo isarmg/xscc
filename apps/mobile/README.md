@@ -1,6 +1,6 @@
 # XSCC GPUI mobile management preview
 
-This is an **iOS 26 / iPadOS 26 / Android API29+ ARM64 preview**. The default build remains
+This is an **iOS 26 / iPadOS 26 / Android 15+ (API 35+) ARM64 preview**. The default build remains
 management-only. The explicit `mobile-session` build adds the software-decoded screen and direct-touch
 session slice; device connection and first-frame acceptance are still required. It is a separate application with bundle identifier
 `org.sarmg.xscc.gpui.preview`. This workspace is the GPUI mobile product entry; its historical directory name and preview identifiers are retained.

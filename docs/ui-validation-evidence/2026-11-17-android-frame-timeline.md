@@ -62,3 +62,35 @@ host capture/encoding, transport and codec frame ownership are unchanged.
 Gradle, Android workflow, APK verifier/tests and current support documentation
 advance the requested Android minimum; three lockfiles add the already-pinned
 Ash dependency needed for WGPU's public Vulkan timing structure.
+
+## Public CI and package evidence
+
+The following results and package metadata come from public GitHub Actions
+builds of source `8ac686dde9310c2cd8977181e7ed6ba94d73fe25`:
+
+- [Android native candidates](https://github.com/isarmg/xscc/actions/runs/44070673717):
+  smoke and management jobs passed, including the API 35 manifest, native frame
+  timeline imports, 16 KB alignment, APK signature and privacy checks.
+- [NV12 Vulkan pixel regressions](https://github.com/isarmg/xscc/actions/runs/44070673749),
+  [framework validation](https://github.com/isarmg/xscc/actions/runs/44070673719),
+  [native management](https://github.com/isarmg/xscc/actions/runs/44070673766) and
+  [Windows WARP drawing](https://github.com/isarmg/xscc/actions/runs/44070673708)
+  passed.
+- [iOS preview](https://github.com/isarmg/xscc/actions/runs/44070673682) failed its
+  pre-existing formatting check in `apps/mobile/src/display_state.rs` and
+  `apps/mobile/src/session_view.rs`. Neither Rust file changes in this candidate.
+
+Management artifact: `14323396299`. Its original ZIP SHA-256 is
+`ba99e71635f73caa39908e3a45b3738ce70cfe426820d67ce40c0ee4de789e57`.
+The downloaded ZIP matched this digest, both `SHA256SUMS` entries matched, and
+the extracted APK passed the repository's manifest and native-alignment verifier.
+
+- APK: `xscc-gpui-android-arm64-management-8ac686dde931.apk`
+- Version: `4.0.0-beta.23` / `40023`; minimum SDK `35`; ARM64.
+- APK bytes: `76748559`.
+- APK SHA-256: `4ea34c3f985c0f17aeccd8fe29925a48969594013494f54c248598ff66621c53`.
+- CI-verified v2 signing certificate SHA-256:
+  `7e2584d12ca65c34bc01facc08b77657764c6405f0c9e2050bdd1df84b2753c9`.
+
+The public package retains the preview signing identity for upgrade installation.
+Physical-device performance acceptance is still pending.
