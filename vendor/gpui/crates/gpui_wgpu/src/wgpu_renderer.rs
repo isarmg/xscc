@@ -232,9 +232,6 @@ struct WgpuRendererCore {
 enum RendererState {
     /// Frames can be drawn.
     Ready {
-        #[cfg(target_os = "android")]
-        surface: Arc<wgpu::Surface<'static>>,
-        #[cfg(not(target_os = "android"))]
         surface: wgpu::Surface<'static>,
         core: WgpuRendererCore,
     },
@@ -247,8 +244,6 @@ enum RendererState {
 }
 
 pub struct WgpuRenderer {
-    #[cfg(target_os = "android")]
-    android_presenter: crate::android_presenter::Presenter,
     /// Shared GPU context for device recovery coordination (unused on WASM).
     #[allow(dead_code)]
     context: Option<GpuContext>,
@@ -456,13 +451,7 @@ impl WgpuRenderer {
         }
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: if cfg!(target_os = "android")
-                && surface_caps.usages.contains(wgpu::TextureUsages::COPY_DST)
-            {
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST
-            } else {
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-            },
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: clamped_width.max(1),
@@ -498,11 +487,7 @@ impl WgpuRenderer {
 
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
 
-        #[cfg(target_os = "android")]
-        let surface = Arc::new(surface);
         Ok(Self {
-            #[cfg(target_os = "android")]
-            android_presenter: crate::android_presenter::Presenter::new()?,
             context: gpu_context,
             compositor_gpu,
             state: RendererState::Ready { surface, core },
@@ -1033,8 +1018,6 @@ impl WgpuRenderer {
             return;
         }
 
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
         let clamped_width = width.min(self.max_texture_size);
         let clamped_height = height.min(self.max_texture_size);
         if clamped_width != width || clamped_height != height {
@@ -1094,8 +1077,6 @@ impl WgpuRenderer {
         if new_alpha_mode == self.surface_config.alpha_mode {
             return;
         }
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
         self.surface_config.alpha_mode = new_alpha_mode;
         let format = self.surface_config.format;
 
@@ -1151,103 +1132,6 @@ impl WgpuRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
-        #[cfg(target_os = "android")]
-        {
-            return self.draw_android(scene);
-        }
-        #[cfg(not(target_os = "android"))]
-        self.draw_surface(scene)
-    }
-
-    #[cfg(target_os = "android")]
-    pub fn set_android_presentation_waker(&mut self, wake: Box<dyn Fn() + Send + Sync>) {
-        self.android_presenter.set_waker(wake);
-    }
-
-    #[cfg(target_os = "android")]
-    fn drain_android_presentations(&mut self) {
-        if let Err(error) = self.android_presenter.drain() {
-            self.last_surface_error = Some(error.to_string());
-        }
-    }
-
-    #[cfg(target_os = "android")]
-    fn draw_android(&mut self, scene: &Scene) -> bool {
-        if let Some(error) = self.last_surface_error.take().or_else(|| {
-            self.device_errors
-                .observe_error(&mut self.observed_error_generation)
-        }) {
-            self.failed_frame_count += 1;
-            log::trace!(
-                "GPU error during frame (failure {} of 10): {error}",
-                self.failed_frame_count
-            );
-
-            // TBD. Does retrying more actually help?
-            if self.failed_frame_count > 10 {
-                panic!("Too many consecutive GPU errors. Last error: {error}");
-            } else if self.failed_frame_count > 5 {
-                if let Some(core) = self.core_mut() {
-                    core.resources.invalidate_intermediate_textures();
-                }
-                self.atlas.clear();
-                self.needs_redraw = true;
-                self.failed_frame_count = 0;
-                return false;
-            }
-        } else {
-            self.failed_frame_count = 0;
-        }
-
-        let RendererState::Ready { surface, core } = &mut self.state else {
-            return false;
-        };
-        let image = match self
-            .android_presenter
-            .acquire(&core.resources.device, &self.surface_config)
-        {
-            Ok(image) => image,
-            Err(error) => {
-                self.last_surface_error = Some(error.to_string());
-                return false;
-            }
-        };
-        let size = Size {
-            width: DevicePixels(image.texture.width() as i32),
-            height: DevicePixels(image.texture.height() as i32),
-        };
-        let started = std::time::Instant::now();
-        if let Err(error) = core.render_frame(
-            scene,
-            &image.view,
-            size,
-            self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied,
-            wgpu::Color::TRANSPARENT,
-        ) {
-            self.android_presenter.recycle(image);
-            self.last_surface_error = Some(error.to_string());
-            return false;
-        }
-        crate::android_render_timing::record(crate::android_render_timing::Stage::Render, started);
-        let started = std::time::Instant::now();
-        let result = self.android_presenter.submit(
-            image,
-            core.resources.device.clone(),
-            core.resources.queue.clone(),
-            surface.clone(),
-            self.surface_config.clone(),
-        );
-        crate::android_render_timing::record(crate::android_render_timing::Stage::Present, started);
-        crate::android_render_timing::finish_frame();
-        if let Err(error) = result {
-            self.last_surface_error = Some(error.to_string());
-            return false;
-        }
-        true
-    }
-
-    #[cfg(not(target_os = "android"))]
-    fn draw_surface(&mut self, scene: &Scene) -> bool {
         #[cfg(target_family = "wasm")]
         if self.device_lost() {
             if matches!(self.state, RendererState::Ready { .. }) {
@@ -2287,8 +2171,6 @@ impl WgpuRenderer {
     /// (e.g. Android `TerminateWindow`) but you intend to re-create the
     /// surface later without losing cached atlas textures.
     pub fn unconfigure_surface(&mut self) {
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
         self.state = match std::mem::replace(&mut self.state, RendererState::Released) {
             RendererState::Ready { core, surface } => {
                 drop(surface);
@@ -2317,8 +2199,6 @@ impl WgpuRenderer {
         config: WgpuSurfaceConfig,
         instance: &wgpu::Instance,
     ) -> anyhow::Result<()> {
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
         let window_handle = window
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
@@ -2356,16 +2236,12 @@ impl WgpuRenderer {
         };
         surface.configure(&core.resources.device, &self.surface_config);
         core.resources.invalidate_intermediate_textures();
-        #[cfg(target_os = "android")]
-        let surface = Arc::new(surface);
         self.state = RendererState::Ready { surface, core };
 
         Ok(())
     }
 
     pub fn destroy(&mut self) {
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
         // Release surface-bound GPU resources eagerly so the underlying native
         // window can be destroyed before the renderer itself is dropped.
         self.state = RendererState::Released;
@@ -2379,14 +2255,6 @@ impl WgpuRenderer {
     /// Returns true if a redraw is needed because GPU state was cleared.
     /// Calling this method clears the flag.
     pub fn needs_redraw(&mut self) -> bool {
-        #[cfg(target_os = "android")]
-        {
-            let (retry, error) = self.android_presenter.poll();
-            self.needs_redraw |= retry;
-            if let Some(error) = error {
-                self.last_surface_error = Some(error);
-            }
-        }
         std::mem::take(&mut self.needs_redraw)
     }
 
@@ -2402,10 +2270,6 @@ impl WgpuRenderer {
     where
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
-        #[cfg(target_os = "android")]
-        self.drain_android_presentations();
-        #[cfg(target_os = "android")]
-        let presentation_wake = self.android_presenter.waker();
         let gpu_context = self.context.as_ref().expect("recover requires gpu_context");
 
         // Check if another window already recovered the context
@@ -2467,10 +2331,6 @@ impl WgpuRenderer {
             self.compositor_gpu,
             self.atlas.clone(),
         )?;
-        #[cfg(target_os = "android")]
-        if let Some(wake) = presentation_wake {
-            self.set_android_presentation_waker(Box::new(move || wake()));
-        }
         self.set_subpixel_layout(is_bgr);
 
         log::info!("GPU recovery complete");
