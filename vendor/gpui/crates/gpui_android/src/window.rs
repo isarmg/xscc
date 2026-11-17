@@ -150,6 +150,12 @@ fn physical_size(window: &SurfaceWindow) -> anyhow::Result<Size<DevicePixels>> {
     Ok(size(DevicePixels(width), DevicePixels(height)))
 }
 impl WindowState {
+    pub fn set_presentation_time(&self, expected_presentation_time: u64) {
+        self.renderer
+            .borrow()
+            .set_presentation_time(expected_presentation_time);
+    }
+
     pub fn can_draw(&self) -> bool {
         self.visible.get() && self.native.borrow().is_some()
     }

@@ -148,8 +148,9 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             && let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get())
         {
             match frame_clock.take_ready() {
-                Ok(true) => {
+                Ok(Some(expected_presentation_time)) => {
                     frame_clock.request();
+                    window.set_presentation_time(expected_presentation_time);
                     let started = Instant::now();
                     window.request_frame(false);
                     let elapsed = started.elapsed();
@@ -157,7 +158,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                     longest_frame = longest_frame.max(elapsed);
                     frames += 1;
                 }
-                Ok(false) => {}
+                Ok(None) => {}
                 Err(error) => {
                     log::error!("Android frame clock failed: {error:#}");
                     state.finish();

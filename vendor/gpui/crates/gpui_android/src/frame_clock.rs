@@ -24,7 +24,7 @@ enum FrameState {
     #[default]
     Idle,
     Pending(usize),
-    Ready,
+    Ready(u64),
     Failed(Option<&'static str>),
 }
 
@@ -40,6 +40,7 @@ pub(crate) struct FrameClock {
 
 impl FrameClock {
     pub(crate) fn new(app: &AndroidApp) -> Self {
+        log::info!("Android frame timeline pacing enabled");
         Self {
             app: app.clone(),
             signal: Arc::new(Signal {
@@ -91,30 +92,30 @@ impl FrameClock {
                     signal: Arc::downgrade(&signal),
                 }));
             });
-            // The NDK has no removeFrameCallback64. This is only an opaque token,
+            // The NDK has no callback removal. This is only an opaque token,
             // never a pointer to State or to callback-owned heap memory.
             unsafe {
-                ndk_sys::AChoreographer_postFrameCallback64(
+                ndk_sys::AChoreographer_postVsyncCallback(
                     choreographer,
-                    Some(on_frame),
+                    Some(on_vsync),
                     token as *mut c_void,
                 );
             }
         }));
     }
 
-    pub(crate) fn take_ready(&self) -> anyhow::Result<bool> {
+    pub(crate) fn take_ready(&self) -> anyhow::Result<Option<u64>> {
         let mut state = self.signal.state.lock().unwrap();
         match *state {
-            FrameState::Ready => {
+            FrameState::Ready(expected_presentation_time) => {
                 *state = FrameState::Idle;
-                Ok(true)
+                Ok(Some(expected_presentation_time))
             }
             FrameState::Failed(ref mut error) => match error.take() {
                 Some(error) => anyhow::bail!(error),
-                None => Ok(false),
+                None => Ok(None),
             },
-            FrameState::Idle | FrameState::Pending(_) => Ok(false),
+            FrameState::Idle | FrameState::Pending(_) => Ok(None),
         }
     }
 
@@ -146,7 +147,18 @@ impl Drop for FrameClock {
     }
 }
 
-unsafe extern "C" fn on_frame(_: i64, data: *mut c_void) {
+unsafe extern "C" fn on_vsync(
+    frame: *const ndk_sys::AChoreographerFrameCallbackData,
+    data: *mut c_void,
+) {
+    let index =
+        unsafe { ndk_sys::AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex(frame) };
+    let nanos = unsafe {
+        ndk_sys::AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(
+            frame, index,
+        )
+    };
+    let expected_presentation_time = if nanos > 0 { nanos as u64 } else { 0 };
     let token = data as usize;
     let registration = CALLBACK.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -162,7 +174,7 @@ unsafe extern "C" fn on_frame(_: i64, data: *mut c_void) {
     let ready = {
         let mut state = signal.state.lock().unwrap();
         if matches!(*state, FrameState::Pending(id) if id == token) {
-            *state = FrameState::Ready;
+            *state = FrameState::Ready(expected_presentation_time);
             true
         } else {
             false

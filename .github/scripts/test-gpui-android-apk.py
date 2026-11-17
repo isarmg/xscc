@@ -50,11 +50,15 @@ class AlignmentTests(unittest.TestCase):
 
     def test_permission_modes_are_explicit(self):
         package = "org.sarmg.xscc.gpui.preview"
-        badging = ("package: name='" + package + "'\nsdkVersion:'29'\n"
+        badging = ("package: name='" + package + "'\nsdkVersion:'35'\n"
                    "targetSdkVersion:'36'\nnative-code: 'arm64-v8a'\n"
                    "uses-permission: name='android.permission.INTERNET'\n")
         tree = "A: android:allowBackup(0x01010280)=(type 0x12)0x0"
         module.check_manifest(badging, tree, package, "management")
+        for api in (29, 34):
+            with self.assertRaisesRegex(ValueError, "SDK or ABI"):
+                module.check_manifest(badging.replace("sdkVersion:'35'", f"sdkVersion:'{api}'"),
+                                      tree, package, "management")
         with self.assertRaisesRegex(ValueError, "Unexpected permissions"):
             module.check_manifest(badging, tree, package, "smoke")
         with self.assertRaisesRegex(ValueError, "Unexpected permissions"):
@@ -64,7 +68,7 @@ class AlignmentTests(unittest.TestCase):
     def test_internal_permission_requires_exact_signature_and_backup_disabled(self):
         package = "org.xscc.gpui.smoke"
         permission = package + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
-        badging = ("package: name='" + package + "'\nsdkVersion:'29'\n"
+        badging = ("package: name='" + package + "'\nsdkVersion:'35'\n"
                    "targetSdkVersion:'36'\nnative-code: 'arm64-v8a'\n"
                    "uses-permission: name='" + permission + "'\n")
         tree = ('E: permission (line=1)\n A: android:name(0x01010003)="' + permission +

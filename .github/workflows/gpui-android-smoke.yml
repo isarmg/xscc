@@ -29,7 +29,7 @@ on:
       package_version:
         description: 'Candidate version, e.g. 1.0.1'
         required: true
-        default: '4.0.0-beta.22'
+        default: '4.0.0-beta.23'
         type: string
       build_only:
         description: 'Build and package without additional host-side tests'
@@ -49,7 +49,7 @@ env:
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
   GRADLE_VERSION: '9.8.1'
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
-  PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.22' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.23' }}
 jobs:
   android:
     runs-on: ubuntu-24.04
@@ -247,11 +247,11 @@ jobs:
           PY
           fi
           if [ "$FLAVOR" != smoke ]; then
-            bindgen_args="$(cargo ndk-env --platform 29 --target aarch64-linux-android --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android"])')"
-            env "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=$bindgen_args --target=aarch64-linux-android29" \
-              cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
+            bindgen_args="$(cargo ndk-env --platform 35 --target aarch64-linux-android --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android"])')"
+            env "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=$bindgen_args --target=aarch64-linux-android35" \
+              cargo ndk -t arm64-v8a --platform 35 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
           else
-            cargo ndk -t arm64-v8a --platform 29 -o "$JNI_LIBS" build --lib --release --locked
+            cargo ndk -t arm64-v8a --platform 35 -o "$JNI_LIBS" build --lib --release --locked
           fi
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI_LIBS/arm64-v8a/"
 
@@ -330,6 +330,9 @@ jobs:
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeTextChanged$' "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --undefined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-imports.txt"
+          grep -Eq ' U AChoreographer_postVsyncCallback(@[^[:space:]]+)?$' "$RUNNER_TEMP/gpui-imports.txt"
+          grep -Eq ' U AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(@[^[:space:]]+)?$' "$RUNNER_TEMP/gpui-imports.txt"
           mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
           test "${#GAME_AARS[@]}" -eq 1
           privacy_args=()
@@ -342,7 +345,7 @@ jobs:
           signing=disposable-debug-key
           if [ "$FLAVOR" = management ]; then signing=repository-preview-key; fi
           if [ "$FLAVOR" != smoke ]; then scope=software-video-pointer-keyboard-audio-preview; fi
-          printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=29\ntarget_sdk=36\nabi=arm64-v8a\nsigning=%s\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope" "$signing"             > dist/gpui-android/BUILD-INFO.txt
+          printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=35\ntarget_sdk=36\nabi=arm64-v8a\nsigning=%s\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope" "$signing"             > dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" != smoke ]; then
             printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=true\naudio_mode=foreground-playback-default-on-with-session-mute\nmicrophone=false\nclipboard=false\nlocal_field_paste=explicit-foreground-text-only\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/

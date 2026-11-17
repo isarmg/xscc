@@ -469,8 +469,19 @@ impl WgpuRenderer {
                 .preferred_present_mode
                 .filter(|mode| surface_caps.present_modes.contains(mode))
                 .unwrap_or_else(|| {
+                    // Keep scheduled future frames ordered instead of replacing them in a mailbox.
                     if cfg!(target_os = "android")
-                        && surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox)
+                        && context
+                            .device
+                            .features()
+                            .contains(wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING)
+                    {
+                        return wgpu::PresentMode::Fifo;
+                    }
+                    if cfg!(target_os = "android")
+                        && surface_caps
+                            .present_modes
+                            .contains(&wgpu::PresentMode::Mailbox)
                     {
                         wgpu::PresentMode::Mailbox
                     } else {
@@ -1088,6 +1099,31 @@ impl WgpuRenderer {
         }
     }
 
+    /// Schedule the next Android presentation in CLOCK_MONOTONIC nanoseconds;
+    /// zero requests immediate presentation when no valid timeline is available.
+    #[cfg(target_os = "android")]
+    pub fn set_presentation_time(&self, expected_presentation_time: u64) {
+        let RendererState::Ready { surface, core } = &self.state else {
+            return;
+        };
+        if self.surface_config.present_mode != wgpu::PresentMode::Fifo
+            || !core
+                .resources
+                .device
+                .features()
+                .contains(wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING)
+        {
+            return;
+        }
+        // Only presentation metadata is changed; wgpu retains the surface and all GPU synchronization.
+        if let Some(surface) = unsafe { surface.as_hal::<wgpu::hal::api::Vulkan>() } {
+            surface.set_next_present_time(ash::vk::PresentTimeGOOGLE {
+                present_id: 0,
+                desired_present_time: expected_presentation_time,
+            });
+        }
+    }
+
     pub fn set_subpixel_layout(&mut self, is_bgr: bool) {
         self.is_bgr = is_bgr;
         if let Some(core) = self.core_mut() {
@@ -1269,7 +1305,15 @@ impl WgpuRenderer {
                 crate::android_render_timing::Stage::Present,
                 present_started,
             );
-            crate::android_render_timing::finish_frame();
+            crate::android_render_timing::finish_frame(
+                self.surface_config.present_mode,
+                self.surface_config.present_mode == wgpu::PresentMode::Fifo
+                    && core
+                        .resources
+                        .device
+                        .features()
+                        .contains(wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
+            );
         }
         true
     }

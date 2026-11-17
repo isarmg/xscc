@@ -1,6 +1,6 @@
 # Android GPUI rendering and IME slice
 
-Experimental single-Activity ARM64 backend, minimum Android API 29. This is a
+Experimental single-Activity ARM64 backend, minimum Android 15 / API 35. This is a
 native GPUI/WGPU rendering test, not a usable remote-control or login client.
 
 Implemented: native window and surface lifetime, touch/tap/drag/scroll through

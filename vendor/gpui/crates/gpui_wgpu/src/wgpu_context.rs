@@ -442,6 +442,13 @@ impl WgpuContext {
         }
 
         let color_atlas_texture_format = Self::select_color_texture_format(adapter)?;
+        #[cfg(target_os = "android")]
+        if adapter
+            .features()
+            .contains(wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING)
+        {
+            required_features |= wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING;
+        }
         #[cfg(target_family = "wasm")]
         let required_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_webgl2_defaults()

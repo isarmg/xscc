@@ -39,8 +39,8 @@ android {
         management {
             dimension 'client'
             applicationId 'org.sarmg.xscc.gpui.preview'
-            versionCode 40022
-            versionName System.getenv('PACKAGE_VERSION') ?: '4.0.0-beta.22'
+            versionCode 40023
+            versionName System.getenv('PACKAGE_VERSION') ?: '4.0.0-beta.23'
             buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
             manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC 控制端预览']
         }
@@ -54,7 +54,7 @@ android {
 
     defaultConfig {
         applicationId 'org.xscc.gpui.smoke'
-        minSdk 29
+        minSdk 35
         targetSdk 36
         versionCode 1
         versionName '0.1-smoke'

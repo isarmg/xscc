@@ -1,6 +1,6 @@
 # GPUI Android candidates
 
-The ARM64/API 29+ smoke flavor exercises the experimental GPUI Android window,
+The ARM64/Android 15+ (API 35+) smoke flavor exercises the experimental GPUI Android window,
 touch input and activity/surface lifecycle. It is not a remote-control client:
 no management login, remote stream, host service or network permission is added.
 Its package is `org.xscc.gpui.smoke`; the controller product uses the management flavor below.
@@ -23,7 +23,7 @@ Passing packaging checks does not prove rendering or touch/lifecycle behavior.
 
 ## Physical-device acceptance (still required)
 
-Install on an ARM64 Android device (API 29+), then:
+Install on an ARM64 Android device running Android 15+ (API 35+), then:
 1. Launch and confirm the GPUI smoke view is visibly rendered.
 2. Tap the interactive control and confirm its visible state changes.
 3. Rotate; background and resume; lock/unlock. Confirm rendering and input recover.

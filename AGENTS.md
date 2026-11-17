@@ -105,7 +105,7 @@ the GPUI-only UI rules below apply to the existing desktop/mobile applications.
 
 * Windows 11 x86_64; Linux x86_64 with Wayland.
 * macOS 26 on Apple Silicon; iOS 26 and iPadOS 26.
-* Android ARM64, minimum API 29. Android, iOS and iPadOS are client-only; host support is desktop-only.
+* Android ARM64, minimum Android 15 / API 35. Android, iOS and iPadOS are client-only; host support is desktop-only.
 * Host and client are being separated into distinct applications in the same repository. Shared protocol code must not depend on either application implementation.
 * Hardware decisions use actual capture, codec, and rendering capabilities, not manufacture dates or model-name lists.
 

@@ -51,6 +51,9 @@ wgpu = { workspace = true, default-features = true }
 web-sys = { workspace = true, features = ["HtmlCanvasElement"] }
 wgpu = { workspace = true, features = ["webgl"] }
 
+[target.'cfg(target_os = "android")'.dependencies]
+ash = { version = "0.38", default-features = false }
+
 [dev-dependencies]
 criterion.workspace = true
 gpui = { workspace = true, features = ["bench-support"] }

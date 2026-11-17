@@ -63,7 +63,7 @@ def verify(apk, library=LIBRARY):
 def check_manifest(badging, tree, package="org.xscc.gpui.smoke", mode="smoke"):
     if not re.search(r"^package: name='" + re.escape(package) + r"'", badging, re.M):
         raise ValueError("Unexpected application ID")
-    for line in ("sdkVersion:'29'", "targetSdkVersion:'36'", "native-code: 'arm64-v8a'"):
+    for line in ("sdkVersion:'35'", "targetSdkVersion:'36'", "native-code: 'arm64-v8a'"):
         if line not in badging.splitlines():
             raise ValueError("Unexpected SDK or ABI")
     permissions = set(re.findall(r"^uses-permission(?:-sdk-\d+)?: name='([^']+)'", badging, re.M))
