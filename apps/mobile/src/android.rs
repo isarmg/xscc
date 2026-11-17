@@ -1,6 +1,8 @@
 #![cfg(target_os = "android")]
 
 #[cfg(feature = "mobile-session")]
+mod android_display;
+#[cfg(feature = "mobile-session")]
 mod display_state;
 
 #[cfg(feature = "mobile-session")]
@@ -70,6 +72,8 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
             .ok_or_else(|| format!("Bundled Maple font is missing: {}", name.to_string_lossy()))?;
         fonts.push(std::borrow::Cow::Owned(asset.buffer()?.to_vec()));
     }
+    #[cfg(feature = "mobile-session")]
+    let display_limit = android_display::DisplayLimit::query(&app);
     let application = gpui::android(app)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -77,6 +81,8 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let handle = runtime.handle().clone();
     application.run(move |cx: &mut App| {
+        #[cfg(feature = "mobile-session")]
+        cx.set_global(display_limit);
         if let Err(error) = cx.text_system().add_fonts(fonts) {
             log::error!("Could not load the bundled Maple fonts: {error}");
             cx.quit();

@@ -154,6 +154,8 @@ jobs:
         run: |
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/geometry.rs -o "$RUNNER_TEMP/gpui-android-geometry-tests"
           "$RUNNER_TEMP/gpui-android-geometry-tests"
+          rustc --edition 2024 --test apps/mobile/src/display_state.rs -o "$RUNNER_TEMP/mobile-display-state-tests"
+          "$RUNNER_TEMP/mobile-display-state-tests"
           rustc --edition 2024 --test vendor/gpui/crates/gpui_android/src/text_state.rs -o "$RUNNER_TEMP/gpui-android-text-state-tests"
           "$RUNNER_TEMP/gpui-android-text-state-tests"
           printf '#[path = "%s/src/gpui_session/metrics.rs"] mod metrics;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gpui-metrics-tests.rs"

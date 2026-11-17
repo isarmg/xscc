@@ -809,10 +809,13 @@ impl SessionView {
                 }
                 SessionEvent::MediaControls(controls) => {
                     if let Some(target) = controls.current_resolution.and_then(|mode| {
-                        TargetFps::new(
-                            mode.refresh_rate
-                                .min(base::session_protocol::MAX_SESSION_FPS),
-                        )
+                        let refresh_rate = mode.refresh_rate;
+                        #[cfg(target_os = "android")]
+                        let refresh_rate = crate::display_state::stream_fps(
+                            refresh_rate,
+                            cx.try_global::<crate::android_display::DisplayLimit>().and_then(|limit| limit.0),
+                        );
+                        TargetFps::new(refresh_rate.min(base::session_protocol::MAX_SESSION_FPS))
                     }) && self.target_fps != Some(target)
                     {
                         self.request_fps(target, cx);

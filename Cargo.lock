@@ -12211,6 +12211,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image 0.25.10",
+ "jni 0.22.4",
  "libc",
  "log",
  "objc2-foundation 0.3.2",

@@ -48,6 +48,21 @@ public class AndroidImeBridge extends GameActivity {
             int selectionStart, int selectionEnd, int composingStart, int composingEnd);
     public static native void nativeAction(long generation, int action);
 
+    @SuppressWarnings("deprecation") // getDefaultDisplay remains available on API29.
+    public float remoteSessionMaximumRefreshRate() {
+        android.view.Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) { return 0; }
+        android.view.Display.Mode current = display.getMode();
+        float highest = current.getRefreshRate();
+        for (android.view.Display.Mode mode : display.getSupportedModes()) {
+            if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                    && mode.getPhysicalHeight() == current.getPhysicalHeight()) {
+                highest = Math.max(highest, mode.getRefreshRate());
+            }
+        }
+        return highest;
+    }
+
     private static boolean onUiThread() {
         return Looper.myLooper() == Looper.getMainLooper();
     }

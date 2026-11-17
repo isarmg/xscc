@@ -40,6 +40,7 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 
 [target.'cfg(target_os = "android")'.dependencies]
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session", "mediacodec"], optional = true }
+jni = "=0.22.4"
 android_logger = "=0.13.3"
 log = "0.4"
 
