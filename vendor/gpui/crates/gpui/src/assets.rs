@@ -39,7 +39,7 @@ pub struct RenderImageParams {
     pub frame_index: usize,
 }
 
-/// A cached and processed image, in BGRA format
+/// A cached image in BGRA format, or owned NV12 planes for Android video.
 pub struct RenderImage {
     /// The ID associated with this image
     pub id: ImageId,
@@ -51,6 +51,10 @@ pub struct RenderImage {
 enum RenderImageData {
     Frames(SmallVec<[Frame; 1]>),
     OwnedBgra {
+        size: Size<DevicePixels>,
+        pixels: Box<dyn AsRef<[u8]> + Send + Sync>,
+    },
+    OwnedNv12 {
         size: Size<DevicePixels>,
         pixels: Box<dyn AsRef<[u8]> + Send + Sync>,
     },
@@ -105,6 +109,50 @@ impl RenderImage {
         Ok(image)
     }
 
+    /// Own packed, BT.601 limited-range NV12 planes for Android video rendering.
+    /// Y rows have `width` bytes; interleaved UV rows have `2 * ceil(width / 2)`.
+    /// The allocation remains owned until the final image/scene reference drops.
+    pub fn from_nv12(
+        width: u32,
+        height: u32,
+        pixels: impl AsRef<[u8]> + Send + Sync + 'static,
+    ) -> Result<Self> {
+        let (w, h) = (width as usize, height as usize);
+        let expected = w.checked_mul(h).and_then(|y| {
+            w.div_ceil(2)
+                .checked_mul(2)?
+                .checked_mul(h.div_ceil(2))?
+                .checked_add(y)
+        });
+        anyhow::ensure!(
+            width > 0
+                && height > 0
+                && width <= 16384
+                && height <= 16384
+                && expected == Some(pixels.as_ref().len()),
+            "owned NV12 image requires complete packed Y and UV planes"
+        );
+        let mut image = Self::new(SmallVec::new());
+        image.data = RenderImageData::OwnedNv12 {
+            size: size(width.into(), height.into()),
+            pixels: Box::new(pixels),
+        };
+        Ok(image)
+    }
+
+    /// Borrow the validated Y and UV planes. These bytes are never BGRA pixels.
+    pub fn nv12_planes(&self) -> Option<(&[u8], &[u8])> {
+        let RenderImageData::OwnedNv12 { size, pixels } = &self.data else {
+            return None;
+        };
+        Some(
+            pixels
+                .as_ref()
+                .as_ref()
+                .split_at(size.width.0 as usize * size.height.0 as usize),
+        )
+    }
+
     /// Convert this image into a byte slice.
     pub fn as_bytes(&self, frame_index: usize) -> Option<&[u8]> {
         match &self.data {
@@ -114,6 +162,7 @@ impl RenderImage {
             RenderImageData::OwnedBgra { pixels, .. } => {
                 (frame_index == 0).then(|| pixels.as_ref().as_ref())
             }
+            RenderImageData::OwnedNv12 { .. } => None,
         }
     }
 
@@ -127,7 +176,7 @@ impl RenderImage {
                     size(width.into(), height.into())
                 })
                 .unwrap_or_default(),
-            RenderImageData::OwnedBgra { size, .. } => {
+            RenderImageData::OwnedBgra { size, .. } | RenderImageData::OwnedNv12 { size, .. } => {
                 if frame_index == 0 {
                     *size
                 } else {
@@ -147,7 +196,7 @@ impl RenderImage {
     pub fn delay(&self, frame_index: usize) -> Delay {
         match &self.data {
             RenderImageData::Frames(frames) => frames.get(frame_index).map(|frame| frame.delay()),
-            RenderImageData::OwnedBgra { .. } => None,
+            RenderImageData::OwnedBgra { .. } | RenderImageData::OwnedNv12 { .. } => None,
         }
         .unwrap_or(Delay::from_numer_denom_ms(100, 1))
     }
@@ -156,7 +205,7 @@ impl RenderImage {
     pub fn frame_count(&self) -> usize {
         match &self.data {
             RenderImageData::Frames(frames) => frames.len(),
-            RenderImageData::OwnedBgra { .. } => 1,
+            RenderImageData::OwnedBgra { .. } | RenderImageData::OwnedNv12 { .. } => 1,
         }
     }
 }
@@ -231,5 +280,20 @@ mod tests {
         assert_eq!(image.render_size(0), Size::default());
         assert_eq!(image.delay(0), Delay::from_numer_denom_ms(100, 1));
         let _ = format!("{image:?}");
+    }
+
+    #[test]
+    fn owned_nv12_preserves_planes_without_exposing_them_as_bgra() {
+        let pixels = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+        let pointer = pixels.as_ptr();
+        let image = RenderImage::from_nv12(3, 3, pixels).unwrap();
+        let (y, uv) = image.nv12_planes().unwrap();
+        assert_eq!(y.as_ptr(), pointer);
+        assert_eq!(y, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(uv, [10, 11, 12, 13, 14, 15, 16, 17]);
+        assert!(image.as_bytes(0).is_none());
+        assert_eq!(image.size(0), size(3.into(), 3.into()));
+        assert!(RenderImage::from_nv12(3, 3, vec![0; 16]).is_err());
+        assert!(RenderImage::from_nv12(0, 3, Vec::<u8>::new()).is_err());
     }
 }

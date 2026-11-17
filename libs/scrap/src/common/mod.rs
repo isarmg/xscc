@@ -45,6 +45,8 @@ pub mod convert;
 pub mod hwcodec;
 #[cfg(feature = "mediacodec")]
 pub mod mediacodec;
+#[cfg(any(all(target_os = "android", feature = "mediacodec"), test))]
+mod nv12;
 pub mod vpxcodec;
 #[cfg(feature = "vram")]
 pub mod vram;
@@ -61,6 +63,8 @@ pub enum ImageFormat {
     Raw,
     ABGR,
     ARGB,
+    #[cfg(target_os = "android")]
+    NV12,
 }
 
 #[repr(C)]
@@ -416,6 +420,8 @@ pub trait GoogleImage {
         let bytes_per_pixel = match fmt {
             ImageFormat::Raw => 3,
             ImageFormat::ARGB | ImageFormat::ABGR => 4,
+            #[cfg(target_os = "android")]
+            ImageFormat::NV12 => 1,
         };
         // https://github.com/lemenkov/libyuv/blob/6900494d90ae095d44405cd4cc3f346971fa69c9/source/convert_argb.cc#L128
         // https://github.com/lemenkov/libyuv/blob/6900494d90ae095d44405cd4cc3f346971fa69c9/source/convert_argb.cc#L129

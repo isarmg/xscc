@@ -16,6 +16,9 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(any(target_os = "android", test))]
+mod nv12;
+
 const MAX_INSTANCE_BUFFER_SIZE: u64 = 256 * 1024 * 1024;
 
 const INSTANCE_TEXTURE_TEXEL_SIZE: u64 = 16;
@@ -124,6 +127,8 @@ pub struct WgpuSurfaceConfig {
 }
 
 struct WgpuPipelines {
+    #[cfg(any(target_os = "android", test))]
+    nv12: wgpu::RenderPipeline,
     quads: wgpu::RenderPipeline,
     shadows: wgpu::RenderPipeline,
     path_rasterization: wgpu::RenderPipeline,
@@ -157,6 +162,8 @@ struct InstanceBindings {
 }
 
 struct WgpuBindGroupLayouts {
+    #[cfg(any(target_os = "android", test))]
+    nv12: wgpu::BindGroupLayout,
     globals: wgpu::BindGroupLayout,
     instances: wgpu::BindGroupLayout,
     texture: wgpu::BindGroupLayout,
@@ -211,6 +218,8 @@ impl WgpuResources {
 }
 
 struct WgpuRendererCore {
+    #[cfg(any(target_os = "android", test))]
+    nv12: nv12::Nv12Surfaces,
     resources: WgpuResources,
     atlas: Arc<WgpuAtlas>,
     path_globals_offset: u64,
@@ -633,6 +642,8 @@ impl WgpuRendererCore {
         });
 
         WgpuBindGroupLayouts {
+            #[cfg(any(target_os = "android", test))]
+            nv12: nv12::bind_group_layout(device),
             globals,
             instances,
             texture,
@@ -928,6 +939,20 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
+        #[cfg(any(target_os = "android", test))]
+        let nv12 = create_pipeline(
+            "nv12_surfaces",
+            "vs_nv12",
+            "fs_nv12",
+            &layouts.globals,
+            &layouts.nv12,
+            None,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
         let surfaces = create_pipeline(
             "surfaces",
             "vs_surface",
@@ -942,6 +967,8 @@ impl WgpuRendererCore {
         );
 
         WgpuPipelines {
+            #[cfg(any(target_os = "android", test))]
+            nv12,
             quads,
             shadows,
             path_rasterization,
@@ -1390,6 +1417,8 @@ impl WgpuRendererCore {
                 path_msaa_texture: None,
                 path_msaa_view: None,
             },
+            #[cfg(any(target_os = "android", test))]
+            nv12: nv12::Nv12Surfaces::default(),
             atlas,
             path_globals_offset,
             gamma_offset,
@@ -1533,6 +1562,21 @@ impl WgpuRendererCore {
                 )
             })?;
         self.prepare_texture_bind_groups(scene);
+        #[cfg(target_os = "android")]
+        self.nv12.prepare(
+            &self.resources,
+            scene.surfaces.iter().map(|surface| nv12::Frame {
+                image: &surface.nv12_image,
+                params: nv12::Params::new(
+                    surface.image_bounds,
+                    surface.bounds,
+                    surface.content_mask.bounds,
+                    surface.corner_radii,
+                    surface.opacity,
+                    surface.grayscale,
+                ),
+            }),
+        )?;
 
         let mut encoder =
             self.resources()
@@ -1655,9 +1699,12 @@ impl WgpuRendererCore {
                             &mut pass,
                         )?;
                     }
-                    // Surfaces are macOS-only for video playback and are not
-                    // implemented by the WGPU renderer.
-                    PrimitiveBatch::Surfaces(_surfaces) => {}
+                    // Android video uses owned NV12 planes; other WGPU backends
+                    // do not produce surface primitives.
+                    PrimitiveBatch::Surfaces(_surfaces) => {
+                        #[cfg(target_os = "android")]
+                        self.nv12.draw(&self.resources, _surfaces, &mut pass);
+                    }
                 }
             }
         }

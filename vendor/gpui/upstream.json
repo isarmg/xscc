@@ -58,7 +58,10 @@
     "crates/gpui_windows/src/directx_renderer_windows_surface_tests.rs",
     "crates/gpui_windows/src/util.rs",
     "crates/http_client/Cargo.toml",
-    "crates/http_client/src/http_client.rs"
+    "crates/http_client/src/http_client.rs",
+    "crates/gpui_wgpu/src/wgpu_renderer.rs",
+    "crates/gpui_wgpu/src/wgpu_renderer/nv12.rs",
+    "crates/gpui_wgpu/src/shaders.wgsl"
   ],
   "asset_directories": [
     "assets/fonts/ibm-plex-sans",
@@ -80,7 +83,8 @@
     "Android requests a fresh presentation only for a native redraw, a new surface, or a failed presentation retry; normal frame callbacks draw dirty content without submitting the same clean scene again.",
     "While reversible iOS session presentation is active, request the showing screen's maximum refresh rate through the existing CADisplayLink preferredFrameRateRange; return to CAFrameRateRangeDefault on exit/background. The product iPhone plist opts into ProMotion rates; inactive presentation, Android's existing refresh request and decoding are unchanged.",
     "Suppress system rotation animation only for reversible remote-session presentation: Android requests jump-cut transitions with a session-owned fullscreen request restored on exit while retaining API29 IME resize compatibility; UIKit wraps its public orientation/scene update in performWithoutAnimation. Application-level curtain animation and stationary overlay controls remain in the mobile application.",
-    "Expose an opt-in local mobile remote-session orientation toggle with default no-op on other platforms. Android uses its Activity UI-thread bridge; UIKit updates only active session orientation policy and public scene geometry. Existing exit/background restoration, text input and remote display modes remain unchanged."
+    "Expose an opt-in local mobile remote-session orientation toggle with default no-op on other platforms. Android uses its Activity UI-thread bridge; UIKit updates only active session orientation policy and public scene geometry. Existing exit/background restoration, text input and remote display modes remain unchanged.",
+    "Render Android-owned limited-range BT.601 NV12 planes in GPUI scene order, preserving immutable decoder ownership, parent clipping, image filtering and existing CPU BGRA paths."
   ],
   "initial_workspace_member_count": 28,
   "removed_crates": [

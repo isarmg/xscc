@@ -1360,3 +1360,58 @@ fn fs_surface(input: SurfaceVarying) -> @location(0) vec4<f32> {
 
     return ycbcr_to_RGB * y_cb_cr;
 }
+
+struct Nv12Params {
+    bounds: Bounds,
+    content_mask: Bounds,
+    rounded_bounds: Bounds,
+    corner_radii: Corners,
+    opacity: f32,
+    grayscale: u32,
+    pad: vec2<u32>,
+}
+
+@group(1) @binding(0) var<uniform> nv12_locals: Nv12Params;
+@group(1) @binding(1) var nv12_y: texture_2d<f32>;
+@group(1) @binding(2) var nv12_uv: texture_2d<f32>;
+
+@vertex
+fn vs_nv12(@builtin(vertex_index) vertex_id: u32) -> SurfaceVarying {
+    let vertex = vec2<f32>(f32(vertex_id & 1u), 0.5 * f32(vertex_id & 2u));
+    var out: SurfaceVarying;
+    out.position = to_device_position(vertex, nv12_locals.bounds);
+    out.texture_position = vertex;
+    out.clip_distances = distance_from_clip_rect(vertex, nv12_locals.bounds, nv12_locals.content_mask);
+    return out;
+}
+
+fn nv12_rgb_at(coordinate: vec2<i32>) -> vec3<f32> {
+    let dimensions = vec2<i32>(textureDimensions(nv12_y));
+    let pixel = clamp(coordinate, vec2<i32>(0), dimensions - vec2<i32>(1));
+    let y = (textureLoad(nv12_y, pixel, 0).r * 255.0 - 16.0) * (255.0 / 219.0);
+    let uv = textureLoad(nv12_uv, pixel / 2, 0).rg * 255.0 - vec2<f32>(128.0);
+    // Match the existing NV12ToARGB path's limited-range BT.601 interpretation.
+    let rgb = vec3<f32>(y + 1.5960268 * uv.y,
+        y - 0.3917623 * uv.x - 0.8129676 * uv.y, y + 2.0172321 * uv.x);
+    return floor(clamp(rgb, vec3<f32>(0.0), vec3<f32>(255.0)) + vec3<f32>(0.5)) / 255.0;
+}
+
+@fragment
+fn fs_nv12(input: SurfaceVarying) -> @location(0) vec4<f32> {
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    // Interpolate converted RGB pixels, preserving the ordinary BGRA image's filtering.
+    let position = input.texture_position * vec2<f32>(textureDimensions(nv12_y)) - vec2<f32>(0.5);
+    let pixel = vec2<i32>(floor(position));
+    let fraction = fract(position);
+    var color = mix(
+        mix(nv12_rgb_at(pixel), nv12_rgb_at(pixel + vec2<i32>(1, 0)), fraction.x),
+        mix(nv12_rgb_at(pixel + vec2<i32>(0, 1)), nv12_rgb_at(pixel + vec2<i32>(1, 1)), fraction.x),
+        fraction.y);
+    if (nv12_locals.grayscale != 0u) {
+        color = vec3<f32>(dot(color, GRAYSCALE_FACTORS));
+    }
+    let distance = quad_sdf(input.position.xy, nv12_locals.rounded_bounds, nv12_locals.corner_radii);
+    return blend_color(vec4<f32>(color, 1.0), nv12_locals.opacity * saturate(0.5 - distance));
+}

@@ -5138,6 +5138,28 @@ impl Window {
             return Ok(());
         }
 
+        if data.nv12_planes().is_some() {
+            #[cfg(target_os = "android")]
+            {
+                let surface = crate::PaintSurface {
+                    order: 0,
+                    bounds: self.snap_bounds(visible_bounds),
+                    image_bounds: self.snap_bounds(image_bounds),
+                    content_mask: self.snapped_content_mask(),
+                    corner_radii: corner_radii
+                        .clamp_radii_for_quad_size(visible_bounds.size)
+                        .scale(self.scale_factor()),
+                    grayscale,
+                    opacity: self.element_opacity(),
+                    nv12_image: data,
+                };
+                self.next_frame.scene.insert_primitive(surface);
+                return Ok(());
+            }
+            #[cfg(not(target_os = "android"))]
+            anyhow::bail!("NV12 video images require the Android renderer");
+        }
+
         let params = RenderImageParams {
             image_id: data.id,
             frame_index,

@@ -241,6 +241,22 @@ fn convert_output(format: &MediaFormat, buffer: &[u8], rgb: &mut ImageRgb) -> Re
     }
     let w = (right - left + 1) as usize;
     let h = (bottom - top + 1) as usize;
+    if matches!(rgb.fmt(), ImageFormat::NV12) {
+        let y_offset = top as usize * stride + left as usize;
+        let uv_offset = y_len + top as usize / 2 * stride + left as usize;
+        super::nv12::copy_planes(
+            &buffer[y_offset..y_len],
+            &buffer[uv_offset..],
+            stride,
+            w,
+            h,
+            &mut rgb.raw,
+        )
+        .ok_or_else(|| Error::msg("Invalid MediaCodec NV12 plane layout"))?;
+        rgb.w = w;
+        rgb.h = h;
+        return Ok(());
+    }
     let align = rgb.align().max(1);
     if !align.is_power_of_two() {
         bail!("Invalid RGB alignment");

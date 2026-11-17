@@ -33,13 +33,24 @@ impl VideoPresentation {
         }
         let Some(frame) = frame else { return Ok(None) };
         let (width, height) = frame.extent();
-        if !packed_bgra(width, height, frame.stride(), frame.as_ref().len()) {
+        #[cfg(target_os = "android")]
+        let nv12 = frame.is_nv12();
+        #[cfg(not(target_os = "android"))]
+        let nv12 = false;
+        if (nv12 && frame.stride() != width as usize)
+            || (!nv12 && !packed_bgra(width, height, frame.stride(), frame.as_ref().len()))
+        {
             return Err("远程画面像素布局无效。".into());
         }
         let extent = (width, height);
         let submitted = frame.submission();
         let next = Arc::new(
-            RenderImage::from_bgra(width, height, frame).map_err(|error| error.to_string())?,
+            if nv12 {
+                RenderImage::from_nv12(width, height, frame)
+            } else {
+                RenderImage::from_bgra(width, height, frame)
+            }
+            .map_err(|error| error.to_string())?,
         );
         if let Some(previous) = self.image.take() {
             window

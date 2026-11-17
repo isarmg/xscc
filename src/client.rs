@@ -931,6 +931,10 @@ impl VideoHandler {
         pixelbuffer: &mut bool,
         chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
+        #[cfg(all(target_os = "android", feature = "gpui-session"))]
+        if matches!(self.rgb.fmt, ImageFormat::NV12) {
+            self.rgb.fmt = ImageFormat::ARGB;
+        }
         let format = CodecFormat::from(&vf);
         if format != self.decoder.format() {
             self.reset(Some(format));
@@ -966,6 +970,7 @@ impl VideoHandler {
         }
         let frame = vf.union.as_ref()?;
         *chroma = Some(Chroma::I420);
+        self.rgb.fmt = ImageFormat::NV12;
         let result =
             self.decoder
                 .handle_mediacodec_frame_with_callback(frame, &mut self.rgb, on_frame);

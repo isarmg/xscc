@@ -7,4 +7,8 @@ pub trait FrameBuffer: AsRef<[u8]> + Send + Sync + 'static {
     fn extent(&self) -> (u32, u32);
     fn stride(&self) -> usize;
     fn submission(&self) -> impl FnOnce() + 'static;
+    #[cfg(target_os = "android")]
+    fn is_nv12(&self) -> bool {
+        false
+    }
 }
