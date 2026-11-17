@@ -1039,7 +1039,7 @@ fn run_encoder(
                     #[cfg(windows)]
                     {
                         #[cfg(feature = "vram")]
-                        if try_gdi == 1 && !c.is_gdi() {
+                        if try_gdi > 0 && !c.is_gdi() {
                             VRamEncoder::set_fallback_gdi(sp.name(), false);
                         }
                         try_gdi = 0;
@@ -1075,9 +1075,12 @@ fn run_encoder(
                     send_counter += 1;
                 }
                 #[cfg(windows)]
-                if dxgi_recovery_started
-                    .map(|started| started.elapsed() >= DXGI_RECOVERY_FRAME_GRACE)
-                    .unwrap_or(true)
+                // WouldBlock includes a static desktop, mode-switch settling and encoder backpressure.
+                // None proves a DXGI failure; GPUI recovers from actual capture errors below.
+                if !cfg!(feature = "gpui-host")
+                    && dxgi_recovery_started
+                        .map(|started| started.elapsed() >= DXGI_RECOVERY_FRAME_GRACE)
+                        .unwrap_or(true)
                 {
                     if try_gdi > 0 && !c.is_gdi() {
                         if try_gdi > 3 {
