@@ -67,8 +67,34 @@ policy regressions cover Mailbox preference and synchronized FIFO fallback; the
 existing NV12 CI also explicitly runs both and rejects an empty test selection.
 Package-scoped WGPU Clippy passed with `--no-deps --all-targets -- -D warnings`.
 The dependency reports its existing warnings; this is not a workspace-wide
-warning-free claim. Native Android build/link/package checks are pending.
+warning-free claim. Android smoke and streaming management build/link/package
+checks passed in the native CI run linked below.
 Physical-device sustained FPS and intermittent-stall acceptance remain outstanding.
+
+## Public CI evidence
+
+Source commit: `1c6c10e560ad27c22a33526816148b91e6768986`.
+
+- [Source and package checks](https://github.com/isarmg/xscc/actions/runs/44106816181): passed.
+- [Software Vulkan pixels and presentation policies](https://github.com/isarmg/xscc/actions/runs/44106816127): passed, including both Android policy tests and the existing Linux NV12 scene tests.
+- [Windows, macOS and Linux framework validation](https://github.com/isarmg/xscc/actions/runs/44106817166): all passed.
+- [Android smoke application](https://github.com/isarmg/xscc/actions/runs/44106816430/job/134121293733): passed native compilation, Java checks, release assembly, native imports and APK validation. This is not the streaming management client.
+- [Android streaming management client](https://github.com/isarmg/xscc/actions/runs/44106816430/job/134121292134): passed native compilation/linking, Java tests, optimized release assembly, signature verification, API 35 manifest validation, 16 KB ELF/ZIP alignment and native entry-point/privacy checks.
+
+[Management candidate ZIP](https://github.com/isarmg/xscc/actions/runs/44106816430/artifacts/14340016179), artifact `14340016179`, contains the installable streaming APK.
+The separate smoke artifact is not the streaming client.
+
+CI verified the actual management APK metadata:
+
+- Package: `org.sarmg.xscc.gpui.preview`.
+- Version: `4.0.0-beta.24` / `40024`; minimum SDK `35`, target SDK `36`; ARM64.
+- Stable v2 signing certificate SHA-256: `7e2584d12ca65c34bc01facc08b77657764c6405f0c9e2050bdd1df84b2753c9`, matching the preceding preview candidates.
+- GitHub-reported artifact ZIP bytes: `37559339`.
+- GitHub-reported artifact ZIP SHA-256: `c7f65212a25e99171e27173d58e05f5c69450be0936b239cc97a5977a06d6189`.
+
+Artifact identity and package checks are established by CI; no local binary
+redownload, physical installation, scanout measurement or sustained-FPS
+acceptance is claimed.
 
 ## Changed runtime surfaces
 
