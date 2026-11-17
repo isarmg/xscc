@@ -121,6 +121,29 @@ The two present-mode tests validate mode selection only. They do not reproduce
 the reported high-refresh stall. This candidate removes a presentation policy
 change; it must not be treated as an established root-cause fix.
 
+### Required runtime evidence
+
+The checked-in `tools/diagnostics/collect-android-streaming-trace.ps1` records a
+30-second system trace with scheduling, CPU frequency/idle, graphics/Binder
+annotations and SurfaceFlinger frame timelines, together with package version,
+matching pipeline logs and before/after display state. Run it from the repository
+root while the existing client is streaming:
+
+```powershell
+powershell -NoProfile -File .\tools\diagnostics\collect-android-streaming-trace.ps1
+```
+
+The default destination is a timestamped directory under the host temporary
+directory. `-Seconds` and `-OutputDirectory` select another duration/destination;
+`-Serial` selects a device when ADB has more than one connection. The syntax was
+checked with the installed Windows PowerShell parser. Actual device recording
+has not been executed in this session.
+
+Configuration follows [Perfetto system tracing](https://perfetto.dev/docs/getting-started/system-tracing)
+and [SurfaceFlinger frame timelines](https://perfetto.dev/docs/data-sources/frametimeline).
+Trace-source availability must be checked in the resulting trace; an app timing
+track or a specific vendor GPU fence track is not assumed to exist.
+
 ## Changed runtime surfaces
 
 | Existing files | Required behavior change |
