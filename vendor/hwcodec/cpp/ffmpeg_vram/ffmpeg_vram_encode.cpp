@@ -102,7 +102,8 @@ public:
   std::array<CaptureSlot, AmfInputQueue::capacity> amf_inputs_;
   AmfInputQueue amf_input_queue_;
   struct PreparedInput { int64_t pts; bool replay; };
-  std::optional<PreparedInput> amf_prepared_;
+  PreparedInput amf_prepared_{};
+  bool amf_input_prepared_ = false;
   std::chrono::steady_clock::time_point amf_prepared_at_{};
 
   const int align_ = 0;
@@ -313,7 +314,7 @@ public:
         failure = AVERROR_EXTERNAL;
       return failure == 0;
     });
-    return failure ? failure : (slot ? 1 : 0);
+    return failure ? failure : (slot >= 0 ? 1 : 0);
   }
 
   int request_keyframe() {
@@ -324,15 +325,16 @@ public:
   int replay_keyframe(EncodeCallback callback, void *obj, int64_t ms) {
     if (!amf_pipeline_ || !keyframe_request_.pending()) return 0;
     int ret = pump_amf(callback, obj);
-    if (ret < 0 || !keyframe_request_.pending() || amf_prepared_
+    if (ret < 0 || !keyframe_request_.pending() || amf_input_prepared_
         || amf_input_queue_.front() || pending_frames_ >= AMF_MAX_PENDING_FRAMES)
       return ret;
     const auto latest = amf_input_queue_.latest();
-    if (!latest) return 0;
-    ret = prepare_amf_input(*latest, 0);
+    if (latest < 0) return 0;
+    ret = prepare_amf_input(latest, 0);
     if (ret < 0) { amf_error_ = ret; return ret; }
     if (ret == 0) return 0;
     amf_prepared_ = PreparedInput{ms, true};
+    amf_input_prepared_ = true;
     amf_prepared_at_ = util::now();
     return pump_amf(callback, obj);
   }
@@ -422,8 +424,8 @@ private:
       return failure == S_OK;
     });
     if (failure != S_OK) return AVERROR_EXTERNAL;
-    if (!index) return AVERROR(EAGAIN);
-    auto &slot = amf_inputs_[*index];
+    if (index < 0) return AVERROR(EAGAIN);
+    auto &slot = amf_inputs_[index];
     if (!slot.capture) {
       desc.Usage = D3D11_USAGE_DEFAULT;
       desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -449,7 +451,7 @@ private:
     native_->context_->Flush();
     if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
     slot.submitted = util::now();
-    return amf_input_queue_.publish(*index, pts) ? 0 : AVERROR_BUG;
+    return amf_input_queue_.publish(index, pts) ? 0 : AVERROR_BUG;
   }
 
   int prepare_amf_input(std::size_t index, UINT64 key) {
@@ -493,15 +495,16 @@ private:
     int ret = receive_pending(callback, obj);
     if (ret < 0) return ret;
     while (pending_frames_ < AMF_MAX_PENDING_FRAMES) {
-      if (!amf_prepared_) {
+      if (!amf_input_prepared_) {
         const auto input = amf_input_queue_.front();
         if (!input) break;
         ret = prepare_amf_input(input->slot, 1);
         if (ret <= 0) return ret;
         amf_prepared_ = PreparedInput{input->pts, false};
+        amf_input_prepared_ = true;
         amf_prepared_at_ = util::now();
       }
-      frame_->pts = amf_prepared_->pts;
+      frame_->pts = amf_prepared_.pts;
       frame_->pict_type = keyframe_request_.pending() ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
       ret = avcodec_send_frame(c_, frame_);
       frame_->pict_type = AV_PICTURE_TYPE_NONE;
@@ -509,8 +512,8 @@ private:
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_prepared_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0) return ret;
-      if (!amf_prepared_->replay) amf_input_queue_.consumed();
-      amf_prepared_.reset();
+      if (!amf_prepared_.replay) amf_input_queue_.consumed();
+      amf_input_prepared_ = false;
       if (pending_frames_++ == 0) amf_progress_at_ = util::now();
       ret = receive_pending(callback, obj);
       if (ret < 0) return ret;

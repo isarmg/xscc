@@ -189,19 +189,19 @@ int main(void) {
     bool ready[2] = {true, true};
     const auto available = [&] { return queue.available([&](std::size_t slot) { return ready[slot]; }); };
     const auto first = available();
-    assert(first && queue.publish(*first, 10));
+    assert(first >= 0 && queue.publish(first, 10));
     const auto second = available();
-    assert(second && *second != *first && queue.publish(*second, 20));
-    assert(!available()); // admission stops before consuming a third captured frame
+    assert(second >= 0 && second != first && queue.publish(second, 20));
+    assert(available() < 0); // admission stops before consuming a third captured frame
     assert(queue.front()->pts == 10);
-    assert(!queue.publish(*first, 30));
+    assert(!queue.publish(first, 30));
     assert(queue.front()->pts == 10); // retry cannot overwrite the prepared input
-    ready[*first] = false;
+    ready[first] = false;
     queue.consumed();
-    assert(!available()); // the codec consumed it, but the GPU has not released it
+    assert(available() < 0); // the codec consumed it, but the GPU has not released it
     assert(queue.front()->pts == 20);
-    ready[*first] = true;
-    assert(available() == first && queue.publish(*first, 30));
+    ready[first] = true;
+    assert(available() == first && queue.publish(first, 30));
     assert(queue.front()->pts == 20);
     queue.consumed();
     assert(queue.front()->pts == 30);
@@ -211,9 +211,9 @@ int main(void) {
 
     for (int64_t pts = 40; pts < 10040; ++pts) {
         const auto slot = available();
-        assert(slot && queue.publish(*slot, pts));
+        assert(slot >= 0 && queue.publish(slot, pts));
         assert(queue.front()->pts == pts);
-        assert(!queue.publish(*slot, pts + 1));
+        assert(!queue.publish(slot, pts + 1));
         queue.consumed();
         assert(!queue.front() && queue.latest() == slot);
     }
@@ -254,7 +254,7 @@ def main():
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
         for source, compiler, standard in (
             ('latch.cpp', args.cxx or args.cc, 'c++17'),
-            ('input.cpp', args.cxx or args.cc, 'c++17'),
+            ('input.cpp', args.cxx or args.cc, 'c++14'),
             ('surface.c', args.cc, 'c11'),
             ('bitrate.c', args.cc, 'c11'),
         ):
