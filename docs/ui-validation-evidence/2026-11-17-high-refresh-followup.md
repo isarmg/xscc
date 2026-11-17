@@ -100,8 +100,8 @@ experiment increased the 1080p GPU median to 1.579 / 1.581 ms; it was reverted.
   `python .github/scripts/test-gpui-mobile-test-gate.py`: 5 and 4 passed.
 - `cargo clippy --offline --locked --manifest-path vendor/gpui/Cargo.toml -p gpui_wgpu --lib --tests --no-deps -- -D warnings`:
   passed. Existing GPUI dependency warnings are outside the changed crate.
-- ARM64 Android and Mesa GPU workflow results are recorded with the produced
-  candidate artifact once those builds complete.
+- ARM64 Android and Mesa GPU workflow results and the produced candidate
+  artifact are recorded below.
 
 Existing runtime paths changed are limited to `gpui_wgpu/src/wgpu_renderer/nv12.rs`
 (Android-only upload and retry), `wgpu_renderer.rs` (the necessary command encoder
@@ -115,3 +115,36 @@ SurfaceFlinger sample are still required to distinguish a source/transport
 bottleneck from missed Android presentation deadlines. ADB cannot start in this
 execution policy because localhost TCP connections are denied; no phone install
 or new physical performance measurement is claimed in this follow-up.
+
+## Candidate build evidence
+
+Implementation and APK source:
+[`39c400e`](https://github.com/isarmg/xscc/commit/39c400ed405002ed84319c31d243121a98ee3d9c).
+
+| Gate | Result |
+| --- | --- |
+| Android smoke and management APKs | [Run 44055552061](https://github.com/isarmg/xscc/actions/runs/44055552061) succeeded in both jobs, including ARM64 compilation, plane-copy regressions, Java/JNI checks, stable signature and package/privacy verification. |
+| NV12 Vulkan pixel regression | [Run 44055551848](https://github.com/isarmg/xscc/actions/runs/44055551848) succeeded: both GPU tests passed, one manual benchmark ignored. The adapter was explicitly `llvmpipe (LLVM 20.1.2, 256 bits)`; this validates pixel behavior, not phone performance. |
+| Native management | [Run 44055551896](https://github.com/isarmg/xscc/actions/runs/44055551896): source-layout, Windows/Linux/macOS library checks and Android/iOS cross-checks all succeeded. |
+| Windows WARP regression | [Run 44055551859](https://github.com/isarmg/xscc/actions/runs/44055551859) succeeded, including owned-image lifetime and atlas replacement checks. |
+| GPUI framework | [Run 44055552018](https://github.com/isarmg/xscc/actions/runs/44055552018): Linux, Windows and macOS jobs all succeeded. |
+
+The [management artifact](https://github.com/isarmg/xscc/actions/runs/44055552061/artifacts/14317005501)
+was downloaded and its archive digest verified locally:
+`sha256:42264f387943a256b3d1816210914a5c237bcd656020b2afb19b794ad7bf9c12`.
+The inner `SHA256SUMS` entries were verified after extraction, along with the
+source commit, package identity and signature evidence:
+
+- APK: `xscc-gpui-android-arm64-management-39c400ed4050.apk`, 76,776,243 bytes.
+- APK SHA-256: `98b8b359a40986e62d6658efb4f77a940bb1d6e8ea285015e2adfd1e2b6441a6`.
+- Package: `org.sarmg.xscc.gpui.preview`, beta.22 / 40022.
+- Signing certificate SHA-256: `7e2584d12ca65c34bc01facc08b77657764c6405f0c9e2050bdd1df84b2753c9`,
+  matching the previous management candidate. CI verified the APK v2 signature.
+
+The APK is ready for replacement installation with `adb install -r`; no automatic
+uninstall or application-data clearing is part of this follow-up.
+
+The separate [iOS interactive-preview run](https://github.com/isarmg/xscc/actions/runs/44055551894)
+stopped at the existing formatting differences in `apps/mobile/src/display_state.rs`
+and `session_view.rs`. Neither file is changed in this follow-up. This is not a
+claim that every repository workflow passed.
