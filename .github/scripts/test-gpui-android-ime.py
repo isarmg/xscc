@@ -87,6 +87,18 @@ STUBS = {
     public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) { return null; }
 }''',
 'android.view.SurfaceView': 'public class SurfaceView extends View { public SurfaceView(android.content.Context c) { super(c); } }',
+'android.view.Display': '''public class Display {
+    public Mode getMode() { return null; }
+    public Mode[] getSupportedModes() { return new Mode[0]; }
+    public static class Mode {
+        public int getPhysicalWidth() { return 0; }
+        public int getPhysicalHeight() { return 0; }
+        public float getRefreshRate() { return 0; }
+    }
+}''',
+'android.view.WindowManager': '''public class WindowManager {
+    public Display getDefaultDisplay() { return null; }
+}''',
 'android.view.inputmethod.EditorInfo': '''public class EditorInfo {
     public int inputType, actionId, imeOptions, initialSelStart, initialSelEnd;
 }''',
@@ -160,6 +172,7 @@ import android.view.inputmethod.EditorInfo;
 import com.google.androidgamesdk.gametextinput.*;
 public class GameActivity extends android.content.Context {
     public InputConnection original;
+    public WindowManager getWindowManager() { return new WindowManager(); }
     public void stateChanged(State state, boolean dismissed) {}
     public void onEditorAction(int action) {}
     public void setTextInputState(State state) { original.setState(state); }
