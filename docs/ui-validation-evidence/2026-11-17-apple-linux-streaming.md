@@ -14,7 +14,7 @@ This record contains public source analysis and synthetic validation only.
 | [FFmpeg AVFrame](https://ffmpeg.org/doxygen/trunk/structAVFrame.html) and [libyuv formats](https://chromium.googlesource.com/libyuv/libyuv/+/HEAD/docs/formats.md) | Respect independent plane strides and visible dimensions. Keep Linux H.264/H.265 decoded NV12 or I420 in packed owned NV12 instead of expanding it to BGRA on the CPU. |
 | [Wayland wl_surface.frame](https://pq.pages.freedesktop.org/wayland.freedesktop.org/docs/html/apa.html#protocol-spec-wl_surface-request-frame) | Its timestamp has an undefined epoch. Record callback dispatch receipt in the process clock for profiling; do not infer compositor queue age from CLOCK_MONOTONIC. |
 
-The iOS, macOS and Linux stream request is capped using `Window::refresh_interval`.
+The automatic iOS, macOS and Linux stream target is capped using `Window::refresh_interval`.
 A remote 240 Hz mode on a reported local 120 Hz display requests a 120 FPS stream;
 the remote display mode remains 240 Hz. Lower remote rates remain lower. Unknown
 or zero display intervals retain the remote request. This bounds work by the
@@ -72,7 +72,18 @@ CI now explicitly runs the full Linux NV12 scene presentation regression, the
 four decoder-plane tests, the real `HwRamDecoderImage::to_fmt` conversion
 regression, and existing Wayland lifecycle tests. Filters reject empty test
 runs. Existing native Apple and Unix product builds validate platform integration.
-CI conclusions and run links will be recorded after completion.
+The following CI results are confirmed for source commit
+`f58db455643a0b4181bdd9e460e7dc917d33e42c`:
+
+| Validation | Result and evidence |
+| --- | --- |
+| Source/package/workflow contracts | [Passed](https://github.com/isarmg/xscc/actions/runs/44087917374). |
+| Linux software Vulkan NV12 | [Passed](https://github.com/isarmg/xscc/actions/runs/44087917628): two shader regressions, four plane-layout tests and one complete scene-presentation regression; one manual timing benchmark remains ignored. |
+| Desktop framework: Linux, macOS 26, Windows | [All passed](https://github.com/isarmg/xscc/actions/runs/44087917700): formatting, Clippy, 12 shared native UI tests per platform, desktop input tests and executable builds. Linux also passed all 18 selected Wayland unit tests. |
+| iOS 26 device application | [Passed](https://github.com/isarmg/xscc/actions/runs/44087917695/job/134055130207): full streaming feature checks, optimized Release build and unsigned preview packaging. Management/keyboard, shared UI and raw-touch regressions passed. This is compilation/package validation, not installation on a physical iOS device. |
+| iOS Simulator runtime | [Passed on an unchanged-source retry](https://github.com/isarmg/xscc/actions/runs/44087917695/job/134066825345), attempt 2: install, launch, capture, relaunch and native text input checks. Attempt 1 failed in the runtime phase; its full log retrieval is unavailable and the cause remains unconfirmed. Screenshots still require visual review. |
+| Native Linux controller | [Passed](https://github.com/isarmg/xscc/actions/runs/44087917460/job/134055127937): Clippy, codec/plane regression, native session tests, optimized Release build, encrypted media/control integration and package smoke validation. The real decoder API regression ran and passed once. |
+| Native macOS host/controller and Linux host | [All passed](https://github.com/isarmg/xscc/actions/runs/44087917460): native Clippy, tests, optimized Release builds and candidate packaging. The Linux controller also passed in the same workflow. |
 
 Physical Apple/Linux high-refresh devices are unavailable in this session.
 Sustained FPS, frame latency, thermal behavior, rotation, reconnect, occlusion
