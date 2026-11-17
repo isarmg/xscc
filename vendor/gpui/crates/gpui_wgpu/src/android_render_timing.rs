@@ -51,7 +51,7 @@ pub(crate) fn finish_frame() {
         }
         let avg = timing.totals.map(|t| t.as_secs_f64() * 1000.0 / f64::from(timing.frames));
         let max = timing.maxima.map(|t| t.as_secs_f64() * 1000.0);
-        log::info!("android_gpu_pipeline frames={} acquire_ms={:.3} upload_ms={:.3} render_ms={:.3} finish_ms={:.3} submit_ms={:.3} present_ms={:.3} max_ms={:?}",
+        log::info!("android_gpu_pipeline frames={} acquire_ms={:.3} upload_ms={:.3} render_ms={:.3} finish_ms={:.3} submit_ms={:.3} present_enqueue_ms={:.3} max_ms={:?}",
             timing.frames, avg[0], avg[1], avg[2], avg[3], avg[4], avg[5], max);
         *timing = Timing::default();
     });

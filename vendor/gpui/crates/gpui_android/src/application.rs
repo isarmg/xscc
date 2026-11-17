@@ -19,6 +19,9 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
     let mut longest_frame = Duration::ZERO;
     let mut dispatch_time = Duration::ZERO;
     while !state.destroyed.get() {
+        if let Some(window) = state.window() {
+            window.sync_presentation();
+        }
         if state
             .window()
             .is_some_and(|w| w.can_draw() && w.dirty.get())
