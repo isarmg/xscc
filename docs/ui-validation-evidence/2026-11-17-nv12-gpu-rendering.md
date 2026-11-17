@@ -137,9 +137,41 @@ This fixture shows similar upload/draw throughput, with slightly higher NV12 CPU
 enqueue time on this desktop GPU. It does **not** show an upload-speed or
 end-to-end FPS improvement. The change removes the separately profiled CPU RGB
 conversion and BGRA intermediates; whether that produces the required sustained
-phone performance still needs the device comparison below. The Android product
-build is additionally required in CI; local Windows tests do not compile its
-platform-specific hooks.
+phone performance still needs the device comparison below.
+
+### CI source and artifact evidence
+
+Runtime implementation: [`984c65b`](https://github.com/isarmg/xscc/commit/984c65b466faf746840faa0b282a33e8d958b14b).
+The Android package source additionally includes test-fixture-only commit
+[`695810d`](https://github.com/isarmg/xscc/commit/695810da1b26a1caa608b13378d46831c9982c15).
+Commit [`3c74f99`](https://github.com/isarmg/xscc/commit/3c74f99b4bc642ec3d87d7f8613a70f32cb06bc8)
+moves the new pixel CI job to a software Vulkan environment without changing
+runtime code.
+
+| Gate | Result / evidence |
+| --- | --- |
+| Android smoke and management APKs | [Run 44041030948](https://github.com/isarmg/xscc/actions/runs/44041030948): both succeeded, including ARM64 Rust cross-compilation, production plane-copy regressions, Java IME audit, APK packaging and package/privacy checks. |
+| NV12 Vulkan pixel regressions | [Run 44041858769](https://github.com/isarmg/xscc/actions/runs/44041858769): 2 passed, 1 manual timing fixture ignored. Adapter explicitly reported CPU `llvmpipe (LLVM 20.1.2, 256 bits)`. This is shader correctness evidence, not phone or hardware performance. |
+| GPUI framework | [Run 44040065437](https://github.com/isarmg/xscc/actions/runs/44040065437): Linux, macOS and Windows compile/lint, shared native UI tests, input tests and executable builds succeeded. |
+| Native management | [Run 44040065509](https://github.com/isarmg/xscc/actions/runs/44040065509): source layout, three desktop libraries and both mobile cross-compiles succeeded. |
+
+The [management APK artifact](https://github.com/isarmg/xscc/actions/runs/44041030948/artifacts/14308944944)
+contains the usable Android client (`org.sarmg.xscc.gpui.preview`). Its artifact
+archive digest is
+`sha256:b1d17a78dbfcae7a7e9c0c1162af30261b269ba2857a3fc90e7ffa3d1e7ea427`
+(archive digest, not the inner APK digest). No device installation was performed.
+
+Initial CI attempts exposed two validation issues, both resolved in the commits
+above: the existing JVM IME fixture lacked display API stubs, and the hosted
+Windows runner had no Vulkan/GL adapter for the newly added WGPU pixel test.
+The original Windows WARP job is restored; NV12 tests now use an explicit Mesa
+ICD, following the [Vulkan loader documentation](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#overriding-the-default-driver-discovery).
+
+The separate iOS interactive-preview run stopped at pre-existing `rustfmt`
+differences in `apps/mobile/src/display_state.rs` and `session_view.rs`; neither
+file is changed here. Its simulator smoke test succeeded. Broader desktop release
+packaging may still be running; those jobs are not included in the passing gates
+above, and this record does not claim all repository workflows are green.
 
 ## Required device acceptance
 
