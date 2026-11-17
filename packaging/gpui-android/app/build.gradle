@@ -39,8 +39,8 @@ android {
         management {
             dimension 'client'
             applicationId 'org.sarmg.xscc.gpui.preview'
-            versionCode 40023
-            versionName System.getenv('PACKAGE_VERSION') ?: '4.0.0-beta.23'
+            versionCode 40024
+            versionName System.getenv('PACKAGE_VERSION') ?: '4.0.0-beta.24'
             buildConfigField 'String', 'NATIVE_LIBRARY', '"xscc_gpui_android_management"'
             manifestPlaceholders = [nativeLibrary: 'xscc_gpui_android_management', appLabel: 'XSCC 控制端预览']
         }

@@ -18,6 +18,8 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
     let mut frame_time = Duration::ZERO;
     let mut longest_frame = Duration::ZERO;
     let mut dispatch_time = Duration::ZERO;
+    let mut callback_delay = Duration::ZERO;
+    let mut longest_callback_delay = Duration::ZERO;
     while !state.destroyed.get() {
         if state
             .window()
@@ -148,9 +150,10 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             && let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get())
         {
             match frame_clock.take_ready() {
-                Ok(Some(expected_presentation_time)) => {
+                Ok(Some(delay)) => {
                     frame_clock.request();
-                    window.set_presentation_time(expected_presentation_time);
+                    callback_delay += delay;
+                    longest_callback_delay = longest_callback_delay.max(delay);
                     let started = Instant::now();
                     window.request_frame(false);
                     let elapsed = started.elapsed();
@@ -173,12 +176,14 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
         if reported.elapsed() >= Duration::from_secs(1) {
             if frames > 0 {
                 log::info!(
-                    "android_frame_pipeline callbacks={} elapsed_ms={:.1} frame_avg_ms={:.2} frame_max_ms={:.2} dispatch_ms={:.2}",
+                    "android_frame_pipeline callbacks={} elapsed_ms={:.1} frame_avg_ms={:.2} frame_max_ms={:.2} dispatch_ms={:.2} callback_delay_avg_ms={:.2} callback_delay_max_ms={:.2}",
                     frames,
                     reported.elapsed().as_secs_f64() * 1000.,
                     frame_time.as_secs_f64() * 1000. / f64::from(frames),
                     longest_frame.as_secs_f64() * 1000.,
                     dispatch_time.as_secs_f64() * 1000.,
+                    callback_delay.as_secs_f64() * 1000. / f64::from(frames),
+                    longest_callback_delay.as_secs_f64() * 1000.,
                 );
             }
             reported = Instant::now();
@@ -186,6 +191,8 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             frame_time = Duration::ZERO;
             longest_frame = Duration::ZERO;
             dispatch_time = Duration::ZERO;
+            callback_delay = Duration::ZERO;
+            longest_callback_delay = Duration::ZERO;
         }
     }
     state.dispatcher.shutdown();

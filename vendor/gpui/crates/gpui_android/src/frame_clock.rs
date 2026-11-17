@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex, Weak,
         atomic::{AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
@@ -24,7 +25,7 @@ enum FrameState {
     #[default]
     Idle,
     Pending(usize),
-    Ready(u64),
+    Ready(Instant),
     Failed(Option<&'static str>),
 }
 
@@ -40,7 +41,7 @@ pub(crate) struct FrameClock {
 
 impl FrameClock {
     pub(crate) fn new(app: &AndroidApp) -> Self {
-        log::info!("Android frame timeline pacing enabled");
+        log::info!("Android Choreographer pacing enabled without future presentation holds");
         Self {
             app: app.clone(),
             signal: Arc::new(Signal {
@@ -104,12 +105,12 @@ impl FrameClock {
         }));
     }
 
-    pub(crate) fn take_ready(&self) -> anyhow::Result<Option<u64>> {
+    pub(crate) fn take_ready(&self) -> anyhow::Result<Option<Duration>> {
         let mut state = self.signal.state.lock().unwrap();
         match *state {
-            FrameState::Ready(expected_presentation_time) => {
+            FrameState::Ready(ready_at) => {
                 *state = FrameState::Idle;
-                Ok(Some(expected_presentation_time))
+                Ok(Some(ready_at.elapsed()))
             }
             FrameState::Failed(ref mut error) => match error.take() {
                 Some(error) => anyhow::bail!(error),
@@ -148,17 +149,10 @@ impl Drop for FrameClock {
 }
 
 unsafe extern "C" fn on_vsync(
-    frame: *const ndk_sys::AChoreographerFrameCallbackData,
+    _frame: *const ndk_sys::AChoreographerFrameCallbackData,
     data: *mut c_void,
 ) {
-    let index =
-        unsafe { ndk_sys::AChoreographerFrameCallbackData_getPreferredFrameTimelineIndex(frame) };
-    let nanos = unsafe {
-        ndk_sys::AChoreographerFrameCallbackData_getFrameTimelineExpectedPresentationTimeNanos(
-            frame, index,
-        )
-    };
-    let expected_presentation_time = if nanos > 0 { nanos as u64 } else { 0 };
+    let ready_at = Instant::now();
     let token = data as usize;
     let registration = CALLBACK.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -174,7 +168,7 @@ unsafe extern "C" fn on_vsync(
     let ready = {
         let mut state = signal.state.lock().unwrap();
         if matches!(*state, FrameState::Pending(id) if id == token) {
-            *state = FrameState::Ready(expected_presentation_time);
+            *state = FrameState::Ready(ready_at);
             true
         } else {
             false

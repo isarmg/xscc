@@ -45,6 +45,9 @@ jobs:
           output=$(cargo +1.99.0 test --locked -p gpui_wgpu --lib wgpu_renderer::nv12::tests -- --test-threads=1 2>&1) || { printf '%s\n' "$output"; exit 1; }
           printf '%s\n' "$output"
           grep -Eq '^test result: ok\. 2 passed; 0 failed; 1 ignored;' <<< "$output" || { echo 'Both NV12 GPU regressions must run' >&2; exit 1; }
+          output=$(cargo +1.99.0 test --locked -p gpui_wgpu --lib wgpu_renderer::tests::android_streaming_ 2>&1) || { printf '%s\n' "$output"; exit 1; }
+          printf '%s\n' "$output"
+          grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$output" || { echo 'Both Android present-mode regressions must run' >&2; exit 1; }
       - name: Verify Linux decoder plane layout and scene presentation
         run: |
           printf '#[path = "%s/libs/scrap/src/common/nv12.rs"] mod nv12;\n' "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/yuv-plane-tests.rs"

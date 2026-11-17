@@ -21,9 +21,10 @@ gates are verified and device acceptance passes.
 
 Only draw a surface between InitWindow and TerminateWindow. The latter releases
 the WGPU surface before returning to Android. Device loss uses WGPU recovery.
-Frame requests are coalesced through Choreographer's preferred frame timeline.
-Its expected presentation timestamp is supplied to supported Vulkan surfaces;
-background, idle, and detached windows block waiting for events.
+Frame requests are coalesced through Choreographer. Android surfaces prefer
+Mailbox when supported, with FIFO as the VSync fallback; no future presentation
+timestamp holds a decoded frame in the compositor. Background, idle, and
+detached windows block waiting for events.
 
 The smoke app lives in `experiments/gpui-android-smoke`; Android packaging and the
 pinned build instructions live in `packaging/gpui-android`. The Android facade is
