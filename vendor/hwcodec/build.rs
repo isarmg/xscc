@@ -249,6 +249,8 @@ mod ffmpeg {
 
     #[cfg(feature = "vram")]
     fn build_ffmpeg_vram(builder: &mut Build) {
+        #[cfg(windows)]
+        builder.flag_if_supported("/std:c++17");
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let ffmpeg_ram_dir = manifest_dir.join("cpp").join("ffmpeg_vram");
         let ffi_header = ffmpeg_ram_dir

@@ -21,6 +21,7 @@ extern "C" {
 #include "common.h"
 #include "system.h"
 #include "amf_keyframe_request.h"
+#include "amf_input_queue.h"
 #include "gpu_retirement.h"
 
 #define LOG_MODULE "FFMPEG_VRAM_ENC"
@@ -29,8 +30,7 @@ extern "C" {
 
 namespace {
 
-// Retain two in-flight frames so conversion can overlap the previous encode.
-constexpr unsigned int AMF_MAX_PENDING_FRAMES = 3;
+constexpr unsigned int AMF_MAX_PENDING_FRAMES = 2;
 
 void lockContext(void *lock_ctx);
 void unlockContext(void *lock_ctx);
@@ -91,10 +91,19 @@ public:
       retirement_extra_capture_event_;
   ComPtr<ID3D11DeviceContext> retirement_extra_capture_context_;
   unsigned int pending_frames_ = 0;
-  std::unique_ptr<void, decltype(&CloseHandle)> amf_poll_timer_{nullptr, &CloseHandle};
+  std::chrono::steady_clock::time_point amf_progress_at_{};
+  int amf_error_ = 0;
   std::unique_ptr<NativeDevice> amf_device_;
-  ComPtr<ID3D11Texture2D> amf_capture_input_, amf_encoder_input_;
-  ComPtr<IDXGIKeyedMutex> amf_capture_mutex_, amf_encoder_mutex_;
+  struct CaptureSlot {
+    ComPtr<ID3D11Texture2D> capture, encoder;
+    ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
+    std::chrono::steady_clock::time_point submitted{};
+  };
+  std::array<CaptureSlot, AmfInputQueue::capacity> amf_inputs_;
+  AmfInputQueue amf_input_queue_;
+  struct PreparedInput { int64_t pts; bool replay; };
+  std::optional<PreparedInput> amf_prepared_;
+  std::chrono::steady_clock::time_point amf_prepared_at_{};
 
   const int align_ = 0;
   const bool full_range_ = false;
@@ -154,13 +163,6 @@ public:
     }
     amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF;
     if (amf_pipeline_) {
-      amf_poll_timer_.reset(CreateWaitableTimerExW(
-          nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-          TIMER_MODIFY_STATE | SYNCHRONIZE));
-      if (!amf_poll_timer_) {
-        LOG_ERROR(std::string("AMF poll timer creation failed: ") + std::to_string(GetLastError()));
-        return false;
-      }
       // Keep AMF's asynchronous D3D work off DesktopDup's immediate context.
       amf_device_ = std::make_unique<NativeDevice>();
       if (!amf_device_->Init(luid_, nullptr))
@@ -273,24 +275,11 @@ public:
     if (retiring_)
       return AVERROR(EPIPE);
     if (amf_pipeline_) {
-      int ret = receive_pending(callback, obj, pending_frames_ >= AMF_MAX_PENDING_FRAMES);
-      if (ret < 0)
-        return ret;
-      if (!av_frame_is_writable(frame_)) {
-        // FFmpeg retains the previous texture until its encoded packet is released.
-        av_frame_unref(frame_);
-        frame_->format = c_->pix_fmt;
-        frame_->width = c_->width;
-        frame_->height = c_->height;
-        frame_->color_range = c_->color_range;
-        frame_->color_primaries = c_->color_primaries;
-        frame_->color_trc = c_->color_trc;
-        frame_->colorspace = c_->colorspace;
-        frame_->chroma_location = c_->chroma_sample_location;
-        if ((ret = av_hwframe_get_buffer(c_->hw_frames_ctx, frame_, 0)) < 0)
-          return ret;
-        encode_texture_ = (ID3D11Texture2D *)frame_->data[0];
-      }
+      int ret = pump_amf(callback, obj);
+      if (ret >= 0) ret = queue_amf_capture(static_cast<ID3D11Texture2D *>(texture), ms);
+      if (ret >= 0) ret = pump_amf(callback, obj);
+      if (ret < 0 && ret != AVERROR(EAGAIN)) amf_error_ = ret;
+      return ret;
     }
 
     if (!convert(texture))
@@ -300,7 +289,31 @@ public:
   }
 
   int poll(EncodeCallback callback, void *obj) {
-    return amf_pipeline_ ? receive_pending(callback, obj, false) : 0;
+    if (!amf_pipeline_) return 0;
+    const int ret = pump_amf(callback, obj);
+    if (ret < 0) amf_error_ = ret;
+    return ret;
+  }
+
+  int input_ready() {
+    if (retiring_) return AVERROR(EPIPE);
+    if (!amf_pipeline_) return 1;
+    if (amf_error_ < 0) return amf_error_;
+    int failure = 0;
+    const auto slot = amf_input_queue_.available([&](std::size_t index) {
+      if (!amf_inputs_[index].capture_mutex) return true;
+      const HRESULT hr = amf_inputs_[index].capture_mutex->AcquireSync(0, 0);
+      if (hr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
+        if (util::elapsed_ms(amf_inputs_[index].submitted) >= ENCODE_TIMEOUT_MS)
+          failure = AVERROR(ETIMEDOUT);
+        return false;
+      }
+      if (hr != S_OK) { failure = AVERROR_EXTERNAL; return false; }
+      if (amf_inputs_[index].capture_mutex->ReleaseSync(0) != S_OK)
+        failure = AVERROR_EXTERNAL;
+      return failure == 0;
+    });
+    return failure ? failure : (slot ? 1 : 0);
   }
 
   int request_keyframe() {
@@ -309,10 +322,19 @@ public:
   }
 
   int replay_keyframe(EncodeCallback callback, void *obj, int64_t ms) {
-    if (!amf_pipeline_ || !keyframe_request_.pending() || !amf_capture_input_)
-      return 0;
-    // A null input reuses our own keyed-mutex BGRA copy, never a DesktopDup surface.
-    return encode(nullptr, callback, obj, ms);
+    if (!amf_pipeline_ || !keyframe_request_.pending()) return 0;
+    int ret = pump_amf(callback, obj);
+    if (ret < 0 || !keyframe_request_.pending() || amf_prepared_
+        || amf_input_queue_.front() || pending_frames_ >= AMF_MAX_PENDING_FRAMES)
+      return ret;
+    const auto latest = amf_input_queue_.latest();
+    if (!latest) return 0;
+    ret = prepare_amf_input(*latest, 0);
+    if (ret < 0) { amf_error_ = ret; return ret; }
+    if (ret == 0) return 0;
+    amf_prepared_ = PreparedInput{ms, true};
+    amf_prepared_at_ = util::now();
+    return pump_amf(callback, obj);
   }
 
   int retire(void *capture_device, int timeout_ms) {
@@ -382,65 +404,118 @@ public:
   }
 
 private:
-  bool convert_amf_input(ID3D11Texture2D *input, ID3D11Texture2D *output,
-                         DXGI_COLOR_SPACE_TYPE color_in,
-                         DXGI_COLOR_SPACE_TYPE color_out) {
-    if (input) {
-      D3D11_TEXTURE2D_DESC desc{};
-      input->GetDesc(&desc);
-      if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) {
-        LOG_ERROR(std::string("Unsupported AMF capture texture layout"));
-        return false;
-      }
-      D3D11_TEXTURE2D_DESC previous{};
-      if (amf_capture_input_)
-        amf_capture_input_->GetDesc(&previous);
-      if (!amf_capture_input_ || previous.Width != desc.Width ||
-          previous.Height != desc.Height || previous.Format != desc.Format) {
-        ComPtr<ID3D11Texture2D> capture_input, encoder_input;
-        ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
-        desc.Usage = D3D11_USAGE_DEFAULT;
-        desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-        desc.CPUAccessFlags = 0;
-        desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        HRB(native_->device_->CreateTexture2D(&desc, nullptr, &capture_input));
-        ComPtr<IDXGIResource> resource;
-        HRB(capture_input.As(&resource));
-        HANDLE shared = nullptr;
-        HRB(resource->GetSharedHandle(&shared));
-        HRB(amf_device_->device_->OpenSharedResource(
-            shared, IID_PPV_ARGS(&encoder_input)));
-        HRB(capture_input.As(&capture_mutex));
-        HRB(encoder_input.As(&encoder_mutex));
-        amf_capture_input_ = std::move(capture_input);
-        amf_encoder_input_ = std::move(encoder_input);
-        amf_capture_mutex_ = std::move(capture_mutex);
-        amf_encoder_mutex_ = std::move(encoder_mutex);
-      }
-    } else if (!amf_capture_input_) {
-      return false;
+  int queue_amf_capture(ID3D11Texture2D *input, int64_t pts) {
+    if (!input) return AVERROR(EINVAL);
+    const int ready = input_ready();
+    if (ready <= 0) return ready < 0 ? ready : AVERROR(EAGAIN);
+    D3D11_TEXTURE2D_DESC desc{};
+    input->GetDesc(&desc);
+    if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1)
+      return AVERROR(EINVAL);
+    HRESULT failure = S_OK;
+    const auto index = amf_input_queue_.available([&](std::size_t i) {
+      if (!amf_inputs_[i].capture_mutex) return true;
+      HRESULT hr = amf_inputs_[i].capture_mutex->AcquireSync(0, 0);
+      if (hr == static_cast<HRESULT>(WAIT_TIMEOUT)) return false;
+      if (hr != S_OK) { failure = hr; return false; }
+      failure = amf_inputs_[i].capture_mutex->ReleaseSync(0);
+      return failure == S_OK;
+    });
+    if (failure != S_OK) return AVERROR_EXTERNAL;
+    if (!index) return AVERROR(EAGAIN);
+    auto &slot = amf_inputs_[*index];
+    if (!slot.capture) {
+      desc.Usage = D3D11_USAGE_DEFAULT;
+      desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+      desc.CPUAccessFlags = 0;
+      desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+      CaptureSlot created;
+      if (FAILED(native_->device_->CreateTexture2D(&desc, nullptr, &created.capture)))
+        return AVERROR_EXTERNAL;
+      ComPtr<IDXGIResource> resource;
+      HANDLE shared = nullptr;
+      if (FAILED(created.capture.As(&resource)) || FAILED(resource->GetSharedHandle(&shared))
+          || FAILED(amf_device_->device_->OpenSharedResource(shared, IID_PPV_ARGS(&created.encoder)))
+          || FAILED(created.capture.As(&created.capture_mutex))
+          || FAILED(created.encoder.As(&created.encoder_mutex))) return AVERROR_EXTERNAL;
+      slot = std::move(created);
     }
-    // Keyed mutexes order GPU work across devices; neither side reads a live
-    // DesktopDup surface after this call, and AMF retains only its own NV12 frames.
-    HRESULT locked = amf_capture_mutex_->AcquireSync(0, ENCODE_TIMEOUT_MS);
-    if (locked != S_OK) {
-      LOG_ERROR(std::string("AMF capture texture lock failed: ") + std::to_string(locked));
-      return false;
-    }
-    if (input)
-      native_->context_->CopyResource(amf_capture_input_.Get(), input);
+    D3D11_TEXTURE2D_DESC owned{};
+    slot.capture->GetDesc(&owned);
+    if (owned.Width != desc.Width || owned.Height != desc.Height || owned.Format != desc.Format)
+      return AVERROR(EINVAL);
+    if (slot.capture_mutex->AcquireSync(0, 0) != S_OK) return AVERROR_EXTERNAL;
+    native_->context_->CopyResource(slot.capture.Get(), input);
     native_->context_->Flush();
-    HRB(amf_capture_mutex_->ReleaseSync(1));
-    locked = amf_encoder_mutex_->AcquireSync(1, ENCODE_TIMEOUT_MS);
-    if (locked != S_OK) {
-      LOG_ERROR(std::string("AMF encoder texture lock failed: ") + std::to_string(locked));
-      return false;
+    if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
+    slot.submitted = util::now();
+    return amf_input_queue_.publish(*index, pts) ? 0 : AVERROR_BUG;
+  }
+
+  int prepare_amf_input(std::size_t index, UINT64 key) {
+    auto &slot = amf_inputs_[index];
+    const HRESULT locked = slot.encoder_mutex->AcquireSync(key, 0);
+    if (locked == static_cast<HRESULT>(WAIT_TIMEOUT))
+      return util::elapsed_ms(slot.submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
+    if (locked != S_OK) return AVERROR_EXTERNAL;
+    int ret = 0;
+    if (!av_frame_is_writable(frame_)) {
+      av_frame_unref(frame_);
+      frame_->format = c_->pix_fmt;
+      frame_->width = c_->width;
+      frame_->height = c_->height;
+      frame_->color_range = c_->color_range;
+      frame_->color_primaries = c_->color_primaries;
+      frame_->color_trc = c_->color_trc;
+      frame_->colorspace = c_->colorspace;
+      frame_->chroma_location = c_->chroma_sample_location;
+      ret = av_hwframe_get_buffer(c_->hw_frames_ctx, frame_, 0);
+      if (ret >= 0) encode_texture_ = reinterpret_cast<ID3D11Texture2D *>(frame_->data[0]);
     }
-    const bool converted = amf_device_->BgraToNv12(
-        amf_encoder_input_.Get(), output, width_, height_, color_in, color_out);
+    if (ret >= 0) {
+      const auto color_in = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+      const auto color_out = bt709_
+          ? (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709)
+          : (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601);
+      if (!amf_device_->BgraToNv12(slot.encoder.Get(), encode_texture_, width_, height_, color_in, color_out))
+        ret = AVERROR_EXTERNAL;
+    }
     amf_device_->context_->Flush();
-    HRB(amf_encoder_mutex_->ReleaseSync(0));
-    return converted;
+    slot.submitted = util::now();
+    const HRESULT released = slot.encoder_mutex->ReleaseSync(0);
+    if (released != S_OK) return AVERROR_EXTERNAL;
+    return ret < 0 ? ret : 1;
+  }
+
+  int pump_amf(EncodeCallback callback, const void *obj) {
+    if (retiring_) return AVERROR(EPIPE);
+    if (amf_error_ < 0) return amf_error_;
+    int ret = receive_pending(callback, obj);
+    if (ret < 0) return ret;
+    while (pending_frames_ < AMF_MAX_PENDING_FRAMES) {
+      if (!amf_prepared_) {
+        const auto input = amf_input_queue_.front();
+        if (!input) break;
+        ret = prepare_amf_input(input->slot, 1);
+        if (ret <= 0) return ret;
+        amf_prepared_ = PreparedInput{input->pts, false};
+        amf_prepared_at_ = util::now();
+      }
+      frame_->pts = amf_prepared_->pts;
+      frame_->pict_type = keyframe_request_.pending() ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+      ret = avcodec_send_frame(c_, frame_);
+      frame_->pict_type = AV_PICTURE_TYPE_NONE;
+      keyframe_request_.submitted(ret);
+      if (ret == AVERROR(EAGAIN))
+        return util::elapsed_ms(amf_prepared_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
+      if (ret < 0) return ret;
+      if (!amf_prepared_->replay) amf_input_queue_.consumed();
+      amf_prepared_.reset();
+      if (pending_frames_++ == 0) amf_progress_at_ = util::now();
+      ret = receive_pending(callback, obj);
+      if (ret < 0) return ret;
+    }
+    return 0;
   }
 
   bool choose_encoder(AdapterVendor vendor) {
@@ -492,32 +567,15 @@ private:
     }
     return false;
   }
-  int receive_pending(EncodeCallback callback, const void *obj, bool wait) {
-    const auto start = util::now();
+  int receive_pending(EncodeCallback callback, const void *obj) {
     while (pending_frames_ > 0) {
       const int ret = avcodec_receive_packet(c_, pkt_);
-      if (ret == AVERROR(EAGAIN)) {
-        if (!wait || pending_frames_ < AMF_MAX_PENDING_FRAMES)
-          return 0;
-        if (util::elapsed_ms(start) >= ENCODE_TIMEOUT_MS)
-          return AVERROR(ETIMEDOUT);
-        // Sleep(1) can consume a high-rate frame budget on Windows.
-        LARGE_INTEGER due{};
-        due.QuadPart = -10000;
-        if (!SetWaitableTimerEx(amf_poll_timer_.get(), &due, 0, nullptr, nullptr, nullptr, 0)) {
-          LOG_ERROR(std::string("AMF poll timer arm failed: ") + std::to_string(GetLastError()));
-          return AVERROR(EIO);
-        }
-        const DWORD waited = WaitForSingleObject(amf_poll_timer_.get(), ENCODE_TIMEOUT_MS);
-        if (waited != WAIT_OBJECT_0) {
-          LOG_ERROR(std::string("AMF poll wait failed: ") + std::to_string(waited == WAIT_FAILED ? GetLastError() : waited));
-          return AVERROR(waited == WAIT_TIMEOUT ? ETIMEDOUT : EIO);
-        }
-        continue;
-      }
+      if (ret == AVERROR(EAGAIN))
+        return util::elapsed_ms(amf_progress_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0)
         return ret;
       --pending_frames_;
+      amf_progress_at_ = util::now();
       if (!pkt_->data || pkt_->size <= 0) {
         av_packet_unref(pkt_);
         return AVERROR_INVALIDDATA;
@@ -540,15 +598,8 @@ private:
     frame_->pict_type = AV_PICTURE_TYPE_NONE;
     keyframe_request_.submitted(ret);
     if (ret < 0) {
-      if (amf_pipeline_ && ret == AVERROR(EAGAIN))
-        return receive_pending(callback, obj, false);
       LOG_ERROR(std::string("avcodec_send_frame failed, ret = ") + av_err2str(ret));
       return ret;
-    }
-
-    if (amf_pipeline_) {
-      ++pending_frames_;
-      return receive_pending(callback, obj, pending_frames_ >= AMF_MAX_PENDING_FRAMES);
     }
 
     auto start = util::now();
@@ -601,11 +652,8 @@ private:
           colorSpace_out = DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601;
         }
       }
-      const bool converted = amf_pipeline_
-          ? convert_amf_input((ID3D11Texture2D *)texture, texture2D,
-                              colorSpace_in, colorSpace_out)
-          : native_->BgraToNv12((ID3D11Texture2D *)texture, texture2D, width_,
-                                height_, colorSpace_in, colorSpace_out);
+      const bool converted = native_->BgraToNv12((ID3D11Texture2D *)texture, texture2D,
+                                                width_, height_, colorSpace_in, colorSpace_out);
       if (!converted) {
         LOG_ERROR(std::string("convert: BgraToNv12 failed"));
         return false;
@@ -708,6 +756,12 @@ void ffmpeg_vram_destroy_encoder(FFmpegVRamEncoder *encoder) {
   } catch (const std::exception &e) {
     LOG_ERROR(std::string("free encoder failed, ") + std::string(e.what()));
   }
+}
+
+int ffmpeg_vram_input_ready(FFmpegVRamEncoder *encoder) {
+  if (!encoder) return AVERROR(EINVAL);
+  try { return encoder->input_ready(); }
+  catch (const std::exception &) { return AVERROR_EXTERNAL; }
 }
 
 int ffmpeg_vram_poll(FFmpegVRamEncoder *encoder, EncodeCallback callback, void *obj) {

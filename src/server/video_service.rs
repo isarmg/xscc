@@ -936,6 +936,13 @@ fn run_encoder(
         } else {
             #[cfg(feature = "gpui-host")]
             let capture_started = Instant::now();
+            #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
+            let captured = if encoder.input_ready()? {
+                c.frame(spf)
+            } else {
+                Err(WouldBlock.into())
+            };
+            #[cfg(not(all(windows, feature = "gpui-host", feature = "vram")))]
             let captured = c.frame(spf);
             #[cfg(feature = "gpui-host")]
             stages.captured(
@@ -1169,6 +1176,7 @@ fn run_encoder(
         // Cursor-only updates carry no encodable image and must not spend a requested image frame slot.
         if try_gdi == 0
             && !frame_pacing::should_pace_capture(spf, encoder.input_texture(), capture_would_block)
+            && encoder.input_ready()?
         {
             continue;
         }

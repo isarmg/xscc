@@ -166,6 +166,13 @@ impl EncoderApi for VRamEncoder {
     }
 
     #[cfg(windows)]
+    fn input_ready(&mut self) -> ResultType<bool> {
+        self.encoder
+            .input_ready()
+            .map_err(|error| anyhow!("GPU encoder admission failed: {error}"))
+    }
+
+    #[cfg(windows)]
     fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
         if !self.amf_pipeline() {
             return Ok(None);

@@ -73,6 +73,17 @@ impl Encoder {
         }
     }
 
+    pub fn input_ready(&mut self) -> Result<bool, i32> {
+        if self.ctx.f.driver != FFMPEG {
+            return Ok(true);
+        }
+        match unsafe { ffmpeg::ffmpeg_vram_input_ready(self.codec) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            error => Err(error),
+        }
+    }
+
     pub fn poll(&mut self) -> Result<&mut Vec<EncodeFrame>, i32> {
         unsafe {
             (&mut *self.frames).clear();

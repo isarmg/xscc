@@ -101,6 +101,11 @@ pub trait EncoderApi {
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame>;
 
     #[cfg(windows)]
+    fn input_ready(&mut self) -> ResultType<bool> {
+        Ok(true)
+    }
+
+    #[cfg(windows)]
     fn retirement_supported(&self) -> bool {
         !self.is_hardware()
     }

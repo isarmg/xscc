@@ -178,6 +178,50 @@ int main(void)
 """
 
 
+
+INPUT_TEST = r"""
+#include <assert.h>
+#include <stdio.h>
+#include "amf_input_queue.h"
+
+int main(void) {
+    AmfInputQueue queue;
+    bool ready[2] = {true, true};
+    const auto available = [&] { return queue.available([&](std::size_t slot) { return ready[slot]; }); };
+    const auto first = available();
+    assert(first && queue.publish(*first, 10));
+    const auto second = available();
+    assert(second && *second != *first && queue.publish(*second, 20));
+    assert(!available()); // admission stops before consuming a third captured frame
+    assert(queue.front()->pts == 10);
+    assert(!queue.publish(*first, 30));
+    assert(queue.front()->pts == 10); // retry cannot overwrite the prepared input
+    ready[*first] = false;
+    queue.consumed();
+    assert(!available()); // the codec consumed it, but the GPU has not released it
+    assert(queue.front()->pts == 20);
+    ready[*first] = true;
+    assert(available() == first && queue.publish(*first, 30));
+    assert(queue.front()->pts == 20);
+    queue.consumed();
+    assert(queue.front()->pts == 30);
+    queue.consumed(); // drain the final frame without another capture arriving
+    assert(!queue.front() && queue.latest() == first);
+    assert(available() == second); // preserve the latest snapshot until needed
+
+    for (int64_t pts = 40; pts < 10040; ++pts) {
+        const auto slot = available();
+        assert(slot && queue.publish(*slot, pts));
+        assert(queue.front()->pts == pts);
+        assert(!queue.publish(*slot, pts + 1));
+        queue.consumed();
+        assert(!queue.front() && queue.latest() == slot);
+    }
+    puts("1 AMF bounded input/GPU readiness/FIFO retry/static-tail regression passed");
+}
+"""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default='cc')
@@ -199,6 +243,7 @@ def main():
             raise ValueError('IDR test directory escaped its temporary root')
         (work / 'amfenc_keyframe.h').write_text(header)
         (work / 'latch.cpp').write_text(LATCH_TEST)
+        (work / 'input.cpp').write_text(INPUT_TEST)
         (work / 'surface.c').write_text(SURFACE_TEST)
         rate_patch = (root / 'res/vcpkg/ffmpeg/patch/0002-libavcodec-amfenc-reconfig-when-bitrate-change.patch').read_text()
         rate_body = '+static int reconfig_encoder' + rate_patch.split('+static int reconfig_encoder', 1)[1].split('\n int ff_amf_receive_packet', 1)[0]
@@ -209,6 +254,7 @@ def main():
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
         for source, compiler, standard in (
             ('latch.cpp', args.cxx or args.cc, 'c++17'),
+            ('input.cpp', args.cxx or args.cc, 'c++17'),
             ('surface.c', args.cc, 'c11'),
             ('bitrate.c', args.cc, 'c11'),
         ):

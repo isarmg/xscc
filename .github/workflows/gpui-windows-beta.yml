@@ -151,6 +151,13 @@ jobs:
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/vcpkg-binary-cache" | Out-Null
           & "$env:VCPKG_ROOT/vcpkg.exe" install --triplet x64-windows-static "--x-install-root=$env:VCPKG_ROOT/installed"
           if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
+      - name: Test AMF asynchronous input and retirement
+        if: matrix.role == 'host'
+        run: |
+          python .github/scripts/test-gpui-amf-keyframe.py --cc "$env:ProgramFiles/LLVM/bin/clang.exe" --cxx "$env:ProgramFiles/LLVM/bin/clang++.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'AMF asynchronous input regression failed' }
+          python .github/scripts/test-gpui-gpu-retirement.py --cxx "$env:ProgramFiles/LLVM/bin/clang++.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'GPU retirement regression failed' }
       - name: Test AMF hardware frame ownership without a GPU
         if: matrix.role == 'host' && !inputs.build_only
         run: |
