@@ -1535,6 +1535,8 @@ impl WgpuRendererCore {
 
         self.record_frame(scene, target_view, clear_color)
             .inspect_err(|_| {
+                #[cfg(any(target_os = "android", test))]
+                self.nv12.discard_uploads();
                 // Queue writes are staged before encoding; flush them even if the frame fails.
                 self.resources.queue.submit(std::iter::empty());
             })
@@ -1563,8 +1565,18 @@ impl WgpuRendererCore {
             })?;
         self.prepare_texture_bind_groups(scene);
         #[cfg(target_os = "android")]
+        let upload_started = std::time::Instant::now();
+        let mut encoder =
+            self.resources()
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("main_encoder"),
+                });
+
+        #[cfg(target_os = "android")]
         self.nv12.prepare(
             &self.resources,
+            &mut encoder,
             scene.surfaces.iter().map(|surface| nv12::Frame {
                 image: &surface.nv12_image,
                 params: nv12::Params::new(
@@ -1578,15 +1590,6 @@ impl WgpuRendererCore {
             }),
         )?;
 
-        let mut encoder =
-            self.resources()
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("main_encoder"),
-                });
-
-        #[cfg(target_os = "android")]
-        let upload_started = std::time::Instant::now();
         #[cfg(any(target_os = "android", test))]
         self.atlas.encode_uploads(&mut encoder)?;
         #[cfg(target_os = "android")]

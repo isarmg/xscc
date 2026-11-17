@@ -56,6 +56,7 @@ struct Uploaded {
     uv: wgpu::Texture,
     params: wgpu::Buffer,
     bindings: wgpu::BindGroup,
+    upload: wgpu::util::StagingBelt,
 }
 
 pub(super) fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -156,6 +157,7 @@ impl Uploaded {
             uv,
             params,
             bindings,
+            upload: wgpu::util::StagingBelt::new(device.as_ref().clone(), 1024 * 1024),
         })
     }
 }
@@ -164,10 +166,17 @@ impl Nv12Surfaces {
     pub(super) fn prepare<'a>(
         &mut self,
         resources: &WgpuResources,
+        encoder: &mut wgpu::CommandEncoder,
         frames: impl ExactSizeIterator<Item = Frame<'a>>,
     ) -> Result<()> {
         // Retain only the current scene's surfaces, never a cache per image or resolution.
         self.frames.truncate(frames.len());
+        if frames.len() > 0 {
+            resources
+                .device
+                .poll(wgpu::PollType::Poll)
+                .context("Poll NV12 upload completion")?;
+        }
         for (index, frame) in frames.enumerate() {
             let size = frame.image.size(0);
             if index == self.frames.len() {
@@ -197,20 +206,45 @@ impl Nv12Surfaces {
                         (size.width.0 as u32).div_ceil(2) * 2,
                     ),
                 ] {
-                    // write_texture snapshots the borrowed planes and orders the upload
-                    // before this submission's reads, including reuse after the prior draw.
-                    resources.queue.write_texture(
+                    let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+                    let length = u64::from(padded) * u64::from(height);
+                    anyhow::ensure!(
+                        length <= resources.device.limits().max_buffer_size,
+                        "NV12 plane exceeds the rendering device upload limit"
+                    );
+                    let staging = uploaded.upload.allocate(
+                        wgpu::BufferSize::new(length).context("Empty NV12 upload")?,
+                        wgpu::BufferSize::new(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64)
+                            .expect("invariant: nonzero texture-copy alignment"),
+                    );
+                    {
+                        let mut mapped =
+                            staging.get_mapped_range_mut().context("Map NV12 upload")?;
+                        if row == padded {
+                            mapped.copy_from_slice(bytes);
+                        } else {
+                            for (index, source) in bytes.chunks_exact(row as usize).enumerate() {
+                                let start = index * padded as usize;
+                                mapped
+                                    .slice(start..start + source.len())
+                                    .copy_from_slice(source);
+                            }
+                        }
+                    }
+                    encoder.copy_buffer_to_texture(
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: staging.buffer(),
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: staging.offset(),
+                                bytes_per_row: Some(padded),
+                                rows_per_image: None,
+                            },
+                        },
                         wgpu::TexelCopyTextureInfo {
                             texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
-                        },
-                        bytes,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(row),
-                            rows_per_image: None,
                         },
                         wgpu::Extent3d {
                             width,
@@ -219,6 +253,7 @@ impl Nv12Surfaces {
                         },
                     );
                 }
+                uploaded.upload.finish_and_recall_on_submit(encoder);
                 uploaded.image = Some(frame.image.id);
             }
             resources
@@ -226,6 +261,10 @@ impl Nv12Surfaces {
                 .write_buffer(&uploaded.params, 0, bytemuck::bytes_of(&frame.params));
         }
         Ok(())
+    }
+
+    pub(super) fn discard_uploads(&mut self) {
+        self.frames.clear();
     }
 
     pub(super) fn draw(
@@ -263,10 +302,6 @@ mod tests {
         let size = image.size(0);
         renderer.check_gpu_errors()?;
         renderer.ensure_render_target(size)?;
-        renderer.core.nv12.prepare(
-            &renderer.core.resources,
-            std::iter::once(Frame { image, params }),
-        )?;
         let resources = &renderer.core.resources;
         resources.queue.write_buffer(
             &resources.globals_buffer,
@@ -278,6 +313,11 @@ mod tests {
             }),
         );
         let mut encoder = resources.device.create_command_encoder(&Default::default());
+        renderer.core.nv12.prepare(
+            resources,
+            &mut encoder,
+            std::iter::once(Frame { image, params }),
+        )?;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -309,7 +349,7 @@ mod tests {
         let rect = bounds(0., 0., 1920., 1080.);
         let params = Params::new(rect, rect, rect, Corners::default(), 1., false);
         let nv12: Arc<[u8]> = vec![128; 1920 * 1080 * 3 / 2].into();
-        let bgra = vec![128; 1920 * 1080 * 4];
+        let bgra = [128, 128, 128, 255].repeat(1920 * 1080);
         let key = |id| {
             AtlasKey::Image(RenderImageParams {
                 image_id: ImageId(id),
@@ -419,6 +459,45 @@ mod tests {
                 assert_eq!(pixel[3], 255);
             }
         }
+        for (image_bounds, x, expected) in [
+            (bounds(-1., 0., 8., 2.), 1, [254, 0, 0]),
+            (bounds(-0.25, 0., 8., 2.), 1, [255, 191, 191]),
+            (bounds(0., 0., 16., 4.), 3, [255, 191, 191]),
+        ] {
+            let rect = bounds(0., 0., 8., 2.);
+            draw(
+                &mut renderer,
+                &image,
+                Params::new(image_bounds, rect, rect, Corners::default(), 1., false),
+            )?;
+            let pixel = renderer.read_image()?.get_pixel(x, 0).0;
+            for channel in 0..3 {
+                assert!(
+                    (pixel[channel] as i32 - expected[channel]).abs() <= 2,
+                    "{pixel:?}"
+                );
+            }
+        }
+        let mut pixels = vec![81; 6];
+        pixels.extend_from_slice(&[41, 41, 41, 90, 240, 90, 240, 240, 110, 240, 110]);
+        let image = RenderImage::from_nv12(3, 3, pixels)?;
+        let rect = bounds(0., 0., 3., 3.);
+        draw(
+            &mut renderer,
+            &image,
+            Params::new(
+                bounds(0., 0., 2.25, 2.25),
+                rect,
+                rect,
+                Corners::default(),
+                1.,
+                false,
+            ),
+        )?;
+        let pixel = renderer.read_image()?.get_pixel(0, 1).0;
+        for (actual, expected) in pixel[..3].iter().zip([127, 0, 128]) {
+            assert!((*actual as i32 - expected).abs() <= 2, "{pixel:?}");
+        }
         Ok(())
     }
 
@@ -446,10 +525,15 @@ mod tests {
                     .all(|pixel| pixel.0 == [expected, expected, expected, 255])
             );
         }
+        let mut encoder = renderer
+            .core
+            .resources
+            .device
+            .create_command_encoder(&Default::default());
         renderer
             .core
             .nv12
-            .prepare(&renderer.core.resources, std::iter::empty())?;
+            .prepare(&renderer.core.resources, &mut encoder, std::iter::empty())?;
         Ok(())
     }
 }

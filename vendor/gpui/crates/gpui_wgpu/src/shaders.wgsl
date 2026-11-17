@@ -1401,14 +1401,21 @@ fn fs_nv12(input: SurfaceVarying) -> @location(0) vec4<f32> {
     if (any(input.clip_distances < vec4<f32>(0.0))) {
         return vec4<f32>(0.0);
     }
-    // Interpolate converted RGB pixels, preserving the ordinary BGRA image's filtering.
-    let position = input.texture_position * vec2<f32>(textureDimensions(nv12_y)) - vec2<f32>(0.5);
-    let pixel = vec2<i32>(floor(position));
-    let fraction = fract(position);
-    var color = mix(
-        mix(nv12_rgb_at(pixel), nv12_rgb_at(pixel + vec2<i32>(1, 0)), fraction.x),
-        mix(nv12_rgb_at(pixel + vec2<i32>(0, 1)), nv12_rgb_at(pixel + vec2<i32>(1, 1)), fraction.x),
-        fraction.y);
+    var color: vec3<f32>;
+    if (all(nv12_locals.bounds.size == vec2<f32>(textureDimensions(nv12_y)))
+        && all(nv12_locals.bounds.origin == floor(nv12_locals.bounds.origin))) {
+        // At pixel-aligned 1:1 size, the other three bilinear weights are zero.
+        color = nv12_rgb_at(vec2<i32>(input.position.xy - nv12_locals.bounds.origin));
+    } else {
+        // Interpolate converted RGB pixels, preserving the ordinary BGRA image's filtering.
+        let position = input.texture_position * vec2<f32>(textureDimensions(nv12_y)) - vec2<f32>(0.5);
+        let pixel = vec2<i32>(floor(position));
+        let fraction = fract(position);
+        color = mix(
+            mix(nv12_rgb_at(pixel), nv12_rgb_at(pixel + vec2<i32>(1, 0)), fraction.x),
+            mix(nv12_rgb_at(pixel + vec2<i32>(0, 1)), nv12_rgb_at(pixel + vec2<i32>(1, 1)), fraction.x),
+            fraction.y);
+    }
     if (nv12_locals.grayscale != 0u) {
         color = vec3<f32>(dot(color, GRAYSCALE_FACTORS));
     }
