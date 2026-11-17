@@ -813,7 +813,8 @@ impl SessionView {
                         #[cfg(target_os = "android")]
                         let refresh_rate = crate::display_state::stream_fps(
                             refresh_rate,
-                            cx.try_global::<crate::android_display::DisplayLimit>().and_then(|limit| limit.0),
+                            cx.try_global::<crate::android_display::DisplayLimit>()
+                                .and_then(|limit| limit.0),
                         );
                         TargetFps::new(refresh_rate.min(base::session_protocol::MAX_SESSION_FPS))
                     }) && self.target_fps != Some(target)

@@ -8,7 +8,9 @@ pub fn accepts_display_update(
 
 #[cfg(any(target_os = "android", test))]
 pub fn stream_fps(remote_hz: u32, display_limit: Option<u32>) -> u32 {
-    display_limit.filter(|limit| *limit > 0).map_or(remote_hz, |limit| remote_hz.min(limit))
+    display_limit
+        .filter(|limit| *limit > 0)
+        .map_or(remote_hz, |limit| remote_hz.min(limit))
 }
 
 #[cfg(test)]
@@ -18,10 +20,14 @@ mod display_tests {
     #[test]
     fn stream_cadence_respects_the_reported_local_display_without_changing_remote_hz() {
         for (remote, local, expected) in [
-            (90, Some(120), 90), (120, Some(120), 120),
-            (144, Some(120), 120), (240, Some(120), 120),
-            (240, Some(240), 240), (144, None, 144),
-            (90, Some(0), 90), (0, Some(120), 0),
+            (90, Some(120), 90),
+            (120, Some(120), 120),
+            (144, Some(120), 120),
+            (240, Some(120), 120),
+            (240, Some(240), 240),
+            (144, None, 144),
+            (90, Some(0), 90),
+            (0, Some(120), 0),
         ] {
             assert_eq!(stream_fps(remote, local), expected);
         }
