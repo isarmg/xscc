@@ -89,7 +89,7 @@ impl AndroidWindow {
         );
         let scale = density(platform.app.config().density());
         let size = physical_size(&native)?;
-        let mut renderer = WgpuRenderer::new(
+        let renderer = WgpuRenderer::new(
             platform.gpu.clone(),
             &native,
             WgpuSurfaceConfig {
@@ -99,8 +99,6 @@ impl AndroidWindow {
             },
             None,
         )?;
-        let present_wake = platform.app.create_waker();
-        renderer.set_android_presentation_waker(Box::new(move || present_wake.wake()));
         let logical = gpui::size(
             px(size.width.0 as f32 / scale),
             px(size.height.0 as f32 / scale),
@@ -152,11 +150,6 @@ fn physical_size(window: &SurfaceWindow) -> anyhow::Result<Size<DevicePixels>> {
     Ok(size(DevicePixels(width), DevicePixels(height)))
 }
 impl WindowState {
-    pub fn sync_presentation(&self) {
-        if self.renderer.borrow_mut().needs_redraw() {
-            self.schedule_frame();
-        }
-    }
     pub fn can_draw(&self) -> bool {
         self.visible.get() && self.native.borrow().is_some()
     }
