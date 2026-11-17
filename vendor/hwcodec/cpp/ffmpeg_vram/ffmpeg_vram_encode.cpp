@@ -29,6 +29,9 @@ extern "C" {
 
 namespace {
 
+// Retain two in-flight frames so conversion can overlap the previous encode.
+constexpr unsigned int AMF_MAX_PENDING_FRAMES = 3;
+
 void lockContext(void *lock_ctx);
 void unlockContext(void *lock_ctx);
 
@@ -270,7 +273,7 @@ public:
     if (retiring_)
       return AVERROR(EPIPE);
     if (amf_pipeline_) {
-      int ret = receive_pending(callback, obj, pending_frames_ >= 2);
+      int ret = receive_pending(callback, obj, pending_frames_ >= AMF_MAX_PENDING_FRAMES);
       if (ret < 0)
         return ret;
       if (!av_frame_is_writable(frame_)) {
@@ -494,7 +497,7 @@ private:
     while (pending_frames_ > 0) {
       const int ret = avcodec_receive_packet(c_, pkt_);
       if (ret == AVERROR(EAGAIN)) {
-        if (!wait || pending_frames_ < 2)
+        if (!wait || pending_frames_ < AMF_MAX_PENDING_FRAMES)
           return 0;
         if (util::elapsed_ms(start) >= ENCODE_TIMEOUT_MS)
           return AVERROR(ETIMEDOUT);
@@ -545,7 +548,7 @@ private:
 
     if (amf_pipeline_) {
       ++pending_frames_;
-      return receive_pending(callback, obj, pending_frames_ >= 2);
+      return receive_pending(callback, obj, pending_frames_ >= AMF_MAX_PENDING_FRAMES);
     }
 
     auto start = util::now();
