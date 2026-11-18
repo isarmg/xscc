@@ -23,6 +23,7 @@ pub(super) enum SurfaceOutput {
 /// The owned output window for one Android Surface lifetime.
 pub struct VideoSurface {
     pub(super) window: NativeWindow,
+    display_limit: i32,
     size: AtomicU64,
     wake: Box<dyn Fn() + Send + Sync>,
 }
@@ -33,11 +34,13 @@ impl VideoSurface {
     pub unsafe fn from_java(
         env: *mut c_void,
         surface: *mut c_void,
+        display_limit: i32,
         wake: Box<dyn Fn() + Send + Sync>,
     ) -> Option<Self> {
         let window = unsafe { NativeWindow::from_surface(env.cast(), surface.cast()) }?;
         Some(Self {
             window,
+            display_limit: if display_limit > 0 { display_limit } else { i32::MAX },
             size: AtomicU64::new(0),
             wake,
         })
@@ -86,7 +89,7 @@ impl VideoSurface {
             return Err(error).context("Read Android presentation clock");
         }
         let now = now.tv_sec * 1_000_000_000 + now.tv_nsec;
-        let Some(deadline) = pacing.deadline(now, fps) else {
+        let Some(deadline) = pacing.deadline(now, fps, self.display_limit) else {
             codec.release_output_buffer(buffer, false)?;
             return Ok(SurfaceOutput::Dropped);
         };

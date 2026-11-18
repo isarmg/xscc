@@ -4,6 +4,7 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 import android.util.Log;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -15,6 +16,7 @@ public final class RemoteVideoLayer {
     private final AndroidImeBridge activity;
     private long owner;
     private int frameRate;
+    private int displayLimit;
     private SurfaceView view;
     private FrameLayout parent;
     private Drawable previousBackground;
@@ -54,6 +56,9 @@ public final class RemoteVideoLayer {
         clear();
         this.owner = owner;
         frameRate = fps;
+        Display display = overlay.getDisplay();
+        displayLimit = display == null ? 0 : Math.round(
+                RemoteSessionPresentation.fastestModeAtCurrentSize(display).getRefreshRate());
         parent = root;
         previousBackground = root.getBackground();
         root.setBackgroundColor(Color.BLACK);
@@ -64,7 +69,7 @@ public final class RemoteVideoLayer {
             public void surfaceCreated(SurfaceHolder holder) {
                 Surface surface = holder.getSurface();
                 setFrameRate(surface);
-                nativeSurfaceChanged(owner, surface);
+                nativeSurfaceChanged(owner, surface, displayLimit);
             }
 
             @Override
@@ -72,7 +77,7 @@ public final class RemoteVideoLayer {
 
             @Override
             public void surfaceDestroyed(SurfaceHolder holder) {
-                nativeSurfaceChanged(owner, null);
+                nativeSurfaceChanged(owner, null, 0);
             }
         });
         parent.addView(view, root.indexOfChild(overlay), bounds);
@@ -81,7 +86,8 @@ public final class RemoteVideoLayer {
     private void setFrameRate(Surface surface) {
         if (!surface.isValid()) return;
         try {
-            surface.setFrameRate(frameRate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+            int rate = displayLimit > 0 ? Math.min(frameRate, displayLimit) : frameRate;
+            surface.setFrameRate(rate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
         } catch (IllegalArgumentException | IllegalStateException error) {
             Log.w("GPUI", "Cannot set remote video Surface frame rate", error);
         }
@@ -97,5 +103,5 @@ public final class RemoteVideoLayer {
         owner = 0;
     }
 
-    private static native void nativeSurfaceChanged(long owner, Surface surface);
+    private static native void nativeSurfaceChanged(long owner, Surface surface, int displayLimit);
 }

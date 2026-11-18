@@ -29,7 +29,7 @@ on:
       package_version:
         description: 'Candidate version, e.g. 1.0.1'
         required: true
-        default: '4.0.0-beta.26'
+        default: '4.0.0-beta.27'
         type: string
       build_only:
         description: 'Build and package without additional host-side tests'
@@ -49,7 +49,7 @@ env:
   VCPKG_BINARY_SOURCES: 'clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite'
   GRADLE_VERSION: '9.8.1'
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
-  PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.26' }}
+  PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.27' }}
 jobs:
   android:
     runs-on: ubuntu-24.04
@@ -169,7 +169,7 @@ jobs:
           done
           python3 .github/scripts/test-gpui-android-each-output.py
           rustc --edition 2018 --test libs/scrap/src/common/mediacodec/surface_pacing.rs -o "$RUNNER_TEMP/mediacodec-surface-pacing-tests"
-          for pacing_test in batches_are_presented_on_distinct_refreshes caps_buffering_and_restarts_after_starvation_or_rate_change; do
+          for pacing_test in batches_are_presented_on_distinct_refreshes caps_buffering_and_restarts_after_starvation_or_rate_change a_faster_source_uses_the_display_refresh_interval; do
             name="tests::$pacing_test"
             "$RUNNER_TEMP/mediacodec-surface-pacing-tests" --list | grep -Fx "$name: test"
             "$RUNNER_TEMP/mediacodec-surface-pacing-tests" --exact "$name"

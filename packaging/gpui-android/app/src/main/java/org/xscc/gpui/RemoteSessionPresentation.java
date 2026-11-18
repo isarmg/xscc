@@ -102,15 +102,7 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
                 Log.w("GPUI", "Remote session display unavailable; cannot request refresh rate");
                 return;
             }
-            Display.Mode current = display.getMode();
-            Display.Mode preferred = current;
-            for (Display.Mode mode : display.getSupportedModes()) {
-                if (mode.getPhysicalWidth() == current.getPhysicalWidth()
-                        && mode.getPhysicalHeight() == current.getPhysicalHeight()
-                        && mode.getRefreshRate() > preferred.getRefreshRate()) {
-                    preferred = mode;
-                }
-            }
+            Display.Mode preferred = fastestModeAtCurrentSize(display);
             WindowManager.LayoutParams attributes = window.getAttributes();
             float refreshRate = preferred.getRefreshRate();
             attributes.preferredDisplayModeId = preferred.getModeId();
@@ -120,6 +112,19 @@ public final class RemoteSessionPresentation implements SurfaceHolder.Callback {
         } catch (RuntimeException error) {
             Log.w("GPUI", "Cannot request remote session refresh rate", error);
         }
+    }
+
+    static Display.Mode fastestModeAtCurrentSize(Display display) {
+        Display.Mode current = display.getMode();
+        Display.Mode preferred = current;
+        for (Display.Mode mode : display.getSupportedModes()) {
+            if (mode.getPhysicalWidth() == current.getPhysicalWidth()
+                    && mode.getPhysicalHeight() == current.getPhysicalHeight()
+                    && mode.getRefreshRate() > preferred.getRefreshRate()) {
+                preferred = mode;
+            }
+        }
+        return preferred;
     }
 
     private static void setSurfaceFrameRate(SurfaceHolder holder, float refreshRate) {

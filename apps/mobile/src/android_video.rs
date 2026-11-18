@@ -174,6 +174,7 @@ extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceChanged(
     _: sys::jclass,
     owner: sys::jlong,
     surface: sys::jobject,
+    display_limit: sys::jint,
 ) {
     let (previous, wake) = {
         let mut slot = SURFACE.lock().unwrap();
@@ -190,6 +191,7 @@ extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceChanged(
                 VideoSurface::from_java(
                     env.cast(),
                     surface.cast(),
+                    display_limit,
                     Box::new(move || notify.notify_one()),
                 )
             }

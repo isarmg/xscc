@@ -55,5 +55,5 @@
     public void placeRemoteVideoSurface(long, int, int, int, int, int);
 }
 -keep,allowoptimization class org.xscc.gpui.RemoteVideoLayer {
-    private static native void nativeSurfaceChanged(long, android.view.Surface);
+    private static native void nativeSurfaceChanged(long, android.view.Surface, int);
 }
