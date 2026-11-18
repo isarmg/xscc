@@ -1,14 +1,46 @@
 #[cfg(any(all(windows, any(feature = "vram", feature = "gpui-host")), test))]
 use std::time::Duration;
+#[cfg(any(all(windows, feature = "gpui-host"), test))]
+use std::time::Instant;
 
 #[cfg(any(all(windows, feature = "vram"), test))]
 pub(super) fn should_pace_capture(spf: Duration, texture: bool, would_block: bool) -> bool {
     !would_block || !texture || (!cfg!(feature = "gpui-host") && spf >= Duration::from_secs(1) / 60)
 }
 
+#[cfg(any(all(windows, feature = "gpui-host"), test))]
+#[derive(Default)]
+struct CaptureCadence {
+    last_deadline: Option<(Instant, Duration)>,
+}
+
+#[cfg(any(all(windows, feature = "gpui-host"), test))]
+impl CaptureCadence {
+    fn deadline(&mut self, start: Instant, interval: Duration) -> Instant {
+        if interval >= Duration::from_secs(1) / 60 {
+            self.last_deadline = None;
+            return start + interval;
+        }
+        // Recover small scheduling overruns without bunching frames after a stall.
+        let anchor = self
+            .last_deadline
+            .filter(|&(deadline, previous_interval)| {
+                previous_interval == interval
+                    && start
+                        .checked_duration_since(deadline)
+                        .is_some_and(|late| late <= interval / 2)
+            })
+            .map_or(start, |(deadline, _)| deadline);
+        let deadline = anchor + interval;
+        self.last_deadline = Some((deadline, interval));
+        deadline
+    }
+}
+
 #[cfg(all(windows, feature = "gpui-host"))]
 pub(super) struct FramePacer {
     timer: Option<std::os::windows::io::OwnedHandle>,
+    cadence: CaptureCadence,
 }
 
 #[cfg(all(windows, feature = "gpui-host"))]
@@ -40,10 +72,13 @@ impl FramePacer {
         } else {
             Some(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(handle.cast()) })
         };
-        Self { timer }
+        Self {
+            timer,
+            cadence: CaptureCadence::default(),
+        }
     }
 
-    pub(super) fn wait_until(&mut self, start: std::time::Instant, frame: Duration) {
+    pub(super) fn wait_until(&mut self, start: Instant, frame: Duration) {
         use std::os::windows::io::AsRawHandle;
         use winapi::{
             shared::ntdef::LARGE_INTEGER,
@@ -53,7 +88,8 @@ impl FramePacer {
             },
         };
 
-        let remaining = frame.saturating_sub(start.elapsed());
+        let deadline = self.cadence.deadline(start, frame);
+        let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return;
         }
@@ -85,7 +121,7 @@ impl FramePacer {
                 }
             };
             if result == WAIT_OBJECT_0 {
-                while start.elapsed() < frame {
+                while Instant::now() < deadline {
                     std::hint::spin_loop();
                 }
                 return;
@@ -102,7 +138,7 @@ impl FramePacer {
             );
             self.timer = None;
         }
-        std::thread::sleep(frame.saturating_sub(start.elapsed()));
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
     }
 }
 
@@ -119,6 +155,38 @@ mod tests {
         pacer.wait_until(start, frame);
         assert!(start.elapsed() >= frame);
         pacer.wait_until(start, frame);
+    }
+
+    #[test]
+    fn short_overruns_do_not_lower_the_sustained_high_refresh_rate() {
+        let mut cadence = CaptureCadence::default();
+        let interval = Duration::from_secs(1) / 120;
+        let start = Instant::now();
+        let mut next = start;
+        let mut frames = 0;
+        while next - start < Duration::from_secs(1) {
+            let deadline = cadence.deadline(next, interval);
+            let work = Duration::from_millis(if frames % 2 == 0 { 10 } else { 6 });
+            next = deadline.max(next + work);
+            frames += 1;
+        }
+        assert!((119..=121).contains(&frames), "paced {frames} captures");
+    }
+
+    #[test]
+    fn rate_changes_and_long_stalls_start_a_fresh_interval() {
+        let mut cadence = CaptureCadence::default();
+        let interval = Duration::from_secs(1) / 120;
+        let start = Instant::now();
+        let due = cadence.deadline(start, interval);
+        let resumed = due + interval;
+        assert_eq!(cadence.deadline(resumed, interval), resumed + interval);
+        let new_interval = Duration::from_secs(1) / 90;
+        let changed = resumed + interval + Duration::from_millis(1);
+        assert_eq!(
+            cadence.deadline(changed, new_interval),
+            changed + new_interval
+        );
     }
 
     #[test]

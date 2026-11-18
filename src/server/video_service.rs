@@ -1189,10 +1189,10 @@ fn run_encoder(
         log::trace!("{:?} {:?}", time::Instant::now(), elapsed);
         #[cfg(feature = "gpui-host")]
         let pacing_wait_started = Instant::now();
+        #[cfg(all(windows, feature = "gpui-host"))]
+        frame_pacer.wait_until(pacing_start, spf);
+        #[cfg(not(all(windows, feature = "gpui-host")))]
         if elapsed < spf {
-            #[cfg(all(windows, feature = "gpui-host"))]
-            frame_pacer.wait_until(pacing_start, spf);
-            #[cfg(not(all(windows, feature = "gpui-host")))]
             std::thread::sleep(spf - elapsed);
         }
         #[cfg(feature = "gpui-host")]
