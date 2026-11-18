@@ -12,8 +12,12 @@ if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
 $taskDeviceArgs = @()
 if ($Serial) { $taskDeviceArgs = @('-s', $Serial) }
 function Invoke-TraceAdb {
-    param([string[]]$Arguments)
-    $result = & $AdbPath @taskDeviceArgs @Arguments
+    param([string[]]$Arguments, [string]$InputText)
+    $result = if ($PSBoundParameters.ContainsKey('InputText')) {
+        $InputText | & $AdbPath @taskDeviceArgs @Arguments
+    } else {
+        & $AdbPath @taskDeviceArgs @Arguments
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "ADB failed with exit code $LASTEXITCODE ($($Arguments -join ' '))"
     }
@@ -63,12 +67,15 @@ Invoke-TraceAdb -Arguments @('shell', 'dumpsys', 'package', $taskPackage) |
     Set-Content -LiteralPath (Join-Path $taskOutput 'version.txt') -Encoding UTF8
 Invoke-TraceAdb -Arguments @('shell', 'dumpsys', 'display') |
     Set-Content -LiteralPath (Join-Path $taskOutput 'display-before.txt') -Encoding UTF8
-$taskRemoteConfig = "/data/local/tmp/xscc-$taskStamp.pbtxt"
 $taskRemoteTrace = "/data/misc/perfetto-traces/xscc-$taskStamp.pftrace"
-Invoke-TraceAdb -Arguments @('push', $taskConfigPath, $taskRemoteConfig) | Out-Host
 Write-Host "Recording $Seconds seconds. Keep the stream active and reproduce the stall."
-Invoke-TraceAdb -Arguments @('shell', 'perfetto', '--txt', '-c', $taskRemoteConfig, '-o', $taskRemoteTrace) | Out-Host
-Invoke-TraceAdb -Arguments @('pull', $taskRemoteTrace, (Join-Path $taskOutput 'streaming.pftrace')) | Out-Host
+try {
+    # Some devices deny Perfetto access to shell-owned files in /data/local/tmp.
+    Invoke-TraceAdb -Arguments @('shell', '-T', 'perfetto', '--txt', '-c', '-', '-o', $taskRemoteTrace) -InputText $taskConfig | Out-Host
+    Invoke-TraceAdb -Arguments @('pull', $taskRemoteTrace, (Join-Path $taskOutput 'streaming.pftrace')) | Out-Host
+} finally {
+    & $AdbPath @taskDeviceArgs shell rm -f $taskRemoteTrace | Out-Null
+}
 Invoke-TraceAdb -Arguments @('logcat', '-d', '-v', 'threadtime', "--pid=$taskAppPid") |
     Select-String 'session_pipeline|android_gpu_pipeline|android_frame_pipeline|android_fps_control|Set fps to|Android surface configured|Android display streaming limit|Choreographer|Vulkan|VK_ERROR' |
     Set-Content -LiteralPath (Join-Path $taskOutput 'pipeline.txt') -Encoding UTF8
