@@ -1358,7 +1358,15 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
         _display: usize,
         _frames: usize,
         _elapsed: std::time::Duration,
+        _surface_output: bool,
     ) {
+    }
+    #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+    fn android_video_surface(
+        &self,
+        _display: usize,
+    ) -> Option<std::sync::Arc<scrap::mediacodec::VideoSurface>> {
+        None
     }
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool);
     #[cfg(any(target_os = "android", target_os = "ios"))]

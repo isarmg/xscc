@@ -22,6 +22,7 @@ TEST_NAMES = {
     'every_output_before_and_after_input_is_released_then_published_without_overwrite',
     'backpressure_keeps_input_borrowed_and_drains_each_output_before_retrying',
     'format_notifications_empty_buffers_and_release_errors_never_publish_fake_outputs',
+    'surface_output_bypasses_pixel_delivery_and_counts_each_successful_release',
 }
 
 
@@ -79,8 +80,8 @@ impl FakeCodec {
         }
     }
     fn release_output_buffer(&self, output: Output, render: bool) -> Result<(), NdkMediaError> {
-        assert!(!render);
-        self.trace.borrow_mut().push(format!("release:{}", output.value));
+        let operation = if render { "render" } else { "release" };
+        self.trace.borrow_mut().push(format!("{operation}:{}", output.value));
         if self.release_fails { Err(NdkMediaError::Release) } else { Ok(()) }
     }
     fn dequeue_input_buffer(&self, _: Duration) -> Result<Option<Input>, NdkMediaError> {
@@ -102,16 +103,39 @@ fn convert_output(_: &Format, bytes: &[u8], rgb: &mut ImageRgb) -> ResultType<()
     if bytes.is_empty() { return Err(Error::Pixels); }
     rgb.raw.clear(); rgb.raw.extend_from_slice(bytes); Ok(())
 }
+struct FakeSurface;
+impl FakeSurface {
+    fn render(&self, codec: &FakeCodec, output: Output, _: (i32,i32)) -> ResultType<bool> {
+        let decoded = !output.empty;
+        codec.release_output_buffer(output, decoded)?;
+        Ok(decoded)
+    }
+}
 struct MediaCodecDecoder { decoder:FakeCodec, configuration:Option<(i32,i32,i32)>,
-    pending_output:usize, decoded_outputs:usize }
+    pending_output:usize, decoded_outputs:usize, surface:Option<FakeSurface> }
 impl Default for MediaCodecDecoder {
-    fn default() -> Self { Self { decoder:FakeCodec::default(), configuration:Some((1,1,120)), pending_output:0, decoded_outputs:0 } }
+    fn default() -> Self { Self { decoder:FakeCodec::default(), configuration:Some((1,1,120)), pending_output:0, decoded_outputs:0, surface:None } }
 }
 impl MediaCodecDecoder {
 """
 
 TESTS = r"""
 }
+#[test]
+fn surface_output_bypasses_pixel_delivery_and_counts_each_successful_release() {
+    let mut decoder = MediaCodecDecoder { surface:Some(FakeSurface), ..Default::default() };
+    decoder.decoder.after_queue.borrow_mut().extend([Event::Frame(5), Event::Frame(6), Event::Empty]);
+    let mut rgb = ImageRgb::default();
+    assert!(decoder.decode_with_callback(&[1], 1, &mut rgb, &mut |_| panic!("surface must bypass pixel delivery")).unwrap());
+    assert_eq!(&*decoder.decoder.trace.borrow(), &["queue-input", "render:5", "render:6", "release:0"]);
+    assert!(rgb.raw.is_empty());
+    assert_eq!(decoder.take_decoded_output_count(), 2);
+    decoder.decoder.release_fails = true;
+    decoder.decoder.events.borrow_mut().push_back(Event::Frame(7));
+    assert!(decoder.poll_output(&mut rgb).is_err());
+    assert_eq!(decoder.take_decoded_output_count(), 0);
+}
+
 #[test]
 fn presentation_timestamps_reach_the_codec_in_microseconds() {
     let mut decoder = MediaCodecDecoder::default();
@@ -207,8 +231,8 @@ def main():
             raise SystemExit('MediaCodec per-output regression selection differs: ' + repr(selected))
         result = subprocess.run([str(executable), '--nocapture'], check=True, capture_output=True, text=True)
         print(result.stdout, end='')
-        if not re.search(r'^test result: ok\. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;', result.stdout, re.M):
-            raise SystemExit('All four MediaCodec per-output regressions must actually pass.')
+        if not re.search(rf'^test result: ok\. {len(TEST_NAMES)} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;', result.stdout, re.M):
+            raise SystemExit('All MediaCodec per-output regressions must actually pass.')
     print('Production delivery methods SHA256: ' + hashlib.sha256(methods.encode()).hexdigest())
 
 

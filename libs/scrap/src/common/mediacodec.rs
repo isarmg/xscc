@@ -8,7 +8,7 @@ use ndk::media::{
 };
 use std::{
     convert::TryFrom,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant},
 };
 
@@ -20,11 +20,15 @@ const H264_MIME_TYPE: &str = "video/avc";
 const H265_MIME_TYPE: &str = "video/hevc";
 const COLOR_YUV420_SEMIPLANAR: i32 = 21;
 
+mod surface;
+pub use surface::VideoSurface;
+
 pub static H264_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
 pub static H265_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
 
 pub struct MediaCodecDecoder {
     decoder: MediaCodec,
+    surface: Option<Arc<VideoSurface>>,
     mime: &'static str,
     configuration: Option<(i32, i32, i32)>,
     pending_output: usize,
@@ -47,6 +51,7 @@ impl MediaCodecDecoder {
             if let Some(decoder) = MediaCodec::from_codec_name(&info.name) {
                 return Some(Self {
                     decoder,
+                    surface: None,
                     mime,
                     configuration: None,
                     pending_output: 0,
@@ -55,6 +60,15 @@ impl MediaCodecDecoder {
             }
         }
         None
+    }
+
+    pub(super) fn use_video_surface(&mut self, surface: Arc<VideoSurface>) {
+        debug_assert!(self.configuration.is_none());
+        self.surface = Some(surface);
+    }
+
+    pub(super) fn video_surface(&self) -> Option<&Arc<VideoSurface>> {
+        self.surface.as_ref()
     }
 
     pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
@@ -87,13 +101,16 @@ impl MediaCodecDecoder {
         format.set_str("mime", self.mime);
         format.set_i32("width", width);
         format.set_i32("height", height);
-        format.set_i32("color-format", COLOR_YUV420_SEMIPLANAR);
+        if self.surface.is_none() {
+            format.set_i32("color-format", COLOR_YUV420_SEMIPLANAR);
+        }
         format.set_i32("frame-rate", fps);
         format.set_f32("operating-rate", fps as f32);
         format.set_i32("priority", 0);
         format.set_i32("low-latency", 1);
+        let window = self.surface.as_ref().map(|surface| &surface.window);
         self.decoder
-            .configure(&format, None, MediaCodecDirection::Decoder)
+            .configure(&format, window, MediaCodecDirection::Decoder)
             .with_context(|| {
                 format!("Configure realtime MediaCodec {width}x{height} at {fps} fps")
             })?;
@@ -180,6 +197,19 @@ impl MediaCodecDecoder {
                 }
                 Err(error) => return Err(error.into()),
             };
+            if let Some(surface) = &self.surface {
+                let Some((width, height, _)) = self.configuration else {
+                    decoder.release_output_buffer(output, false)?;
+                    bail!("Surface codec is not running");
+                };
+                let rendered = surface.render(decoder, output, (width, height))?;
+                self.pending_output = self.pending_output.saturating_sub(1);
+                if rendered {
+                    self.decoded_outputs = self.decoded_outputs.saturating_add(1);
+                    decoded = true;
+                }
+                continue;
+            }
             let converted = convert_output(&output.format(), output.buffer(), rgb);
             decoder.release_output_buffer(output, false)?;
             self.pending_output = self.pending_output.saturating_sub(1);

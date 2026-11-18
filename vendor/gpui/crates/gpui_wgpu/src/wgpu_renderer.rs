@@ -1101,6 +1101,14 @@ impl WgpuRenderer {
         }
     }
 
+    #[cfg(target_os = "android")]
+    pub fn supports_transparency(&self) -> bool {
+        matches!(
+            self.transparent_alpha_mode,
+            wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::Inherit
+        )
+    }
+
     pub fn update_transparency(&mut self, transparent: bool) {
         let new_alpha_mode = if transparent {
             self.transparent_alpha_mode

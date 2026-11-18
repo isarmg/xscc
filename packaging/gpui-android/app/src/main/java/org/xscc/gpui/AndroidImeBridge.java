@@ -76,8 +76,11 @@ public class AndroidImeBridge extends GameActivity {
     @Override
     protected InputEnabledSurfaceView createSurfaceView() {
         imeSurface = new ImeSurfaceView();
+        prepareRenderSurface(imeSurface);
         return imeSurface;
     }
+
+    protected void prepareRenderSurface(SurfaceView surface) {}
 
     SurfaceView remoteSessionSurfaceView() {
         return imeSurface;

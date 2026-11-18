@@ -51,6 +51,7 @@ pub(crate) struct WindowState {
     pub platform: Weak<State>,
     native: RefCell<Option<SurfaceWindow>>,
     renderer: RefCell<WgpuRenderer>,
+    transparent: Cell<bool>,
     pub active: Cell<bool>,
     pub visible: Cell<bool>,
     pub dirty: Cell<bool>,
@@ -112,6 +113,7 @@ impl AndroidWindow {
             platform: Rc::downgrade(platform),
             native: RefCell::new(Some(native)),
             renderer: RefCell::new(renderer),
+            transparent: Cell::new(false),
             active: Cell::new(platform.focused.get()),
             visible: Cell::new(platform.resumed.get()),
             dirty: Cell::new(true),
@@ -224,7 +226,7 @@ impl WindowState {
             &native,
             WgpuSurfaceConfig {
                 size,
-                transparent: false,
+                transparent: self.transparent.get(),
                 preferred_present_mode: None,
             },
             &instance,
@@ -430,10 +432,21 @@ impl PlatformWindow for AndroidWindow {
         false
     }
     fn background_appearance(&self) -> WindowBackgroundAppearance {
-        WindowBackgroundAppearance::Opaque
+        if self.0.transparent.get() {
+            WindowBackgroundAppearance::Transparent
+        } else {
+            WindowBackgroundAppearance::Opaque
+        }
     }
     fn set_title(&mut self, _: &str) {}
-    fn set_background_appearance(&self, _: WindowBackgroundAppearance) {}
+    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
+        let transparent = matches!(appearance, WindowBackgroundAppearance::Transparent)
+            && self.0.renderer.borrow().supports_transparency();
+        if self.0.transparent.replace(transparent) != transparent {
+            self.0.renderer.borrow_mut().update_transparency(transparent);
+            self.0.schedule_frame();
+        }
+    }
     fn minimize(&self) {}
     fn zoom(&self) {}
     fn toggle_fullscreen(&self) {}

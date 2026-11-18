@@ -745,6 +745,23 @@ impl Decoder {
     }
 
     #[cfg(feature = "mediacodec")]
+    pub fn use_video_surface(&mut self, surface: std::sync::Arc<crate::mediacodec::VideoSurface>) {
+        if let Some(decoder) = self.h264_media_codec.as_mut().or(self.h265_media_codec.as_mut()) {
+            decoder.use_video_surface(surface);
+        } else {
+            surface.invalidate();
+        }
+    }
+
+    #[cfg(feature = "mediacodec")]
+    pub fn video_surface(&self) -> Option<&std::sync::Arc<crate::mediacodec::VideoSurface>> {
+        self.h264_media_codec
+            .as_ref()
+            .or(self.h265_media_codec.as_ref())
+            .and_then(MediaCodecDecoder::video_surface)
+    }
+
+    #[cfg(feature = "mediacodec")]
     pub fn set_video_size(&mut self, width: i32, height: i32, fps: i32) -> ResultType<()> {
         if let Some(decoder) = self
             .h264_media_codec

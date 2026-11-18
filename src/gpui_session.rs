@@ -7,7 +7,7 @@ use base::message_proto::*;
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{bail, rendezvous_proto::ConnType, tokio, ResultType};
 #[cfg(all(target_os = "android", feature = "mediacodec"))]
-pub use scrap::android::initialize_android_decoders;
+pub use scrap::{android::initialize_android_decoders, mediacodec::VideoSurface};
 mod controls;
 mod virtual_display;
 pub use virtual_display::{VirtualDisplayConfiguration, VirtualDisplayMode, VirtualDisplayResult, VirtualDisplayScreen, VirtualDisplayState};
@@ -198,6 +198,8 @@ pub struct SessionQuality {
     pub decoded_fps: Option<i32>,
     /// New images accepted by the UI per wall-clock second, not physical scanout.
     pub submitted_fps: Option<i32>,
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    pub surface_submitted_fps: Option<i32>,
     pub decode_p50_ms: Option<f32>,
     pub decode_p95_ms: Option<f32>,
     pub ui_queue_p95_ms: Option<f32>,
@@ -215,6 +217,10 @@ impl SessionQuality {
         }
         if update.submitted_fps.is_some() {
             self.submitted_fps = update.submitted_fps;
+            #[cfg(all(target_os = "android", feature = "mediacodec"))]
+            {
+                self.surface_submitted_fps = update.surface_submitted_fps;
+            }
         }
         if update.mailbox_dropped.is_some() {
             self.mailbox_dropped = update.mailbox_dropped;
@@ -289,6 +295,8 @@ struct Mailbox {
     controls: RwLock<controls::Controls>,
     virtual_requests: Mutex<virtual_display::Requests>,
     monitors: RwLock<Monitors>,
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    video_surface: Mutex<Option<(usize, Arc<VideoSurface>)>>,
     connected: AtomicBool,
     keyboard: AtomicBool,
     closed: AtomicBool,
@@ -310,6 +318,8 @@ impl Default for Mailbox {
             controls: RwLock::new(controls::Controls::default()),
             virtual_requests: Mutex::new(virtual_display::Requests::default()),
             monitors: RwLock::new(Monitors::default()),
+            #[cfg(all(target_os = "android", feature = "mediacodec"))]
+            video_surface: Mutex::new(None),
             connected: AtomicBool::new(false),
             keyboard: AtomicBool::new(true),
             closed: AtomicBool::new(false),
@@ -376,6 +386,39 @@ pub struct SessionHandle {
     session: Session<Handler>,
 }
 impl SessionHandle {
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    pub fn set_android_video_surface(&self, surface: Option<(usize, Arc<VideoSurface>)>) {
+        use crate::client::Interface as _;
+
+        let mailbox = &self.session.ui_handler.0;
+        let (previous, active_display) = {
+            let monitors = mailbox.monitors.read().unwrap();
+            let active = (!mailbox.closed.load(Ordering::Acquire)
+                && mailbox.connected.load(Ordering::Acquire)
+                && monitors.pending.is_none()
+                && monitors.list.get(monitors.current).is_some_and(|monitor| monitor.available))
+                .then_some(monitors.current);
+            let surface = surface.filter(|(display, surface)| {
+                active == Some(*display) && surface.is_valid()
+            });
+            let mut slot = mailbox.video_surface.lock().unwrap();
+            match (&*slot, &surface) {
+                (None, None) => return,
+                (Some((a, old)), Some((b, new))) if a == b && Arc::ptr_eq(old, new) => return,
+                _ => {}
+            }
+            let refresh = surface.as_ref().or(slot.as_ref()).map(|(display, _)| *display);
+            (std::mem::replace(&mut *slot, surface), active.filter(|display| Some(*display) == refresh))
+        };
+        if let Some((display, surface)) = previous {
+            surface.invalidate();
+            self.session.send(Data::ResetDecoder(Some(display)));
+        }
+        if let Some(display) = active_display {
+            self.session.refresh_video(display as i32);
+        }
+    }
+
     pub fn updates(&self) -> SessionUpdates {
         SessionUpdates(self.session.ui_handler.0.clone())
     }
@@ -547,6 +590,8 @@ impl SessionHandle {
             mailbox.clear_frames();
         }
         self.session.switch_display(index as i32);
+        #[cfg(all(target_os = "android", feature = "mediacodec"))]
+        self.set_android_video_surface(None);
         Ok(())
     }
     pub fn set_target_fps(&self, target: TargetFps) -> ResultType<()> {
@@ -645,6 +690,8 @@ impl SessionHandle {
             .connected
             .store(false, Ordering::Release);
         self.session.close();
+        #[cfg(all(target_os = "android", feature = "mediacodec"))]
+        self.set_android_video_surface(None);
         self.session.ui_handler.0.clear_frames();
         self.session.ui_handler.0.updates.notify_one();
     }
@@ -825,18 +872,38 @@ impl InvokeUiSession for Handler {
         }
     }
     #[cfg(all(target_os = "android", feature = "mediacodec"))]
-    fn on_mediacodec_decoded(&self, display: usize, frames: usize, elapsed: Duration) {
+    fn on_mediacodec_decoded(
+        &self,
+        display: usize,
+        frames: usize,
+        elapsed: Duration,
+        surface_output: bool,
+    ) {
         let monitors = self.0.monitors.read().unwrap();
         if !self.0.closed.load(Ordering::Acquire)
             && monitors.pending.is_none()
             && monitors.current == display
         {
-            self.0
-                .metrics
-                .lock()
-                .unwrap()
-                .decoded_frames(frames, elapsed);
+            let mut metrics = self.0.metrics.lock().unwrap();
+            metrics.decoded_frames(frames, elapsed);
+            if surface_output {
+                metrics.surface_submitted(frames);
+            }
         }
+    }
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    fn android_video_surface(&self, display: usize) -> Option<Arc<VideoSurface>> {
+        let monitors = self.0.monitors.read().unwrap();
+        if self.0.closed.load(Ordering::Acquire)
+            || monitors.pending.is_some()
+            || monitors.current != display
+        {
+            return None;
+        }
+        let target = self.0.video_surface.lock().unwrap();
+        target.as_ref()
+            .filter(|(index, surface)| *index == display && surface.is_valid())
+            .map(|(_, surface)| Arc::clone(surface))
     }
     fn on_rgba(&self, display: usize, image: &mut scrap::ImageRgb) {
         if self.0.closed.load(Ordering::Acquire) {
@@ -1072,6 +1139,7 @@ impl InvokeUiSession for Handler {
                     "received_fps": sample.received_fps,
                     "decoded_fps": sample.decoded_fps,
                     "submitted_fps": sample.submitted_fps,
+                    "surface_submitted_fps": sample.surface_submitted_fps(),
                     "decode_p50_ms": sample.decode_p50_ms,
                     "decode_p95_ms": sample.decode_p95_ms,
                     "ui_queue_p95_ms": sample.ui_queue_p95_ms,
@@ -1091,6 +1159,8 @@ impl InvokeUiSession for Handler {
                 received_fps: sample.as_ref().map(|s| s.received_fps),
                 decoded_fps: sample.as_ref().map(|s| s.decoded_fps),
                 submitted_fps: sample.as_ref().map(|s| s.submitted_fps),
+                #[cfg(all(target_os = "android", feature = "mediacodec"))]
+                surface_submitted_fps: sample.as_ref().and_then(metrics::Sample::surface_submitted_fps),
                 decode_p50_ms: sample.as_ref().and_then(|s| s.decode_p50_ms),
                 decode_p95_ms: sample.as_ref().and_then(|s| s.decode_p95_ms),
                 ui_queue_p95_ms: sample.as_ref().and_then(|s| s.ui_queue_p95_ms),

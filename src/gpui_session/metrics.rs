@@ -39,6 +39,8 @@ pub(super) struct Metrics {
     received: u64,
     decoded: u64,
     submitted: u64,
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    surface_submitted: u64,
     dropped: u64,
     callbacks: u64,
     published: u64,
@@ -53,6 +55,8 @@ impl Default for Metrics {
             received: 0,
             decoded: 0,
             submitted: 0,
+            #[cfg(all(target_os = "android", feature = "mediacodec"))]
+            surface_submitted: 0,
             dropped: 0,
             callbacks: 0,
             published: 0,
@@ -65,12 +69,22 @@ pub(super) struct Sample {
     pub received_fps: i32,
     pub decoded_fps: i32,
     pub submitted_fps: i32,
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    surface_submitted_fps: i32,
     pub decode_p50_ms: Option<f32>,
     pub decode_p95_ms: Option<f32>,
     pub ui_queue_p95_ms: Option<f32>,
     pub mailbox_dropped: u64,
     pub video_callback_count: u64,
     pub mailbox_publish_count: u64,
+}
+impl Sample {
+    pub(super) fn surface_submitted_fps(&self) -> Option<i32> {
+        #[cfg(all(target_os = "android", feature = "mediacodec"))]
+        return Some(self.surface_submitted_fps);
+        #[cfg(not(all(target_os = "android", feature = "mediacodec")))]
+        None
+    }
 }
 impl Metrics {
     pub fn epoch(&self) -> u64 {
@@ -99,6 +113,10 @@ impl Metrics {
         self.submitted = self.submitted.saturating_add(1);
         self.ui_queue_time.push(queue_time);
     }
+    #[cfg(all(target_os = "android", feature = "mediacodec"))]
+    pub fn surface_submitted(&mut self, frames: usize) {
+        self.surface_submitted = self.surface_submitted.saturating_add(frames as u64);
+    }
     pub fn callback(&mut self) {
         self.callbacks = self.callbacks.saturating_add(1);
     }
@@ -122,6 +140,8 @@ impl Metrics {
             received_fps: rate(self.received),
             decoded_fps: rate(self.decoded),
             submitted_fps: rate(self.submitted),
+            #[cfg(all(target_os = "android", feature = "mediacodec"))]
+            surface_submitted_fps: rate(self.surface_submitted),
             decode_p50_ms: self.decode_time.percentile_ms(50),
             decode_p95_ms: self.decode_time.percentile_ms(95),
             ui_queue_p95_ms: self.ui_queue_time.percentile_ms(95),

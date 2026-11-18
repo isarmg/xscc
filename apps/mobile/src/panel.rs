@@ -302,10 +302,10 @@ impl Render for Panel {
         ))]
         if self.session_visible {
             let visible = crate::session_view::visible_bounds(window);
-            return div()
-                .size_full()
-                .font_family(theme::FONT_FAMILY)
-                .bg(rgb(0x000000))
+            let root = div().size_full().font_family(theme::FONT_FAMILY);
+            #[cfg(not(target_os = "android"))]
+            let root = root.bg(rgb(0x000000));
+            return root
                 .text_color(rgb(palette.text))
                 .child(
                     div()

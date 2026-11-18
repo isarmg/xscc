@@ -80,6 +80,9 @@ use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
+#[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+mod android_video_surface;
+
 #[cfg(any(test, all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session")))]
 pub(crate) mod mobile_audio;
 #[cfg(not(target_os = "linux"))]
@@ -1035,7 +1038,9 @@ impl VideoHandler {
     ) -> Option<usize> {
         let outputs = self.decoder.take_mediacodec_output_count();
         match outputs {
-            Some(frames) if frames > 0 => ui.on_mediacodec_decoded(display, frames, elapsed),
+            Some(frames) if frames > 0 => ui.on_mediacodec_decoded(
+                display, frames, elapsed, self.decoder.video_surface().is_some(),
+            ),
             Some(_) => {}
             None if produced_image => ui.on_video_decoded(display, elapsed),
             None => {}
@@ -2195,6 +2200,13 @@ pub fn start_video_thread<F, T>(
                                         error,
                                         "Poll MediaCodec output failed: {error:#}"
                                     );
+                                    #[cfg(all(target_os = "android", feature = "gpui-session"))]
+                                    if handler.discard_failed_android_surface() {
+                                        *discard_queue.write().unwrap() = true;
+                                    } else {
+                                        handler.reset(None);
+                                    }
+                                    #[cfg(not(all(target_os = "android", feature = "gpui-session")))]
                                     handler.reset(None);
                                     session.refresh_video(display as _);
                                 }
@@ -2210,7 +2222,8 @@ pub fn start_video_thread<F, T>(
             if let Ok(data) = message {
                 match data {
                     MediaData::VideoFrame(_) | MediaData::VideoQueue => {
-                        let vf = match data {
+                        #[allow(unused_mut)]
+                        let mut vf = match data {
                             MediaData::VideoFrame(vf) => {
                                 *discard_queue.write().unwrap() = false;
                                 *vf
@@ -2242,12 +2255,18 @@ pub fn start_video_thread<F, T>(
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
                             #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+                            if !handler.select_android_output(
+                                &mut vf, format, session.ui_handler.android_video_surface(display),
+                            ) {
+                                continue;
+                            }
+                            #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
                             let mut output_published = false;
                             #[cfg(not(all(target_os = "android", feature = "mediacodec", feature = "gpui-session")))]
                             let output_published = false;
                             #[cfg(feature = "mediacodec")]
                             let frame_result = (|| -> ResultType<bool> {
-                                if format_changed {
+                                if handler.decoder.format() != format {
                                     handler.reset(Some(format));
                                 }
                                 if matches!(format, CodecFormat::H264 | CodecFormat::H265) {
@@ -2366,6 +2385,10 @@ pub fn start_video_thread<F, T>(
                                     }
                                 }
                                 Err(e) => {
+                                    #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+                                    if handler.discard_failed_android_surface() {
+                                        *discard_queue.write().unwrap() = true;
+                                    }
                                     // This is a simple workaround.
                                     //
                                     // I only see the following error:
@@ -2411,6 +2434,14 @@ pub fn start_video_thread<F, T>(
                         }
                     }
                     MediaData::Reset => {
+                        #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+                        if video_handler.as_ref().is_some_and(|handler| {
+                            handler.decoder.video_surface().is_some_and(|surface| !surface.is_valid())
+                        }) {
+                            video_handler = None;
+                            *discard_queue.write().unwrap() = true;
+                            continue;
+                        }
                         if let Some(handler) = video_handler.as_mut() {
                             handler.reset(None);
                         }

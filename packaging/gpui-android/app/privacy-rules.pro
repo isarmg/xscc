@@ -52,4 +52,8 @@
 -keepclassmembers class org.xscc.gpui.smoke.SmokeActivity {
     public void setRemoteSessionPresentation(boolean);
     public void rotateRemoteSession();
+    public void placeRemoteVideoSurface(long, int, int, int, int, int);
+}
+-keep,allowoptimization class org.xscc.gpui.RemoteVideoLayer {
+    private static native void nativeSurfaceChanged(long, android.view.Surface);
 }

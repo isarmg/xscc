@@ -1,5 +1,7 @@
 mod virtual_displays;
 
+#[cfg(target_os = "android")]
+use crate::android_video::{Layer, Placement, VideoApp};
 use crate::{
     display_state::accepts_display_update,
     presentation::VideoPresentation,
@@ -86,6 +88,8 @@ pub struct SessionView {
     receiver: mpsc::Receiver<Reply>,
     wake: Arc<tokio::sync::Notify>,
     presentation: VideoPresentation,
+    #[cfg(target_os = "android")]
+    video_layer: Layer,
     frame_scheduled: bool,
     notice: String,
     _refresh: gpui::Task<()>,
@@ -137,6 +141,8 @@ impl SessionView {
         }));
         let (sender, receiver) = mpsc::channel();
         let wake = Arc::new(tokio::sync::Notify::new());
+        #[cfg(target_os = "android")]
+        let video_layer = Layer::new(cx.try_global::<VideoApp>().map(|app| app.0.clone()), wake.clone());
         let refresh_wake = wake.clone();
         let refresh = cx.spawn_in(window, async move |view, cx| {
             loop {
@@ -189,6 +195,8 @@ impl SessionView {
                             view.notice = error;
                         }
                         window.set_remote_session_presentation(false);
+                        #[cfg(target_os = "android")]
+                        window.set_background_appearance(gpui::WindowBackgroundAppearance::Opaque);
                         view.presentation_active = false;
                     });
                 });
@@ -240,6 +248,8 @@ impl SessionView {
             receiver,
             wake,
             presentation: VideoPresentation::default(),
+            #[cfg(target_os = "android")]
+            video_layer,
             frame_scheduled: false,
             notice: "选择已授权设备查看画面".into(),
             _refresh: refresh,
@@ -252,6 +262,8 @@ impl SessionView {
     }
 
     pub fn stop(&mut self) {
+        #[cfg(target_os = "android")]
+        self.video_layer.clear();
         if let Some(control) = self.keyboard_control.take() {
             control.configure(false, false, false);
             control.cancel();
@@ -588,6 +600,8 @@ impl SessionView {
         let Some(session) = &self.session else { return };
         match session.switch_monitor(index) {
             Ok(()) => {
+                #[cfg(target_os = "android")]
+                self.video_layer.clear();
                 self.pending_monitor = Some(index);
                 self.quality = SessionQuality::default();
                 self.extent = (0, 0);
@@ -890,8 +904,10 @@ impl SessionView {
             .filter(|frame| {
                 accepts_display_update(self.current_monitor, self.pending_monitor, frame.display)
             });
-        if let Some(frame) = &frame {
-            let extent = (frame.width, frame.height);
+        let extent = frame.as_ref().map(|frame| (frame.width, frame.height));
+        #[cfg(target_os = "android")]
+        let extent = self.video_surface_size().or(extent);
+        if let Some(extent) = extent {
             if self.extent != extent {
                 first_image = true;
                 self.release_input();
@@ -956,10 +972,47 @@ impl SessionView {
 }
 
 impl SessionView {
+    #[cfg(target_os = "android")]
+    fn video_surface_size(&self) -> Option<(u32, u32)> {
+        let (display, surface) = self.video_layer.target()?;
+        accepts_display_update(self.current_monitor, self.pending_monitor, display)
+            .then(|| surface.size())
+            .flatten()
+    }
+
+    #[cfg(target_os = "android")]
+    fn place_video_layer(&mut self, layout: SessionLayout, window: &Window) -> bool {
+        use gpui::WindowBackgroundAppearance::{Opaque, Transparent};
+
+        let placement = self.current_monitor.zip(self.target_fps).and_then(|(display, fps)| {
+            (self.connected
+                && self.authorized()
+                && self.pending_monitor.is_none()
+                && fps.value() > 60
+                && matches!(self.quality.codec.as_deref(), Some("H264" | "H265")))
+                .then(|| Placement::new(layout.video, self.extent, window.scale_factor(), fps.value()))
+                .flatten()
+                .map(|placement| (display, placement))
+        });
+        window.set_background_appearance(if placement.is_some() { Transparent } else { Opaque });
+        match placement.filter(|_| matches!(window.background_appearance(), Transparent)) {
+            Some((display, placement)) => self.video_layer.place(display, placement),
+            None => self.video_layer.clear(),
+        }
+        if let Some(session) = &self.session {
+            session.set_android_video_surface(self.video_layer.target());
+        }
+        self.video_surface_size().is_some()
+    }
+
     fn sync_presentation(&mut self, window: &mut Window) {
         let active = self.selected.is_some();
         if active != self.presentation_active {
             window.set_remote_session_presentation(active);
+            #[cfg(target_os = "android")]
+            if !active {
+                window.set_background_appearance(gpui::WindowBackgroundAppearance::Opaque);
+            }
             self.presentation_active = active;
         }
     }
@@ -1043,6 +1096,13 @@ impl SessionView {
             .as_ref()
             .map(SessionHandle::media_controls)
             .unwrap_or_default();
+        let (submission, submitted_fps) = ("UI提交", self.quality.submitted_fps);
+        #[cfg(target_os = "android")]
+        let (submission, submitted_fps) = if self.video_surface_size().is_some() {
+            ("Surface提交", self.quality.surface_submitted_fps)
+        } else {
+            (submission, submitted_fps)
+        };
         let model = ChromeModel {
             layout: self.mouse_layout(),
             connecting: self.connecting.is_some(),
@@ -1105,7 +1165,7 @@ impl SessionView {
                 })
                 .collect(),
             quality: format!(
-                "{} · 接收 {} / 解码 {} / UI提交 {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
+                "{} · 接收 {} / 解码 {} / {submission} {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
                 self.transport.as_deref().unwrap_or("—"),
                 self.quality
                     .received_fps
@@ -1115,8 +1175,7 @@ impl SessionView {
                     .decoded_fps
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
-                self.quality
-                    .submitted_fps
+                submitted_fps
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into()),
                 self.quality
@@ -1527,6 +1586,10 @@ impl Render for SessionView {
             self.layout = layout;
             self.publish_chrome(cx);
         }
+        #[cfg(target_os = "android")]
+        let direct_video = self.place_video_layer(layout, window);
+        #[cfg(not(target_os = "android"))]
+        let direct_video = false;
         let owner = cx.entity_id();
         let generation = self.generation;
         let extent = self.extent;
@@ -1545,12 +1608,12 @@ impl Render for SessionView {
             .h(visible.height)
             .overflow_hidden()
             .track_focus(&self.focus)
-            .bg(rgb(0x000000))
+            .bg(gpui::rgba(if direct_video { 0x00000000 } else { 0x000000ff }))
             .child(
                 at(layout.video).overflow_hidden().children(
                     self.presentation
                         .image()
-                        .filter(|_| self.connected && self.extent.0 > 0 && self.extent.1 > 0)
+                        .filter(|_| !direct_video && self.connected && self.extent.0 > 0 && self.extent.1 > 0)
                         .map(|image| remote_image(image.clone())),
                 ),
             )
