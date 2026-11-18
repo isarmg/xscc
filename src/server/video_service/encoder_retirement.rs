@@ -7,7 +7,6 @@ use std::{
     cell::Cell,
     ffi::c_void,
     mem::ManuallyDrop,
-    ops::{Deref, DerefMut},
     panic::{catch_unwind, AssertUnwindSafe},
     time::Duration,
 };
@@ -58,6 +57,7 @@ impl Drop for CaptureOwner {
 
 pub(super) struct EncoderOwner<'a> {
     encoder: ManuallyDrop<Encoder>,
+    capturer: &'a mut CapturerInfo,
     capture_device: Option<*mut c_void>,
     retirement_failed: &'a Cell<bool>,
 }
@@ -65,27 +65,20 @@ pub(super) struct EncoderOwner<'a> {
 impl<'a> EncoderOwner<'a> {
     pub(super) fn new(
         encoder: Encoder,
+        capturer: &'a mut CapturerInfo,
         capture_device: Option<*mut c_void>,
         retirement_failed: &'a Cell<bool>,
     ) -> Self {
         Self {
             encoder: ManuallyDrop::new(encoder),
+            capturer,
             capture_device,
             retirement_failed,
         }
     }
-}
 
-impl Deref for EncoderOwner<'_> {
-    type Target = Encoder;
-    fn deref(&self) -> &Self::Target {
-        &self.encoder
-    }
-}
-
-impl DerefMut for EncoderOwner<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.encoder
+    pub(super) fn parts(&mut self) -> (&mut Encoder, &mut CapturerInfo) {
+        (&mut self.encoder, self.capturer)
     }
 }
 
@@ -107,6 +100,11 @@ impl Drop for EncoderOwner<'_> {
                 hbb_common::anyhow::anyhow!(
                     "GPU capture device is unknown; retirement cannot be verified"
                 )
+            })?;
+            // The frame borrow ended and the encoder submitted work using its own input.
+            // Return the desktop frame before waiting for the codec and GPU to retire.
+            self.capturer.release_acquired_frame().map_err(|error| {
+                hbb_common::anyhow::anyhow!("Return the desktop frame before GPU retirement: {error}")
             })?;
             self.encoder
                 .retire_for_display_change(device, Duration::from_millis(1500))

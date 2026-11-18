@@ -346,24 +346,24 @@ public:
     auto deadline = gpu_retirement_deadline(timeout_ms);
     int ret = drain_encoder_for_retirement(c_, pkt_, drain_sent_, deadline);
     if (ret < 0)
-      return ret;
+      return retirement_error("codec_drain", ret);
     pending_frames_ = 0;
     ret = wait_context_for_retirement(native_->device_.Get(), native_->context_.Get(),
                                       retirement_capture_event_, deadline);
     if (ret < 0)
-      return ret;
+      return retirement_error("capture_context", ret);
     if (amf_device_) {
       ret = wait_context_for_retirement(amf_device_->device_.Get(), amf_device_->context_.Get(),
                                         retirement_encode_event_, deadline);
       if (ret < 0)
-        return ret;
+        return retirement_error("encode_context", ret);
     }
     if (capture_device && capture_device != native_->device_.Get()) {
       ret = wait_capture_for_retirement(static_cast<ID3D11Device *>(capture_device),
                                         retirement_extra_capture_context_,
                                         retirement_extra_capture_event_, deadline);
       if (ret < 0)
-        return ret;
+        return retirement_error("desktop_duplication_context", ret);
     }
     retired_ = true;
     return 0;
@@ -406,6 +406,12 @@ public:
   }
 
 private:
+  int retirement_error(const char *phase, int error) const {
+    LOG_ERROR(std::string("video_gpu_retirement phase=") + phase +
+              " encoder=" + encoder_->name_ + " code=" + std::to_string(error));
+    return error;
+  }
+
   int queue_amf_capture(ID3D11Texture2D *input, int64_t pts) {
     if (!input) return AVERROR(EINVAL);
     const int ready = input_ready();

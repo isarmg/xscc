@@ -15,18 +15,20 @@ static ENCODER_DROPS: AtomicUsize = AtomicUsize::new(0);
 static CAPTURE_DROPS: AtomicUsize = AtomicUsize::new(0);
 static RAII_DROPS: AtomicUsize = AtomicUsize::new(0);
 static GUARD_DROPS: AtomicUsize = AtomicUsize::new(0);
+static FRAME_HELD: AtomicBool = AtomicBool::new(false);
+static RETIRE_CALLS: AtomicUsize = AtomicUsize::new(0);
 static STICKY: AtomicBool = AtomicBool::new(false);
 static UNVERIFIED: AtomicBool = AtomicBool::new(false);
 static TOPOLOGY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
-pub struct TestError(&'static str);
+pub struct TestError(String);
 impl std::fmt::Display for TestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
 }
 impl std::error::Error for TestError {}
 #[macro_export]
-macro_rules! anyhow { ($message:expr) => { $crate::TestError($message) }; }
+macro_rules! anyhow { ($($args:tt)*) => { $crate::TestError(format!($($args)*)) }; }
 pub mod anyhow { pub use crate::anyhow; }
 #[macro_export]
 macro_rules! test_log { ($($args:tt)*) => { { let _ = format_args!($($args)*); } }; }
@@ -39,8 +41,10 @@ pub mod codec {
         pub fn retirement_supported(&self) -> bool { self.supported }
         pub fn retire_for_display_change(&mut self, _: *mut std::ffi::c_void,
                                           budget: std::time::Duration) -> Result<(), TestError> {
+            RETIRE_CALLS.fetch_add(1, Ordering::SeqCst);
+            assert!(!FRAME_HELD.load(Ordering::SeqCst), "GPU retirement cannot wait with a desktop frame held");
             assert_eq!(budget, std::time::Duration::from_millis(1500));
-            if !self.supported || self.outcome == 1 { return Err(TestError("mock error")); }
+            if !self.supported || self.outcome == 1 { return Err(TestError("mock error".into())); }
             if self.outcome == 2 { panic!("mock retirement panic"); }
             Ok(())
         }
@@ -49,7 +53,16 @@ pub mod codec {
         fn drop(&mut self) { ENCODER_DROPS.fetch_add(1, Ordering::SeqCst); }
     }
 }
-pub struct CapturerInfo;
+pub struct CapturerInfo { release_fails: bool }
+impl CapturerInfo {
+    fn release_acquired_frame(&mut self) -> std::io::Result<()> {
+        if self.release_fails {
+            return Err(std::io::Error::other("mock desktop frame release failed"));
+        }
+        assert!(FRAME_HELD.swap(false, Ordering::SeqCst));
+        Ok(())
+    }
+}
 impl Drop for CapturerInfo {
     fn drop(&mut self) { CAPTURE_DROPS.fetch_add(1, Ordering::SeqCst); }
 }
@@ -71,7 +84,7 @@ pub mod capture_lifecycle {
 mod encoder_retirement;
 
 fn reset(topology: bool) {
-    for value in [&ENCODER_DROPS, &CAPTURE_DROPS, &RAII_DROPS, &GUARD_DROPS] {
+    for value in [&ENCODER_DROPS, &CAPTURE_DROPS, &RAII_DROPS, &GUARD_DROPS, &RETIRE_CALLS] {
         value.store(0, Ordering::SeqCst);
     }
     STICKY.store(false, Ordering::SeqCst);
@@ -79,13 +92,18 @@ fn reset(topology: bool) {
     TOPOLOGY.store(topology, Ordering::SeqCst);
 }
 fn one_owner(supported: bool, outcome: u8, device_known: bool) {
+    run_owner(supported, outcome, device_known, false);
+}
+fn run_owner(supported: bool, outcome: u8, device_known: bool, release_fails: bool) {
+    FRAME_HELD.store(true, Ordering::SeqCst);
     let mut capture = encoder_retirement::CaptureOwner::new(
-        CapturerInfo, Raii, capture_lifecycle::CaptureGuard(&()));
+        CapturerInfo { release_fails }, Raii, capture_lifecycle::CaptureGuard(&()));
     {
-        let (_, _, failed) = capture.parts();
+        let (capturer, _, failed) = capture.parts();
         let encoder = codec::Encoder { supported, outcome };
-        let _owner = encoder_retirement::EncoderOwner::new(
-            encoder, device_known.then_some(std::ptr::null_mut()), failed);
+        let mut owner = encoder_retirement::EncoderOwner::new(
+            encoder, capturer, device_known.then_some(std::ptr::null_mut()), failed);
+        let _ = owner.parts();
     }
     drop(capture);
 }
@@ -96,11 +114,19 @@ fn drops(expected: usize) {
 }
 
 #[test]
-fn successful_retirement_drops_all_existing_owners_once() {
+fn successful_retirement_returns_the_desktop_frame_and_drops_all_owners_once() {
     reset(false);
     one_owner(true, 0, true);
     drops(1);
     assert!(!STICKY.load(Ordering::SeqCst));
+}
+#[test]
+fn failed_frame_return_keeps_owners_and_never_claims_gpu_idle() {
+    reset(true);
+    run_owner(true, 0, true, true);
+    assert_eq!(RETIRE_CALLS.load(Ordering::SeqCst), 0);
+    drops(0);
+    assert!(STICKY.load(Ordering::SeqCst));
 }
 #[test]
 fn errors_panics_and_unknown_devices_do_not_free_or_ack_idle() {

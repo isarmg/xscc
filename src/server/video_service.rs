@@ -712,8 +712,10 @@ fn run_encoder(
         }
     };
     #[cfg(windows)]
-    let mut encoder =
-        encoder_retirement::EncoderOwner::new(encoder, capture_device, retirement_failed);
+    let mut encoder_owner =
+        encoder_retirement::EncoderOwner::new(encoder, c, capture_device, retirement_failed);
+    #[cfg(windows)]
+    let (mut encoder, c) = encoder_owner.parts();
     #[cfg(feature = "gpui-host")]
     let (metric_backend, metric_driver) = match &encoder_cfg {
         EncoderCfg::VPX(_) => (1, 0),

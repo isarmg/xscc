@@ -145,6 +145,10 @@ pub trait TraitCapturer {
     fn is_gdi(&self) -> bool;
     #[cfg(windows)]
     fn set_gdi(&mut self) -> bool;
+    #[cfg(windows)]
+    fn release_acquired_frame(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 
     #[cfg(feature = "vram")]
     fn device(&self) -> AdapterDevice;

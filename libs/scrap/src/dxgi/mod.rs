@@ -795,6 +795,16 @@ impl Capturer {
         }
     }
 
+    pub(crate) fn release_acquired_frame(&mut self) -> io::Result<()> {
+        match self.release_frame() {
+            // ACCESS_LOST invalidates the duplication and its acquired frame.
+            Err(error) if error.kind() != io::ErrorKind::ConnectionReset => return Err(error),
+            _ => {}
+        }
+        self.texture = ComPtr(ptr::null_mut());
+        Ok(())
+    }
+
     fn release_frame(&mut self) -> io::Result<()> {
         if self.duplication.is_null() {
             return Ok(());
