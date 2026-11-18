@@ -12268,6 +12268,7 @@ dependencies = [
  "hbb_common",
  "serde 1.0.229",
  "serde_json 1.0.154",
+ "winapi 0.3.9",
 ]
 
 [[package]]

@@ -2,6 +2,8 @@
 mod client;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod host;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod send_timer;
 use crate::client::PendingAssociation;
 #[cfg(test)]
 use crate::host as udp_host;
@@ -2062,13 +2064,12 @@ mod tests {
             task::{Context, Poll, Waker},
         };
         let mut context = Context::from_waker(Waker::noop());
+        let mut timer = send_timer::SendTimer::new();
         for _ in 0..32 {
-            let mut due = std::pin::pin!(wait_for_media_send(Instant::now()));
+            let mut due = std::pin::pin!(timer.wait_until(Instant::now()));
             assert_eq!(due.as_mut().poll(&mut context), Poll::Ready(()));
         }
-        let mut later = std::pin::pin!(wait_for_media_send(
-            Instant::now() + Duration::from_secs(30)
-        ));
+        let mut later = std::pin::pin!(timer.wait_until(Instant::now() + Duration::from_secs(30)));
         assert_eq!(later.as_mut().poll(&mut context), Poll::Pending);
     }
 
@@ -2444,6 +2445,41 @@ struct Transmission {
     indices: VecDeque<u16>,
     deadline: Instant,
     initial: bool,
+    queued: Instant,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct VideoSendMetrics {
+    started: Instant,
+    sent_messages: u32,
+    expired_messages: u32,
+    max_send_time: Duration,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+impl VideoSendMetrics {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            sent_messages: 0,
+            expired_messages: 0,
+            max_send_time: Duration::ZERO,
+        }
+    }
+
+    fn report(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed < Duration::from_secs(1) {
+            return;
+        }
+        if self.sent_messages > 0 || self.expired_messages > 0 {
+            hbb_common::log::info!(target: "xscc::host_udp_metrics",
+                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3}}}",
+                elapsed.as_secs_f64() * 1_000.0, self.sent_messages, self.expired_messages,
+                self.max_send_time.as_secs_f64() * 1_000.0);
+        }
+        *self = Self::new(now);
+    }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn transmission(
@@ -2464,18 +2500,12 @@ fn transmission(
         indices: indices.into(),
         deadline: queued + ttl,
         initial,
+        queued,
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn frame_notice(writer: &ReliableWriter, sid: SessionId, notice: FrameNotice) -> ResultType<()> {
     writer.notice(sid, notice)
-}
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn wait_for_media_send(deadline: Instant) {
-    // Tokio rounds even an already-due timer up to a millisecond tick.
-    if deadline > Instant::now() {
-        tokio::time::sleep_until(deadline.into()).await;
-    }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn host_media(
@@ -2508,6 +2538,8 @@ async fn host_media(
         let mut probe: Option<([u8; 16], Instant)> = None;
         let started = Instant::now();
         let mut next_send = started;
+        let mut send_timer = send_timer::SendTimer::new();
+        let mut video_metrics = VideoSendMetrics::new(started);
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             if closing.borrow().is_some() { return Ok(()); }
@@ -2615,6 +2647,7 @@ async fn host_media(
                         if slot.as_ref().is_some_and(|frame| frame.deadline <= now) {
                             let expired = slot.take().expect("invariant: expired transmission exists");
                             let metadata = expired.plan.descriptor().metadata;
+                            if expired.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
                             if expired.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
@@ -2624,9 +2657,10 @@ async fn host_media(
                         cached.retain(|metadata| *metadata != expired); frame_notice(&writer, sid, FrameNotice::Abandoned(expired))?;
                     }
                     if let Some(report) = session.take_report(now) { udp.send_report(&report).await?; }
+                    video_metrics.report(now);
                     if current.is_none() { current = retries.pop_front(); if current.is_some() { next_send = now; } }
                 }
-                _ = wait_for_media_send(next_send), if current.is_some() || sound.is_some() => {
+                _ = send_timer.wait_until(next_send), if current.is_some() || sound.is_some() => {
                     for _ in 0..16 {
                     let now = Instant::now();
                     let sound_ready = sound.as_ref().is_some_and(|frame| {
@@ -2648,6 +2682,7 @@ async fn host_media(
                             next_send = now + media::REPORT_INTERVAL; break;
                         }
                         SendDecision::Expired => {
+                            if frame.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
                             if frame.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
@@ -2658,6 +2693,10 @@ async fn host_media(
                             frame.indices.pop_front();
                             if frame.indices.is_empty() {
                                 if frame.initial {
+                                    if metadata.kind == MediaKind::Video {
+                                        video_metrics.sent_messages += 1;
+                                        video_metrics.max_send_time = video_metrics.max_send_time.max(frame.queued.elapsed());
+                                    }
                                     if metadata.keyframe { cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?; }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
                                     if metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, Instant::now()); }
