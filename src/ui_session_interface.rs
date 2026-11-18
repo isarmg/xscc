@@ -1358,7 +1358,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
         _display: usize,
         _frames: usize,
         _elapsed: std::time::Duration,
-        _surface_output: bool,
+        _surface_outputs: usize,
     ) {
     }
     #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]

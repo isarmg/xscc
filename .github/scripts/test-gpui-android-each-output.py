@@ -16,13 +16,14 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'libs/scrap/src/common/mediacodec.rs'
 METHODS = ('decode', 'decode_with_callback', 'has_pending_output',
-           'take_decoded_output_count', 'poll_output', 'poll_output_with_callback')
+           'take_decoded_output_count', 'take_surface_output_count',
+           'poll_output', 'poll_output_with_callback')
 TEST_NAMES = {
     'presentation_timestamps_reach_the_codec_in_microseconds',
     'every_output_before_and_after_input_is_released_then_published_without_overwrite',
     'backpressure_keeps_input_borrowed_and_drains_each_output_before_retrying',
     'format_notifications_empty_buffers_and_release_errors_never_publish_fake_outputs',
-    'surface_output_bypasses_pixel_delivery_and_counts_each_successful_release',
+    'surface_output_bypasses_pixel_delivery_and_counts_decode_and_submission_separately',
 }
 
 
@@ -104,17 +105,24 @@ fn convert_output(_: &Format, bytes: &[u8], rgb: &mut ImageRgb) -> ResultType<()
     rgb.raw.clear(); rgb.raw.extend_from_slice(bytes); Ok(())
 }
 struct FakeSurface;
+enum SurfaceOutput { NoFrame, Dropped, Submitted }
 impl FakeSurface {
-    fn render(&self, codec: &FakeCodec, output: Output, _: (i32,i32)) -> ResultType<bool> {
-        let decoded = !output.empty;
-        codec.release_output_buffer(output, decoded)?;
-        Ok(decoded)
+    fn render(&self, codec: &FakeCodec, output: Output, _: (i32,i32,i32), _: &mut ()) -> ResultType<SurfaceOutput> {
+        let result = match (output.empty, output.value) {
+            (true, _) => SurfaceOutput::NoFrame,
+            (false, 9) => SurfaceOutput::Dropped,
+            (false, _) => SurfaceOutput::Submitted,
+        };
+        codec.release_output_buffer(output, matches!(result, SurfaceOutput::Submitted))?;
+        Ok(result)
     }
 }
 struct MediaCodecDecoder { decoder:FakeCodec, configuration:Option<(i32,i32,i32)>,
-    pending_output:usize, decoded_outputs:usize, surface:Option<FakeSurface> }
+    pending_output:usize, decoded_outputs:usize, surface_outputs:usize,
+    surface_pacing:(), surface:Option<FakeSurface> }
 impl Default for MediaCodecDecoder {
-    fn default() -> Self { Self { decoder:FakeCodec::default(), configuration:Some((1,1,120)), pending_output:0, decoded_outputs:0, surface:None } }
+    fn default() -> Self { Self { decoder:FakeCodec::default(), configuration:Some((1,1,120)),
+        pending_output:0, decoded_outputs:0, surface_outputs:0, surface_pacing:(), surface:None } }
 }
 impl MediaCodecDecoder {
 """
@@ -122,18 +130,20 @@ impl MediaCodecDecoder {
 TESTS = r"""
 }
 #[test]
-fn surface_output_bypasses_pixel_delivery_and_counts_each_successful_release() {
+fn surface_output_bypasses_pixel_delivery_and_counts_decode_and_submission_separately() {
     let mut decoder = MediaCodecDecoder { surface:Some(FakeSurface), ..Default::default() };
-    decoder.decoder.after_queue.borrow_mut().extend([Event::Frame(5), Event::Frame(6), Event::Empty]);
+    decoder.decoder.after_queue.borrow_mut().extend([Event::Frame(5), Event::Frame(6), Event::Frame(9), Event::Empty]);
     let mut rgb = ImageRgb::default();
     assert!(decoder.decode_with_callback(&[1], 1, &mut rgb, &mut |_| panic!("surface must bypass pixel delivery")).unwrap());
-    assert_eq!(&*decoder.decoder.trace.borrow(), &["queue-input", "render:5", "render:6", "release:0"]);
+    assert_eq!(&*decoder.decoder.trace.borrow(), &["queue-input", "render:5", "render:6", "release:9", "release:0"]);
     assert!(rgb.raw.is_empty());
-    assert_eq!(decoder.take_decoded_output_count(), 2);
+    assert_eq!(decoder.take_decoded_output_count(), 3);
+    assert_eq!(decoder.take_surface_output_count(), 2);
     decoder.decoder.release_fails = true;
     decoder.decoder.events.borrow_mut().push_back(Event::Frame(7));
     assert!(decoder.poll_output(&mut rgb).is_err());
     assert_eq!(decoder.take_decoded_output_count(), 0);
+    assert_eq!(decoder.take_surface_output_count(), 0);
 }
 
 #[test]

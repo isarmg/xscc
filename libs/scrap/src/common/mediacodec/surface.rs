@@ -9,8 +9,16 @@ use ndk::{
     native_window::NativeWindow,
 };
 
+use super::surface_pacing::Pacing;
+
 const INVALID: u64 = u64::MAX;
 const CODEC_CONFIG: u32 = 2;
+
+pub(super) enum SurfaceOutput {
+    NoFrame,
+    Dropped,
+    Submitted,
+}
 
 /// The owned output window for one Android Surface lifetime.
 pub struct VideoSurface {
@@ -56,11 +64,16 @@ impl VideoSurface {
         &self,
         codec: &MediaCodec,
         buffer: OutputBuffer<'_>,
-        (width, height): (i32, i32),
-    ) -> ResultType<bool> {
-        if !self.is_valid() || buffer.flags() & CODEC_CONFIG != 0 {
+        (width, height, fps): (i32, i32, i32),
+        pacing: &mut Pacing,
+    ) -> ResultType<SurfaceOutput> {
+        if buffer.flags() & CODEC_CONFIG != 0 {
             codec.release_output_buffer(buffer, false)?;
-            return Ok(false);
+            return Ok(SurfaceOutput::NoFrame);
+        }
+        if !self.is_valid() {
+            codec.release_output_buffer(buffer, false)?;
+            return Ok(SurfaceOutput::Dropped);
         }
         // Sender PTS is relative to its capture session, not Android's monotonic clock.
         let mut now = libc::timespec {
@@ -72,7 +85,12 @@ impl VideoSurface {
             codec.release_output_buffer(buffer, false)?;
             return Err(error).context("Read Android presentation clock");
         }
-        codec.release_output_buffer_at_time(buffer, now.tv_sec * 1_000_000_000 + now.tv_nsec)?;
+        let now = now.tv_sec * 1_000_000_000 + now.tv_nsec;
+        let Some(deadline) = pacing.deadline(now, fps) else {
+            codec.release_output_buffer(buffer, false)?;
+            return Ok(SurfaceOutput::Dropped);
+        };
+        codec.release_output_buffer_at_time(buffer, deadline)?;
         let next = (width as u64) << 32 | height as u64;
         let previous = self.size.load(Ordering::Acquire);
         if previous != INVALID
@@ -84,6 +102,6 @@ impl VideoSurface {
         {
             (self.wake)();
         }
-        Ok(true)
+        Ok(SurfaceOutput::Submitted)
     }
 }

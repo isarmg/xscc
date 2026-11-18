@@ -21,6 +21,8 @@ const H265_MIME_TYPE: &str = "video/hevc";
 const COLOR_YUV420_SEMIPLANAR: i32 = 21;
 
 mod surface;
+mod surface_pacing;
+use surface::SurfaceOutput;
 pub use surface::VideoSurface;
 
 pub static H264_DECODER_SUPPORT: AtomicBool = AtomicBool::new(false);
@@ -33,6 +35,8 @@ pub struct MediaCodecDecoder {
     configuration: Option<(i32, i32, i32)>,
     pending_output: usize,
     decoded_outputs: usize,
+    surface_outputs: usize,
+    surface_pacing: surface_pacing::Pacing,
 }
 
 impl MediaCodecDecoder {
@@ -56,6 +60,8 @@ impl MediaCodecDecoder {
                     configuration: None,
                     pending_output: 0,
                     decoded_outputs: 0,
+                    surface_outputs: 0,
+                    surface_pacing: Default::default(),
                 });
             }
         }
@@ -97,6 +103,8 @@ impl MediaCodecDecoder {
         }
         self.pending_output = 0;
         self.decoded_outputs = 0;
+        self.surface_outputs = 0;
+        self.surface_pacing = Default::default();
         let format = MediaFormat::new();
         format.set_str("mime", self.mime);
         format.set_i32("width", width);
@@ -176,6 +184,10 @@ impl MediaCodecDecoder {
         std::mem::take(&mut self.decoded_outputs)
     }
 
+    pub fn take_surface_output_count(&mut self) -> usize {
+        std::mem::take(&mut self.surface_outputs)
+    }
+
     pub fn poll_output(&mut self, rgb: &mut ImageRgb) -> ResultType<bool> {
         self.poll_output_with_callback(rgb, &mut |_| {})
     }
@@ -198,15 +210,19 @@ impl MediaCodecDecoder {
                 Err(error) => return Err(error.into()),
             };
             if let Some(surface) = &self.surface {
-                let Some((width, height, _)) = self.configuration else {
+                let Some(configuration) = self.configuration else {
                     decoder.release_output_buffer(output, false)?;
                     bail!("Surface codec is not running");
                 };
-                let rendered = surface.render(decoder, output, (width, height))?;
+                let rendered =
+                    surface.render(decoder, output, configuration, &mut self.surface_pacing)?;
                 self.pending_output = self.pending_output.saturating_sub(1);
-                if rendered {
+                if !matches!(rendered, SurfaceOutput::NoFrame) {
                     self.decoded_outputs = self.decoded_outputs.saturating_add(1);
                     decoded = true;
+                }
+                if matches!(rendered, SurfaceOutput::Submitted) {
+                    self.surface_outputs = self.surface_outputs.saturating_add(1);
                 }
                 continue;
             }

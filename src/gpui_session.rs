@@ -877,7 +877,7 @@ impl InvokeUiSession for Handler {
         display: usize,
         frames: usize,
         elapsed: Duration,
-        surface_output: bool,
+        surface_outputs: usize,
     ) {
         let monitors = self.0.monitors.read().unwrap();
         if !self.0.closed.load(Ordering::Acquire)
@@ -886,9 +886,7 @@ impl InvokeUiSession for Handler {
         {
             let mut metrics = self.0.metrics.lock().unwrap();
             metrics.decoded_frames(frames, elapsed);
-            if surface_output {
-                metrics.surface_submitted(frames);
-            }
+            metrics.surface_submitted(surface_outputs);
         }
     }
     #[cfg(all(target_os = "android", feature = "mediacodec"))]

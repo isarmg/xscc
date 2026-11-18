@@ -1037,10 +1037,11 @@ impl VideoHandler {
         elapsed: Duration,
     ) -> Option<usize> {
         let outputs = self.decoder.take_mediacodec_output_count();
+        let submitted = self.decoder.take_mediacodec_surface_output_count();
         match outputs {
-            Some(frames) if frames > 0 => ui.on_mediacodec_decoded(
-                display, frames, elapsed, self.decoder.video_surface().is_some(),
-            ),
+            Some(frames) if frames > 0 => {
+                ui.on_mediacodec_decoded(display, frames, elapsed, submitted)
+            }
             Some(_) => {}
             None if produced_image => ui.on_video_decoded(display, elapsed),
             None => {}
