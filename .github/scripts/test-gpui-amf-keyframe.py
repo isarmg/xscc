@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run CPU-only AMF IDR and dynamic peak-rate checks against production helpers."""
+"""Run CPU-only AMF IDR, polling and rate checks against production code."""
 import argparse
 import os
 from pathlib import Path
@@ -179,6 +179,35 @@ int main(void)
 
 
 
+BACKPRESSURE_TEST = r"""
+#include <assert.h>
+#include <stdio.h>
+
+static int waits;
+static void av_usleep(int usec)
+{
+    assert(usec == 1000);
+    ++waits;
+}
+
+static void queue_full(int timeout)
+{
+    const struct { int query_timeout; } settings = {timeout}, *ctx = &settings;
+    (void)ctx;
+#include "amf_backpressure.h"
+}
+
+int main(void)
+{
+    queue_full(0);
+    assert(waits == 0);
+    queue_full(1000);
+    assert(waits == 1);
+    puts("1 AMF nonblocking backpressure regression passed");
+}
+"""
+
+
 INPUT_TEST = r"""
 #include <assert.h>
 #include <stdio.h>
@@ -249,6 +278,12 @@ def main():
         rate_body = '+static int reconfig_encoder' + rate_patch.split('+static int reconfig_encoder', 1)[1].split('\n int ff_amf_receive_packet', 1)[0]
         (work / 'amf_bitrate.h').write_text('\n'.join(line[1:] for line in rate_body.split('\n') if line.startswith('+')))
         (work / 'bitrate.c').write_text(BITRATE_TEST)
+        wait_patch = (root / 'res/vcpkg/ffmpeg/patch/0008-remove-amf-loop-query.patch').read_text()
+        wait_body = wait_patch.split('int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)\n', 1)[1].split('\n             }', 1)[0]
+        wait_lines = [line[1:] for line in wait_body.splitlines()
+                      if line.startswith((' ', '+')) and 'block_and_wait' not in line]
+        (work / 'amf_backpressure.h').write_text('\n'.join(wait_lines) + '\n')
+        (work / 'backpressure.c').write_text(BACKPRESSURE_TEST)
         include = root / 'vendor/hwcodec/externals/AMF_v1.4.35/amf/public/include'
         latch = root / 'vendor/hwcodec/cpp/ffmpeg_vram'
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
@@ -257,6 +292,7 @@ def main():
             ('input.cpp', args.cxx or args.cc, 'c++14'),
             ('surface.c', args.cc, 'c11'),
             ('bitrate.c', args.cc, 'c11'),
+            ('backpressure.c', args.cc, 'c11'),
         ):
             executable = work / (source + ('.exe' if os.name == 'nt' else '.out'))
             subprocess.run(

@@ -278,8 +278,7 @@ impl EncoderApi for VRamEncoder {
     }
 
     fn set_frame_rate(&mut self, fps: u32) -> ResultType<bool> {
-        // The pinned MFX backend has no FPS reset. FFmpeg's exported FPS setter
-        // calls set_bitrate, so both require a fresh encoder with millisecond PTS.
+        // The pinned MFX and FFmpeg backends require a fresh encoder when FPS changes.
         if !matches!(self.ctx.f.driver, Driver::NV | Driver::AMF) {
             return Ok(false);
         }

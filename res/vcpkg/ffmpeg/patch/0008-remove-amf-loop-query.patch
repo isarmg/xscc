@@ -5,15 +5,17 @@ Subject: [PATCH] remove amf loop query
 
 Signed-off-by: 21pages <sunboeasy@gmail.com>
 ---
- libavcodec/amfenc.c | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ libavcodec/amfenc.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/libavcodec/amfenc.c b/libavcodec/amfenc.c
-index f70f0109f6..a53a05b16b 100644
 --- a/libavcodec/amfenc.c
 +++ b/libavcodec/amfenc.c
-@@ -886,7 +886,7 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
-                 av_usleep(1000);
+@@ -885,8 +885,9 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+                 block_and_wait = 1;
+-                av_usleep(1000);
++                if (ctx->query_timeout != 0)
++                    av_usleep(1000);
              }
          }
 -    } while (block_and_wait);

@@ -92,6 +92,7 @@ public:
   ComPtr<ID3D11DeviceContext> retirement_extra_capture_context_;
   unsigned int pending_frames_ = 0;
   std::chrono::steady_clock::time_point amf_progress_at_{};
+  std::chrono::steady_clock::time_point amf_next_slow_log_{};
   int amf_error_ = 0;
   std::unique_ptr<NativeDevice> amf_device_;
   struct CaptureSlot {
@@ -183,6 +184,12 @@ public:
       c_->rc_max_rate = c_->bit_rate;
       if (av_opt_set(c_->priv_data, "rc", "vbr_peak", 0) < 0)
         return false;
+      if (dataFormat_ == H265 && framerate_ > 60 && c_->bit_rate > 0) {
+        // Limit IDR bursts to four frame budgets at the initial encode rate.
+        const int64_t max_au_bits = c_->bit_rate * 4 / framerate_;
+        if (av_opt_set_int(c_->priv_data, "max_au_size", max_au_bits, 0) < 0)
+          return false;
+      }
     }
     util_encode::set_others(c_->priv_data, encoder_->name_);
 
@@ -276,10 +283,11 @@ public:
     if (retiring_)
       return AVERROR(EPIPE);
     if (amf_pipeline_) {
-      int ret = pump_amf(callback, obj);
-      if (ret >= 0) ret = queue_amf_capture(static_cast<ID3D11Texture2D *>(texture), ms);
-      if (ret >= 0) ret = pump_amf(callback, obj);
-      if (ret < 0 && ret != AVERROR(EAGAIN)) amf_error_ = ret;
+      if (amf_error_ < 0) return amf_error_;
+      int ret = queue_amf_capture(static_cast<ID3D11Texture2D *>(texture), ms);
+      // A full input queue still has output to drain. The new texture was never encoded.
+      if (ret >= 0 || ret == AVERROR(EAGAIN)) ret = pump_amf(callback, obj);
+      if (ret < 0) amf_error_ = ret;
       return ret;
     }
 
@@ -302,15 +310,15 @@ public:
     if (amf_error_ < 0) return amf_error_;
     int failure = 0;
     const auto slot = amf_input_queue_.available([&](std::size_t index) {
-      if (!amf_inputs_[index].capture_mutex) return true;
-      const HRESULT hr = amf_inputs_[index].capture_mutex->AcquireSync(0, 0);
-      if (hr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
-        if (util::elapsed_ms(amf_inputs_[index].submitted) >= ENCODE_TIMEOUT_MS)
-          failure = AVERROR(ETIMEDOUT);
+      auto &input = amf_inputs_[index];
+      if (failure) return false;
+      if (!input.capture_mutex) return true;
+      const int acquired = acquire_amf_capture(input);
+      if (acquired <= 0) {
+        failure = acquired;
         return false;
       }
-      if (hr != S_OK) { failure = AVERROR_EXTERNAL; return false; }
-      if (amf_inputs_[index].capture_mutex->ReleaseSync(0) != S_OK)
+      if (input.capture_mutex->ReleaseSync(0) != S_OK)
         failure = AVERROR_EXTERNAL;
       return failure == 0;
     });
@@ -397,12 +405,8 @@ public:
   }
 
   int set_framerate(int framerate) {
-    // Recreate AMF when its target changes, including its device/pool.
-    if (amf_pipeline_ && framerate != framerate_)
-      return -1;
-    c_->time_base = av_make_q(1, framerate);
-    c_->framerate = av_inv_q(c_->time_base);
-    return 0;
+    // Native FPS is negotiated at codec open. Input PTS stays in milliseconds.
+    return framerate == framerate_ ? 0 : AVERROR(ENOSYS);
   }
 
 private:
@@ -412,24 +416,39 @@ private:
     return error;
   }
 
+  void log_slow_amf(const char *phase, std::chrono::steady_clock::time_point started) {
+    const auto now = util::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started);
+    if (elapsed.count() < 16 || now < amf_next_slow_log_) return;
+    amf_next_slow_log_ = now + std::chrono::seconds(1);
+    LOG_WARN(std::string("host_amf_slow phase=") + phase +
+             " elapsed_ms=" + std::to_string(elapsed.count()));
+  }
+
+  static int acquire_amf_capture(CaptureSlot &slot) {
+    const HRESULT hr = slot.capture_mutex->AcquireSync(0, 0);
+    if (hr == static_cast<HRESULT>(WAIT_TIMEOUT))
+      return util::elapsed_ms(slot.submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
+    return hr == S_OK ? 1 : AVERROR_EXTERNAL;
+  }
+
   int queue_amf_capture(ID3D11Texture2D *input, int64_t pts) {
     if (!input) return AVERROR(EINVAL);
-    const int ready = input_ready();
-    if (ready <= 0) return ready < 0 ? ready : AVERROR(EAGAIN);
+    const auto started = util::now();
     D3D11_TEXTURE2D_DESC desc{};
     input->GetDesc(&desc);
     if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1)
       return AVERROR(EINVAL);
-    HRESULT failure = S_OK;
+    int failure = 0;
     const auto index = amf_input_queue_.available([&](std::size_t i) {
-      if (!amf_inputs_[i].capture_mutex) return true;
-      HRESULT hr = amf_inputs_[i].capture_mutex->AcquireSync(0, 0);
-      if (hr == static_cast<HRESULT>(WAIT_TIMEOUT)) return false;
-      if (hr != S_OK) { failure = hr; return false; }
-      failure = amf_inputs_[i].capture_mutex->ReleaseSync(0);
-      return failure == S_OK;
+      if (failure) return false;
+      auto &input_slot = amf_inputs_[i];
+      if (!input_slot.capture_mutex) return true;
+      const int acquired = acquire_amf_capture(input_slot);
+      if (acquired < 0) failure = acquired;
+      return acquired > 0;
     });
-    if (failure != S_OK) return AVERROR_EXTERNAL;
+    if (failure) return failure;
     if (index < 0) return AVERROR(EAGAIN);
     auto &slot = amf_inputs_[index];
     if (!slot.capture) {
@@ -446,21 +465,24 @@ private:
           || FAILED(amf_device_->device_->OpenSharedResource(shared, IID_PPV_ARGS(&created.encoder)))
           || FAILED(created.capture.As(&created.capture_mutex))
           || FAILED(created.encoder.As(&created.encoder_mutex))) return AVERROR_EXTERNAL;
+      if (created.capture_mutex->AcquireSync(0, 0) != S_OK) return AVERROR_EXTERNAL;
       slot = std::move(created);
     }
     D3D11_TEXTURE2D_DESC owned{};
     slot.capture->GetDesc(&owned);
-    if (owned.Width != desc.Width || owned.Height != desc.Height || owned.Format != desc.Format)
-      return AVERROR(EINVAL);
-    if (slot.capture_mutex->AcquireSync(0, 0) != S_OK) return AVERROR_EXTERNAL;
+    if (owned.Width != desc.Width || owned.Height != desc.Height || owned.Format != desc.Format) {
+      return slot.capture_mutex->ReleaseSync(0) == S_OK ? AVERROR(EINVAL) : AVERROR_EXTERNAL;
+    }
     native_->context_->CopyResource(slot.capture.Get(), input);
     native_->context_->Flush();
     if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
     slot.submitted = util::now();
+    log_slow_amf("capture_copy", started);
     return amf_input_queue_.publish(index, pts) ? 0 : AVERROR_BUG;
   }
 
   int prepare_amf_input(std::size_t index, UINT64 key) {
+    const auto started = util::now();
     auto &slot = amf_inputs_[index];
     const HRESULT locked = slot.encoder_mutex->AcquireSync(key, 0);
     if (locked == static_cast<HRESULT>(WAIT_TIMEOUT))
@@ -492,6 +514,7 @@ private:
     slot.submitted = util::now();
     const HRESULT released = slot.encoder_mutex->ReleaseSync(0);
     if (released != S_OK) return AVERROR_EXTERNAL;
+    log_slow_amf("convert", started);
     return ret < 0 ? ret : 1;
   }
 
@@ -512,9 +535,11 @@ private:
       }
       frame_->pts = amf_prepared_.pts;
       frame_->pict_type = keyframe_request_.pending() ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+      const auto started = util::now();
       ret = avcodec_send_frame(c_, frame_);
       frame_->pict_type = AV_PICTURE_TYPE_NONE;
       keyframe_request_.submitted(ret);
+      log_slow_amf("send_frame", started);
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_prepared_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0) return ret;
@@ -578,7 +603,9 @@ private:
   }
   int receive_pending(EncodeCallback callback, const void *obj) {
     while (pending_frames_ > 0) {
+      const auto started = util::now();
       const int ret = avcodec_receive_packet(c_, pkt_);
+      log_slow_amf("receive_packet", started);
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_progress_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0)
@@ -828,7 +855,7 @@ int ffmpeg_vram_set_bitrate(FFmpegVRamEncoder *encoder, int kbs) {
 
 int ffmpeg_vram_set_framerate(FFmpegVRamEncoder *encoder, int32_t framerate) {
   try {
-    return encoder->set_bitrate(framerate);
+    return encoder->set_framerate(framerate);
   } catch (const std::exception &e) {
     LOG_ERROR(std::string("ffmpeg_vram_set_framerate failed, ") + std::string(e.what()));
   }
