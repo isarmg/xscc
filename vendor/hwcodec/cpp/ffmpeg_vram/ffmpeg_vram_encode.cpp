@@ -481,7 +481,9 @@ private:
       return slot.capture_mutex->ReleaseSync(0) == S_OK ? AVERROR(EINVAL) : AVERROR_EXTERNAL;
     }
     native_->context_->CopyResource(slot.capture.Get(), input);
-    native_->context_->Flush();
+    // ReleaseSync submits the writes to the keyed surface. A separate full
+    // context flush here stalled the capture thread under AMD driver load.
+    if (framerate_ <= 60) native_->context_->Flush();
     if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
     slot.submitted = util::now();
     log_slow_amf("capture_copy", started);
