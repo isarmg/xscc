@@ -9,6 +9,7 @@ extern "C" {
 
 #ifdef _WIN32
 #include <libavutil/hwcontext_d3d11va.h>
+#include <d3d11_4.h>
 #endif
 
 #include <memory>
@@ -31,6 +32,43 @@ extern "C" {
 namespace {
 
 constexpr unsigned int AMF_MAX_PENDING_FRAMES = 2;
+
+class AmfTransferFence {
+public:
+  bool init(NativeDevice &device) {
+    ComPtr<ID3D11Device5> fence_device;
+    return SUCCEEDED(device.device_.As(&fence_device)) &&
+           SUCCEEDED(device.context_.As(&context_)) &&
+           SUCCEEDED(fence_device->CreateFence(0, D3D11_FENCE_FLAG_NONE,
+                                                IID_PPV_ARGS(&fence_)));
+  }
+
+  int submit(UINT64 &ticket) {
+    const UINT64 next = value_ + 1;
+    const HRESULT result = context_->Signal(fence_.Get(), next);
+    if (FAILED(result)) return static_cast<int>(result);
+    context_->Flush();
+    ticket = value_ = next;
+    return 0;
+  }
+
+  int ready(UINT64 ticket, std::chrono::steady_clock::time_point submitted) const {
+    if (ticket == 0) return 1;
+    const UINT64 completed = fence_->GetCompletedValue();
+    if (completed == UINT64_MAX) return AVERROR_EXTERNAL;
+    if (completed >= ticket) return 1;
+    return util::elapsed_ms(submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
+  }
+
+private:
+  ComPtr<ID3D11DeviceContext4> context_;
+  ComPtr<ID3D11Fence> fence_;
+  UINT64 value_ = 0;
+};
+
+struct AmfTransferFences {
+  AmfTransferFence capture, encode;
+};
 
 void lockContext(void *lock_ctx);
 void unlockContext(void *lock_ctx);
@@ -83,7 +121,6 @@ public:
   int32_t framerate_;
   int32_t gop_;
   bool amf_pipeline_ = false;
-  bool amf_on_capture_device_ = false;
   AmfKeyframeRequest keyframe_request_;
   bool retiring_ = false;
   bool retired_ = false;
@@ -97,10 +134,12 @@ public:
   int64_t amf_logged_slow_ms_ = 0;
   int amf_error_ = 0;
   std::unique_ptr<NativeDevice> amf_device_;
+  std::unique_ptr<AmfTransferFences> amf_fences_;
   struct CaptureSlot {
     ComPtr<ID3D11Texture2D> capture, encoder;
     ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
     NativeDevice::BgraToNv12Views conversion_views;
+    UINT64 written = 0, read = 0;
     std::chrono::steady_clock::time_point submitted{};
   };
   std::array<CaptureSlot, AmfInputQueue::capacity> amf_inputs_;
@@ -128,7 +167,7 @@ public:
 
   ~FFmpegVRamEncoder() {}
 
-  bool init(bool allow_device_local_amf) {
+  bool init() {
     const AVCodec *codec = NULL;
     int ret;
 
@@ -168,18 +207,18 @@ public:
     }
     amf_pipeline_ = encoder_->driver_ == EncoderDriver::AMF;
     if (amf_pipeline_) {
-      amf_on_capture_device_ = allow_device_local_amf && handle_ && framerate_ > 60;
-      if (!amf_on_capture_device_) {
-        amf_device_ = std::make_unique<NativeDevice>();
-        if (!amf_device_->Init(luid_, nullptr))
-          return false;
-        d3d11Device_->Release();
-        d3d11DeviceContext_->Release();
-        d3d11Device_ = amf_device_->device_.Get();
-        d3d11Device_->AddRef();
-        d3d11DeviceContext_ = amf_device_->context_.Get();
-        d3d11DeviceContext_->AddRef();
-      }
+      // AMF work has its own immediate context, separate from DesktopDup.
+      amf_device_ = std::make_unique<NativeDevice>();
+      if (!amf_device_->Init(luid_, nullptr))
+        return false;
+      d3d11Device_->Release();
+      d3d11DeviceContext_->Release();
+      d3d11Device_ = amf_device_->device_.Get();
+      d3d11Device_->AddRef();
+      d3d11DeviceContext_ = amf_device_->context_.Get();
+      d3d11DeviceContext_->AddRef();
+      if (handle_ && framerate_ > 60)
+        init_amf_fences();
       if ((ret = av_opt_set_int(c_->priv_data, "query_timeout", 0, 0)) < 0)
         return false;
     }
@@ -317,13 +356,13 @@ public:
     const auto slot = amf_input_queue_.available([&](std::size_t index) {
       auto &input = amf_inputs_[index];
       if (failure) return false;
-      if (!input.capture_mutex) return true;
+      if (!input.capture) return true;
       const int acquired = acquire_amf_capture(input);
       if (acquired <= 0) {
         failure = acquired;
         return false;
       }
-      if (input.capture_mutex->ReleaseSync(0) != S_OK)
+      if (input.capture_mutex && input.capture_mutex->ReleaseSync(0) != S_OK)
         failure = AVERROR_EXTERNAL;
       return failure == 0;
     });
@@ -435,7 +474,41 @@ private:
              " elapsed_ms=" + std::to_string(elapsed.count()));
   }
 
-  static int acquire_amf_capture(CaptureSlot &slot) {
+  bool allocate_amf_slot(D3D11_TEXTURE2D_DESC desc, bool fenced,
+                         CaptureSlot &slot) {
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    desc.CPUAccessFlags = 0;
+    desc.MiscFlags = fenced ? D3D11_RESOURCE_MISC_SHARED
+                           : D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    ComPtr<IDXGIResource> resource;
+    HANDLE shared = nullptr;
+    if (FAILED(native_->device_->CreateTexture2D(&desc, nullptr, &slot.capture))
+        || FAILED(slot.capture.As(&resource)) || FAILED(resource->GetSharedHandle(&shared))
+        || FAILED(amf_device_->device_->OpenSharedResource(shared, IID_PPV_ARGS(&slot.encoder))))
+      return false;
+    if (fenced) return true;
+    return SUCCEEDED(slot.capture.As(&slot.capture_mutex))
+        && SUCCEEDED(slot.encoder.As(&slot.encoder_mutex))
+        && slot.capture_mutex->AcquireSync(0, 0) == S_OK;
+  }
+
+  void init_amf_fences() {
+    auto fences = std::make_unique<AmfTransferFences>();
+    if (!fences->capture.init(*native_) || !fences->encode.init(*amf_device_))
+      return;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width_;
+    desc.Height = height_;
+    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    CaptureSlot probe;
+    if (allocate_amf_slot(desc, true, probe))
+      amf_fences_ = std::move(fences);
+  }
+
+  int acquire_amf_capture(CaptureSlot &slot) {
+    if (amf_fences_) return amf_fences_->encode.ready(slot.read, slot.submitted);
     const HRESULT hr = slot.capture_mutex->AcquireSync(0, 0);
     if (hr == static_cast<HRESULT>(WAIT_TIMEOUT))
       return util::elapsed_ms(slot.submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
@@ -453,7 +526,7 @@ private:
     const auto index = amf_input_queue_.available([&](std::size_t i) {
       if (failure) return false;
       auto &input_slot = amf_inputs_[i];
-      if (!input_slot.capture_mutex) return true;
+      if (!input_slot.capture) return true;
       const int acquired = acquire_amf_capture(input_slot);
       if (acquired < 0) failure = acquired;
       return acquired > 0;
@@ -462,22 +535,9 @@ private:
     if (index < 0) return AVERROR(EAGAIN);
     auto &slot = amf_inputs_[index];
     if (!slot.capture) {
-      desc.Usage = D3D11_USAGE_DEFAULT;
-      desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-      desc.CPUAccessFlags = 0;
-      desc.MiscFlags = amf_device_ ? D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX : 0;
       CaptureSlot created;
-      if (FAILED(native_->device_->CreateTexture2D(&desc, nullptr, &created.capture)))
+      if (!allocate_amf_slot(desc, static_cast<bool>(amf_fences_), created))
         return AVERROR_EXTERNAL;
-      if (amf_device_) {
-        ComPtr<IDXGIResource> resource;
-        HANDLE shared = nullptr;
-        if (FAILED(created.capture.As(&resource)) || FAILED(resource->GetSharedHandle(&shared))
-            || FAILED(amf_device_->device_->OpenSharedResource(shared, IID_PPV_ARGS(&created.encoder)))
-            || FAILED(created.capture.As(&created.capture_mutex))
-            || FAILED(created.encoder.As(&created.encoder_mutex))) return AVERROR_EXTERNAL;
-        if (created.capture_mutex->AcquireSync(0, 0) != S_OK) return AVERROR_EXTERNAL;
-      }
       slot = std::move(created);
     }
     D3D11_TEXTURE2D_DESC owned{};
@@ -488,9 +548,12 @@ private:
       return AVERROR(EINVAL);
     }
     native_->context_->CopyResource(slot.capture.Get(), input);
-    if (slot.capture_mutex) {
-      // Keyed sharing submits the copy at release. Local textures stay on
-      // the same immediate context through color conversion.
+    if (amf_fences_) {
+      const auto submitting = util::now();
+      const int result = amf_fences_->capture.submit(slot.written);
+      if (result < 0) return result;
+      log_slow_amf("capture_submit", submitting);
+    } else {
       if (framerate_ <= 60) native_->context_->Flush();
       const auto releasing = util::now();
       if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
@@ -504,13 +567,15 @@ private:
   int prepare_amf_input(std::size_t index, UINT64 key) {
     const auto started = util::now();
     auto &slot = amf_inputs_[index];
-    if (slot.encoder_mutex) {
+    if (amf_fences_) {
+      const int ready = amf_fences_->capture.ready(slot.written, slot.submitted);
+      if (ready <= 0) return ready;
+    } else {
       const HRESULT locked = slot.encoder_mutex->AcquireSync(key, 0);
       if (locked == static_cast<HRESULT>(WAIT_TIMEOUT))
         return util::elapsed_ms(slot.submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (locked != S_OK) return AVERROR_EXTERNAL;
     }
-    auto &device = amf_device_ ? *amf_device_ : *native_;
     int ret = 0;
     if (!av_frame_is_writable(frame_)) {
       av_frame_unref(frame_);
@@ -531,16 +596,20 @@ private:
           ? (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709)
           : (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601);
       const bool high_refresh = framerate_ > 60;
-      auto *input = slot.encoder ? slot.encoder.Get() : slot.capture.Get();
-      if (!device.BgraToNv12(input, encode_texture_, width_, height_,
-                            color_in, color_out, high_refresh ? framerate_ : 30,
-                            high_refresh ? &slot.conversion_views : nullptr))
+      if (!amf_device_->BgraToNv12(slot.encoder.Get(), encode_texture_, width_, height_,
+                                  color_in, color_out, high_refresh ? framerate_ : 30,
+                                  high_refresh ? &slot.conversion_views : nullptr))
         ret = AVERROR_EXTERNAL;
     }
-    device.context_->Flush();
+    if (amf_fences_) {
+      // A slot is reusable after the encoder device has finished reading BGRA.
+      const int published = amf_fences_->encode.submit(slot.read);
+      if (published < 0) return published;
+    } else {
+      amf_device_->context_->Flush();
+      if (slot.encoder_mutex->ReleaseSync(0) != S_OK) return AVERROR_EXTERNAL;
+    }
     slot.submitted = util::now();
-    if (slot.encoder_mutex && slot.encoder_mutex->ReleaseSync(0) != S_OK)
-      return AVERROR_EXTERNAL;
     log_slow_amf("convert", started);
     return ret < 0 ? ret : 1;
   }
@@ -779,28 +848,21 @@ FFmpegVRamEncoder *ffmpeg_vram_new_encoder(void *handle, int64_t luid,
                                            DataFormat dataFormat, int32_t width,
                                            int32_t height, int32_t kbs,
                                            int32_t framerate, int32_t gop) {
-  bool allow_device_local_amf = true;
-  for (;;) {
-    std::unique_ptr<FFmpegVRamEncoder> encoder;
-    try {
-      encoder = std::make_unique<FFmpegVRamEncoder>(handle, luid, dataFormat,
-                                                   width, height, kbs, framerate, gop);
-      if (encoder->init(allow_device_local_amf)) {
-        if (encoder->amf_pipeline_)
-          LOG_INFO(std::string("host_amf_transfer=") +
-                   (encoder->amf_on_capture_device_ ? "device_local" : "keyed"));
-        return encoder.release();
-      }
-    } catch (const std::exception &e) {
-      LOG_ERROR(std::string("new FFmpegVRamEncoder failed, ") + std::string(e.what()));
+  std::unique_ptr<FFmpegVRamEncoder> encoder;
+  try {
+    encoder = std::make_unique<FFmpegVRamEncoder>(handle, luid, dataFormat,
+                                                 width, height, kbs, framerate, gop);
+    if (encoder->init()) {
+      if (encoder->amf_pipeline_)
+        LOG_INFO(std::string("host_amf_transfer=") +
+                 (encoder->amf_fences_ ? "fenced" : "keyed"));
+      return encoder.release();
     }
-    if (!encoder) return nullptr;
-    const bool retry = encoder->amf_on_capture_device_;
-    encoder->destroy();
-    if (!retry) return nullptr;
-    LOG_WARN(std::string("AMF device-local initialization failed; retrying keyed transfer"));
-    allow_device_local_amf = false;
+  } catch (const std::exception &e) {
+    LOG_ERROR(std::string("new FFmpegVRamEncoder failed, ") + e.what());
   }
+  if (encoder) encoder->destroy();
+  return nullptr;
 }
 
 int ffmpeg_vram_encode(FFmpegVRamEncoder *encoder, void *texture,
