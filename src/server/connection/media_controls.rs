@@ -77,7 +77,7 @@ impl Connection {
         let permit = self.managed_permit.clone();
         #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
         let test_lan = self.test_lan;
-        let result = tokio::task::spawn_blocking(move || -> ResultType<bool> {
+        let result = tokio::task::spawn_blocking(move || -> ResultType<()> {
             #[cfg(feature = "managed")]
             {
                 #[cfg(feature = "test-lan-direct")]
@@ -88,21 +88,14 @@ impl Connection {
                     bail!("Session authorization expired");
                 }
             }
-            let (name, original) = {
-                let displays = display_service::try_get_displays()?;
-                let display = displays
-                    .get(index)
-                    .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
-                #[cfg(target_os = "macos")]
-                let scale = display.scale();
-                #[cfg(not(target_os = "macos"))]
-                let scale = 1.0;
-                let original = (
-                    ((display.width() as f64) / scale).round() as i32,
-                    ((display.height() as f64) / scale).round() as i32,
-                );
-                (display.name(), original)
-            };
+            let displays = display_service::try_get_displays()?;
+            let display = displays
+                .get(index)
+                .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
+            let name = display.name();
+            #[cfg(not(windows))]
+            let original = display_service::original_capture_size(display);
+            drop(displays);
             #[cfg(not(windows))]
             if mode.refresh_rate != 0 {
                 bail!("The host does not support refresh rate changes");
@@ -126,32 +119,25 @@ impl Connection {
                     if !applied {
                         bail!("Virtual display rejected the requested resolution");
                     }
-                    return Ok(true);
+                    return Ok(());
                 }
             }
-            if mode.refresh_rate == 0 {
-                crate::platform::change_resolution(&name, mode.width as _, mode.height as _)?;
-            }
             #[cfg(windows)]
-            if mode.refresh_rate != 0 {
-                crate::platform::windows::display_modes::change(&name, &mode)?;
-            }
-            #[cfg(windows)]
-            let record = !virtual_display_manager::amyuni_idd::is_my_display(&name);
+            crate::platform::windows::display_modes::change_for_session(&name, &mode)?;
             #[cfg(not(windows))]
-            let record = true;
-            if record {
+            {
+                crate::platform::change_resolution(&name, mode.width as _, mode.height as _)?;
                 display_service::set_last_changed_resolution(
                     &name,
                     original,
                     (mode.width, mode.height),
                 );
             }
-            Ok(mode.refresh_rate != 0 && original == (mode.width, mode.height))
+            Ok(())
         })
         .await;
         match result {
-            Ok(Ok(_)) => {
+            Ok(Ok(())) => {
                 let snapshot = tokio::task::spawn_blocking(move || -> ResultType<Message> {
                     display_service::check_displays_changed()?;
                     video_service::make_display_changed_msg(index, None, VideoSource::Monitor)

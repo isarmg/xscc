@@ -3029,7 +3029,15 @@ pub(super) fn change_resolution_directly(
     width: usize,
     height: usize,
 ) -> ResultType<()> {
-    let presentation = crate::virtual_display_manager::before_persistent_display_change()?;
+    let mode = base::message_proto::Resolution {
+        width: i32::try_from(width)?,
+        height: i32::try_from(height)?,
+        ..Default::default()
+    };
+    display_modes::change(name, &mode)
+}
+
+fn apply_display_size(name: &str, width: usize, height: usize) -> ResultType<()> {
     let device_name = str_to_device_name(name);
     unsafe {
         let mut dm: DEVMODEW = std::mem::zeroed();
@@ -3050,9 +3058,6 @@ pub(super) fn change_resolution_directly(
                 res,
                 io::Error::last_os_error()
             );
-        }
-        if let Some(presentation) = presentation {
-            presentation.finish()?;
         }
         Ok(())
     }

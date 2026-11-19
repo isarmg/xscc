@@ -10,7 +10,8 @@ impl Pacing {
         // Give SurfaceFlinger a full refresh period of notice and keep bursts inside
         // distinct presentation slots. Rebase when the stream starves or changes rate.
         let deadline = match self.last {
-            Some((last, period)) if period == interval && last >= now => last + period,
+            Some((last, period)) if period == interval && last >= now => last + interval,
+            Some((last, _)) if last >= now => (last + interval).max(now + 2 * interval),
             _ => now + 2 * interval,
         };
         // Real transports can deliver four or more outputs together. Keep extra
@@ -51,8 +52,19 @@ mod tests {
         assert_eq!(pacing.deadline(0, 120, 120), Some(33_333_336));
         assert_eq!(pacing.deadline(0, 120, 120), Some(41_666_670));
         assert_eq!(pacing.deadline(0, 120, 120), None);
-        assert_eq!(pacing.deadline(1_000_000_000, 120, 120), Some(1_016_666_668));
-        assert_eq!(pacing.deadline(1_000_000_000, 90, 120), Some(1_022_222_224));
+        assert_eq!(
+            pacing.deadline(1_000_000_000, 120, 120),
+            Some(1_016_666_668)
+        );
+        assert_eq!(pacing.deadline(1_000_000_000, 90, 120), Some(1_027_777_780));
+    }
+
+    #[test]
+    fn increasing_rate_keeps_already_submitted_frames_in_order() {
+        let mut pacing = Pacing::default();
+        assert_eq!(pacing.deadline(0, 90, 120), Some(22_222_224));
+        assert_eq!(pacing.deadline(0, 90, 120), Some(33_333_336));
+        assert_eq!(pacing.deadline(1_000_000, 120, 120), Some(41_666_670));
     }
 
     #[test]

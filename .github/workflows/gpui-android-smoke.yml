@@ -221,6 +221,12 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: '0'
         run: cargo test --locked -p xscc-native-management --test mobile_enrollment_input
 
+      - name: Test MediaCodec Surface scheduling
+        if: ${{ matrix.flavor == 'management' && !inputs.build_only }}
+        run: |
+          rustc --edition 2021 --test libs/scrap/src/common/mediacodec/surface_pacing.rs -o "$RUNNER_TEMP/xscc-surface-pacing-tests"
+          "$RUNNER_TEMP/xscc-surface-pacing-tests" --nocapture
+
       - name: Cross-compile the selected GPUI library
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}

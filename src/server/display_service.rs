@@ -18,7 +18,7 @@ pub const NAME: &'static str = "display";
 const DUMMY_DISPLAY_SIDE_MAX_SIZE: usize = 1024;
 
 struct ChangedResolution {
-    original: (i32, i32),
+    original: Resolution,
     changed: (i32, i32),
 }
 
@@ -575,8 +575,21 @@ pub(super) fn check_display_changed(
     }
 }
 
+#[cfg(not(any(windows, target_os = "android", target_os = "ios")))]
+pub(super) fn original_capture_size(display: &Display) -> Resolution {
+    #[cfg(target_os = "macos")]
+    let scale = display.scale();
+    #[cfg(not(target_os = "macos"))]
+    let scale = 1.0;
+    Resolution {
+        width: (display.width() as f64 / scale).round() as i32,
+        height: (display.height() as f64 / scale).round() as i32,
+        ..Default::default()
+    }
+}
+
 #[inline]
-pub fn set_last_changed_resolution(display_name: &str, original: (i32, i32), changed: (i32, i32)) {
+pub fn set_last_changed_resolution(display_name: &str, original: Resolution, changed: (i32, i32)) {
     let mut lock = CHANGED_RESOLUTIONS.write().unwrap();
     match lock.get_mut(display_name) {
         Some(res) => res.changed = changed,
@@ -683,8 +696,13 @@ fn retained_virtual_display(
 }
 
 #[cfg(windows)]
-pub(super) fn restore_session_resolutions() {
-    if CHANGED_RESOLUTIONS.read().unwrap().is_empty() {
+pub(super) fn has_resolution_changes() -> bool {
+    !CHANGED_RESOLUTIONS.read().unwrap().is_empty()
+}
+
+#[cfg(windows)]
+pub(super) fn restore_session_resolutions(idle: &super::video_service::CaptureIdleGuard<'_>) {
+    if !has_resolution_changes() {
         return;
     }
     let state = virtual_display_manager::configuration_state();
@@ -699,48 +717,44 @@ pub(super) fn restore_session_resolutions() {
         .write()
         .unwrap()
         .retain(|name, _| !retained_virtual_display(&state, name));
-    restore_resolutions();
+    restore_resolutions(idle);
 }
 
 #[inline]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", windows)))]
 pub fn restore_resolutions() {
-    #[cfg(windows)]
-    let changed = std::mem::take(&mut *CHANGED_RESOLUTIONS.write().unwrap());
-    #[cfg(not(windows))]
     let changed = CHANGED_RESOLUTIONS.read().unwrap();
     for (name, res) in changed.iter() {
-        let (w, h) = res.original;
-        #[cfg(windows)]
+        let (w, h) = (res.original.width, res.original.height);
+        log::info!("Restore resolution of display '{}' to ({}, {})", name, w, h);
+        if let Err(error) = crate::platform::change_resolution(name, w as _, h as _) {
+            log::error!("Failed to restore resolution of display '{name}' to ({w},{h}): {error}");
+        }
+    }
+    drop(changed);
+    CHANGED_RESOLUTIONS.write().unwrap().clear();
+}
+
+#[cfg(windows)]
+pub(super) fn restore_resolutions(idle: &super::video_service::CaptureIdleGuard<'_>) {
+    let changed = std::mem::take(&mut *CHANGED_RESOLUTIONS.write().unwrap());
+    for (name, res) in changed {
         let started = std::time::Instant::now();
-        #[cfg(windows)]
+        let (w, h, hz) = (res.original.width, res.original.height, res.original.refresh_rate);
         hbb_common::throttled_log!(
             Duration::from_secs(1), info,
-            "session_display_cleanup stage=resolution_restore_begin display={name} width={w} height={h}"
+            "session_display_cleanup stage=resolution_restore_begin display={name} width={w} height={h} hz={hz}"
         );
-        #[cfg(not(windows))]
-        log::info!("Restore resolution of display '{}' to ({}, {})", name, w, h);
-        let result = crate::platform::change_resolution(name, w as _, h as _);
-        #[cfg(windows)]
+        let result = crate::platform::windows::display_modes::restore(&name, &res.original, idle);
         hbb_common::throttled_log!(
             Duration::from_secs(1), info,
             "session_display_cleanup stage=resolution_restore_end display={name} elapsed_ms={} success={}",
             started.elapsed().as_millis(), result.is_ok()
         );
-        if let Err(e) = result {
-            log::error!(
-                "Failed to restore resolution of display '{}' to ({},{}): {}",
-                name,
-                w,
-                h,
-                e
-            );
+        if let Err(error) = result {
+            log::error!("Failed to restore resolution of display '{name}' to {w}x{h} at {hz} Hz: {error}");
+            CHANGED_RESOLUTIONS.write().unwrap().insert(name, res);
         }
-    }
-    #[cfg(not(windows))]
-    {
-        drop(changed);
-        CHANGED_RESOLUTIONS.write().unwrap().clear();
     }
 }
 
@@ -810,14 +824,23 @@ mod session_resolution_cleanup_tests {
             (
                 r"\\.\DISPLAY1".into(),
                 ChangedResolution {
-                    original: (1920, 1080),
+                    original: base::message_proto::Resolution {
+                        width: 1920,
+                        height: 1080,
+                        refresh_rate: 120,
+                        ..Default::default()
+                    },
                     changed: (1280, 720),
                 },
             ),
             (
                 r"\\.\display2".into(),
                 ChangedResolution {
-                    original: (1280, 720),
+                    original: base::message_proto::Resolution {
+                        width: 1280,
+                        height: 720,
+                        ..Default::default()
+                    },
                     changed: (2560, 1440),
                 },
             ),
@@ -840,7 +863,7 @@ mod session_resolution_cleanup_tests {
         );
         assert_eq!(changed.len(), 1);
         let physical = &changed[r"\\.\DISPLAY1"];
-        assert_eq!(physical.original, (1920, 1080));
+        assert_eq!((physical.original.width, physical.original.height, physical.original.refresh_rate), (1920, 1080, 120));
         assert_eq!(physical.changed, (1280, 720));
     }
 
@@ -1017,7 +1040,7 @@ pub(super) fn get_original_resolution(
         let changed_resolutions = CHANGED_RESOLUTIONS.write().unwrap();
         let (width, height) = match changed_resolutions.get(display_name) {
             Some(res) => {
-                res.original
+                (res.original.width, res.original.height)
                 /*
                 The resolution change may not happen immediately, `changed` has been updated,
                 but the actual resolution is old, it will be mistaken for a third-party change.

@@ -7,7 +7,6 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Host, StreamConfig,
 };
-use crossbeam_queue::ArrayQueue;
 use magnum_opus::{Channels::*, Decoder as AudioDecoder};
 #[cfg(not(target_os = "linux"))]
 use ringbuf::{ring_buffer::RbBase, Rb};
@@ -99,6 +98,7 @@ pub mod io_loop;
 
 
 mod presentation;
+mod video_queue;
 pub mod screenshot;
 mod streaming;
 
@@ -1035,11 +1035,15 @@ impl VideoHandler {
         display: usize,
         produced_image: bool,
         elapsed: Duration,
+        activity: &std::sync::atomic::AtomicUsize,
     ) -> Option<usize> {
         let outputs = self.decoder.take_mediacodec_output_count();
         let submitted = self.decoder.take_mediacodec_surface_output_count();
         match outputs {
             Some(frames) if frames > 0 => {
+                if self.decoder.video_surface().is_some() {
+                    activity.fetch_add(frames, std::sync::atomic::Ordering::Relaxed);
+                }
                 ui.on_mediacodec_decoded(display, frames, elapsed, submitted)
             }
             Some(_) => {}
@@ -2052,11 +2056,8 @@ impl LoginConfigHandler {
 
 /// Media data.
 pub enum MediaData {
-    VideoQueue,
-    VideoFrame(Box<VideoFrame>),
     AudioFrame(Box<AudioFrame>),
     AudioFormat(AudioFormat),
-    Reset,
 }
 
 pub type MediaSender = mpsc::Sender<MediaData>;
@@ -2066,14 +2067,14 @@ pub type MediaSender = mpsc::Sender<MediaData>;
 /// # Arguments
 ///
 /// * `video_callback` - The callback for video frame. Being called when a video frame is ready.
-pub fn start_video_thread<F, T>(
+fn start_video_thread<F, T>(
     session: Session<T>,
     display: usize,
-    video_receiver: mpsc::Receiver<MediaData>,
-    video_queue: Arc<ArrayQueue<VideoFrame>>,
+    video_queue: Arc<video_queue::VideoQueue>,
     fps: Arc<RwLock<Option<usize>>>,
     chroma: Arc<RwLock<Option<Chroma>>>,
-    discard_queue: Arc<RwLock<bool>>,
+    #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
+    activity: Arc<std::sync::atomic::AtomicUsize>,
     video_callback: F,
 ) where
     F: 'static + FnMut(usize, &mut scrap::ImageRgb, *mut c_void, bool) + Send,
@@ -2091,6 +2092,7 @@ pub fn start_video_thread<F, T>(
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
         let mut last_presented: Option<std::time::Instant> = None;
+        let mut needs_keyframe = false;
         loop {
             #[cfg(feature = "mediacodec")]
             let message = match video_handler.as_mut() {
@@ -2101,7 +2103,7 @@ pub fn start_video_thread<F, T>(
                     );
                     #[cfg(not(target_os = "android"))]
                     let wait = Duration::from_millis(4);
-                    match video_receiver.recv_timeout(wait) {
+                    match video_queue.recv_timeout(wait) {
                         Ok(data) => Ok(data),
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -2124,6 +2126,7 @@ pub fn start_video_thread<F, T>(
                                     display,
                                     output_result.as_ref().is_ok_and(|produced| *produced),
                                     elapsed,
+                                    &activity,
                                 );
                                 if let Some(outputs) = outputs.filter(|outputs| *outputs > 0) {
                                     fps_calculate(
@@ -2202,13 +2205,13 @@ pub fn start_video_thread<F, T>(
                                         "Poll MediaCodec output failed: {error:#}"
                                     );
                                     #[cfg(all(target_os = "android", feature = "gpui-session"))]
-                                    if handler.discard_failed_android_surface() {
-                                        *discard_queue.write().unwrap() = true;
-                                    } else {
+                                    if !handler.discard_failed_android_surface() {
                                         handler.reset(None);
                                     }
                                     #[cfg(not(all(target_os = "android", feature = "gpui-session")))]
                                     handler.reset(None);
+                                    needs_keyframe = true;
+                                    video_queue.invalidate();
                                     session.refresh_video(display as _);
                                 }
                             }
@@ -2216,34 +2219,18 @@ pub fn start_video_thread<F, T>(
                         }
                     }
                 }
-                _ => video_receiver.recv(),
+                _ => video_queue.recv(),
             };
             #[cfg(not(feature = "mediacodec"))]
-            let message = video_receiver.recv();
+            let message = video_queue.recv();
             if let Ok(data) = message {
                 match data {
-                    MediaData::VideoFrame(_) | MediaData::VideoQueue => {
+                    video_queue::VideoItem::Frame(packet) => {
+                        if needs_keyframe && !packet.keyframe {
+                            continue;
+                        }
                         #[allow(unused_mut)]
-                        let mut vf = match data {
-                            MediaData::VideoFrame(vf) => {
-                                *discard_queue.write().unwrap() = false;
-                                *vf
-                            }
-                            MediaData::VideoQueue => {
-                                if let Some(vf) = video_queue.pop() {
-                                    if discard_queue.read().unwrap().clone() {
-                                        continue;
-                                    }
-                                    vf
-                                } else {
-                                    continue;
-                                }
-                            }
-                            _ => {
-                                // unreachable!();
-                                continue;
-                            }
-                        };
+                        let mut vf = packet.frame;
                         let display = vf.display as usize;
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
@@ -2271,14 +2258,9 @@ pub fn start_video_thread<F, T>(
                                     handler.reset(Some(format));
                                 }
                                 if matches!(format, CodecFormat::H264 | CodecFormat::H265) {
-                                    let (size, fps) = {
-                                        let lc = session.lc.read().unwrap();
-                                        let size = lc.peer_info.as_ref()
-                                            .and_then(|peer| peer.displays.get(display))
-                                            .map(|display| (display.width, display.height));
-                                        (size, lc.streaming_target_fps())
-                                    };
-                                    let (width, height) = size.ok_or_else(|| anyhow!("Missing remote display size"))?;
+                                    let fps = session.lc.read().unwrap().streaming_target_fps();
+                                    let (width, height) = packet.dimensions
+                                        .ok_or_else(|| anyhow!("Missing remote display size"))?;
                                     if let Err(error) = handler.decoder.set_video_size(width, height, fps) {
                                         handler.fail_counter = MAX_DECODE_FAIL_COUNTER;
                                         return Err(error);
@@ -2309,6 +2291,7 @@ pub fn start_video_thread<F, T>(
                                     display,
                                     frame_result.as_ref().is_ok_and(|produced| *produced),
                                     elapsed,
+                                    &activity,
                                 );
                                 if let Some(outputs) = outputs {
                                     fps_calculate(
@@ -2323,6 +2306,9 @@ pub fn start_video_thread<F, T>(
                                 }
                                 outputs
                             };
+                            if frame_result.is_ok() && packet.keyframe {
+                                needs_keyframe = false;
+                            }
                             match frame_result {
                                 Ok(true) => {
                                     #[cfg(all(
@@ -2387,9 +2373,9 @@ pub fn start_video_thread<F, T>(
                                 }
                                 Err(e) => {
                                     #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
-                                    if handler.discard_failed_android_surface() {
-                                        *discard_queue.write().unwrap() = true;
-                                    }
+                                    handler.discard_failed_android_surface();
+                                    needs_keyframe = true;
+                                    video_queue.invalidate();
                                     // This is a simple workaround.
                                     //
                                     // I only see the following error:
@@ -2434,20 +2420,19 @@ pub fn start_video_thread<F, T>(
                             ));
                         }
                     }
-                    MediaData::Reset => {
+                    video_queue::VideoItem::Reset => {
+                        needs_keyframe = true;
                         #[cfg(all(target_os = "android", feature = "mediacodec", feature = "gpui-session"))]
                         if video_handler.as_ref().is_some_and(|handler| {
                             handler.decoder.video_surface().is_some_and(|surface| !surface.is_valid())
                         }) {
                             video_handler = None;
-                            *discard_queue.write().unwrap() = true;
                             continue;
                         }
                         if let Some(handler) = video_handler.as_mut() {
                             handler.reset(None);
                         }
                     }
-                    _ => {}
                 }
             } else {
                 break;

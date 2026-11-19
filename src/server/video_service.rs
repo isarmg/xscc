@@ -69,6 +69,8 @@ use std::{
 };
 
 pub const OPTION_REFRESH: &'static str = "refresh";
+#[cfg(all(windows, feature = "gpui-host", feature = "vram", feature = "hwcodec"))]
+pub(super) const OPTION_VRAM_RUNTIME_FAILED: &str = "vram-runtime-failed";
 
 #[cfg(windows)]
 const DXGI_RECOVERY_LIMIT: usize = 3;
@@ -232,6 +234,9 @@ impl VideoFrameController {
         };
         for (id, instant) in first.into_iter().chain(receiver_guard.try_iter()) {
             if let Some(tm) = instant {
+                if tm < self.cur {
+                    continue;
+                }
                 log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
             }
             if self.send_conn_ids.contains(&id) {
@@ -801,6 +806,8 @@ fn run_encoder(
     #[cfg(feature = "gpui-host")]
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
+    #[cfg(all(windows, feature = "vram"))]
+    let vram_failure = |error| handle_vram_runtime_failure(sp, &encoder_cfg, error);
     #[cfg(all(windows, feature = "gpui-host"))]
     let mut frame_pacer = frame_pacing::FramePacer::new();
 
@@ -846,7 +853,7 @@ fn run_encoder(
             && refresh_allowed(first_frame, encoder_warmed_up, encoder.latency_free())
         {
             #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
-            let keyframe_requested = encoder.request_keyframe()?;
+            let keyframe_requested = encoder.request_keyframe().map_err(vram_failure)?;
             #[cfg(not(all(windows, feature = "gpui-host", feature = "vram")))]
             let keyframe_requested = false;
             if keyframe_requested {
@@ -936,26 +943,33 @@ fn run_encoder(
             send_counter += 1;
             Ok(())
         } else {
+            #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
+            let input_ready = encoder.input_ready().map_err(vram_failure)?;
             #[cfg(feature = "gpui-host")]
             let capture_started = Instant::now();
             #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
-            let captured = if encoder.input_ready()? {
+            let captured = if input_ready {
                 c.frame(spf)
             } else {
+                stages.encoder_backpressure();
                 Err(WouldBlock.into())
             };
             #[cfg(not(all(windows, feature = "gpui-host", feature = "vram")))]
             let captured = c.frame(spf);
+            #[cfg(all(feature = "gpui-host", not(all(windows, feature = "vram"))))]
+            let input_ready = true;
             #[cfg(feature = "gpui-host")]
-            stages.captured(
-                capture_started.elapsed(),
-                match &captured {
-                    Ok(frame) if frame.valid() => metrics::CaptureState::Ready,
-                    Ok(_) => metrics::CaptureState::Empty,
-                    Err(error) if error.kind() == WouldBlock => metrics::CaptureState::WouldBlock,
-                    Err(_) => metrics::CaptureState::Failed,
-                },
-            );
+            if input_ready {
+                stages.captured(
+                    capture_started.elapsed(),
+                    match &captured {
+                        Ok(frame) if frame.valid() => metrics::CaptureState::Ready,
+                        Ok(_) => metrics::CaptureState::Empty,
+                        Err(error) if error.kind() == WouldBlock => metrics::CaptureState::WouldBlock,
+                        Err(_) => metrics::CaptureState::Failed,
+                    },
+                );
+            }
             match captured {
                 Ok(frame) => {
                     repeat_encode_counter = 0;
@@ -1058,9 +1072,9 @@ fn run_encoder(
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
                 #[cfg(all(windows, feature = "vram"))]
-                let pending_frame = match encoder.replay_keyframe(ms)? {
+                let pending_frame = match encoder.replay_keyframe(ms).map_err(vram_failure)? {
                     Some(frame) => Some(frame),
-                    None => encoder.poll_video_frame()?,
+                    None => encoder.poll_video_frame().map_err(vram_failure)?,
                 };
                 #[cfg(all(windows, feature = "vram"))]
                 if let Some(mut frame) = pending_frame {
@@ -1159,7 +1173,9 @@ fn run_encoder(
         let mut fetched_conn_ids = HashSet::new();
         let timeout_millis = 3_000u64;
         let wait_begin = Instant::now();
-        while wait_begin.elapsed().as_millis() < timeout_millis as _ {
+        while fetched_conn_ids.len() < frame_controller.send_conn_ids.len()
+            && wait_begin.elapsed().as_millis() < timeout_millis as _
+        {
             #[cfg(windows)]
             if !sp.ok() || capture_lifecycle::change_pending() {
                 break;
@@ -1168,10 +1184,6 @@ fn run_encoder(
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }
             frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
-            // break if all connections have received current frame
-            if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
-                break;
-            }
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
         #[cfg(feature = "gpui-host")]
@@ -1181,7 +1193,7 @@ fn run_encoder(
         // Cursor-only updates carry no encodable image and must not spend a requested image frame slot.
         if try_gdi == 0
             && !frame_pacing::should_pace_capture(spf, encoder.input_texture(), capture_would_block)
-            && encoder.input_ready()?
+            && encoder.input_ready().map_err(vram_failure)?
         {
             continue;
         }
@@ -1236,6 +1248,25 @@ impl Drop for Raii {
     }
 }
 
+#[cfg(all(windows, feature = "vram"))]
+fn handle_vram_runtime_failure(
+    _service: &GenericService,
+    _config: &EncoderCfg,
+    error: hbb_common::anyhow::Error,
+) -> hbb_common::anyhow::Error {
+    #[cfg(all(feature = "gpui-host", feature = "hwcodec"))]
+    if matches!(_config, EncoderCfg::VRAM(_)) {
+        _service.set_option_bool(OPTION_VRAM_RUNTIME_FAILED, true);
+        hbb_common::throttled_log!(
+            Duration::from_secs(5), warn,
+            "video_encoder_runtime_fallback display={} error={error:#}",
+            _service.name()
+        );
+        return VideoRestart::CaptureBackendChanged.into();
+    }
+    error
+}
+
 fn setup_encoder(
     c: &CapturerInfo,
     service: &GenericService,
@@ -1245,6 +1276,13 @@ fn setup_encoder(
     let name = service.name();
     let encoder_cfg =
         get_encoder_config(&c, name.to_string(), quality, last_portable_service_running)?;
+    #[cfg(all(windows, feature = "gpui-host", feature = "vram", feature = "hwcodec"))]
+    let encoder_cfg = match encoder_cfg {
+        EncoderCfg::VRAM(config) if service.is_option_true(OPTION_VRAM_RUNTIME_FAILED) => {
+            config.ram_fallback()?
+        }
+        config => config,
+    };
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     #[cfg(feature = "gpui-host")]
     let requested_fps = {

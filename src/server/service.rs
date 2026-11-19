@@ -109,6 +109,10 @@ impl<T: Subscriber + From<ConnInner>> Service for ServiceTmpl<T> {
         if lock.subscribes.get(&sub.id()).is_some() {
             return;
         }
+        #[cfg(all(windows, feature = "gpui-host", feature = "vram", feature = "hwcodec"))]
+        if !lock.has_subscribes() {
+            lock.options.remove(super::video_service::OPTION_VRAM_RUNTIME_FAILED);
+        }
         if lock.need_snapshot {
             lock.new_subscribes.insert(sub.id(), sub.into());
         } else {

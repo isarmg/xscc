@@ -31,7 +31,7 @@ use hbb_common::{
     tcp::{FramedStreamReader, FramedStreamWriter},
     tokio::{
         self,
-        sync::{mpsc, oneshot, watch, Notify},
+        sync::{mpsc, oneshot, watch, Notify, OwnedSemaphorePermit, Semaphore},
         task::JoinHandle,
         time::{interval, timeout, MissedTickBehavior},
     },
@@ -45,13 +45,18 @@ use std::{
     io,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
 
 const CONTROL_QUEUE: usize = 32;
 const MEDIA_QUEUE: usize = 2;
+const VIDEO_QUEUE: usize = 64;
+const VIDEO_QUEUE_BYTES: usize = 2 * media::MAX_VIDEO_FRAME;
+const VIDEO_QUEUE_AGE: Duration = Duration::from_millis(600);
+const VIDEO_REORDER_WINDOW: Duration = Duration::from_millis(24);
+const VIDEO_REORDER_FRAMES: usize = 8;
 const CONTROL_LIMIT: usize = 128 * 1024;
 const MAX_STREAMS: usize = 65;
 const RELIABLE_BYTES: usize = 64 * 1024 * 1024;
@@ -486,10 +491,27 @@ struct ReceiveStream {
     epoch: u64,
     last: Option<u64>,
     needs_keyframe: bool,
+    held: BTreeMap<u64, (CompletedFrame, Instant)>,
+}
+
+impl ReceiveStream {
+    fn expected(&self) -> Option<u64> {
+        self.last.and_then(|last| last.checked_add(1))
+    }
+
+    fn reorder_due(&self, now: Instant) -> Option<Instant> {
+        let (&first, _) = self.held.first_key_value()?;
+        if self.expected() == Some(first) {
+            Some(now)
+        } else {
+            self.held.values().map(|(_, deadline)| *deadline).min()
+        }
+    }
 }
 struct QueuedFrame {
     plan: FramePlan,
     queued: Instant,
+    video_bytes: Option<OwnedSemaphorePermit>,
 }
 struct WorkerChannels {
     frames: mpsc::Receiver<QueuedFrame>,
@@ -499,39 +521,14 @@ struct WorkerChannels {
     failed: watch::Sender<Option<String>>,
 }
 
-type VideoReleased = Box<dyn Fn(u32, Instant) + Send + Sync>;
-
-fn video_released(
-    callback: &OnceLock<VideoReleased>,
-    kind: MediaKind,
-    display: u32,
-    queued: Instant,
-) {
-    if kind == MediaKind::Video {
-        if let Some(callback) = callback.get() {
-            callback(display, queued);
-        }
-    }
-}
-
 /// A producer lease of the same bounded UDP sender used by the connection.
 /// Clones share epoch/frame counters; dropping or revoking the TCP owner closes all clones.
 #[derive(Clone)]
 pub struct MediaSender {
     inner: Arc<Mutex<Outbound>>,
     failure: watch::Sender<Option<String>>,
-    released: Arc<OnceLock<VideoReleased>>,
 }
 impl MediaSender {
-    /// Releases deltas at dequeue and keyframes after sending; the callback must not block.
-    pub fn on_video_released(
-        &self,
-        callback: impl Fn(u32, Instant) + Send + Sync + 'static,
-    ) -> ResultType<()> {
-        self.released
-            .set(Box::new(callback))
-            .map_err(|_| hbb_common::anyhow::anyhow!("Video release callback already registered"))
-    }
     pub fn send_video(&self, message: Arc<Message>) -> ResultType<()> {
         let result = self
             .inner
@@ -571,7 +568,7 @@ struct Outbound {
     outgoing: mpsc::Sender<QueuedFrame>,
     audio: mpsc::Sender<QueuedFrame>,
     sending: BTreeMap<StreamKey, SendStream>,
-    released: Arc<OnceLock<VideoReleased>>,
+    video_bytes: Arc<Semaphore>,
 }
 impl Outbound {
     fn command(&self, command: Command) -> ResultType<()> {
@@ -627,7 +624,6 @@ impl Outbound {
                 bail!("Controller media transmission is unavailable");
             }
             if !self.ready.load(Ordering::Acquire) {
-                video_released(&self.released, kind, display, Instant::now());
                 return Ok(true);
             }
             let current = self.sending.get(&(kind, display));
@@ -661,15 +657,36 @@ impl Outbound {
             } else {
                 &self.outgoing
             };
+            let video_bytes = if kind == MediaKind::Video {
+                // Keep a slot for a recovery keyframe during delta-frame bursts.
+                let size = plan.descriptor().total_size;
+                if !keyframe
+                    && (sender.capacity() <= 1
+                        || self.video_bytes.available_permits().saturating_sub(size as usize)
+                            < media::MAX_VIDEO_FRAME)
+                {
+                    self.notice(FrameNotice::Abandoned(metadata))?;
+                    return Ok(true);
+                }
+                match self.video_bytes.clone().try_acquire_many_owned(size) {
+                    Ok(permit) => Some(permit),
+                    Err(_) => {
+                        self.notice(FrameNotice::Abandoned(metadata))?;
+                        return Ok(true);
+                    }
+                }
+            } else {
+                None
+            };
             match sender.try_send(QueuedFrame {
                 plan,
                 queued: Instant::now(),
+                video_bytes,
             }) {
                 Ok(()) => Ok(true),
-                Err(mpsc::error::TrySendError::Full(frame)) => {
-                    video_released(&self.released, kind, display, frame.queued);
+                Err(mpsc::error::TrySendError::Full(_)) => {
                     if kind == MediaKind::Video {
-                        self.notice(FrameNotice::Abandoned(frame.plan.descriptor().metadata))?;
+                        self.notice(FrameNotice::Abandoned(metadata))?;
                     }
                     Ok(true)
                 }
@@ -757,13 +774,12 @@ impl HybridTransport {
         };
         let (incoming, reliable) = mpsc::channel(CONTROL_QUEUE);
         let (completed, media) = mpsc::channel(MEDIA_QUEUE + 4);
-        let (outgoing, frames) = mpsc::channel(MEDIA_QUEUE);
+        let (outgoing, frames) = mpsc::channel(VIDEO_QUEUE);
         let (audio, audio_rx) = mpsc::channel(16);
         let (commands, command_rx) = mpsc::channel(CONTROL_QUEUE);
         let (failed, failure) = watch::channel(None);
         let (limits, limit_rx) = watch::channel(None);
         let (reader, tcp_writer) = stream.into_split();
-        let released = Arc::new(OnceLock::new());
         let tasks = vec![
             tokio::spawn(tcp_write(
                 tcp_writer,
@@ -787,10 +803,9 @@ impl HybridTransport {
                         outgoing,
                         audio,
                         sending: BTreeMap::new(),
-                        released: released.clone(),
+                        video_bytes: Arc::new(Semaphore::new(VIDEO_QUEUE_BYTES)),
                     })),
                     failure: failed.clone(),
-                    released,
                 },
                 session_id: sid,
                 host,
@@ -839,7 +854,6 @@ impl HybridTransport {
             transport.writer.clone(),
             transport.ready.clone(),
             transport.bitrate_budget.clone(),
-            transport.outbound.released.clone(),
         )));
         Ok(transport)
     }
@@ -1017,6 +1031,8 @@ impl HybridTransport {
     async fn next(&mut self) -> ResultType<BytesMut> {
         loop {
             self.check()?;
+            let now = Instant::now();
+            let reorder_due = self.receiving.values().filter_map(|stream| stream.reorder_due(now)).min();
             tokio::select! {
                 biased;
                 changed = self.failure.changed() => { changed.context("UDP session workers stopped")?; self.check()?; }
@@ -1054,6 +1070,15 @@ impl HybridTransport {
                     }
                     return Ok(bytes);
                 }
+                _ = async {
+                    if let Some(deadline) = reorder_due {
+                        if deadline > now {
+                            tokio::time::sleep_until(deadline.into()).await;
+                        }
+                    }
+                }, if reorder_due.is_some() => {
+                    if let Some(bytes) = self.take_reordered(Instant::now())? { return Ok(bytes); }
+                }
                 frame = self.media.recv(), if !self.host => {
                     let frame = frame.context("UDP media receiver stopped")?;
                     if let Some(bytes) = self.deliver(frame)? { return Ok(bytes); }
@@ -1066,10 +1091,8 @@ impl HybridTransport {
             return Ok(None);
         }
         let metadata = frame.metadata;
-        let Some(state) = self
-            .receiving
-            .get_mut(&(metadata.kind, metadata.display_id))
-        else {
+        let key = (metadata.kind, metadata.display_id);
+        let Some(state) = self.receiving.get(&key) else {
             return Ok(None);
         };
         if metadata.epoch != state.epoch || state.last.is_some_and(|last| metadata.frame_id <= last)
@@ -1082,27 +1105,35 @@ impl HybridTransport {
         {
             bail!("UDP media payload metadata mismatch");
         }
+        let gap = metadata.kind == MediaKind::Video
+            && !metadata.keyframe
+            && !state.needs_keyframe
+            && state.expected() != Some(metadata.frame_id);
+        if gap && state.held.contains_key(&metadata.frame_id) {
+            return Ok(None);
+        }
+        let hold = gap && self.has_reorder_space(frame.payload.len());
+        let state = self.receiving.get_mut(&key).expect("invariant: receiving stream");
+        if hold {
+            state.held.insert(
+                metadata.frame_id,
+                (frame, Instant::now() + VIDEO_REORDER_WINDOW),
+            );
+            return Ok(None);
+        }
         if metadata.kind == MediaKind::Video {
-            if state
-                .last
-                .is_some_and(|last| last.checked_add(1) != Some(metadata.frame_id))
-            {
+            if gap {
+                state.held.clear();
                 state.needs_keyframe = true;
             }
             if metadata.keyframe {
                 state.needs_keyframe = false;
             }
             if state.needs_keyframe {
-                if self
-                    .video_recovery
-                    .lock()
-                    .unwrap()
-                    .request(metadata, false, Instant::now())
-                {
-                    request_refresh(&self.writer, metadata.display_id)?;
-                }
+                self.request_gap_recovery(metadata, Instant::now())?;
                 return Ok(None);
             }
+            state.held.retain(|id, _| *id > metadata.frame_id);
         }
         state.last = Some(metadata.frame_id);
         self.video_recovery
@@ -1112,6 +1143,38 @@ impl HybridTransport {
         Ok(Some(frame.payload.try_into_mut().unwrap_or_else(
             |payload| BytesMut::from(payload.as_ref()),
         )))
+    }
+
+    fn has_reorder_space(&self, size: usize) -> bool {
+        let (frames, bytes) = self.receiving.values().flat_map(|state| state.held.values()).fold(
+            (0, size),
+            |(count, bytes), (frame, _)| (count + 1, bytes + frame.payload.len()),
+        );
+        frames < VIDEO_REORDER_FRAMES && bytes <= media::MAX_VIDEO_FRAME
+    }
+
+    fn take_reordered(&mut self, now: Instant) -> ResultType<Option<BytesMut>> {
+        let Some(stream) = self.receiving.values_mut().find(|stream| {
+            stream.reorder_due(now).is_some_and(|due| due <= now)
+        }) else {
+            return Ok(None);
+        };
+        let (id, (frame, _)) = stream.held.pop_first().expect("invariant: reordered frame due");
+        if stream.expected() == Some(id) {
+            return self.deliver(frame);
+        }
+        let gap = stream.held.last_key_value().map_or(frame.metadata, |(_, (latest, _))| latest.metadata);
+        stream.held.clear();
+        stream.needs_keyframe = true;
+        self.request_gap_recovery(gap, now)?;
+        Ok(None)
+    }
+
+    fn request_gap_recovery(&self, metadata: FrameMetadata, now: Instant) -> ResultType<()> {
+        if self.video_recovery.lock().unwrap().request(metadata, false, now) {
+            request_refresh(&self.writer, metadata.display_id)?;
+        }
+        Ok(())
     }
 }
 
@@ -1406,6 +1469,7 @@ mod tests {
                         )
                         .unwrap(),
                         queued: Instant::now() - Duration::from_secs(1),
+                        video_bytes: None,
                     })
                     .unwrap_or_else(|_| panic!("fixture audio queue must fit"));
             }
@@ -1586,27 +1650,16 @@ mod tests {
             .unwrap();
         assert_eq!(host.video_bitrate_budget(), None);
         host.set_media_bitrate_limit(1_000).unwrap();
-        let released = Arc::new(Notify::new());
-        let notify = released.clone();
-        host.media_sender()
-            .unwrap()
-            .on_video_released(move |_, _| notify.notify_one())
-            .unwrap();
         let mut serving = tokio::spawn(async move {
             host.send(&video(true, 100)).await.unwrap();
-            // A producer waiting for wire completion has no queued successor.
-            let mut fetched = false;
             let mut tick = interval(Duration::from_millis(8));
+            tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let until = tokio::time::sleep(Duration::from_millis(800));
             tokio::pin!(until);
             loop {
                 tokio::select! {
                     _ = &mut until => return (host.video_bitrate_budget(), host),
-                    _ = released.notified() => fetched = true,
-                    _ = tick.tick(), if fetched => {
-                        fetched = false;
-                        host.send(&video(false, 1024)).await.unwrap();
-                    }
+                    _ = tick.tick() => host.send(&video(false, 1024)).await.unwrap(),
                     packet = host.next() => { packet.unwrap().unwrap(); }
                 }
             }
@@ -1737,6 +1790,16 @@ mod tests {
         let mut invalid = frame(4, false);
         invalid.metadata.keyframe = true;
         assert!(transport.deliver(invalid).is_err());
+
+        assert!(transport.deliver(frame(5, false)).unwrap().is_none());
+        assert!(transport.deliver(frame(4, false)).unwrap().is_some());
+        assert!(transport.take_reordered(Instant::now()).unwrap().is_some());
+        assert!(transport.deliver(frame(6, false)).unwrap().is_some());
+
+        assert!(transport.deliver(frame(8, false)).unwrap().is_none());
+        assert!(transport.take_reordered(Instant::now() + VIDEO_REORDER_WINDOW).unwrap().is_none());
+        assert!(transport.deliver(frame(7, false)).unwrap().is_none());
+        assert!(transport.deliver(frame(9, true)).unwrap().is_some());
     }
     #[tokio::test]
     async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
@@ -2019,9 +2082,9 @@ mod tests {
         let second = first.clone();
         first.send_video(Arc::new(video(true, 64))).unwrap();
         second.send_video(Arc::new(video(false, 64))).unwrap();
-        // Full admission must consume an ID and issue an abandoned notice. The
-        // next admitted delta cannot conceal a gap in the reference chain.
-        first.send_video(Arc::new(video(false, 64))).unwrap();
+        for _ in 2..VIDEO_QUEUE {
+            first.send_video(Arc::new(video(false, 64))).unwrap();
+        }
         let a = channels
             .frames
             .recv()
@@ -2039,6 +2102,11 @@ mod tests {
             .descriptor()
             .metadata;
         assert_eq!((a.epoch, a.frame_id, b.epoch, b.frame_id), (1, 0, 1, 1));
+        for expected in 2..VIDEO_QUEUE - 1 {
+            let queued = channels.frames.try_recv().unwrap();
+            assert_eq!(queued.plan.descriptor().metadata.frame_id, expected as u64);
+        }
+        assert!(channels.frames.try_recv().is_err());
         second.send_video(Arc::new(video(false, 64))).unwrap();
         let after_gap = channels
             .frames
@@ -2048,36 +2116,29 @@ mod tests {
             .plan
             .descriptor()
             .metadata;
-        assert_eq!((after_gap.epoch, after_gap.frame_id), (1, 3));
+        assert_eq!((after_gap.epoch, after_gap.frame_id), (1, VIDEO_QUEUE as u64));
         drop(transport);
         assert!(first.send_video(Arc::new(video(true, 64))).is_err());
         assert!(second.send_video(Arc::new(video(true, 64))).is_err());
     }
     #[tokio::test]
-    async fn video_producer_is_released_for_pre_ready_and_full_queue_discards() {
+    async fn delta_backpressure_preserves_admission_for_a_keyframe() {
         let (_client, host) = backpressured_streams();
-        let (transport, _channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
+        let (transport, mut channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
         let producer = transport.outbound.clone();
-        let (released, mut notifications) = mpsc::unbounded_channel();
-        producer
-            .on_video_released(move |display, _| {
-                released.send(display).unwrap();
-            })
-            .unwrap();
         producer.send_video(Arc::new(video(true, 64))).unwrap();
-        assert_eq!(notifications.try_recv().unwrap(), 0);
+        assert!(channels.frames.try_recv().is_err());
         transport.ready.store(true, Ordering::Release);
+        for _ in 0..VIDEO_QUEUE {
+            producer.send_video(Arc::new(video(false, 64))).unwrap();
+        }
         producer.send_video(Arc::new(video(true, 64))).unwrap();
-        producer.send_video(Arc::new(video(false, 64))).unwrap();
-        assert!(
-            notifications.try_recv().is_err(),
-            "enqueue must not release the producer before sending"
-        );
-        producer.send_video(Arc::new(video(false, 64))).unwrap();
-        assert_eq!(notifications.try_recv().unwrap(), 0);
-        drop(transport);
-        assert!(producer.send_video(Arc::new(video(true, 64))).is_err());
-        assert!(notifications.try_recv().is_err());
+        for _ in 0..VIDEO_QUEUE - 1 {
+            assert!(!channels.frames.try_recv().unwrap().plan.descriptor().metadata.keyframe);
+        }
+        let recovery = channels.frames.try_recv().unwrap().plan.descriptor().metadata;
+        assert!(recovery.keyframe);
+        assert_eq!(recovery.frame_id, VIDEO_QUEUE as u64);
     }
 
     #[tokio::test]
@@ -2109,32 +2170,18 @@ mod tests {
             .unwrap()
             .unwrap();
         host.set_media_bitrate_limit(8_000).unwrap();
-        let released = Arc::new(Notify::new());
-        let notify = released.clone();
-        host.media_sender()
-            .unwrap()
-            .on_video_released(move |_, _| notify.notify_one())
-            .unwrap();
         let serving = tokio::spawn(async move {
             let mut refresh = true;
             let mut refreshes = 0;
             let mut produced = 0;
-            let mut fetched = true;
             let mut tick = interval(Duration::from_nanos(8_333_333));
             tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
-                    _ = released.notified() => fetched = true,
-                    _ = tick.tick(), if fetched => {
-                        fetched = false;
+                    _ = tick.tick() => {
                         let key = std::mem::take(&mut refresh);
                         let bytes = if key { 300_000 } else if produced == 1 { 60_000 } else { 4_000 };
                         host.send(&video(key, bytes)).await.unwrap();
-                        if !key && produced == 1 {
-                            timeout(Duration::from_millis(20), released.notified()).await
-                                .expect("delta production must overlap the ongoing initial UDP send");
-                            fetched = true;
-                        }
                         produced += 1;
                     }
                     packet = host.next() => {
@@ -2527,15 +2574,15 @@ fn transmission(
     queued: Instant,
 ) -> Transmission {
     let descriptor = plan.descriptor();
-    let ttl = match (descriptor.metadata.kind, descriptor.metadata.keyframe) {
-        (MediaKind::Audio, _) => media::AUDIO_TTL,
-        (_, true) => media::keyframe_deadline(descriptor.total_size as usize, effective_bps),
-        _ => media::DELTA_TTL,
+    let deadline = match (descriptor.metadata.kind, descriptor.metadata.keyframe) {
+        (MediaKind::Audio, _) => queued + media::AUDIO_TTL,
+        (_, true) => queued + media::keyframe_deadline(descriptor.total_size as usize, effective_bps),
+        _ => (Instant::now() + media::DELTA_TTL).min(queued + VIDEO_QUEUE_AGE),
     };
     Transmission {
         plan,
         indices: indices.into(),
-        deadline: queued + ttl,
+        deadline,
         initial,
         queued,
     }
@@ -2551,7 +2598,6 @@ async fn host_media(
     writer: ReliableWriter,
     ready: Arc<AtomicBool>,
     bitrate_budget: Arc<AtomicU64>,
-    released: Arc<OnceLock<VideoReleased>>,
 ) {
     let WorkerChannels {
         mut frames,
@@ -2601,9 +2647,6 @@ async fn host_media(
                             cached.retain(|metadata| (metadata.kind, metadata.display_id) != key);
                             retries.retain(|retry: &Transmission| (retry.plan.descriptor().metadata.kind, retry.plan.descriptor().metadata.display_id) != key);
                             if current.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) {
-                                if current.as_ref().is_some_and(|frame| frame.initial && frame.plan.descriptor().metadata.keyframe) {
-                                    video_released(&released, epoch.kind, epoch.display, Instant::now());
-                                }
                                 current = None;
                             }
                             if sound.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) { sound = None; }
@@ -2654,7 +2697,7 @@ async fn host_media(
                         // Idle restart windows and large IDRs are not evidence of a slow path.
                         let backlogged = current.as_ref().is_some_and(|frame|
                             !frame.plan.descriptor().metadata.keyframe
-                                && (released.get().is_some() || !frames.is_empty()
+                                && (!frames.is_empty()
                                     || frame.deadline.saturating_duration_since(now) <= Duration::from_millis(25)));
                         if backlogged || (previous != 0 && estimate > previous) {
                             bitrate_budget.store(estimate, Ordering::Release);
@@ -2678,15 +2721,16 @@ async fn host_media(
                 }
                 frame = frames.recv(), if current.is_none() && repair.is_none() => {
                     let frame = frame.context("UDP media producer stopped")?;
-                    let queued = frame.queued;
-                    let frame = frame.plan;
+                    let QueuedFrame { plan: frame, queued, video_bytes } = frame;
+                    drop(video_bytes);
                     let metadata = frame.descriptor().metadata;
                     if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) {
-                        video_released(&released, metadata.kind, metadata.display_id, queued);
                         continue;
                     }
-                    if !metadata.keyframe {
-                        video_released(&released, metadata.kind, metadata.display_id, queued);
+                    if !metadata.keyframe && queued.elapsed() >= VIDEO_QUEUE_AGE {
+                        video_metrics.expired_messages += 1;
+                        frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
+                        continue;
                     }
                     if metadata.keyframe {
                         for evicted in cache.insert(frame.clone(), Instant::now())? {
@@ -2706,7 +2750,6 @@ async fn host_media(
                             let expired = slot.take().expect("invariant: expired transmission exists");
                             let metadata = expired.plan.descriptor().metadata;
                             if expired.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
-                            if expired.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
                         }
@@ -2749,7 +2792,6 @@ async fn host_media(
                         }
                         SendDecision::Expired => {
                             if frame.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
-                            if frame.initial && metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, now); }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
                         }
@@ -2770,7 +2812,6 @@ async fn host_media(
                                         cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?;
                                     }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
-                                    if metadata.keyframe { video_released(&released, metadata.kind, metadata.display_id, Instant::now()); }
                                 } else {
                                     video_metrics.max_keyframe_repair_time = video_metrics.max_keyframe_repair_time.max(elapsed);
                                 }

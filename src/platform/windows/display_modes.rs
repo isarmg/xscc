@@ -88,6 +88,68 @@ pub(crate) fn supported(name: &str) -> SupportedResolutions {
 }
 
 pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
+    change_guarded(name, requested, false)
+}
+
+pub(crate) fn change_for_session(name: &str, requested: &Resolution) -> ResultType<()> {
+    change_guarded(name, requested, true)
+}
+
+fn matches_mode(current: &Resolution, requested: &Resolution) -> bool {
+    (current.width, current.height) == (requested.width, requested.height)
+        && (requested.refresh_rate == 0 || current.refresh_rate == requested.refresh_rate)
+}
+
+fn change_guarded(name: &str, requested: &Resolution, remember: bool) -> ResultType<()> {
+    let presentation = crate::virtual_display_manager::before_display_mode_change()?;
+    let original = current(name)?;
+    if !matches_mode(&original, requested) {
+        if remember && !crate::virtual_display_manager::amyuni_idd::is_my_display(name) {
+            // Record under the mode-change guard, including partial Windows failures.
+            crate::server::display_service::set_last_changed_resolution(
+                name,
+                original,
+                (requested.width, requested.height),
+            );
+        }
+        if requested.refresh_rate == 0 {
+            super::apply_display_size(
+                name,
+                usize::try_from(requested.width)?,
+                usize::try_from(requested.height)?,
+            )?;
+        } else {
+            let applied = match &presentation {
+                Some(guard) => guard.change_virtual_mode(name, requested)?,
+                None => false,
+            };
+            if !applied {
+                apply_mode(name, requested)?;
+            }
+        }
+    }
+    if let Some(presentation) = presentation {
+        presentation.finish()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn restore(
+    name: &str,
+    original: &Resolution,
+    _idle: &crate::server::video_service::CaptureIdleGuard<'_>,
+) -> ResultType<()> {
+    if !matches_mode(&current(name)?, original) {
+        if original.refresh_rate != 0 {
+            apply_mode(name, original)?;
+        } else {
+            super::apply_display_size(name, original.width as usize, original.height as usize)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_mode(name: &str, requested: &Resolution) -> ResultType<()> {
     let mut mode = modes(name)
         .into_iter()
         .find(|mode| {
@@ -99,17 +161,6 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
         .ok_or_else(|| {
             hbb_common::anyhow::anyhow!("The display driver does not offer this mode")
         })?;
-    let presentation = crate::virtual_display_manager::before_display_mode_change()?;
-    let virtual_mode_applied = match &presentation {
-        Some(guard) => guard.change_virtual_mode(name, requested)?,
-        None => false,
-    };
-    if virtual_mode_applied {
-        if let Some(presentation) = presentation {
-            presentation.finish()?;
-        }
-        return Ok(());
-    }
     let device = str_to_device_name(name);
     mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_DISPLAYORIENTATION;
     let test =
@@ -130,10 +181,7 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
         bail!("Apply display mode failed (result {result})");
     }
     let actual = current(name)?;
-    if actual.width != requested.width
-        || actual.height != requested.height
-        || actual.refresh_rate != requested.refresh_rate
-    {
+    if !matches_mode(&actual, requested) {
         bail!(
             "Windows applied {}×{} at {} Hz instead of the requested mode",
             actual.width,
@@ -141,8 +189,26 @@ pub(crate) fn change(name: &str, requested: &Resolution) -> ResultType<()> {
             actual.refresh_rate
         );
     }
-    if let Some(presentation) = presentation {
-        presentation.finish()?;
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_dimensions_at_a_different_refresh_rate_need_restoration() {
+        let saved = Resolution {
+            width: 1920,
+            height: 1080,
+            refresh_rate: 120,
+            ..Default::default()
+        };
+        let live = Resolution {
+            refresh_rate: 60,
+            ..saved.clone()
+        };
+        assert!(!matches_mode(&live, &saved));
+        assert!(matches_mode(&saved, &saved));
+    }
 }

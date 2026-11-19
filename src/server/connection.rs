@@ -358,11 +358,12 @@ impl ConnInner {
         }
     }
 
-    // Enqueue and barrier participation share the same lock as mode publication.
+    // Return whether the legacy TCP queue requires a handoff acknowledgement.
     pub(super) fn send_video(&self, message: Arc<Message>) -> bool {
         let writer = self.video_writer.lock().unwrap();
         if let Some(writer) = writer.as_ref() {
-            writer.send_video(message).is_ok()
+            let _ = writer.send_video(message);
+            false
         } else {
             self.tx_video
                 .as_ref()
@@ -425,12 +426,6 @@ impl Connection {
             .stream
             .media_sender()
             .ok_or_else(|| hbb_common::anyhow::anyhow!("UDP media sender unavailable"))?;
-        let id = self.inner.id();
-        if !self.video_ack_required {
-            writer.on_video_released(move |display, queued| {
-                video_service::notify_video_frame_fetched(display as usize, id, Some(queued));
-            })?;
-        }
         writer.migrate_video(&mut self.rx_video)?;
         *published = Some(writer);
         Ok(())
@@ -2796,13 +2791,13 @@ impl Connection {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if s.width != 0 && s.height != 0 {
                     self.change_resolution(
-                        None,
-                        &Resolution {
+                        Resolution {
                             width: s.width,
                             height: s.height,
                             ..Default::default()
                         },
-                    );
+                    )
+                    .await;
                 }
             }
 
@@ -2967,56 +2962,47 @@ impl Connection {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn change_resolution(&mut self, d: Option<usize>, r: &Resolution) {
-        if self.keyboard {
-            if let Ok(displays) = display_service::try_get_displays() {
-                let display_idx = d.unwrap_or(self.display_idx);
-                if let Some(display) = displays.get(display_idx) {
-                    let name = display.name();
-                    #[cfg(windows)]
-                    if let Some(_ok) =
-                        virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
-                            &name,
-                            r.width as _,
-                            r.height as _,
-                        )
-                    {
-                        return;
-                    }
-                    #[allow(unused_mut)]
-                    let mut record_changed = true;
-                    #[cfg(windows)]
-                    if virtual_display_manager::amyuni_idd::is_my_display(&name) {
-                        record_changed = false;
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    let scale = 1.0;
-                    #[cfg(target_os = "macos")]
-                    let scale = display.scale();
-                    let original = (
-                        ((display.width() as f64) / scale).round() as _,
-                        (display.height() as f64 / scale).round() as _,
-                    );
-                    if record_changed {
-                        display_service::set_last_changed_resolution(
-                            &name,
-                            original,
-                            (r.width, r.height),
-                        );
-                    }
-                    if let Err(e) =
-                        crate::platform::change_resolution(&name, r.width as _, r.height as _)
-                    {
-                        log::error!(
-                            "Failed to change resolution '{}' to ({},{}): {:?}",
-                            &name,
-                            r.width,
-                            r.height,
-                            e
-                        );
-                    }
+    async fn change_resolution(&mut self, requested: Resolution) {
+        if !self.keyboard {
+            return;
+        }
+        let index = self.display_idx;
+        let changed = tokio::task::spawn_blocking(move || -> ResultType<()> {
+            let displays = display_service::try_get_displays()?;
+            let Some(display) = displays.get(index) else {
+                return Ok(());
+            };
+            let name = display.name();
+            #[cfg(not(windows))]
+            let original = display_service::original_capture_size(display);
+            drop(displays);
+            #[cfg(windows)]
+            {
+                if virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
+                    &name,
+                    requested.width as _,
+                    requested.height as _,
+                )
+                .is_some()
+                {
+                    return Ok(());
                 }
+                crate::platform::windows::display_modes::change_for_session(&name, &requested)?;
             }
+            #[cfg(not(windows))]
+            {
+                display_service::set_last_changed_resolution(
+                    &name,
+                    original,
+                    (requested.width, requested.height),
+                );
+                crate::platform::change_resolution(&name, requested.width as _, requested.height as _)?;
+            }
+            Ok(())
+        })
+        .await;
+        if let Err(error) = changed.map_err(hbb_common::anyhow::Error::from).and_then(|result| result) {
+            log::error!("Change display {index} resolution failed: {error:#}");
         }
     }
 
@@ -3897,9 +3883,9 @@ pub(crate) fn cleanup_orphaned_virtual_displays() {
 
 #[cfg(windows)]
 pub(crate) fn finish_session_display() -> ResultType<()> {
-    if !virtual_display_manager::session_display_active()
-        && !virtual_display_manager::session_display_cleanup_required()?
-    {
+    let remove_virtual = virtual_display_manager::session_display_active()
+        || virtual_display_manager::session_display_cleanup_required()?;
+    if !remove_virtual && !display_service::has_resolution_changes() {
         return Ok(());
     }
     let started = Instant::now();
@@ -3910,6 +3896,10 @@ pub(crate) fn finish_session_display() -> ResultType<()> {
     );
     let idle = video_service::wait_for_capture_idle(Duration::from_secs(5))
         .map_err(|error| hbb_common::anyhow::anyhow!(error))?;
+    if !remove_virtual {
+        display_service::restore_session_resolutions(&idle);
+        return Ok(());
+    }
     hbb_common::throttled_log!(
         Duration::from_secs(1),
         info,
@@ -3920,7 +3910,7 @@ pub(crate) fn finish_session_display() -> ResultType<()> {
     virtual_display_manager::prepare_session_display_removal(&idle)?;
     display_service::discard_detached_resolution_changes(&temporary_resolutions);
     let mut errors = Vec::new();
-    display_service::restore_resolutions();
+    display_service::restore_resolutions(&idle);
     if let Err(error) = virtual_display_manager::reset_all() {
         errors.push(format!("remove temporary displays: {error:#}"));
     }
@@ -4154,7 +4144,7 @@ mod raii {
                 started.elapsed().as_millis()
             );
             if !remove_virtual_displays {
-                display_service::restore_session_resolutions();
+                display_service::restore_session_resolutions(&_idle);
                 return;
             }
             let temporary_resolutions =
@@ -4174,7 +4164,7 @@ mod raii {
                 return;
             }
             display_service::discard_detached_resolution_changes(&temporary_resolutions);
-            display_service::restore_resolutions();
+            display_service::restore_resolutions(&_idle);
             let removal = virtual_display_manager::reset_all();
             hbb_common::throttled_log!(
                 Duration::from_secs(1), info,

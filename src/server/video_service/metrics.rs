@@ -50,6 +50,7 @@ pub(super) struct Metrics {
     handoff: Stage,
     pacing: Stage,
     outcomes: [u64; 4],
+    encoder_backpressure: u64,
     encodes: [u64; 3],
 }
 
@@ -66,6 +67,7 @@ impl Metrics {
             handoff: Stage::default(),
             pacing: Stage::default(),
             outcomes: [0; 4],
+            encoder_backpressure: 0,
             encodes: [0; 3],
         }
     }
@@ -73,6 +75,11 @@ impl Metrics {
     pub(super) fn captured(&mut self, elapsed: Duration, state: CaptureState) {
         self.capture.record(elapsed);
         self.outcomes[state as usize] += 1;
+    }
+
+    #[cfg(any(test, all(windows, feature = "vram")))]
+    pub(super) fn encoder_backpressure(&mut self) {
+        self.encoder_backpressure += 1;
     }
 
     pub(super) fn converted(&mut self, elapsed: Duration) {
@@ -153,6 +160,7 @@ impl fmt::Display for Sample {
         write!(f, concat!(
             "{{\"schema\":1,\"elapsed_ms\":{:.3},\"spf_target_ms\":{:.3},",
             "\"capture_calls\":{},\"frame_count\":{},\"capture_empty\":{},\"capture_would_block\":{},\"capture_failed\":{},",
+            "\"encoder_backpressure\":{},",
             "\"capture_avg_ms\":{:.3},\"capture_max_ms\":{:.3},\"convert_calls\":{},\"convert_avg_ms\":{:.3},\"convert_max_ms\":{:.3},",
             "\"encode_calls\":{},\"fresh_encode_calls\":{},\"replay_encode_calls\":{},\"repeat_encode_calls\":{},",
             "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{},",
@@ -163,6 +171,7 @@ impl fmt::Display for Sample {
             "\"pacing_calls\":{},\"pacing_avg_ms\":{:.3},\"pacing_max_ms\":{:.3}}}"
         ), milliseconds(self.elapsed), milliseconds(self.spf),
             values.capture.calls, values.outcomes[0], values.outcomes[1], values.outcomes[2], values.outcomes[3],
+            values.encoder_backpressure,
             values.capture.average_ms(), milliseconds(values.capture.max), values.convert.calls,
             values.convert.average_ms(), milliseconds(values.convert.max), values.encode_send.calls,
             values.encodes[0], values.encodes[1], values.encodes[2],
