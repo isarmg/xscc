@@ -2464,6 +2464,7 @@ async fn client_media(
         let mut packet = [0; media::DEFAULT_MTU + 1];
         loop {
             if closing.borrow().is_some() { return Ok(()); }
+            let report_at = pending.receiver.next_report_at();
             tokio::select! {
                 biased;
                 changed = closing.changed() => { changed.context("UDP TCP owner stopped")?; if closing.borrow().is_some() { return Ok(()); } }
@@ -2502,6 +2503,12 @@ async fn client_media(
                     }
                     _ => bail!("Invalid controller UDP media command"),
                 },
+                _ = tokio::time::sleep_until(report_at.unwrap_or(started).into()), if report_at.is_some() => {
+                    if let Some(report) = pending.receiver.take_report(Instant::now()) {
+                        let report = pending.sender.seal_report(&report)?;
+                        pending.socket.send(&report.bytes).await.context("Send UDP receive report")?;
+                    }
+                }
                 _ = timer.tick() => {
                     let now = Instant::now();
                     let path_ready = ready.load(Ordering::Acquire);
@@ -2510,10 +2517,6 @@ async fn client_media(
                         let probe = pending.sender.seal_probe(ProbeKind::Probe, probe_token)?;
                         pending.socket.send(&probe.bytes).await.context("Validate UDP media path")?;
                         next_probe = now + if path_ready { Duration::from_secs(15) } else { Duration::from_millis(250) };
-                    }
-                    if let Some(report) = pending.receiver.take_report(now) {
-                        let report = pending.sender.seal_report(&report)?;
-                        pending.socket.send(&report.bytes).await.context("Send UDP receive report")?;
                     }
                     recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery)?;
                     let tick = video_recovery.lock().unwrap().tick(now);

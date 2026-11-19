@@ -22,6 +22,9 @@ pub const MAX_FRAGMENTS: usize = 8192;
 pub const MAX_ACK_RANGES: usize = 64;
 pub const REPLAY_WINDOW: u64 = 8192;
 pub const REPORT_INTERVAL: Duration = Duration::from_millis(20);
+// A recovery frame may be paced two packets at a time at the minimum send
+// window. Release that window sooner while keyframe fragments are arriving.
+const KEYFRAME_REPORT_INTERVAL: Duration = Duration::from_millis(4);
 pub const DELTA_TTL: Duration = Duration::from_millis(100);
 pub const AUDIO_TTL: Duration = Duration::from_millis(40);
 const MAGIC: &[u8; 4] = b"XSMU";
@@ -452,6 +455,7 @@ pub struct DatagramReceiver {
     largest_at: Option<Instant>,
     last_report: Option<Instant>,
     unreported: usize,
+    unreported_keyframe: bool,
 }
 impl DatagramReceiver {
     pub fn new(seed: &[u8; 32], sid: SessionId, direction: Direction) -> Result<Self, MediaError> {
@@ -463,6 +467,7 @@ impl DatagramReceiver {
             largest_at: None,
             last_report: None,
             unreported: 0,
+            unreported_keyframe: false,
         })
     }
     pub fn open(&mut self, bytes: &[u8], now: Instant) -> Result<AuthenticatedPacket, MediaError> {
@@ -503,8 +508,9 @@ impl DatagramReceiver {
             _ => return Err(MediaError::InvalidEnvelope),
         };
         self.replay.commit(sequence);
-        if matches!(packet, AuthenticatedPacket::Fragment(_)) {
+        if let AuthenticatedPacket::Fragment(fragment) = &packet {
             self.received(sequence, now);
+            self.unreported_keyframe |= fragment.descriptor.metadata.keyframe;
         }
         Ok(packet)
     }
@@ -541,17 +547,30 @@ impl DatagramReceiver {
         }
         self.unreported = self.unreported.saturating_add(1);
     }
-    pub fn take_report(&mut self, now: Instant) -> Option<ReceiveReport> {
+    pub fn next_report_at(&self) -> Option<Instant> {
         let largest_at = self.largest_at?;
-        if self.unreported == 0
-            || (self.unreported < 32
-                && now.saturating_duration_since(self.last_report.unwrap_or(largest_at))
-                    < REPORT_INTERVAL)
-        {
+        if self.unreported == 0 {
             return None;
         }
+        if self.unreported >= 32 {
+            return Some(largest_at);
+        }
+        let interval = if self.unreported_keyframe {
+            KEYFRAME_REPORT_INTERVAL
+        } else {
+            REPORT_INTERVAL
+        };
+        Some(self.last_report.unwrap_or(largest_at) + interval)
+    }
+
+    pub fn take_report(&mut self, now: Instant) -> Option<ReceiveReport> {
+        if now < self.next_report_at()? {
+            return None;
+        }
+        let largest_at = self.largest_at?;
         self.last_report = Some(now);
         self.unreported = 0;
+        self.unreported_keyframe = false;
         Some(ReceiveReport {
             largest: self.ranges[0].last,
             ack_delay_us: now
@@ -2050,6 +2069,55 @@ mod tests {
             .unwrap();
         assert_eq!(completed.metadata, plan.descriptor().metadata);
         assert_eq!(&completed.payload, plan.payload());
+    }
+
+    #[test]
+    fn keyframe_feedback_reopens_a_two_packet_window_before_the_next_periodic_report() {
+        let now = Instant::now();
+        let sid = SessionId([6; 16]);
+        let mut sender = DatagramSender::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let mut receiver =
+            DatagramReceiver::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let plan = FramePlan::new(
+            metadata(1, true),
+            Bytes::from(vec![0; DEFAULT_MTU * 3]),
+            DEFAULT_MTU,
+        )
+        .unwrap();
+        let mut pacer = Pacer::new(DEFAULT_MTU, 5_000_000, now).unwrap();
+        pacer
+            .on_probe_response(Duration::from_millis(4), now)
+            .unwrap();
+        pacer.window = 2 * DEFAULT_MTU;
+        let deadline = now + Duration::from_secs(1);
+        for index in 0..2 {
+            let packet = sender.seal_fragment(&plan, index).unwrap();
+            assert_eq!(
+                pacer.decide(packet.bytes.len(), deadline, now, false),
+                SendDecision::Send,
+            );
+            pacer
+                .on_sent(packet.sequence, packet.bytes.len(), now)
+                .unwrap();
+            receiver.open(&packet.bytes, now).unwrap();
+        }
+        let remaining = plan.packet_len(2).unwrap();
+        assert!(matches!(
+            pacer.decide(remaining, deadline, now, false),
+            SendDecision::Wait(_)
+        ));
+        assert!(receiver
+            .take_report(now + Duration::from_millis(3))
+            .is_none());
+        let feedback_at = receiver.next_report_at().unwrap();
+        assert!(feedback_at < now + REPORT_INTERVAL);
+        let report = receiver.take_report(feedback_at).unwrap();
+        pacer.on_report(&report, feedback_at).unwrap();
+        assert_eq!(
+            pacer.decide(remaining, deadline, feedback_at, false),
+            SendDecision::Send,
+        );
+        assert!(receiver.next_report_at().is_none());
     }
 
     #[test]
