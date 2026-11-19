@@ -2480,6 +2480,7 @@ struct VideoSendMetrics {
     max_keyframe_bytes: u32,
     max_keyframe_send_time: Duration,
     max_keyframe_repair_time: Duration,
+    keyframe_feedback_probes: u32,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2493,6 +2494,7 @@ impl VideoSendMetrics {
             max_keyframe_bytes: 0,
             max_keyframe_send_time: Duration::ZERO,
             max_keyframe_repair_time: Duration::ZERO,
+            keyframe_feedback_probes: 0,
         }
     }
 
@@ -2504,13 +2506,14 @@ impl VideoSendMetrics {
         if self.sent_messages > 0
             || self.expired_messages > 0
             || !self.max_keyframe_repair_time.is_zero()
+            || self.keyframe_feedback_probes > 0
         {
             hbb_common::log::info!(target: "xscc::host_udp_metrics",
-                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3},\"max_keyframe_bytes\":{},\"max_keyframe_send_ms\":{:.3},\"max_keyframe_repair_ms\":{:.3}}}",
+                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3},\"max_keyframe_bytes\":{},\"max_keyframe_send_ms\":{:.3},\"max_keyframe_repair_ms\":{:.3},\"keyframe_feedback_probes\":{}}}",
                 elapsed.as_secs_f64() * 1_000.0, self.sent_messages, self.expired_messages,
                 self.max_send_time.as_secs_f64() * 1_000.0, self.max_keyframe_bytes,
                 self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
-                self.max_keyframe_repair_time.as_secs_f64() * 1_000.0);
+                self.max_keyframe_repair_time.as_secs_f64() * 1_000.0, self.keyframe_feedback_probes);
         }
         *self = Self::new(now);
     }
@@ -2644,6 +2647,8 @@ async fn host_media(
                     AuthenticatedPacket::Report(report) => {
                         let now = Instant::now();
                         pacer.on_report(&report, now)?;
+                        // Delayed probe responses must not reset newly acknowledged traffic.
+                        probe = None;
                         let estimate = pacer.effective_bitrate();
                         let previous = bitrate_budget.load(Ordering::Acquire);
                         // Idle restart windows and large IDRs are not evidence of a slow path.
@@ -2738,6 +2743,7 @@ async fn host_media(
                             if probe.is_none_or(|(_, sent)| sent.elapsed() >= Duration::from_millis(500)) {
                                 let mut token = [0; 16]; randombytes::randombytes_into(&mut token);
                                 udp.send_probe(token).await?; probe = Some((token, Instant::now()));
+                                if metadata.keyframe { video_metrics.keyframe_feedback_probes += 1; }
                             }
                             next_send = now + media::REPORT_INTERVAL; break;
                         }

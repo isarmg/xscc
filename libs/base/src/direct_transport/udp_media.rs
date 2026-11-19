@@ -1568,6 +1568,13 @@ impl Pacer {
         }
         let usable = self.window.saturating_sub(2 * self.mtu).max(2 * self.mtu);
         if self.flights.len() >= 65_536 || self.inflight_bytes + bytes > usable {
+            // A lost window cannot elicit another report. Probe after allowing
+            // several report intervals and at least four measured round trips.
+            if now.saturating_duration_since(self.last_feedback)
+                >= (REPORT_INTERVAL * 4).max(self.srtt * 4)
+            {
+                return SendDecision::FeedbackRequired;
+            }
             return SendDecision::Wait(self.srtt.min(REPORT_INTERVAL));
         }
         if self.tokens < bytes as f64 {
@@ -2399,6 +2406,34 @@ mod tests {
             [Recovery::RefreshVideo(metadata(20, true))]
         );
         quota.note_notice(next, now).unwrap();
+    }
+
+    #[test]
+    fn a_lost_send_window_probes_before_the_path_idle_timeout() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(1);
+        let rtt = Duration::from_millis(5);
+        let mut pacer = Pacer::new(DEFAULT_MTU, 8_000_000, now).unwrap();
+        pacer.on_probe_response(rtt, now).unwrap();
+        for sequence in 0..8 {
+            pacer.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+        }
+
+        assert!(matches!(
+            pacer.decide(DEFAULT_MTU, deadline, now + REPORT_INTERVAL * 3, false),
+            SendDecision::Wait(_)
+        ));
+        let probe = now + REPORT_INTERVAL * 4;
+        assert_eq!(
+            pacer.decide(DEFAULT_MTU, deadline, probe, false),
+            SendDecision::FeedbackRequired
+        );
+        assert_eq!(pacer.inflight_bytes(), 8 * DEFAULT_MTU);
+        pacer.on_probe_response(rtt, probe + rtt).unwrap();
+        assert_eq!(
+            pacer.decide(DEFAULT_MTU, deadline, probe + rtt, false),
+            SendDecision::Send
+        );
     }
 
     #[test]

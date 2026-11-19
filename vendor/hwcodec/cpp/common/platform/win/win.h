@@ -27,6 +27,15 @@ using namespace DirectX;
 
 class NativeDevice {
 public:
+  struct BgraToNv12Views {
+    ComPtr<ID3D11VideoProcessorEnumerator> enumerator;
+    ComPtr<ID3D11VideoProcessorInputView> input;
+    ComPtr<ID3D11VideoProcessorOutputView> output;
+    ID3D11Texture2D *input_texture = nullptr;
+    ID3D11Texture2D *output_texture = nullptr;
+    int input_slice = 0;
+  };
+
   bool Init(int64_t luid, ID3D11Device *device, int pool_size = 1);
   bool EnsureTexture(int width, int height);
   bool SetTexture(ID3D11Texture2D *texture);
@@ -39,10 +48,12 @@ public:
   bool Process(ID3D11Texture2D *in, ID3D11Texture2D *out, int width, int height,
                D3D11_VIDEO_PROCESSOR_CONTENT_DESC content_desc,
                DXGI_COLOR_SPACE_TYPE colorSpace_in,
-               DXGI_COLOR_SPACE_TYPE colorSpace_out, int arraySlice);
+               DXGI_COLOR_SPACE_TYPE colorSpace_out, int arraySlice,
+               BgraToNv12Views *views = nullptr);
   bool BgraToNv12(ID3D11Texture2D *bgraTexture, ID3D11Texture2D *nv12Texture,
                   int width, int height, DXGI_COLOR_SPACE_TYPE colorSpace_in,
-                  DXGI_COLOR_SPACE_TYPE colorSpace_outt);
+                  DXGI_COLOR_SPACE_TYPE colorSpace_out, UINT framerate = 30,
+                  BgraToNv12Views *views = nullptr);
   bool Nv12ToBgra(int width, int height, ID3D11Texture2D *nv12Texture,
                   ID3D11Texture2D *bgraTexture, int nv12ArrayIndex);
   AdapterVendor GetVendor();

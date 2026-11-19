@@ -93,11 +93,13 @@ public:
   unsigned int pending_frames_ = 0;
   std::chrono::steady_clock::time_point amf_progress_at_{};
   std::chrono::steady_clock::time_point amf_next_slow_log_{};
+  int64_t amf_logged_slow_ms_ = 0;
   int amf_error_ = 0;
   std::unique_ptr<NativeDevice> amf_device_;
   struct CaptureSlot {
     ComPtr<ID3D11Texture2D> capture, encoder;
     ComPtr<IDXGIKeyedMutex> capture_mutex, encoder_mutex;
+    NativeDevice::BgraToNv12Views conversion_views;
     std::chrono::steady_clock::time_point submitted{};
   };
   std::array<CaptureSlot, AmfInputQueue::capacity> amf_inputs_;
@@ -419,8 +421,13 @@ private:
   void log_slow_amf(const char *phase, std::chrono::steady_clock::time_point started) {
     const auto now = util::now();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started);
-    if (elapsed.count() < 16 || now < amf_next_slow_log_) return;
-    amf_next_slow_log_ = now + std::chrono::seconds(1);
+    if (elapsed.count() < 16) return;
+    if (now >= amf_next_slow_log_) {
+      amf_next_slow_log_ = now + std::chrono::seconds(1);
+      amf_logged_slow_ms_ = 0;
+    }
+    if (elapsed.count() < amf_logged_slow_ms_ * 2) return;
+    amf_logged_slow_ms_ = elapsed.count();
     LOG_WARN(std::string("host_amf_slow phase=") + phase +
              " elapsed_ms=" + std::to_string(elapsed.count()));
   }
@@ -507,7 +514,10 @@ private:
       const auto color_out = bt709_
           ? (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P709 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709)
           : (full_range_ ? DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601 : DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P601);
-      if (!amf_device_->BgraToNv12(slot.encoder.Get(), encode_texture_, width_, height_, color_in, color_out))
+      const bool high_refresh = framerate_ > 60;
+      if (!amf_device_->BgraToNv12(slot.encoder.Get(), encode_texture_, width_, height_,
+                                  color_in, color_out, high_refresh ? framerate_ : 30,
+                                  high_refresh ? &slot.conversion_views : nullptr))
         ret = AVERROR_EXTERNAL;
     }
     amf_device_->context_->Flush();

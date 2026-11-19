@@ -403,11 +403,7 @@ bool NativeDevice::Process(ID3D11Texture2D *in, ID3D11Texture2D *out, int width,
                            D3D11_VIDEO_PROCESSOR_CONTENT_DESC content_desc,
                            DXGI_COLOR_SPACE_TYPE colorSpace_in,
                            DXGI_COLOR_SPACE_TYPE colorSpace_out,
-                           int arraySlice) {
-  D3D11_TEXTURE2D_DESC inDesc = {0};
-  D3D11_TEXTURE2D_DESC outDesc = {0};
-  in->GetDesc(&inDesc);
-  out->GetDesc(&outDesc);
+                           int arraySlice, BgraToNv12Views *views) {
   if (memcmp(&last_content_desc_, &content_desc, sizeof(content_desc)) != 0) {
     if (video_processor_enumerator_) {
       video_processor_enumerator_.Reset();
@@ -447,25 +443,36 @@ bool NativeDevice::Process(ID3D11Texture2D *in, ID3D11Texture2D *out, int width,
   video_context1_->VideoProcessorSetStreamDestRect(video_processor_.Get(), 0,
                                                    true, &rect);
 
-  D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC InputViewDesc;
-  ZeroMemory(&InputViewDesc, sizeof(InputViewDesc));
-  InputViewDesc.FourCC = 0;
-  InputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-  InputViewDesc.Texture2D.MipSlice = 0;
-  InputViewDesc.Texture2D.ArraySlice = arraySlice;
-  ComPtr<ID3D11VideoProcessorInputView> inputView = nullptr;
-  HRB(video_device_->CreateVideoProcessorInputView(
-      in, video_processor_enumerator_.Get(), &InputViewDesc,
-      inputView.ReleaseAndGetAddressOf()));
+  if (views && views->enumerator.Get() != video_processor_enumerator_.Get()) {
+    *views = {};
+    views->enumerator = video_processor_enumerator_;
+  }
 
-  D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC OutputViewDesc;
-  ZeroMemory(&OutputViewDesc, sizeof(OutputViewDesc));
-  OutputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-  OutputViewDesc.Texture2D.MipSlice = 0;
-  ComPtr<ID3D11VideoProcessorOutputView> outputView = nullptr;
-  HRB(video_device_->CreateVideoProcessorOutputView(
-      out, video_processor_enumerator_.Get(), &OutputViewDesc,
-      outputView.ReleaseAndGetAddressOf()));
+  ComPtr<ID3D11VideoProcessorInputView> transient_input;
+  auto &inputView = views ? views->input : transient_input;
+  if (!inputView || (views && (views->input_texture != in || views->input_slice != arraySlice))) {
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC desc{};
+    desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+    desc.Texture2D.ArraySlice = arraySlice;
+    HRB(video_device_->CreateVideoProcessorInputView(
+        in, video_processor_enumerator_.Get(), &desc,
+        inputView.ReleaseAndGetAddressOf()));
+    if (views) {
+      views->input_texture = in;
+      views->input_slice = arraySlice;
+    }
+  }
+
+  ComPtr<ID3D11VideoProcessorOutputView> transient_output;
+  auto &outputView = views ? views->output : transient_output;
+  if (!outputView || (views && views->output_texture != out)) {
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC desc{};
+    desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+    HRB(video_device_->CreateVideoProcessorOutputView(
+        out, video_processor_enumerator_.Get(), &desc,
+        outputView.ReleaseAndGetAddressOf()));
+    if (views) views->output_texture = out;
+  }
 
   D3D11_VIDEO_PROCESSOR_STREAM StreamData;
   ZeroMemory(&StreamData, sizeof(StreamData));
@@ -480,7 +487,8 @@ bool NativeDevice::Process(ID3D11Texture2D *in, ID3D11Texture2D *out, int width,
 bool NativeDevice::BgraToNv12(ID3D11Texture2D *bgraTexture,
                               ID3D11Texture2D *nv12Texture, int width,
                               int height, DXGI_COLOR_SPACE_TYPE colorSpace_in,
-                              DXGI_COLOR_SPACE_TYPE colorSpace_out) {
+                              DXGI_COLOR_SPACE_TYPE colorSpace_out, UINT framerate,
+                              BgraToNv12Views *views) {
   D3D11_TEXTURE2D_DESC bgraDesc = {0};
   D3D11_TEXTURE2D_DESC nv12Desc = {0};
   bgraTexture->GetDesc(&bgraDesc);
@@ -503,7 +511,7 @@ bool NativeDevice::BgraToNv12(ID3D11Texture2D *bgraTexture,
   D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc;
   ZeroMemory(&contentDesc, sizeof(contentDesc));
   contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-  contentDesc.InputFrameRate.Numerator = 30;
+  contentDesc.InputFrameRate.Numerator = framerate;
   contentDesc.InputFrameRate.Denominator = 1;
   // TODO: width height always same with desc.Width and desc.Height in test,
   // need test for decide to use which one
@@ -513,11 +521,12 @@ bool NativeDevice::BgraToNv12(ID3D11Texture2D *bgraTexture,
   contentDesc.InputHeight = height;
   contentDesc.OutputWidth = width;
   contentDesc.OutputHeight = height;
-  contentDesc.OutputFrameRate.Numerator = 30;
+  contentDesc.OutputFrameRate.Numerator = framerate;
   contentDesc.OutputFrameRate.Denominator = 1;
+  if (views) contentDesc.Usage = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 
   return Process(bgraTexture, nv12Texture, width, height, contentDesc,
-                 colorSpace_in, colorSpace_out, 0);
+                 colorSpace_in, colorSpace_out, 0, views);
 }
 
 AdapterVendor NativeDevice::GetVendor() {
