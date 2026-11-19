@@ -4,9 +4,12 @@ mod client;
 pub mod host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod send_timer;
+#[cfg(debug_assertions)]
 mod video_receive_metrics;
 mod video_send_queue;
-use crate::{client::PendingAssociation, video_receive_metrics::VideoReceiveMetrics};
+use crate::client::PendingAssociation;
+#[cfg(debug_assertions)]
+use crate::video_receive_metrics::VideoReceiveMetrics;
 #[cfg(test)]
 use crate::host as udp_host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1070,6 +1073,7 @@ impl HybridTransport {
         };
         if metadata.epoch != state.epoch || state.last.is_some_and(|last| metadata.frame_id <= last)
         {
+            #[cfg(debug_assertions)]
             if metadata.kind == MediaKind::Video {
                 hbb_common::throttled_log!(
                     Duration::from_secs(1),
@@ -1104,6 +1108,7 @@ impl HybridTransport {
         }
         if metadata.kind == MediaKind::Video {
             if gap {
+                #[cfg(debug_assertions)]
                 hbb_common::throttled_log!(
                     Duration::from_secs(1),
                     info,
@@ -1114,6 +1119,7 @@ impl HybridTransport {
                 state.needs_keyframe = true;
             }
             if metadata.keyframe {
+                #[cfg(debug_assertions)]
                 if state.needs_keyframe {
                     hbb_common::throttled_log!(
                         Duration::from_secs(1),
@@ -1158,6 +1164,7 @@ impl HybridTransport {
         if stream.expected() == Some(id) {
             return self.deliver(frame);
         }
+        #[cfg(debug_assertions)]
         hbb_common::throttled_log!(
             Duration::from_secs(1),
             info,
@@ -2372,11 +2379,14 @@ fn recovery(
     outcome: ReceiveOutcome,
     completed: &mpsc::Sender<CompletedFrame>,
     gate: &Mutex<media::VideoRecovery>,
-    video_metrics: &mut VideoReceiveMetrics,
+    #[cfg(debug_assertions)] video_metrics: &mut VideoReceiveMetrics,
 ) -> ResultType<()> {
-    video_metrics.window.expired_video_assemblies += outcome.expired_video.assemblies;
-    video_metrics.window.expired_missing_video_fragments += outcome.expired_video.missing_fragments;
-    video_metrics.window.expired_video_sent_notices += outcome.expired_video.sent_notices;
+    #[cfg(debug_assertions)]
+    {
+        video_metrics.window.expired_video_assemblies += outcome.expired_video.assemblies;
+        video_metrics.window.expired_missing_video_fragments += outcome.expired_video.missing_fragments;
+        video_metrics.window.expired_video_sent_notices += outcome.expired_video.sent_notices;
+    }
     for recovery in outcome.recovery {
         match recovery {
             Recovery::RefreshVideo(metadata) => refresh(writer, metadata, metadata.keyframe, gate)?,
@@ -2386,7 +2396,10 @@ fn recovery(
                     udp_media_control::Union::Nack(serde_json::to_vec(&nack)?.into()),
                     false,
                 )?;
-                video_metrics.window.keyframe_nacks += 1;
+                #[cfg(debug_assertions)]
+                {
+                    video_metrics.window.keyframe_nacks += 1;
+                }
             }
             Recovery::KeyframeComplete(complete) => writer.control(
                 sid,
@@ -2396,6 +2409,7 @@ fn recovery(
         }
     }
     if let Some(frame) = outcome.frame {
+        #[cfg(debug_assertions)]
         if frame.metadata.kind == MediaKind::Video {
             video_metrics.window.reassembled_video_messages += 1;
             video_metrics.window.last_reassembled_video = Some(frame.metadata);
@@ -2405,7 +2419,10 @@ fn recovery(
             Err(mpsc::error::TrySendError::Full(frame))
                 if frame.metadata.kind == MediaKind::Video =>
             {
-                video_metrics.window.video_receive_queue_drops += 1;
+                #[cfg(debug_assertions)]
+                {
+                    video_metrics.window.video_receive_queue_drops += 1;
+                }
                 refresh(writer, frame.metadata, frame.metadata.keyframe, gate)?
             }
             Err(mpsc::error::TrySendError::Full(_)) => {}
@@ -2500,6 +2517,7 @@ async fn client_media(
         reassembler.set_effective_rate(receive_rate.effective)?;
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let started = Instant::now();
+        #[cfg(debug_assertions)]
         let mut video_metrics = VideoReceiveMetrics::new(started, pending.receiver.highest_authenticated_sequence());
         let mut next_probe = started + Duration::from_millis(250);
         let mut probe_token = [0; 16]; randombytes::randombytes_into(&mut probe_token);
@@ -2521,6 +2539,7 @@ async fn client_media(
                         let now = Instant::now();
                         match reassembler.note_notice(notice, now) {
                             Ok(outcome) => {
+                                #[cfg(debug_assertions)]
                                 if matches!(notice, FrameNotice::Abandoned(metadata) if metadata.kind == MediaKind::Video) {
                                     video_metrics.window.sender_abandoned_video_messages += 1;
                                 }
@@ -2530,12 +2549,17 @@ async fn client_media(
                                     FrameNotice::Sent(descriptor) if descriptor.metadata.keyframe => {
                                         if let Some(bytes) = reassembler.received_bytes(descriptor.metadata) {
                                             let replaced = video_recovery.lock().unwrap().keyframe_progress(descriptor, bytes, now)?;
-                                            if let Some(metadata) = replaced { reassembler.discard(metadata); }
+                                            if let Some(metadata) = replaced {
+                                                #[cfg(debug_assertions)]
+                                                { video_metrics.window.superseded_keyframes += 1; }
+                                                reassembler.discard(metadata);
+                                            }
                                         }
                                     }
                                     _ => {}
                                 }
-                                recovery(&writer, pending.session_id, outcome, &completed, &video_recovery, &mut video_metrics)?;
+                                recovery(&writer, pending.session_id, outcome, &completed, &video_recovery,
+                                    #[cfg(debug_assertions)] &mut video_metrics)?;
                             }
                             Err(MediaError::WrongEpoch) => {}
                             Err(error) => return Err(error.into()),
@@ -2563,17 +2587,26 @@ async fn client_media(
                         pending.socket.send(&probe.bytes).await.context("Validate UDP media path")?;
                         next_probe = now + if path_ready { Duration::from_secs(15) } else { Duration::from_millis(250) };
                     }
-                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery, &mut video_metrics)?;
+                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery,
+                        #[cfg(debug_assertions)] &mut video_metrics)?;
                     let tick = video_recovery.lock().unwrap().tick(now);
+                    #[cfg(debug_assertions)]
+                    {
+                        video_metrics.window.stalled_keyframes += tick.abandon.len();
+                        video_metrics.window.refresh_retries += tick.refresh.len();
+                    }
                     for metadata in tick.abandon { reassembler.discard(metadata); }
                     for metadata in tick.refresh { request_refresh(&writer, metadata.display_id)?; }
+                    #[cfg(debug_assertions)]
                     video_metrics.report(now);
                 }
                 count = pending.socket.recv(&mut packet) => {
                     let count = count.context("Receive UDP media")?;
-                    video_metrics.window.socket_datagrams += 1;
+                    #[cfg(debug_assertions)]
+                    { video_metrics.window.socket_datagrams += 1; }
                     if count > pending.mtu { continue; }
                     let Ok(packet) = pending.receiver.open(&packet[..count], Instant::now()) else { continue; };
+                    #[cfg(debug_assertions)]
                     video_metrics.authenticated(pending.receiver.highest_authenticated_sequence()
                         .expect("invariant: accepted datagram updates the sequence window"));
                     match packet {
@@ -2585,7 +2618,9 @@ async fn client_media(
                             if fragment.descriptor.total_size as usize > receive_limit.load(Ordering::Acquire) { bail!("UDP frame exceeds application receive limit"); }
                             let now = Instant::now();
                             let descriptor = fragment.descriptor;
+                            #[cfg(debug_assertions)]
                             let is_video = descriptor.metadata.kind == MediaKind::Video;
+                            #[cfg(debug_assertions)]
                             if is_video { video_metrics.video_fragment(now); }
                             match reassembler.push(fragment, now) {
                                 Ok(outcome) => {
@@ -2598,16 +2633,23 @@ async fn client_media(
                                             .or_else(|| reassembler.received_bytes(descriptor.metadata));
                                         if let Some(bytes) = bytes {
                                             let replaced = video_recovery.lock().unwrap().keyframe_progress(descriptor, bytes, now)?;
-                                            if let Some(metadata) = replaced { reassembler.discard(metadata); }
+                                            if let Some(metadata) = replaced {
+                                                #[cfg(debug_assertions)]
+                                                { video_metrics.window.superseded_keyframes += 1; }
+                                                reassembler.discard(metadata);
+                                            }
                                         }
                                     }
-                                    recovery(&writer, pending.session_id, outcome, &completed, &video_recovery, &mut video_metrics)?;
+                                    recovery(&writer, pending.session_id, outcome, &completed, &video_recovery,
+                                        #[cfg(debug_assertions)] &mut video_metrics)?;
                                 }
                                 Err(MediaError::WrongEpoch) => {
-                                    video_metrics.window.video_wrong_epoch_fragments += u64::from(is_video);
+                                    #[cfg(debug_assertions)]
+                                    { video_metrics.window.video_wrong_epoch_fragments += u64::from(is_video); }
                                 }
                                 Err(MediaError::Capacity) => {
-                                    video_metrics.window.video_capacity_rejections += u64::from(is_video);
+                                    #[cfg(debug_assertions)]
+                                    { video_metrics.window.video_capacity_rejections += u64::from(is_video); }
                                 }
                                 Err(error) => return Err(error.into()),
                             }
@@ -2631,13 +2673,17 @@ struct Transmission {
     indices: VecDeque<u16>,
     deadline: Instant,
     initial: bool,
+    #[cfg(debug_assertions)]
     queued: Instant,
+    #[cfg(debug_assertions)]
     selected: Instant,
+    #[cfg(debug_assertions)]
     first_fragment: Option<Instant>,
+    #[cfg(debug_assertions)]
     send_calls: Duration,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
 #[derive(Default)]
 struct KeyframeTiming {
     queue: Duration,
@@ -2646,9 +2692,12 @@ struct KeyframeTiming {
     send_calls: Duration,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
 struct VideoSendMetrics {
     started: Instant,
+    sent_datagrams: u32,
+    last_video_datagram_sequence: Option<u64>,
+    last_sent_video: Option<FrameMetadata>,
     sent_messages: u32,
     expired_messages: u32,
     max_send_time: Duration,
@@ -2659,11 +2708,14 @@ struct VideoSendMetrics {
     keyframe_feedback_probes: u32,
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
 impl VideoSendMetrics {
     fn new(started: Instant) -> Self {
         Self {
             started,
+            sent_datagrams: 0,
+            last_video_datagram_sequence: None,
+            last_sent_video: None,
             sent_messages: 0,
             expired_messages: 0,
             max_send_time: Duration::ZERO,
@@ -2675,26 +2727,41 @@ impl VideoSendMetrics {
         }
     }
 
-    fn report(&mut self, now: Instant) {
+    fn report(&mut self, now: Instant, pacer: &Pacer) {
         let elapsed = now.saturating_duration_since(self.started);
         if elapsed < Duration::from_secs(1) {
             return;
         }
-        if self.sent_messages > 0
+        if self.sent_datagrams > 0
             || self.expired_messages > 0
             || !self.max_keyframe_repair_time.is_zero()
             || self.keyframe_feedback_probes > 0
         {
-            hbb_common::log::info!(target: "xscc::host_udp_metrics",
-                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3},\"max_keyframe_bytes\":{},\"max_keyframe_send_ms\":{:.3},\"max_keyframe_repair_ms\":{:.3},\"keyframe_feedback_probes\":{},\"slowest_keyframe_queue_ms\":{:.3},\"slowest_keyframe_first_fragment_ms\":{:.3},\"slowest_keyframe_transfer_ms\":{:.3},\"slowest_keyframe_send_calls_ms\":{:.3}}}",
-                elapsed.as_secs_f64() * 1_000.0, self.sent_messages, self.expired_messages,
-                self.max_send_time.as_secs_f64() * 1_000.0, self.max_keyframe_bytes,
-                self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
-                self.max_keyframe_repair_time.as_secs_f64() * 1_000.0, self.keyframe_feedback_probes,
-                self.slowest_keyframe.queue.as_secs_f64() * 1_000.0,
-                self.slowest_keyframe.first_fragment.as_secs_f64() * 1_000.0,
-                self.slowest_keyframe.transfer.as_secs_f64() * 1_000.0,
-                self.slowest_keyframe.send_calls.as_secs_f64() * 1_000.0);
+            hbb_common::log::info!(
+                target: "xscc::host_udp_metrics",
+                "host_udp_video_pipeline {}",
+                serde_json::json!({
+                    "schema": 1,
+                    "elapsed_ms": elapsed.as_secs_f64() * 1_000.0,
+                    "sent_video_datagrams": self.sent_datagrams,
+                    "last_video_datagram_sequence": self.last_video_datagram_sequence,
+                    "last_sent_video": self.last_sent_video,
+                    "sent_video_messages": self.sent_messages,
+                    "expired_video_messages": self.expired_messages,
+                    "effective_bitrate_bps": pacer.effective_bitrate(),
+                    "congestion_window_bytes": pacer.congestion_window(),
+                    "inflight_bytes": pacer.inflight_bytes(),
+                    "max_send_ms": self.max_send_time.as_secs_f64() * 1_000.0,
+                    "max_keyframe_bytes": self.max_keyframe_bytes,
+                    "max_keyframe_send_ms": self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
+                    "max_keyframe_repair_ms": self.max_keyframe_repair_time.as_secs_f64() * 1_000.0,
+                    "keyframe_feedback_probes": self.keyframe_feedback_probes,
+                    "slowest_keyframe_queue_ms": self.slowest_keyframe.queue.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_first_fragment_ms": self.slowest_keyframe.first_fragment.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_transfer_ms": self.slowest_keyframe.transfer.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_send_calls_ms": self.slowest_keyframe.send_calls.as_secs_f64() * 1_000.0,
+                }),
+            );
         }
         *self = Self::new(now);
     }
@@ -2721,9 +2788,13 @@ fn transmission(
         indices: indices.into(),
         deadline,
         initial,
+        #[cfg(debug_assertions)]
         queued,
+        #[cfg(debug_assertions)]
         selected,
+        #[cfg(debug_assertions)]
         first_fragment: None,
+        #[cfg(debug_assertions)]
         send_calls: Duration::ZERO,
     }
 }
@@ -2763,6 +2834,7 @@ async fn host_media(
         let started = Instant::now();
         let mut next_send = started;
         let mut send_timer = send_timer::SendTimer::new();
+        #[cfg(debug_assertions)]
         let mut video_metrics = VideoSendMetrics::new(started);
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -2869,7 +2941,8 @@ async fn host_media(
                         continue;
                     }
                     if !metadata.keyframe && queued.elapsed() >= VIDEO_QUEUE_AGE {
-                        video_metrics.expired_messages += 1;
+                        #[cfg(debug_assertions)]
+                        { video_metrics.expired_messages += 1; }
                         frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                         continue;
                     }
@@ -2903,6 +2976,7 @@ async fn host_media(
                         if slot.as_ref().is_some_and(|frame| frame.deadline <= now) {
                             let expired = slot.take().expect("invariant: expired transmission exists");
                             let metadata = expired.plan.descriptor().metadata;
+                            #[cfg(debug_assertions)]
                             if expired.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
@@ -2912,7 +2986,8 @@ async fn host_media(
                         cached.retain(|metadata| *metadata != expired); frame_notice(&writer, sid, FrameNotice::Abandoned(expired))?;
                     }
                     if let Some(report) = session.take_report(now) { udp.send_report(&report).await?; }
-                    video_metrics.report(now);
+                    #[cfg(debug_assertions)]
+                    video_metrics.report(now, &pacer);
                 }
                 _ = send_timer.wait_until(next_send), if current.is_some() || sound.is_some() || repair.is_some() => {
                     for _ in 0..16 {
@@ -2940,11 +3015,13 @@ async fn host_media(
                             if probe.is_none_or(|(_, sent)| sent.elapsed() >= Duration::from_millis(500)) {
                                 let mut token = [0; 16]; randombytes::randombytes_into(&mut token);
                                 udp.send_probe(token).await?; probe = Some((token, Instant::now()));
+                                #[cfg(debug_assertions)]
                                 if metadata.keyframe { video_metrics.keyframe_feedback_probes += 1; }
                             }
                             next_send = now + media::REPORT_INTERVAL; break;
                         }
                         SendDecision::Expired => {
+                            #[cfg(debug_assertions)]
                             if frame.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
                             frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
                             cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
@@ -2953,35 +3030,50 @@ async fn host_media(
                             let packet = udp.send_fragment(&frame.plan, index).await?;
                             let sent = Instant::now();
                             pacer.on_sent(packet.sequence, packet.bytes.len(), sent)?;
+                            #[cfg(debug_assertions)]
+                            if metadata.kind == MediaKind::Video {
+                                video_metrics.sent_datagrams += 1;
+                                video_metrics.last_video_datagram_sequence = Some(packet.sequence);
+                            }
+                            #[cfg(debug_assertions)]
                             if metadata.keyframe && frame.initial {
                                 frame.first_fragment.get_or_insert(sent);
                                 frame.send_calls += sent.saturating_duration_since(now);
                             }
                             frame.indices.pop_front();
                             if frame.indices.is_empty() {
+                                #[cfg(debug_assertions)]
                                 let elapsed = sent.saturating_duration_since(frame.queued);
                                 if frame.initial {
+                                    #[cfg(debug_assertions)]
                                     if metadata.kind == MediaKind::Video {
                                         video_metrics.sent_messages += 1;
+                                        video_metrics.last_sent_video = Some(metadata);
                                         video_metrics.max_send_time = video_metrics.max_send_time.max(elapsed);
                                     }
                                     if metadata.keyframe {
-                                        video_metrics.max_keyframe_bytes = video_metrics.max_keyframe_bytes.max(frame.plan.descriptor().total_size);
-                                        if elapsed > video_metrics.max_keyframe_send_time {
-                                            let first = frame.first_fragment.expect("invariant: keyframe fragment sent");
-                                            video_metrics.max_keyframe_send_time = elapsed;
-                                            video_metrics.slowest_keyframe = KeyframeTiming {
-                                                queue: frame.selected.saturating_duration_since(frame.queued),
-                                                first_fragment: first.saturating_duration_since(frame.selected),
-                                                transfer: sent.saturating_duration_since(first),
-                                                send_calls: frame.send_calls,
-                                            };
+                                        #[cfg(debug_assertions)]
+                                        {
+                                            video_metrics.max_keyframe_bytes = video_metrics.max_keyframe_bytes.max(frame.plan.descriptor().total_size);
+                                            if elapsed > video_metrics.max_keyframe_send_time {
+                                                let first = frame.first_fragment.expect("invariant: keyframe fragment sent");
+                                                video_metrics.max_keyframe_send_time = elapsed;
+                                                video_metrics.slowest_keyframe = KeyframeTiming {
+                                                    queue: frame.selected.saturating_duration_since(frame.queued),
+                                                    first_fragment: first.saturating_duration_since(frame.selected),
+                                                    transfer: sent.saturating_duration_since(first),
+                                                    send_calls: frame.send_calls,
+                                                };
+                                            }
                                         }
                                         cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?;
                                     }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
                                 } else {
-                                    video_metrics.max_keyframe_repair_time = video_metrics.max_keyframe_repair_time.max(elapsed);
+                                    #[cfg(debug_assertions)]
+                                    {
+                                        video_metrics.max_keyframe_repair_time = video_metrics.max_keyframe_repair_time.max(elapsed);
+                                    }
                                 }
                                 let next_repair = !frame.initial && !retries.is_empty();
                                 *active = None;

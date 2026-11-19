@@ -515,6 +515,7 @@ impl DatagramReceiver {
         Ok(packet)
     }
     /// Includes every authenticated datagram type sharing the sender's sequence space.
+    #[cfg(debug_assertions)]
     pub fn highest_authenticated_sequence(&self) -> Option<u64> {
         self.replay.highest
     }
@@ -1012,6 +1013,7 @@ pub enum Recovery {
     KeyframeNack(KeyframeNack),
     KeyframeComplete(KeyframeComplete),
 }
+#[cfg(debug_assertions)]
 #[derive(Debug, Default)]
 pub struct VideoAssemblyExpiry {
     pub assemblies: usize,
@@ -1023,6 +1025,7 @@ pub struct VideoAssemblyExpiry {
 pub struct ReceiveOutcome {
     pub frame: Option<CompletedFrame>,
     pub recovery: Vec<Recovery>,
+    #[cfg(debug_assertions)]
     pub expired_video: VideoAssemblyExpiry,
 }
 
@@ -1338,7 +1341,10 @@ impl Reassembler {
             if now < *deadline {
                 return true;
             }
-            outcome.expired_video.sent_notices += 1;
+            #[cfg(debug_assertions)]
+            {
+                outcome.expired_video.sent_notices += 1;
+            }
             outcome
                 .recovery
                 .push(Recovery::RefreshVideo(descriptor.metadata));
@@ -1347,8 +1353,11 @@ impl Reassembler {
         self.pending.retain(|_, frame| {
             if now >= frame.deadline {
                 if frame.descriptor.metadata.kind == MediaKind::Video {
-                    outcome.expired_video.assemblies += 1;
-                    outcome.expired_video.missing_fragments += frame.remaining;
+                    #[cfg(debug_assertions)]
+                    {
+                        outcome.expired_video.assemblies += 1;
+                        outcome.expired_video.missing_fragments += frame.remaining;
+                    }
                     outcome
                         .recovery
                         .push(Recovery::RefreshVideo(frame.descriptor.metadata));
@@ -2151,6 +2160,7 @@ mod tests {
         for index in (0..=128).step_by(2) {
             receiver.open(&packets[index].bytes, now).unwrap();
         }
+        #[cfg(debug_assertions)]
         assert_eq!(receiver.highest_authenticated_sequence(), Some(128));
         let report = receiver.take_report(now + REPORT_INTERVAL).unwrap();
         report.validate().unwrap();
@@ -2166,6 +2176,7 @@ mod tests {
         for index in (1..128).step_by(2) {
             receiver.open(&packets[index].bytes, now).unwrap();
         }
+        #[cfg(debug_assertions)]
         assert_eq!(receiver.highest_authenticated_sequence(), Some(128));
         for packet in &packets[129..] {
             receiver.open(&packet.bytes, now + REPORT_INTERVAL).unwrap();
@@ -2287,9 +2298,12 @@ mod tests {
         assert!(expired
             .recovery
             .contains(&Recovery::RefreshVideo(metadata(1, false))));
-        assert_eq!(expired.expired_video.assemblies, 1);
-        assert_eq!(expired.expired_video.missing_fragments, 1);
-        assert_eq!(expired.expired_video.sent_notices, 0);
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(expired.expired_video.assemblies, 1);
+            assert_eq!(expired.expired_video.missing_fragments, 1);
+            assert_eq!(expired.expired_video.sent_notices, 0);
+        }
         let tail = FramePlan::new(
             metadata(2, false),
             Bytes::from_static(b"last static update"),
@@ -2303,8 +2317,11 @@ mod tests {
         assert!(expired
             .recovery
             .contains(&Recovery::RefreshVideo(metadata(2, false))));
-        assert_eq!(expired.expired_video.assemblies, 0);
-        assert_eq!(expired.expired_video.sent_notices, 1);
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(expired.expired_video.assemblies, 0);
+            assert_eq!(expired.expired_video.sent_notices, 1);
+        }
         assembler.set_epoch(MediaKind::Video, 0, 1).unwrap();
         let stale = fragment(&tx, &rx, &mut sender, &mut receiver, &tail, 0, now).await;
         assert!(matches!(

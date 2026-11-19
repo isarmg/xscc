@@ -52,6 +52,10 @@ on:
         required: false
         default: false
         type: boolean
+      stream_debug:
+        description: 'Build an optimized Debug package with stream diagnostics'
+        default: false
+        type: boolean
       validate_virtual_display_driver:
         description: 'Check real 120/240 Hz, repeated mode changes and removal on the disposable runner'
         required: false
@@ -60,7 +64,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: gpui-windows-preview-${{ github.ref }}
+  group: gpui-windows-preview-${{ github.ref }}-${{ inputs.stream_debug && 'debug' || 'release' }}
   cancel-in-progress: false
 jobs:
   candidate:
@@ -83,6 +87,7 @@ jobs:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/gpui-${{ matrix.role }}
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: "-C target-feature=+crt-static"
       XSCC_PACKAGE_MODE: managed
+      XSCC_RUST_PROFILE: ${{ inputs.stream_debug && 'stream-debug' || 'release' }}
       PACKAGE_ROLE: ${{ matrix.role }}
       PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.1' }}
     steps:
@@ -386,11 +391,11 @@ jobs:
         run: |
           cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "${{ matrix.core_features }}" --target x86_64-pc-windows-msvc --no-run --message-format=json > (Join-Path $env:RUNNER_TEMP 'xscc-vdd-test-build.jsonl')
           if ($LASTEXITCODE -ne 0) { throw 'Native VDD test executable build failed' }
-      - name: Build standalone release executable
+      - name: Build standalone executable
         run: |
           $features = '${{ matrix.features }}'
-          cargo build --locked --release --manifest-path apps/desktop/Cargo.toml --features $features --bin xscc-desktop --target x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          cargo build --locked --profile $env:XSCC_RUST_PROFILE --manifest-path apps/desktop/Cargo.toml --features $features --bin xscc-desktop --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "Build failed for profile $env:XSCC_RUST_PROFILE" }
       - name: Prepare and verify final application manifest
         run: ./.github/scripts/prepare-gpui-manifest.ps1
       - name: Verify existing elevated runner token for host CLI
@@ -440,7 +445,7 @@ jobs:
           retention-days: 14
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '4.0.0-beta.1' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned
+          name: xscc-${{ matrix.role }}-${{ inputs.package_version || '4.0.0-beta.1' }}-windows11-x86_64-${{ env.XSCC_PACKAGE_MODE }}-unsigned${{ inputs.stream_debug && '-debug' || '' }}
           path: dist/${{ matrix.role }}/*
           if-no-files-found: error
           retention-days: 30

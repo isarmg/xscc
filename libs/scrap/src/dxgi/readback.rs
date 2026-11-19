@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use std::{
     fmt,
     time::{Duration, Instant},
@@ -24,12 +25,14 @@ impl Pending {
     }
 }
 
+#[cfg(debug_assertions)]
 #[derive(Default)]
 struct Stage {
     calls: u64,
     total: Duration,
     max: Duration,
 }
+#[cfg(debug_assertions)]
 impl Stage {
     fn record(&mut self, elapsed: Duration) {
         self.calls += 1;
@@ -45,12 +48,14 @@ impl Stage {
     }
 }
 
+#[cfg(debug_assertions)]
 pub(super) struct Metrics {
     started: Instant,
     acquire: Stage,
     copy: Stage,
     map: Stage,
 }
+#[cfg(debug_assertions)]
 impl Metrics {
     pub(super) fn new() -> Self {
         Self {
@@ -80,10 +85,12 @@ impl Metrics {
         })
     }
 }
+#[cfg(debug_assertions)]
 pub(super) struct Sample {
     elapsed: Duration,
     values: Metrics,
 }
+#[cfg(debug_assertions)]
 impl fmt::Display for Sample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let v = &self.values;

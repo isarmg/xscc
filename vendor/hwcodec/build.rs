@@ -249,6 +249,9 @@ mod ffmpeg {
 
     #[cfg(feature = "vram")]
     fn build_ffmpeg_vram(builder: &mut Build) {
+        if env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some() {
+            builder.define("XSCC_STREAM_DEBUG", None);
+        }
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let ffmpeg_ram_dir = manifest_dir.join("cpp").join("ffmpeg_vram");
         let ffi_header = ffmpeg_ram_dir

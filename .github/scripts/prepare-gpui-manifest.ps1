@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ($env:PACKAGE_ROLE -notin @('controller', 'host')) { throw 'Invalid package role' }
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-desktop.exe'
+$profile = if ($env:XSCC_RUST_PROFILE) { $env:XSCC_RUST_PROFILE } else { 'release' }
+$exe = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc/$profile/xscc-desktop.exe"
 if ((Get-AuthenticodeSignature $exe).Status -ne 'NotSigned') {
     throw 'Refusing to modify a signed or invalid-signature executable'
 }

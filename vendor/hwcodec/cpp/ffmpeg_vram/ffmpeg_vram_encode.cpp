@@ -92,8 +92,10 @@ public:
   ComPtr<ID3D11DeviceContext> retirement_extra_capture_context_;
   unsigned int pending_frames_ = 0;
   std::chrono::steady_clock::time_point amf_progress_at_{};
+#ifdef XSCC_STREAM_DEBUG
   std::chrono::steady_clock::time_point amf_next_slow_log_{};
   int64_t amf_logged_slow_ms_ = 0;
+#endif
   int amf_error_ = 0;
   std::unique_ptr<NativeDevice> amf_device_;
   struct CaptureSlot {
@@ -422,6 +424,7 @@ private:
     return error;
   }
 
+#ifdef XSCC_STREAM_DEBUG
   void log_slow_amf(const char *phase, std::chrono::steady_clock::time_point started) {
     const auto now = util::now();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started);
@@ -435,6 +438,7 @@ private:
     LOG_WARN(std::string("host_amf_slow phase=") + phase +
              " elapsed_ms=" + std::to_string(elapsed.count()));
   }
+#endif
 
   static int acquire_amf_capture(CaptureSlot &slot) {
     const HRESULT hr = slot.capture_mutex->AcquireSync(0, 0);
@@ -445,7 +449,9 @@ private:
 
   int queue_amf_capture(ID3D11Texture2D *input, int64_t pts) {
     if (!input) return AVERROR(EINVAL);
+#ifdef XSCC_STREAM_DEBUG
     const auto started = util::now();
+#endif
     D3D11_TEXTURE2D_DESC desc{};
     input->GetDesc(&desc);
     if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1)
@@ -488,16 +494,22 @@ private:
     // ReleaseSync submits the writes to the keyed surface. A separate full
     // context flush here stalled the capture thread under AMD driver load.
     if (framerate_ <= 60) native_->context_->Flush();
+#ifdef XSCC_STREAM_DEBUG
     const auto releasing = util::now();
+#endif
     if (slot.capture_mutex->ReleaseSync(1) != S_OK) return AVERROR_EXTERNAL;
     slot.submitted = util::now();
+#ifdef XSCC_STREAM_DEBUG
     log_slow_amf("keyed_release", releasing);
     log_slow_amf("capture_copy", started);
+#endif
     return amf_input_queue_.publish(index, pts) ? 0 : AVERROR_BUG;
   }
 
   int prepare_amf_input(std::size_t index, UINT64 key) {
+#ifdef XSCC_STREAM_DEBUG
     const auto started = util::now();
+#endif
     auto &slot = amf_inputs_[index];
     const HRESULT locked = slot.encoder_mutex->AcquireSync(key, 0);
     if (locked == static_cast<HRESULT>(WAIT_TIMEOUT))
@@ -532,7 +544,9 @@ private:
     slot.submitted = util::now();
     const HRESULT released = slot.encoder_mutex->ReleaseSync(0);
     if (released != S_OK) return AVERROR_EXTERNAL;
+#ifdef XSCC_STREAM_DEBUG
     log_slow_amf("convert", started);
+#endif
     return ret < 0 ? ret : 1;
   }
 
@@ -553,11 +567,15 @@ private:
       }
       frame_->pts = amf_prepared_.pts;
       frame_->pict_type = keyframe_request_.pending() ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+#ifdef XSCC_STREAM_DEBUG
       const auto started = util::now();
+#endif
       ret = avcodec_send_frame(c_, frame_);
       frame_->pict_type = AV_PICTURE_TYPE_NONE;
       keyframe_request_.submitted(ret);
+#ifdef XSCC_STREAM_DEBUG
       log_slow_amf("send_frame", started);
+#endif
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_prepared_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0) return ret;
@@ -621,9 +639,13 @@ private:
   }
   int receive_pending(EncodeCallback callback, const void *obj) {
     while (pending_frames_ > 0) {
+#ifdef XSCC_STREAM_DEBUG
       const auto started = util::now();
+#endif
       const int ret = avcodec_receive_packet(c_, pkt_);
+#ifdef XSCC_STREAM_DEBUG
       log_slow_amf("receive_packet", started);
+#endif
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_progress_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0)
@@ -776,7 +798,9 @@ FFmpegVRamEncoder *ffmpeg_vram_new_encoder(void *handle, int64_t luid,
                                     height, kbs, framerate, gop);
     if (encoder) {
       if (encoder->init()) {
+#ifdef XSCC_STREAM_DEBUG
         if (encoder->amf_pipeline_) LOG_INFO("host_amf_transfer=keyed");
+#endif
         return encoder;
       }
     }

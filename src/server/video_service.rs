@@ -29,7 +29,7 @@ pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
 
 #[cfg(any(all(windows, any(feature = "vram", feature = "gpui-host")), test))]
 mod frame_pacing;
-#[cfg(feature = "gpui-host")]
+#[cfg(all(feature = "gpui-host", debug_assertions))]
 mod metrics;
 
 use super::video_lifecycle::VideoRestart;
@@ -803,7 +803,7 @@ fn run_encoder(
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
     #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
     let mut rejected_transport_limit = None;
-    #[cfg(feature = "gpui-host")]
+    #[cfg(all(feature = "gpui-host", debug_assertions))]
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "vram"))]
@@ -812,7 +812,7 @@ fn run_encoder(
     let mut frame_pacer = frame_pacing::FramePacer::new();
 
     while sp.ok() {
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", any(windows, debug_assertions)))]
         let iteration_started = Instant::now();
         #[cfg(windows)]
         if capture_lifecycle::change_pending() {
@@ -839,7 +839,7 @@ fn run_encoder(
             #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
             &mut rejected_transport_limit,
         )?;
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", debug_assertions))]
         if let Some(sample) = stages.sample(Instant::now(), spf) {
             #[cfg(windows)]
             let sample = sample.with_capture_gdi(c.is_gdi());
@@ -904,7 +904,7 @@ fn run_encoder(
             }
         }
         let now = time::Instant::now();
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", debug_assertions))]
         stages.preflight(now.saturating_duration_since(iteration_started));
         #[cfg(all(windows, feature = "gpui-host"))]
         let pacing_start = iteration_started;
@@ -923,7 +923,7 @@ fn run_encoder(
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
         let res = if replay_cached {
             replay_cached = false;
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             let encode_started = Instant::now();
             let ids = handle_one_frame(
                 display_idx,
@@ -934,10 +934,10 @@ fn run_encoder(
                 &mut encode_fail_counter,
                 &mut first_frame,
                 &mut encoder_warmed_up,
-                #[cfg(feature = "gpui-host")]
+                #[cfg(all(feature = "gpui-host", debug_assertions))]
                 &mut stages,
             )?;
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Replay);
             frame_controller.set_send(now, ids);
             send_counter += 1;
@@ -945,20 +945,21 @@ fn run_encoder(
         } else {
             #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
             let input_ready = encoder.input_ready().map_err(vram_failure)?;
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             let capture_started = Instant::now();
             #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
             let captured = if input_ready {
                 c.frame(spf)
             } else {
+                #[cfg(debug_assertions)]
                 stages.encoder_backpressure();
                 Err(WouldBlock.into())
             };
             #[cfg(not(all(windows, feature = "gpui-host", feature = "vram")))]
             let captured = c.frame(spf);
-            #[cfg(all(feature = "gpui-host", not(all(windows, feature = "vram"))))]
+            #[cfg(all(feature = "gpui-host", debug_assertions, not(all(windows, feature = "vram"))))]
             let input_ready = true;
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             if input_ready {
                 stages.captured(
                     capture_started.elapsed(),
@@ -1027,13 +1028,13 @@ fn run_encoder(
                         } else {
                             cached.format.get_or_insert_with(|| yuv_format.clone());
                         }
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         let convert_started = Instant::now();
                         let frame = frame.to(&yuv_format, &mut cached.yuv, &mut mid_data)?;
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         stages.converted(convert_started.elapsed());
                         cached.valid = !cached.texture;
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         let encode_started = Instant::now();
                         let send_conn_ids = handle_one_frame(
                             display_idx,
@@ -1044,10 +1045,10 @@ fn run_encoder(
                             &mut encode_fail_counter,
                             &mut first_frame,
                             &mut encoder_warmed_up,
-                            #[cfg(feature = "gpui-host")]
+                            #[cfg(all(feature = "gpui-host", debug_assertions))]
                             &mut stages,
                         )?;
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Fresh);
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
@@ -1081,10 +1082,10 @@ fn run_encoder(
                     frame.display = display_idx as _;
                     let mut message = Message::new();
                     message.set_video_frame(frame);
-                    #[cfg(feature = "gpui-host")]
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
                     let enqueue_started = Instant::now();
                     let ids = sp.send_video_frame(message);
-                    #[cfg(feature = "gpui-host")]
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
                     stages.enqueue_time(enqueue_started.elapsed());
                     frame_controller.set_send(now, ids);
                     encoder_warmed_up = true;
@@ -1111,7 +1112,7 @@ fn run_encoder(
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         let encode_started = Instant::now();
                         let send_conn_ids = handle_one_frame(
                             display_idx,
@@ -1122,10 +1123,10 @@ fn run_encoder(
                             &mut encode_fail_counter,
                             &mut first_frame,
                             &mut encoder_warmed_up,
-                            #[cfg(feature = "gpui-host")]
+                            #[cfg(all(feature = "gpui-host", debug_assertions))]
                             &mut stages,
                         )?;
-                        #[cfg(feature = "gpui-host")]
+                        #[cfg(all(feature = "gpui-host", debug_assertions))]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Repeat);
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
@@ -1186,7 +1187,7 @@ fn run_encoder(
             frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", debug_assertions))]
         stages.handoff(wait_begin.elapsed());
 
         #[cfg(all(windows, feature = "vram"))]
@@ -1201,7 +1202,7 @@ fn run_encoder(
         let elapsed = pacing_start.elapsed();
         // may need to enable frame(timeout)
         log::trace!("{:?} {:?}", time::Instant::now(), elapsed);
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", debug_assertions))]
         let pacing_wait_started = Instant::now();
         #[cfg(all(windows, feature = "gpui-host"))]
         frame_pacer.wait_until(pacing_start, spf);
@@ -1209,7 +1210,7 @@ fn run_encoder(
         if elapsed < spf {
             std::thread::sleep(spf - elapsed);
         }
-        #[cfg(feature = "gpui-host")]
+        #[cfg(all(feature = "gpui-host", debug_assertions))]
         stages.paced(pacing_wait_started.elapsed());
     }
 
@@ -1502,7 +1503,7 @@ fn handle_one_frame(
     encode_fail_counter: &mut usize,
     first_frame: &mut bool,
     encoder_warmed_up: &mut bool,
-    #[cfg(feature = "gpui-host")] stages: &mut metrics::Metrics,
+    #[cfg(all(feature = "gpui-host", debug_assertions))] stages: &mut metrics::Metrics,
 ) -> ResultType<HashSet<i32>> {
     sp.snapshot(|sps| {
         // so that new sub and old sub share the same encoder after switch
@@ -1516,10 +1517,10 @@ fn handle_one_frame(
     let mut send_conn_ids: HashSet<i32> = Default::default();
     let first = *first_frame;
     *first_frame = false;
-    #[cfg(feature = "gpui-host")]
+    #[cfg(all(feature = "gpui-host", debug_assertions))]
     let encode_started = Instant::now();
     let encoded = encoder.encode_to_message(frame, ms);
-    #[cfg(feature = "gpui-host")]
+    #[cfg(all(feature = "gpui-host", debug_assertions))]
     stages.encode_time(encode_started.elapsed());
     match encoded {
         Ok(mut vf) => {
@@ -1531,10 +1532,10 @@ fn handle_one_frame(
             vf.display = display as _;
             let mut msg = Message::new();
             msg.set_video_frame(vf);
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             let enqueue_started = Instant::now();
             send_conn_ids = sp.send_video_frame(msg);
-            #[cfg(feature = "gpui-host")]
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
             stages.enqueue_time(enqueue_started.elapsed());
         }
         Err(e) => {

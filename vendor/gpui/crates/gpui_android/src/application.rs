@@ -4,21 +4,27 @@ use android_activity::{
     input::{InputEvent, KeyAction, Keycode},
 };
 use gpui::AppLifecyclePhase;
-use std::{
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::rc::Rc;
+#[cfg(debug_assertions)]
+use std::time::{Duration, Instant};
 
 pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
     let mut launched = Some(launched);
     let mut input = InputState::default();
     let frame_clock = FrameClock::new(&state.app);
+    #[cfg(debug_assertions)]
     let mut reported = Instant::now();
+    #[cfg(debug_assertions)]
     let mut frames = 0u32;
+    #[cfg(debug_assertions)]
     let mut frame_time = Duration::ZERO;
+    #[cfg(debug_assertions)]
     let mut longest_frame = Duration::ZERO;
+    #[cfg(debug_assertions)]
     let mut dispatch_time = Duration::ZERO;
+    #[cfg(debug_assertions)]
     let mut callback_delay = Duration::ZERO;
+    #[cfg(debug_assertions)]
     let mut longest_callback_delay = Duration::ZERO;
     while !state.destroyed.get() {
         if state
@@ -138,9 +144,13 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
                 window.sync_ime();
             }
         });
+        #[cfg(debug_assertions)]
         let dispatch_started = Instant::now();
         state.dispatcher.drain();
-        dispatch_time += dispatch_started.elapsed();
+        #[cfg(debug_assertions)]
+        {
+            dispatch_time += dispatch_started.elapsed();
+        }
         if let Some(window) = state.window() {
             window.refresh_insets();
             window.sync_ime();
@@ -150,16 +160,20 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
             && let Some(window) = state.window().filter(|w| w.can_draw() && w.dirty.get())
         {
             match frame_clock.take_ready() {
-                Ok(Some(delay)) => {
+                Ok(Some(_delay)) => {
                     frame_clock.request();
-                    callback_delay += delay;
-                    longest_callback_delay = longest_callback_delay.max(delay);
+                    #[cfg(debug_assertions)]
                     let started = Instant::now();
                     window.request_frame(false);
-                    let elapsed = started.elapsed();
-                    frame_time += elapsed;
-                    longest_frame = longest_frame.max(elapsed);
-                    frames += 1;
+                    #[cfg(debug_assertions)]
+                    {
+                        let elapsed = started.elapsed();
+                        frame_time += elapsed;
+                        longest_frame = longest_frame.max(elapsed);
+                        callback_delay += _delay;
+                        longest_callback_delay = longest_callback_delay.max(_delay);
+                        frames += 1;
+                    }
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -173,6 +187,7 @@ pub(crate) fn run(state: &Rc<State>, launched: Box<dyn FnOnce()>) {
         if let Some(window) = state.window() {
             window.sync_ime();
         }
+        #[cfg(debug_assertions)]
         if reported.elapsed() >= Duration::from_secs(1) {
             if frames > 0 {
                 log::info!(

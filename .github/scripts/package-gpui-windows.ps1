@@ -6,15 +6,20 @@ if ($env:PACKAGE_VERSION -notmatch '^\d+\.\d+\.\d+(-beta\.\d+)?$' -or
 }
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
 if ($env:PACKAGE_ROLE -notin @('controller', 'host')) { throw 'Invalid package role' }
+$profile = if ($env:XSCC_RUST_PROFILE) { $env:XSCC_RUST_PROFILE } else { 'release' }
+if ($profile -notin @('release', 'stream-debug')) { throw 'Invalid package build profile' }
+$profileSuffix = if ($profile -eq 'stream-debug') { '-debug' } else { '' }
 $role = $env:PACKAGE_ROLE
 $name = if ($role -eq 'host') { 'xscc-host.exe' } else { 'xscc-controller.exe' }
 $installerScript = if ($role -eq 'host') { 'host-installer.nsi' } else { 'installer.nsi' }
 $readme = if ($role -eq 'host') { 'README-host.txt' } else { 'README.txt' }
-$stem = "xscc-$role-$env:PACKAGE_VERSION-windows11-x86_64-unsigned"
+$stem = "xscc-$role-$env:PACKAGE_VERSION-windows11-x86_64-unsigned$profileSuffix"
 $out = Join-Path $root "dist/$role"
 $payload = Join-Path $env:RUNNER_TEMP $stem
 New-Item -ItemType Directory -Force $out, $payload | Out-Null
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-desktop.exe'
+$exe = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc/$profile/xscc-desktop.exe"
+& python "$PSScriptRoot/check-stream-diagnostics.py" $exe --profile $profile --role $role
+if ($LASTEXITCODE -ne 0) { throw 'Stream diagnostics package gate failed' }
 & python "$PSScriptRoot/check-gpui-package-mode.py" $exe --output (Join-Path $payload 'build-capabilities.json')
 if ($LASTEXITCODE -ne 0) { throw 'Package capability gate failed' }
 $bytes = [System.IO.File]::ReadAllBytes($exe)
@@ -54,6 +59,7 @@ if ($env:XSCC_PACKAGE_MODE -eq 'test-lan-direct') {
 $metadata = [ordered]@{
     package_mode = if ($env:XSCC_PACKAGE_MODE) { $env:XSCC_PACKAGE_MODE } else { 'managed' }
     package_version = $env:PACKAGE_VERSION
+    rust_profile = $profile
     source_sha = $env:SOURCE_SHA
     source_url = "$env:SERVER_URL/$env:REPOSITORY/tree/$env:SOURCE_SHA"
     build_run = "$env:SERVER_URL/$env:REPOSITORY/actions/runs/$env:RUN_ID"

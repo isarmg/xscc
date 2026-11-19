@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$exe = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/release/xscc-desktop.exe'
+$profile = if ($env:XSCC_RUST_PROFILE) { $env:XSCC_RUST_PROFILE } else { 'release' }
+$exe = Join-Path $env:CARGO_TARGET_DIR "x86_64-pc-windows-msvc/$profile/xscc-desktop.exe"
 
 function Invoke-NativeProbe([string[]] $ProbeArguments, [int] $TimeoutMilliseconds) {
     $info = [Diagnostics.ProcessStartInfo]::new()

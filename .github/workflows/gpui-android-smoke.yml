@@ -36,10 +36,14 @@ on:
         required: false
         default: false
         type: boolean
+      stream_debug:
+        description: 'Build an optimized Debug APK with stream diagnostics'
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
-  group: gpui-android-smoke-${{ github.ref }}
+  group: gpui-android-smoke-${{ github.ref }}-${{ inputs.stream_debug && 'debug' || 'release' }}
   cancel-in-progress: false
 env:
   RUST_VERSION: '1.99.0'
@@ -50,6 +54,7 @@ env:
   GRADLE_VERSION: '9.8.1'
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
   PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.27' }}
+  XSCC_RUST_PROFILE: ${{ inputs.stream_debug && 'stream-debug' || 'release' }}
 jobs:
   android:
     runs-on: ubuntu-24.04
@@ -236,7 +241,7 @@ jobs:
           set -euo pipefail
           cargo install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
           JNI_LIBS="$GITHUB_WORKSPACE/packaging/gpui-android/app/src/$FLAVOR/jniLibs"
-          mkdir -p "$JNI_LIBS"
+          mkdir -p "$JNI_LIBS/arm64-v8a"
           cd "$WORKSPACE"
           FEATURES=()
           if [ "$FLAVOR" != smoke ]; then
@@ -261,10 +266,12 @@ jobs:
           if [ "$FLAVOR" != smoke ]; then
             bindgen_args="$(cargo ndk-env --platform 35 --target aarch64-linux-android --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android"])')"
             env "BINDGEN_EXTRA_CLANG_ARGS_aarch64-linux-android=$bindgen_args --target=aarch64-linux-android35" \
-              cargo ndk -t arm64-v8a --platform 35 -o "$JNI_LIBS" build --lib --release --locked "${FEATURES[@]}"
+              cargo ndk -t arm64-v8a --platform 35 build --lib --profile "$XSCC_RUST_PROFILE" --locked "${FEATURES[@]}"
           else
-            cargo ndk -t arm64-v8a --platform 35 -o "$JNI_LIBS" build --lib --release --locked
+            cargo ndk -t arm64-v8a --platform 35 build --lib --profile "$XSCC_RUST_PROFILE" --locked
           fi
+          target_dir="$(cargo metadata --locked --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+          cp "$target_dir/aarch64-linux-android/$XSCC_RUST_PROFILE/lib$NATIVE_LIBRARY.so" "$JNI_LIBS/arm64-v8a/"
           cp "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI_LIBS/arm64-v8a/"
 
       - name: Download pinned Temurin 27 archive
@@ -339,6 +346,7 @@ jobs:
           if [ "$FLAVOR" = landirect ]; then test_args+=(--test-lan-direct); fi
           python3 .github/scripts/verify-gpui-android-apk.py "$APK" --expected-package "$APPLICATION_ID" --expected-library "$NATIVE_LIBRARY" --permission-mode "$PERMISSION_MODE" "${test_args[@]}" --badging dist/gpui-android/manifest-badging.txt --manifest-tree dist/gpui-android/manifest-tree.txt | tee dist/gpui-android/native-validation.txt
           unzip -p "$APK" "lib/arm64-v8a/lib$NATIVE_LIBRARY.so" > "$RUNNER_TEMP/gpui-smoke.so"
+          python3 .github/scripts/check-stream-diagnostics.py "$RUNNER_TEMP/gpui-smoke.so" --profile "$XSCC_RUST_PROFILE" --role "$FLAVOR"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --defined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeTextChanged$' "$RUNNER_TEMP/gpui-symbols.txt"
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
@@ -349,7 +357,10 @@ jobs:
           privacy_args=()
           if [ "$FLAVOR" != smoke ]; then privacy_args+=(--management); fi
           python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
-          cp "$APK" "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk"
+          profile_suffix=
+          if [ "$XSCC_RUST_PROFILE" = stream-debug ]; then profile_suffix=-debug; fi
+          candidate_apk="dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}$profile_suffix.apk"
+          cp "$APK" "$candidate_apk"
           cp packaging/gpui-android/README.md dist/gpui-android/
           cp "$GITHUB_WORKSPACE/Cargo.lock" dist/gpui-android/
           scope="$FLAVOR-preview"
@@ -357,6 +368,7 @@ jobs:
           if [ "$FLAVOR" = management ]; then signing=repository-preview-key; fi
           if [ "$FLAVOR" != smoke ]; then scope=software-video-pointer-keyboard-audio-preview; fi
           printf 'commit=%s\nui=GPUI\nscope=%s\nmin_sdk=35\ntarget_sdk=36\nabi=arm64-v8a\nsigning=%s\ndevice_test=not-run\n' "$GITHUB_SHA" "$scope" "$signing"             > dist/gpui-android/BUILD-INFO.txt
+          printf 'rust_profile=%s\n' "$XSCC_RUST_PROFILE" >> dist/gpui-android/BUILD-INFO.txt
           if [ "$FLAVOR" != smoke ]; then
             printf 'session=software-video-pointer-keyboard-audio-preview\ninput_modes=direct-control,view-only\nkeyboard=true\nkeyboard_scope=software-keyboard-text-and-control-keys\nfull_hardware_keyboard=false\nhardware_control_compatibility=unmodified-nonrepeating-enter-tab\nwayland_non_ascii=rejected\naudio=true\naudio_default_enabled=true\naudio_mode=foreground-playback-default-on-with-session-mute\nmicrophone=false\nclipboard=false\nlocal_field_paste=explicit-foreground-text-only\nfirst_frame_test=not-run\nkeyboard_device_test=not-run\naudio_device_test=not-run\n' >> dist/gpui-android/BUILD-INFO.txt
             cp "$RUNNER_TEMP/management-dependencies.txt" dist/gpui-android/
@@ -364,7 +376,7 @@ jobs:
           if [ "$FLAVOR" = landirect ]; then
             python3 -c "import sys; sys.path.insert(0, '.github/scripts'); from gpui_mobile_test_gate import WARNING; print(WARNING)" > dist/gpui-android/TEST-ONLY.txt
             printf 'test_lan_direct=true\nidentity_authentication=false\nhost_test_opt_in_required=true\ntest_ip_scope=any-reachable-ipv4-or-ipv6\n' >> dist/gpui-android/BUILD-INFO.txt
-            mv "dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}.apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-IP-direct-${GITHUB_SHA:0:12}.apk"
+            mv "$candidate_apk" "dist/gpui-android/xscc-gpui-android-arm64-TEST-IP-direct-${GITHUB_SHA:0:12}$profile_suffix.apk"
           else
             printf 'test_lan_direct=false\n' >> dist/gpui-android/BUILD-INFO.txt
           fi
@@ -395,7 +407,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-android-${{ matrix.flavor }}-${{ github.sha }}
+          name: xscc-gpui-android-${{ matrix.flavor }}-${{ github.sha }}${{ inputs.stream_debug && '-debug' || '' }}
           path: dist/gpui-android/*
           if-no-files-found: error
           retention-days: 14

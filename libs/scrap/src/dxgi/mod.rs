@@ -76,6 +76,7 @@ pub struct Capturer {
     fastlane: bool,
     staging: [Staging; 2],
     pending_readback: readback::Pending,
+    #[cfg(debug_assertions)]
     capture_metrics: readback::Metrics,
     texture: ComPtr<ID3D11Texture2D>,
     width: usize,
@@ -194,6 +195,7 @@ impl Capturer {
                 && desc.ModeDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT,
             staging: [Staging::new(), Staging::new()],
             pending_readback: readback::Pending::default(),
+            #[cfg(debug_assertions)]
             capture_metrics: readback::Metrics::new(),
             texture: ComPtr(ptr::null_mut()),
             width: display.width() as usize,
@@ -471,9 +473,11 @@ impl Capturer {
         }
         let mut frame = ptr::null_mut();
         let mut info = mem::zeroed();
+        #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
         let acquired =
             wrap_hresult((*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame));
+        #[cfg(debug_assertions)]
         self.capture_metrics.acquire(started.elapsed());
         if let Err(err) = acquired {
             if err.kind() == io::ErrorKind::TimedOut && !self.fastlane {
@@ -502,8 +506,10 @@ impl Capturer {
             Ok((rect.pBits, rect.Pitch))
         } else {
             let slot = self.pending_readback.write_slot();
+            #[cfg(debug_assertions)]
             let started = std::time::Instant::now();
             self.copy_to_staging(frame.0, slot)?;
+            #[cfg(debug_assertions)]
             self.capture_metrics.copy(started.elapsed());
             // Copy into the free owned slot while the encoder can consume the previous
             // GPU readback. The duplication frame is still released at the next acquire.
@@ -530,8 +536,10 @@ impl Capturer {
 
     unsafe fn map_staging(&mut self, slot: usize) -> io::Result<(*const u8, i32)> {
         let mut rect = mem::zeroed();
+        #[cfg(debug_assertions)]
         let started = std::time::Instant::now();
         let result = wrap_hresult((*self.staging[slot].surface.0).Map(&mut rect, DXGI_MAP_READ));
+        #[cfg(debug_assertions)]
         self.capture_metrics.map(started.elapsed());
         result?;
         let acquired = self.frame_state == FrameState::Acquired;
@@ -598,6 +606,7 @@ impl Capturer {
     }
 
     pub fn frame<'a>(&'a mut self, timeout: UINT) -> io::Result<Frame<'a>> {
+        #[cfg(debug_assertions)]
         if let Some(sample) = self.capture_metrics.sample() {
             hbb_common::log::info!(target: "xscc::host_capture_metrics", "host_dxgi_pipeline {sample}");
         }
@@ -682,10 +691,12 @@ impl Capturer {
             let mut frame = ptr::null_mut();
             let mut info = mem::zeroed();
 
+            #[cfg(debug_assertions)]
             let started = std::time::Instant::now();
             let acquired = wrap_hresult(
                 (*self.duplication.0).AcquireNextFrame(timeout, &mut info, &mut frame),
             );
+            #[cfg(debug_assertions)]
             self.capture_metrics.acquire(started.elapsed());
             acquired?;
             self.frame_state = FrameState::Acquired;

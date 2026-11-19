@@ -916,6 +916,7 @@ impl InvokeUiSession for Handler {
                 return;
             }
         }
+        #[cfg(debug_assertions)]
         self.0.metrics.lock().unwrap().callback();
         if let Some(frame) = take_frame(display, image, &self.0) {
             let monitors = self.0.monitors.read().unwrap();
@@ -933,6 +934,7 @@ impl InvokeUiSession for Handler {
             let replaced = {
                 let mut metrics = self.0.metrics.lock().unwrap();
                 let replaced = self.0.frame.force_push(frame).is_some();
+                #[cfg(debug_assertions)]
                 metrics.published();
                 if replaced {
                     metrics.dropped();
@@ -1127,13 +1129,15 @@ impl InvokeUiSession for Handler {
         let index = monitors.current;
         let sample = self.0.metrics.lock().unwrap().snapshot(Instant::now());
         drop(monitors);
-        #[cfg(not(target_os = "ios"))]
+        #[cfg(all(debug_assertions, not(target_os = "ios")))]
         if let Some(sample) = sample.as_ref() {
             hbb_common::log::info!(
                 target: "xscc::session_metrics",
                 "session_pipeline {}",
                 serde_json::json!({
                     "schema": 1,
+                    "display": index,
+                    "elapsed_ms": sample.elapsed_ms,
                     "received_fps": sample.received_fps,
                     "decoded_fps": sample.decoded_fps,
                     "submitted_fps": sample.submitted_fps,
@@ -1145,6 +1149,7 @@ impl InvokeUiSession for Handler {
                     "video_callback_count": sample.video_callback_count,
                     "mailbox_publish_count": sample.mailbox_publish_count,
                     "codec": status.codec_format.as_ref().map(ToString::to_string),
+                    "round_trip_ms": status.delay.filter(|delay| *delay > 0),
                     "target_bitrate_kbps": status.target_bitrate
                         .and_then(|value| u32::try_from(value).ok())
                         .filter(|value| *value > 0),

@@ -42,7 +42,9 @@ pub(super) struct Metrics {
     #[cfg(all(target_os = "android", feature = "mediacodec"))]
     surface_submitted: u64,
     dropped: u64,
+    #[cfg(any(test, debug_assertions))]
     callbacks: u64,
+    #[cfg(any(test, debug_assertions))]
     published: u64,
     decode_time: Samples,
     ui_queue_time: Samples,
@@ -58,7 +60,9 @@ impl Default for Metrics {
             #[cfg(all(target_os = "android", feature = "mediacodec"))]
             surface_submitted: 0,
             dropped: 0,
+            #[cfg(any(test, debug_assertions))]
             callbacks: 0,
+            #[cfg(any(test, debug_assertions))]
             published: 0,
             decode_time: Samples::default(),
             ui_queue_time: Samples::default(),
@@ -66,6 +70,8 @@ impl Default for Metrics {
     }
 }
 pub(super) struct Sample {
+    #[cfg(all(debug_assertions, not(target_os = "ios")))]
+    pub elapsed_ms: f64,
     pub received_fps: i32,
     pub decoded_fps: i32,
     pub submitted_fps: i32,
@@ -75,10 +81,16 @@ pub(super) struct Sample {
     pub decode_p95_ms: Option<f32>,
     pub ui_queue_p95_ms: Option<f32>,
     pub mailbox_dropped: u64,
+    #[cfg(any(test, debug_assertions))]
     pub video_callback_count: u64,
+    #[cfg(any(test, debug_assertions))]
     pub mailbox_publish_count: u64,
 }
 impl Sample {
+    #[cfg(any(
+        all(target_os = "android", feature = "mediacodec"),
+        all(debug_assertions, not(target_os = "ios"))
+    ))]
     pub(super) fn surface_submitted_fps(&self) -> Option<i32> {
         #[cfg(all(target_os = "android", feature = "mediacodec"))]
         return Some(self.surface_submitted_fps);
@@ -117,9 +129,11 @@ impl Metrics {
     pub fn surface_submitted(&mut self, frames: usize) {
         self.surface_submitted = self.surface_submitted.saturating_add(frames as u64);
     }
+    #[cfg(any(test, debug_assertions))]
     pub fn callback(&mut self) {
         self.callbacks = self.callbacks.saturating_add(1);
     }
+    #[cfg(any(test, debug_assertions))]
     pub fn published(&mut self) {
         self.published = self.published.saturating_add(1);
     }
@@ -137,6 +151,8 @@ impl Metrics {
                 .min(i32::MAX as f64)) as i32
         };
         let sample = Sample {
+            #[cfg(all(debug_assertions, not(target_os = "ios")))]
+            elapsed_ms: elapsed.as_secs_f64() * 1000.0,
             received_fps: rate(self.received),
             decoded_fps: rate(self.decoded),
             submitted_fps: rate(self.submitted),
@@ -146,7 +162,9 @@ impl Metrics {
             decode_p95_ms: self.decode_time.percentile_ms(95),
             ui_queue_p95_ms: self.ui_queue_time.percentile_ms(95),
             mailbox_dropped: self.dropped,
+            #[cfg(any(test, debug_assertions))]
             video_callback_count: self.callbacks,
+            #[cfg(any(test, debug_assertions))]
             mailbox_publish_count: self.published,
         };
         *self = Self {

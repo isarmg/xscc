@@ -12,9 +12,11 @@ pub(super) struct VideoReceiveMetrics {
 
 #[derive(Default, Serialize)]
 pub(super) struct VideoReceiveSample {
+    schema: u32,
     elapsed_ms: f64,
     pub(super) socket_datagrams: u64,
     authenticated_datagrams: u64,
+    highest_authenticated_sequence: Option<u64>,
     sequence_gap_slots: u64,
     reordered_datagrams: u64,
     video_fragments: u64,
@@ -28,6 +30,9 @@ pub(super) struct VideoReceiveSample {
     pub(super) video_capacity_rejections: u64,
     pub(super) video_receive_queue_drops: u64,
     pub(super) keyframe_nacks: u64,
+    pub(super) superseded_keyframes: u64,
+    pub(super) stalled_keyframes: usize,
+    pub(super) refresh_retries: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_reassembled_video: Option<FrameMetadata>,
 }
@@ -73,10 +78,15 @@ impl VideoReceiveMetrics {
             && sample.expired_video_sent_notices == 0
             && sample.sender_abandoned_video_messages == 0
             && sample.keyframe_nacks == 0
+            && sample.superseded_keyframes == 0
+            && sample.stalled_keyframes == 0
+            && sample.refresh_retries == 0
         {
             return None;
         }
+        sample.schema = 1;
         sample.elapsed_ms = elapsed.as_secs_f64() * 1_000.0;
+        sample.highest_authenticated_sequence = self.highest_sequence;
         Some(sample)
     }
 

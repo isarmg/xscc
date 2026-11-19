@@ -27,3 +27,7 @@ unicode-segmentation = "1.12"
 [profile.release]
 debug = 0
 strip = "debuginfo"
+
+[profile.stream-debug]
+inherits = "release"
+debug-assertions = true

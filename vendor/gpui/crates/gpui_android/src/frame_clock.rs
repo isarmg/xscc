@@ -6,8 +6,10 @@ use std::{
         Arc, Mutex, Weak,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(1);
 
@@ -25,7 +27,10 @@ enum FrameState {
     #[default]
     Idle,
     Pending(usize),
-    Ready(Instant),
+    Ready {
+        #[cfg(debug_assertions)]
+        at: Instant,
+    },
     Failed(Option<&'static str>),
 }
 
@@ -41,6 +46,7 @@ pub(crate) struct FrameClock {
 
 impl FrameClock {
     pub(crate) fn new(app: &AndroidApp) -> Self {
+        #[cfg(debug_assertions)]
         log::info!("Android Choreographer pacing enabled without future presentation holds");
         Self {
             app: app.clone(),
@@ -108,9 +114,16 @@ impl FrameClock {
     pub(crate) fn take_ready(&self) -> anyhow::Result<Option<Duration>> {
         let mut state = self.signal.state.lock().unwrap();
         match *state {
-            FrameState::Ready(ready_at) => {
+            FrameState::Ready {
+                #[cfg(debug_assertions)]
+                at,
+            } => {
                 *state = FrameState::Idle;
-                Ok(Some(ready_at.elapsed()))
+                #[cfg(debug_assertions)]
+                let delay = at.elapsed();
+                #[cfg(not(debug_assertions))]
+                let delay = Duration::ZERO;
+                Ok(Some(delay))
             }
             FrameState::Failed(ref mut error) => match error.take() {
                 Some(error) => anyhow::bail!(error),
@@ -152,6 +165,7 @@ unsafe extern "C" fn on_vsync(
     _frame: *const ndk_sys::AChoreographerFrameCallbackData,
     data: *mut c_void,
 ) {
+    #[cfg(debug_assertions)]
     let ready_at = Instant::now();
     let token = data as usize;
     let registration = CALLBACK.with(|slot| {
@@ -168,7 +182,10 @@ unsafe extern "C" fn on_vsync(
     let ready = {
         let mut state = signal.state.lock().unwrap();
         if matches!(*state, FrameState::Pending(id) if id == token) {
-            *state = FrameState::Ready(ready_at);
+            *state = FrameState::Ready {
+                #[cfg(debug_assertions)]
+                at: ready_at,
+            };
             true
         } else {
             false

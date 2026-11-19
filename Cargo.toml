@@ -253,3 +253,7 @@ osx_minimum_system_version = "10.14"
 # Preserve the profiles previously used by the standalone product workspaces.
 [profile.dev]
 debug = 0
+
+[profile.stream-debug]
+inherits = "release"
+debug-assertions = true
