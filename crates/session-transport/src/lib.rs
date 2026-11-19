@@ -1652,6 +1652,8 @@ mod tests {
         host.set_media_bitrate_limit(1_000).unwrap();
         let mut serving = tokio::spawn(async move {
             host.send(&video(true, 100)).await.unwrap();
+            // Exceed the wire cap even when a Windows runner wakes on coarse timer ticks.
+            let delta = video(false, 8 * 1024);
             let mut tick = interval(Duration::from_millis(8));
             tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let until = tokio::time::sleep(Duration::from_millis(800));
@@ -1659,7 +1661,7 @@ mod tests {
             loop {
                 tokio::select! {
                     _ = &mut until => return (host.video_bitrate_budget(), host),
-                    _ = tick.tick() => host.send(&video(false, 1024)).await.unwrap(),
+                    _ = tick.tick() => host.send(&delta).await.unwrap(),
                     packet = host.next() => { packet.unwrap().unwrap(); }
                 }
             }
