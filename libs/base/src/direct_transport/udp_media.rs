@@ -514,6 +514,11 @@ impl DatagramReceiver {
         }
         Ok(packet)
     }
+    /// Includes every authenticated datagram type sharing the sender's sequence space.
+    pub fn highest_authenticated_sequence(&self) -> Option<u64> {
+        self.replay.highest
+    }
+
     fn received(&mut self, sequence: u64, now: Instant) {
         if self
             .ranges
@@ -1008,9 +1013,17 @@ pub enum Recovery {
     KeyframeComplete(KeyframeComplete),
 }
 #[derive(Debug, Default)]
+pub struct VideoAssemblyExpiry {
+    pub assemblies: usize,
+    pub missing_fragments: usize,
+    pub sent_notices: usize,
+}
+
+#[derive(Debug, Default)]
 pub struct ReceiveOutcome {
     pub frame: Option<CompletedFrame>,
     pub recovery: Vec<Recovery>,
+    pub expired_video: VideoAssemblyExpiry,
 }
 
 struct PendingFrame {
@@ -1325,6 +1338,7 @@ impl Reassembler {
             if now < *deadline {
                 return true;
             }
+            outcome.expired_video.sent_notices += 1;
             outcome
                 .recovery
                 .push(Recovery::RefreshVideo(descriptor.metadata));
@@ -1333,6 +1347,8 @@ impl Reassembler {
         self.pending.retain(|_, frame| {
             if now >= frame.deadline {
                 if frame.descriptor.metadata.kind == MediaKind::Video {
+                    outcome.expired_video.assemblies += 1;
+                    outcome.expired_video.missing_fragments += frame.remaining;
                     outcome
                         .recovery
                         .push(Recovery::RefreshVideo(frame.descriptor.metadata));
@@ -2135,6 +2151,7 @@ mod tests {
         for index in (0..=128).step_by(2) {
             receiver.open(&packets[index].bytes, now).unwrap();
         }
+        assert_eq!(receiver.highest_authenticated_sequence(), Some(128));
         let report = receiver.take_report(now + REPORT_INTERVAL).unwrap();
         report.validate().unwrap();
         assert_eq!(report.ranges.len(), MAX_ACK_RANGES);
@@ -2149,6 +2166,7 @@ mod tests {
         for index in (1..128).step_by(2) {
             receiver.open(&packets[index].bytes, now).unwrap();
         }
+        assert_eq!(receiver.highest_authenticated_sequence(), Some(128));
         for packet in &packets[129..] {
             receiver.open(&packet.bytes, now + REPORT_INTERVAL).unwrap();
         }
@@ -2265,10 +2283,13 @@ mod tests {
             };
             assembler.push(fragment, now).unwrap();
         }
-        assert!(assembler
-            .expire(now + DELTA_TTL)
+        let expired = assembler.expire(now + DELTA_TTL);
+        assert!(expired
             .recovery
             .contains(&Recovery::RefreshVideo(metadata(1, false))));
+        assert_eq!(expired.expired_video.assemblies, 1);
+        assert_eq!(expired.expired_video.missing_fragments, 1);
+        assert_eq!(expired.expired_video.sent_notices, 0);
         let tail = FramePlan::new(
             metadata(2, false),
             Bytes::from_static(b"last static update"),
@@ -2278,10 +2299,12 @@ mod tests {
         assembler
             .note_notice(FrameNotice::Sent(tail.descriptor()), now)
             .unwrap();
-        assert!(assembler
-            .expire(now + DELTA_TTL)
+        let expired = assembler.expire(now + DELTA_TTL);
+        assert!(expired
             .recovery
             .contains(&Recovery::RefreshVideo(metadata(2, false))));
+        assert_eq!(expired.expired_video.assemblies, 0);
+        assert_eq!(expired.expired_video.sent_notices, 1);
         assembler.set_epoch(MediaKind::Video, 0, 1).unwrap();
         let stale = fragment(&tx, &rx, &mut sender, &mut receiver, &tail, 0, now).await;
         assert!(matches!(

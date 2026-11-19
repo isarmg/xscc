@@ -4,8 +4,9 @@ mod client;
 pub mod host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod send_timer;
+mod video_receive_metrics;
 mod video_send_queue;
-use crate::client::PendingAssociation;
+use crate::{client::PendingAssociation, video_receive_metrics::VideoReceiveMetrics};
 #[cfg(test)]
 use crate::host as udp_host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1069,6 +1070,14 @@ impl HybridTransport {
         };
         if metadata.epoch != state.epoch || state.last.is_some_and(|last| metadata.frame_id <= last)
         {
+            if metadata.kind == MediaKind::Video {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1),
+                    info,
+                    "client_udp_video_stale display={} epoch={} current_epoch={} frame={} last_delivered={:?}",
+                    metadata.display_id, metadata.epoch, state.epoch, metadata.frame_id, state.last
+                );
+            }
             return Ok(None);
         }
         if media_metadata(&Message::parse_from_tokio_bytes(&frame.payload)?)?
@@ -1095,10 +1104,24 @@ impl HybridTransport {
         }
         if metadata.kind == MediaKind::Video {
             if gap {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1),
+                    info,
+                    "client_udp_video_order_gap reason=reorder_capacity display={} epoch={} expected={:?} next={} discarded={}",
+                    metadata.display_id, metadata.epoch, state.expected(), metadata.frame_id, state.held.len() + 1
+                );
                 state.held.clear();
                 state.needs_keyframe = true;
             }
             if metadata.keyframe {
+                if state.needs_keyframe {
+                    hbb_common::throttled_log!(
+                        Duration::from_secs(1),
+                        info,
+                        "client_udp_video_reference_ready display={} epoch={} frame={}",
+                        metadata.display_id, metadata.epoch, metadata.frame_id
+                    );
+                }
                 state.needs_keyframe = false;
             }
             if state.needs_keyframe {
@@ -1135,6 +1158,12 @@ impl HybridTransport {
         if stream.expected() == Some(id) {
             return self.deliver(frame);
         }
+        hbb_common::throttled_log!(
+            Duration::from_secs(1),
+            info,
+            "client_udp_video_order_gap reason=reorder_timeout display={} epoch={} expected={:?} next={id} discarded={}",
+            frame.metadata.display_id, frame.metadata.epoch, stream.expected(), stream.held.len() + 1
+        );
         let gap = stream.held.last_key_value().map_or(frame.metadata, |(_, (latest, _))| latest.metadata);
         stream.held.clear();
         stream.needs_keyframe = true;
@@ -2343,15 +2372,22 @@ fn recovery(
     outcome: ReceiveOutcome,
     completed: &mpsc::Sender<CompletedFrame>,
     gate: &Mutex<media::VideoRecovery>,
+    video_metrics: &mut VideoReceiveMetrics,
 ) -> ResultType<()> {
+    video_metrics.window.expired_video_assemblies += outcome.expired_video.assemblies;
+    video_metrics.window.expired_missing_video_fragments += outcome.expired_video.missing_fragments;
+    video_metrics.window.expired_video_sent_notices += outcome.expired_video.sent_notices;
     for recovery in outcome.recovery {
         match recovery {
             Recovery::RefreshVideo(metadata) => refresh(writer, metadata, metadata.keyframe, gate)?,
-            Recovery::KeyframeNack(nack) => writer.control(
-                sid,
-                udp_media_control::Union::Nack(serde_json::to_vec(&nack)?.into()),
-                false,
-            )?,
+            Recovery::KeyframeNack(nack) => {
+                writer.control(
+                    sid,
+                    udp_media_control::Union::Nack(serde_json::to_vec(&nack)?.into()),
+                    false,
+                )?;
+                video_metrics.window.keyframe_nacks += 1;
+            }
             Recovery::KeyframeComplete(complete) => writer.control(
                 sid,
                 udp_media_control::Union::Complete(serde_json::to_vec(&complete)?.into()),
@@ -2360,11 +2396,16 @@ fn recovery(
         }
     }
     if let Some(frame) = outcome.frame {
+        if frame.metadata.kind == MediaKind::Video {
+            video_metrics.window.reassembled_video_messages += 1;
+            video_metrics.window.last_reassembled_video = Some(frame.metadata);
+        }
         match completed.try_send(frame) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(frame))
                 if frame.metadata.kind == MediaKind::Video =>
             {
+                video_metrics.window.video_receive_queue_drops += 1;
                 refresh(writer, frame.metadata, frame.metadata.keyframe, gate)?
             }
             Err(mpsc::error::TrySendError::Full(_)) => {}
@@ -2459,6 +2500,7 @@ async fn client_media(
         reassembler.set_effective_rate(receive_rate.effective)?;
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let started = Instant::now();
+        let mut video_metrics = VideoReceiveMetrics::new(started, pending.receiver.highest_authenticated_sequence());
         let mut next_probe = started + Duration::from_millis(250);
         let mut probe_token = [0; 16]; randombytes::randombytes_into(&mut probe_token);
         let mut packet = [0; media::DEFAULT_MTU + 1];
@@ -2479,6 +2521,9 @@ async fn client_media(
                         let now = Instant::now();
                         match reassembler.note_notice(notice, now) {
                             Ok(outcome) => {
+                                if matches!(notice, FrameNotice::Abandoned(metadata) if metadata.kind == MediaKind::Video) {
+                                    video_metrics.window.sender_abandoned_video_messages += 1;
+                                }
                                 match notice {
                                     FrameNotice::Abandoned(metadata) if metadata.keyframe =>
                                         video_recovery.lock().unwrap().keyframe_abandoned(metadata),
@@ -2490,7 +2535,7 @@ async fn client_media(
                                     }
                                     _ => {}
                                 }
-                                recovery(&writer, pending.session_id, outcome, &completed, &video_recovery)?;
+                                recovery(&writer, pending.session_id, outcome, &completed, &video_recovery, &mut video_metrics)?;
                             }
                             Err(MediaError::WrongEpoch) => {}
                             Err(error) => return Err(error.into()),
@@ -2518,15 +2563,19 @@ async fn client_media(
                         pending.socket.send(&probe.bytes).await.context("Validate UDP media path")?;
                         next_probe = now + if path_ready { Duration::from_secs(15) } else { Duration::from_millis(250) };
                     }
-                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery)?;
+                    recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery, &mut video_metrics)?;
                     let tick = video_recovery.lock().unwrap().tick(now);
                     for metadata in tick.abandon { reassembler.discard(metadata); }
                     for metadata in tick.refresh { request_refresh(&writer, metadata.display_id)?; }
+                    video_metrics.report(now);
                 }
                 count = pending.socket.recv(&mut packet) => {
                     let count = count.context("Receive UDP media")?;
+                    video_metrics.window.socket_datagrams += 1;
                     if count > pending.mtu { continue; }
                     let Ok(packet) = pending.receiver.open(&packet[..count], Instant::now()) else { continue; };
+                    video_metrics.authenticated(pending.receiver.highest_authenticated_sequence()
+                        .expect("invariant: accepted datagram updates the sequence window"));
                     match packet {
                         AuthenticatedPacket::Probe { kind: ProbeKind::Challenge, token } => {
                             let response = pending.sender.seal_probe(ProbeKind::Response, token)?;
@@ -2536,6 +2585,8 @@ async fn client_media(
                             if fragment.descriptor.total_size as usize > receive_limit.load(Ordering::Acquire) { bail!("UDP frame exceeds application receive limit"); }
                             let now = Instant::now();
                             let descriptor = fragment.descriptor;
+                            let is_video = descriptor.metadata.kind == MediaKind::Video;
+                            if is_video { video_metrics.video_fragment(now); }
                             match reassembler.push(fragment, now) {
                                 Ok(outcome) => {
                                     if let Some(bps) = receive_rate.received(count, now) {
@@ -2550,9 +2601,14 @@ async fn client_media(
                                             if let Some(metadata) = replaced { reassembler.discard(metadata); }
                                         }
                                     }
-                                    recovery(&writer, pending.session_id, outcome, &completed, &video_recovery)?;
+                                    recovery(&writer, pending.session_id, outcome, &completed, &video_recovery, &mut video_metrics)?;
                                 }
-                                Err(MediaError::WrongEpoch | MediaError::Capacity) => {}
+                                Err(MediaError::WrongEpoch) => {
+                                    video_metrics.window.video_wrong_epoch_fragments += u64::from(is_video);
+                                }
+                                Err(MediaError::Capacity) => {
+                                    video_metrics.window.video_capacity_rejections += u64::from(is_video);
+                                }
                                 Err(error) => return Err(error.into()),
                             }
                         }
