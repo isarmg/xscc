@@ -4,6 +4,7 @@ mod client;
 pub mod host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod send_timer;
+mod video_send_queue;
 use crate::client::PendingAssociation;
 #[cfg(test)]
 use crate::host as udp_host;
@@ -31,7 +32,7 @@ use hbb_common::{
     tcp::{FramedStreamReader, FramedStreamWriter},
     tokio::{
         self,
-        sync::{mpsc, oneshot, watch, Notify, OwnedSemaphorePermit, Semaphore},
+        sync::{mpsc, oneshot, watch, Notify},
         task::JoinHandle,
         time::{interval, timeout, MissedTickBehavior},
     },
@@ -511,10 +512,9 @@ impl ReceiveStream {
 struct QueuedFrame {
     plan: FramePlan,
     queued: Instant,
-    video_bytes: Option<OwnedSemaphorePermit>,
 }
 struct WorkerChannels {
-    frames: mpsc::Receiver<QueuedFrame>,
+    frames: Arc<video_send_queue::VideoSendQueue>,
     audio: mpsc::Receiver<QueuedFrame>,
     commands: mpsc::Receiver<Command>,
     completed: mpsc::Sender<CompletedFrame>,
@@ -565,10 +565,9 @@ struct Outbound {
     failure: watch::Receiver<Option<String>>,
     writer: ReliableWriter,
     commands: mpsc::Sender<Command>,
-    outgoing: mpsc::Sender<QueuedFrame>,
+    outgoing: Arc<video_send_queue::VideoSendQueue>,
     audio: mpsc::Sender<QueuedFrame>,
     sending: BTreeMap<StreamKey, SendStream>,
-    video_bytes: Arc<Semaphore>,
 }
 impl Outbound {
     fn command(&self, command: Command) -> ResultType<()> {
@@ -652,44 +651,18 @@ impl Outbound {
                 message.write_to_bytes()?.into(),
                 media::DEFAULT_MTU,
             )?;
-            let sender = if kind == MediaKind::Audio {
-                &self.audio
-            } else {
-                &self.outgoing
-            };
-            let video_bytes = if kind == MediaKind::Video {
-                // Keep a slot for a recovery keyframe during delta-frame bursts.
-                let size = plan.descriptor().total_size;
-                if !keyframe
-                    && (sender.capacity() <= 1
-                        || self.video_bytes.available_permits().saturating_sub(size as usize)
-                            < media::MAX_VIDEO_FRAME)
-                {
-                    self.notice(FrameNotice::Abandoned(metadata))?;
-                    return Ok(true);
-                }
-                match self.video_bytes.clone().try_acquire_many_owned(size) {
-                    Ok(permit) => Some(permit),
-                    Err(_) => {
-                        self.notice(FrameNotice::Abandoned(metadata))?;
-                        return Ok(true);
-                    }
-                }
-            } else {
-                None
-            };
-            match sender.try_send(QueuedFrame {
+            let queued = QueuedFrame {
                 plan,
                 queued: Instant::now(),
-                video_bytes,
-            }) {
-                Ok(()) => Ok(true),
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    if kind == MediaKind::Video {
-                        self.notice(FrameNotice::Abandoned(metadata))?;
-                    }
-                    Ok(true)
+            };
+            if kind == MediaKind::Video {
+                if !self.outgoing.push(queued) {
+                    self.notice(FrameNotice::Abandoned(metadata))?;
                 }
+                return Ok(true);
+            }
+            match self.audio.try_send(queued) {
+                Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(true),
                 Err(mpsc::error::TrySendError::Closed(_)) => bail!("UDP media writer stopped"),
             }
         } else if self.host {
@@ -774,7 +747,7 @@ impl HybridTransport {
         };
         let (incoming, reliable) = mpsc::channel(CONTROL_QUEUE);
         let (completed, media) = mpsc::channel(MEDIA_QUEUE + 4);
-        let (outgoing, frames) = mpsc::channel(VIDEO_QUEUE);
+        let frames = Arc::new(video_send_queue::VideoSendQueue::default());
         let (audio, audio_rx) = mpsc::channel(16);
         let (commands, command_rx) = mpsc::channel(CONTROL_QUEUE);
         let (failed, failure) = watch::channel(None);
@@ -800,10 +773,9 @@ impl HybridTransport {
                         failure: failure.clone(),
                         writer: writer.clone(),
                         commands: commands.clone(),
-                        outgoing,
+                        outgoing: frames.clone(),
                         audio,
                         sending: BTreeMap::new(),
-                        video_bytes: Arc::new(Semaphore::new(VIDEO_QUEUE_BYTES)),
                     })),
                     failure: failed.clone(),
                 },
@@ -1469,7 +1441,6 @@ mod tests {
                         )
                         .unwrap(),
                         queued: Instant::now() - Duration::from_secs(1),
-                        video_bytes: None,
                     })
                     .unwrap_or_else(|_| panic!("fixture audio queue must fit"));
             }
@@ -2077,8 +2048,7 @@ mod tests {
     #[tokio::test]
     async fn producer_clones_share_frame_sequences_and_stop_with_the_transport_owner() {
         let (_client, host) = backpressured_streams();
-        let (transport, mut channels) =
-            HybridTransport::new(host, SessionId([5; 16]), true).unwrap();
+        let (transport, channels) = HybridTransport::new(host, SessionId([5; 16]), true).unwrap();
         transport.ready.store(true, Ordering::Release);
         let first = transport.outbound.clone();
         let second = first.clone();
@@ -2089,58 +2059,90 @@ mod tests {
         }
         let a = channels
             .frames
-            .recv()
+            .next(None, None)
             .await
-            .unwrap()
             .plan
             .descriptor()
             .metadata;
         let b = channels
             .frames
-            .recv()
+            .next(None, None)
             .await
-            .unwrap()
             .plan
             .descriptor()
             .metadata;
         assert_eq!((a.epoch, a.frame_id, b.epoch, b.frame_id), (1, 0, 1, 1));
         for expected in 2..VIDEO_QUEUE - 1 {
-            let queued = channels.frames.try_recv().unwrap();
+            let queued = channels.frames.pop(None, None).unwrap();
             assert_eq!(queued.plan.descriptor().metadata.frame_id, expected as u64);
         }
-        assert!(channels.frames.try_recv().is_err());
+        assert!(channels.frames.is_empty());
         second.send_video(Arc::new(video(false, 64))).unwrap();
         let after_gap = channels
             .frames
-            .recv()
+            .next(None, None)
             .await
-            .unwrap()
             .plan
             .descriptor()
             .metadata;
-        assert_eq!((after_gap.epoch, after_gap.frame_id), (1, VIDEO_QUEUE as u64));
+        assert_eq!(
+            (after_gap.epoch, after_gap.frame_id),
+            (1, VIDEO_QUEUE as u64)
+        );
         drop(transport);
         assert!(first.send_video(Arc::new(video(true, 64))).is_err());
         assert!(second.send_video(Arc::new(video(true, 64))).is_err());
     }
     #[tokio::test]
-    async fn delta_backpressure_preserves_admission_for_a_keyframe() {
+    async fn recovery_keyframe_skips_same_display_backlog_and_an_active_delta() {
         let (_client, host) = backpressured_streams();
-        let (transport, mut channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
+        let (transport, channels) = HybridTransport::new(host, SessionId([8; 16]), true).unwrap();
         let producer = transport.outbound.clone();
         producer.send_video(Arc::new(video(true, 64))).unwrap();
-        assert!(channels.frames.try_recv().is_err());
+        assert!(channels.frames.is_empty());
         transport.ready.store(true, Ordering::Release);
-        for _ in 0..VIDEO_QUEUE {
+        producer.send_video(Arc::new(video(false, 64))).unwrap();
+        let active = channels
+            .frames
+            .pop(None, None)
+            .unwrap()
+            .plan
+            .descriptor()
+            .metadata;
+        for _ in 1..VIDEO_QUEUE {
             producer.send_video(Arc::new(video(false, 64))).unwrap();
         }
         producer.send_video(Arc::new(video(true, 64))).unwrap();
-        for _ in 0..VIDEO_QUEUE - 1 {
-            assert!(!channels.frames.try_recv().unwrap().plan.descriptor().metadata.keyframe);
-        }
-        let recovery = channels.frames.try_recv().unwrap().plan.descriptor().metadata;
+        producer.send_video(Arc::new(video(false, 64))).unwrap();
+
+        assert!(channels
+            .frames
+            .pop(
+                Some(FrameMetadata {
+                    keyframe: true,
+                    ..active
+                }),
+                None
+            )
+            .is_none());
+        let recovery = channels
+            .frames
+            .next(Some(active), None)
+            .await
+            .plan
+            .descriptor()
+            .metadata;
         assert!(recovery.keyframe);
         assert_eq!(recovery.frame_id, VIDEO_QUEUE as u64);
+        let following = channels
+            .frames
+            .next(None, None)
+            .await
+            .plan
+            .descriptor()
+            .metadata;
+        assert_eq!(following.frame_id, recovery.frame_id + 1);
+        assert!(channels.frames.is_empty());
     }
 
     #[tokio::test]
@@ -2157,6 +2159,59 @@ mod tests {
         }
         let mut later = std::pin::pin!(timer.wait_until(Instant::now() + Duration::from_secs(30)));
         assert_eq!(later.as_mut().poll(&mut context), Poll::Pending);
+    }
+
+    #[tokio::test]
+    async fn recovery_keyframe_arrives_before_a_saturated_delta_queue() {
+        let (client, host, _listener, udp) = media_streams(udp_host::bind).await;
+        let mut host = SessionTransport::accepted(host, Some(udp.registration()));
+        let offer = host.offer_host().await.unwrap().unwrap();
+        let mut client: SessionTransport = client.into();
+        client.enable_client(&offer).await.unwrap();
+        timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        host.set_media_bitrate_limit(8_000).unwrap();
+        let sender = host.media_sender().unwrap();
+        let serving = tokio::spawn(async move {
+            while let Some(packet) = host.next().await {
+                if terminal(&Message::parse_from_bytes(&packet.unwrap()).unwrap()) {
+                    break;
+                }
+            }
+        });
+
+        sender.send_video(Arc::new(video(true, 1_024))).unwrap();
+        let first = timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            Message::parse_from_bytes(&first).unwrap(),
+            video(true, 1_024)
+        );
+
+        let delta = Arc::new(video(false, 4_096));
+        for _ in 0..VIDEO_QUEUE {
+            sender.send_video(delta.clone()).unwrap();
+        }
+        let keyframe = video(true, 48_000);
+        sender.send_video(Arc::new(keyframe.clone())).unwrap();
+
+        let next = timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(Message::parse_from_bytes(&next).unwrap(), keyframe);
+        client.send(&close()).await.unwrap();
+        timeout(Duration::from_secs(3), serving)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
@@ -2518,6 +2573,18 @@ struct Transmission {
     deadline: Instant,
     initial: bool,
     queued: Instant,
+    selected: Instant,
+    first_fragment: Option<Instant>,
+    send_calls: Duration,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[derive(Default)]
+struct KeyframeTiming {
+    queue: Duration,
+    first_fragment: Duration,
+    transfer: Duration,
+    send_calls: Duration,
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2528,6 +2595,7 @@ struct VideoSendMetrics {
     max_send_time: Duration,
     max_keyframe_bytes: u32,
     max_keyframe_send_time: Duration,
+    slowest_keyframe: KeyframeTiming,
     max_keyframe_repair_time: Duration,
     keyframe_feedback_probes: u32,
 }
@@ -2542,6 +2610,7 @@ impl VideoSendMetrics {
             max_send_time: Duration::ZERO,
             max_keyframe_bytes: 0,
             max_keyframe_send_time: Duration::ZERO,
+            slowest_keyframe: KeyframeTiming::default(),
             max_keyframe_repair_time: Duration::ZERO,
             keyframe_feedback_probes: 0,
         }
@@ -2558,11 +2627,15 @@ impl VideoSendMetrics {
             || self.keyframe_feedback_probes > 0
         {
             hbb_common::log::info!(target: "xscc::host_udp_metrics",
-                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3},\"max_keyframe_bytes\":{},\"max_keyframe_send_ms\":{:.3},\"max_keyframe_repair_ms\":{:.3},\"keyframe_feedback_probes\":{}}}",
+                "host_udp_video_pipeline {{\"elapsed_ms\":{:.3},\"sent_video_messages\":{},\"expired_video_messages\":{},\"max_send_ms\":{:.3},\"max_keyframe_bytes\":{},\"max_keyframe_send_ms\":{:.3},\"max_keyframe_repair_ms\":{:.3},\"keyframe_feedback_probes\":{},\"slowest_keyframe_queue_ms\":{:.3},\"slowest_keyframe_first_fragment_ms\":{:.3},\"slowest_keyframe_transfer_ms\":{:.3},\"slowest_keyframe_send_calls_ms\":{:.3}}}",
                 elapsed.as_secs_f64() * 1_000.0, self.sent_messages, self.expired_messages,
                 self.max_send_time.as_secs_f64() * 1_000.0, self.max_keyframe_bytes,
                 self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
-                self.max_keyframe_repair_time.as_secs_f64() * 1_000.0, self.keyframe_feedback_probes);
+                self.max_keyframe_repair_time.as_secs_f64() * 1_000.0, self.keyframe_feedback_probes,
+                self.slowest_keyframe.queue.as_secs_f64() * 1_000.0,
+                self.slowest_keyframe.first_fragment.as_secs_f64() * 1_000.0,
+                self.slowest_keyframe.transfer.as_secs_f64() * 1_000.0,
+                self.slowest_keyframe.send_calls.as_secs_f64() * 1_000.0);
         }
         *self = Self::new(now);
     }
@@ -2576,10 +2649,13 @@ fn transmission(
     queued: Instant,
 ) -> Transmission {
     let descriptor = plan.descriptor();
+    let selected = Instant::now();
     let deadline = match (descriptor.metadata.kind, descriptor.metadata.keyframe) {
         (MediaKind::Audio, _) => queued + media::AUDIO_TTL,
-        (_, true) => queued + media::keyframe_deadline(descriptor.total_size as usize, effective_bps),
-        _ => (Instant::now() + media::DELTA_TTL).min(queued + VIDEO_QUEUE_AGE),
+        (_, true) => {
+            queued + media::keyframe_deadline(descriptor.total_size as usize, effective_bps)
+        }
+        _ => (selected + media::DELTA_TTL).min(queued + VIDEO_QUEUE_AGE),
     };
     Transmission {
         plan,
@@ -2587,6 +2663,9 @@ fn transmission(
         deadline,
         initial,
         queued,
+        selected,
+        first_fragment: None,
+        send_calls: Duration::ZERO,
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2602,7 +2681,7 @@ async fn host_media(
     bitrate_budget: Arc<AtomicU64>,
 ) {
     let WorkerChannels {
-        mut frames,
+        frames,
         mut audio,
         mut commands,
         failed,
@@ -2721,10 +2800,11 @@ async fn host_media(
                     sound = Some(next);
                     next_send = Instant::now();
                 }
-                frame = frames.recv(), if current.is_none() && repair.is_none() => {
-                    let frame = frame.context("UDP media producer stopped")?;
-                    let QueuedFrame { plan: frame, queued, video_bytes } = frame;
-                    drop(video_bytes);
+                frame = frames.next(
+                    current.as_ref().map(|frame| frame.plan.descriptor().metadata),
+                    repair.as_ref().map(|frame| frame.plan.descriptor().metadata),
+                ) => {
+                    let QueuedFrame { plan: frame, queued } = frame;
                     let metadata = frame.descriptor().metadata;
                     if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) {
                         continue;
@@ -2735,6 +2815,19 @@ async fn host_media(
                         continue;
                     }
                     if metadata.keyframe {
+                        let supersedes = |prior| video_send_queue::supersedes(metadata, prior);
+                        if repair.as_ref().is_some_and(|frame| supersedes(frame.plan.descriptor().metadata)) {
+                            repair = None;
+                        }
+                        retries.retain(|frame| !supersedes(frame.plan.descriptor().metadata));
+                        cached.retain(|prior| {
+                            if supersedes(*prior) {
+                                cache.complete(KeyframeComplete { metadata: *prior });
+                                false
+                            } else {
+                                true
+                            }
+                        });
                         for evicted in cache.insert(frame.clone(), Instant::now())? {
                             cached.retain(|metadata| *metadata != evicted); frame_notice(&writer, sid, FrameNotice::Abandoned(evicted))?;
                         }
@@ -2799,10 +2892,15 @@ async fn host_media(
                         }
                         SendDecision::Send => {
                             let packet = udp.send_fragment(&frame.plan, index).await?;
-                            pacer.on_sent(packet.sequence, packet.bytes.len(), Instant::now())?;
+                            let sent = Instant::now();
+                            pacer.on_sent(packet.sequence, packet.bytes.len(), sent)?;
+                            if metadata.keyframe && frame.initial {
+                                frame.first_fragment.get_or_insert(sent);
+                                frame.send_calls += sent.saturating_duration_since(now);
+                            }
                             frame.indices.pop_front();
                             if frame.indices.is_empty() {
-                                let elapsed = frame.queued.elapsed();
+                                let elapsed = sent.saturating_duration_since(frame.queued);
                                 if frame.initial {
                                     if metadata.kind == MediaKind::Video {
                                         video_metrics.sent_messages += 1;
@@ -2810,7 +2908,16 @@ async fn host_media(
                                     }
                                     if metadata.keyframe {
                                         video_metrics.max_keyframe_bytes = video_metrics.max_keyframe_bytes.max(frame.plan.descriptor().total_size);
-                                        video_metrics.max_keyframe_send_time = video_metrics.max_keyframe_send_time.max(elapsed);
+                                        if elapsed > video_metrics.max_keyframe_send_time {
+                                            let first = frame.first_fragment.expect("invariant: keyframe fragment sent");
+                                            video_metrics.max_keyframe_send_time = elapsed;
+                                            video_metrics.slowest_keyframe = KeyframeTiming {
+                                                queue: frame.selected.saturating_duration_since(frame.queued),
+                                                first_fragment: first.saturating_duration_since(frame.selected),
+                                                transfer: sent.saturating_duration_since(first),
+                                                send_calls: frame.send_calls,
+                                            };
+                                        }
                                         cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?;
                                     }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;

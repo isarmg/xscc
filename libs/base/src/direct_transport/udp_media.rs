@@ -1490,7 +1490,7 @@ pub struct Pacer {
     srtt: Duration,
     last_feedback: Instant,
     last_activity: Instant,
-    last_loss: Option<Instant>,
+    recovery_through: Option<u64>,
     tokens: f64,
     refilled: Instant,
 }
@@ -1512,7 +1512,7 @@ impl Pacer {
             srtt: Duration::from_millis(100),
             last_feedback: now,
             last_activity: now,
-            last_loss: None,
+            recovery_through: None,
             tokens: (10 * mtu) as f64,
             refilled: now,
         })
@@ -1639,24 +1639,26 @@ impl Pacer {
         self.last_feedback = now;
         let loss_age = self.feedback_timeout();
         let srtt = self.srtt;
-        let mut had_loss = false;
-        for (_, flight) in self.flights.extract_if(.., |&sequence, flight| {
+        let mut latest_loss = None;
+        for (sequence, flight) in self.flights.extract_if(.., |&sequence, flight| {
             let age = now.saturating_duration_since(flight.sent);
             age >= loss_age
                 || (sequence.saturating_add(3) <= report.largest && age >= srtt.mul_f64(1.125))
         }) {
-            had_loss = true;
+            latest_loss = Some(sequence);
             self.inflight_bytes -= flight.bytes;
         }
-        if had_loss
-            && self
-                .last_loss
-                .is_none_or(|at| now.saturating_duration_since(at) >= self.srtt)
-        {
-            self.window = (self.window / 2).max(2 * self.mtu);
-            self.threshold = self.window;
-            self.last_loss = Some(now);
-        } else if !had_loss && acknowledged > 0 {
+        if let Some(sequence) = latest_loss {
+            // Delayed reports of the same flight must not halve the window again.
+            if self
+                .recovery_through
+                .is_none_or(|boundary| sequence > boundary)
+            {
+                self.window = (self.window / 2).max(2 * self.mtu);
+                self.threshold = self.window;
+                self.recovery_through = self.highest_sent;
+            }
+        } else if acknowledged > 0 {
             let increase = if self.window < self.threshold {
                 acknowledged
             } else {
@@ -2434,6 +2436,32 @@ mod tests {
             pacer.decide(DEFAULT_MTU, deadline, probe + rtt, false),
             SendDecision::Send
         );
+    }
+
+    #[test]
+    fn delayed_reports_of_one_lost_flight_only_reduce_the_window_once() {
+        let now = Instant::now();
+        let mut pacer = Pacer::new(DEFAULT_MTU, 8_000_000, now).unwrap();
+        for sequence in 0..8 {
+            pacer.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+        }
+        let report = |largest| ReceiveReport {
+            largest,
+            ack_delay_us: 0,
+            ranges: vec![AckRange {
+                first: largest,
+                last: largest,
+            }],
+        };
+        pacer
+            .on_report(&report(4), now + Duration::from_millis(150))
+            .unwrap();
+        let reduced = pacer.congestion_window();
+        assert_eq!(reduced, 5 * DEFAULT_MTU);
+        pacer
+            .on_report(&report(7), now + Duration::from_millis(340))
+            .unwrap();
+        assert_eq!(pacer.congestion_window(), reduced);
     }
 
     #[test]
