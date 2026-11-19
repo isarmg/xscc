@@ -843,7 +843,7 @@ fn run_encoder(
         if let Some(sample) = stages.sample(Instant::now(), spf) {
             #[cfg(windows)]
             let sample = sample.with_capture_gdi(c.is_gdi());
-            let sample = sample.with_encoder(metric_backend, metric_driver);
+            let sample = sample.with_encoder(metric_backend, metric_driver, encoder.bitrate());
             log::info!(target: "xscc::host_video_metrics", "host_video_pipeline {sample}");
         }
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but

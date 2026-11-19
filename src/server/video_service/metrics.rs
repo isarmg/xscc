@@ -122,6 +122,7 @@ impl Metrics {
             capture_gdi: 2,
             encoder_backend: 0,
             encoder_driver: 0,
+            encoder_bitrate_kbps: 0,
             values: std::mem::replace(self, Self::new(now)),
         })
     }
@@ -133,13 +134,15 @@ pub(super) struct Sample {
     capture_gdi: u8,
     encoder_backend: u8,
     encoder_driver: u8,
+    encoder_bitrate_kbps: u32,
     values: Metrics,
 }
 
 impl Sample {
-    pub(super) fn with_encoder(mut self, backend: u8, driver: u8) -> Self {
+    pub(super) fn with_encoder(mut self, backend: u8, driver: u8, bitrate_kbps: u32) -> Self {
         self.encoder_backend = backend;
         self.encoder_driver = driver;
+        self.encoder_bitrate_kbps = bitrate_kbps;
         self
     }
 
@@ -164,7 +167,7 @@ impl fmt::Display for Sample {
             "\"capture_avg_ms\":{:.3},\"capture_max_ms\":{:.3},\"convert_calls\":{},\"convert_avg_ms\":{:.3},\"convert_max_ms\":{:.3},",
             "\"encode_calls\":{},\"fresh_encode_calls\":{},\"replay_encode_calls\":{},\"repeat_encode_calls\":{},",
             "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{},",
-            "\"encoder_backend\":{},\"encoder_driver\":{},\"encoder_texture\":{},",
+            "\"encoder_backend\":{},\"encoder_driver\":{},\"encoder_texture\":{},\"encoder_bitrate_kbps\":{},",
             "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},\"encoded_output_count\":{},",
             "\"preflight_calls\":{},\"preflight_avg_ms\":{:.3},\"preflight_max_ms\":{:.3},",
             "\"handoff_calls\":{},\"handoff_avg_ms\":{:.3},\"handoff_max_ms\":{:.3},",
@@ -177,6 +180,7 @@ impl fmt::Display for Sample {
             values.encodes[0], values.encodes[1], values.encodes[2],
             values.encode_send.average_ms(), milliseconds(values.encode_send.max), self.capture_gdi,
             self.encoder_backend, self.encoder_driver, u8::from(self.encoder_backend == 4),
+            self.encoder_bitrate_kbps,
             values.encode.average_ms(), milliseconds(values.encode.max),
             values.enqueue.average_ms(), milliseconds(values.enqueue.max), values.enqueue.calls,
             values.preflight.calls, values.preflight.average_ms(), milliseconds(values.preflight.max),
@@ -248,10 +252,11 @@ mod tests {
         assert_eq!(report.values.encodes, [1, 1, 1]);
         assert_eq!(report.values.encode_send.average_ms(), 8.0);
         assert_eq!(report.values.encode_send.max, Duration::from_millis(12));
-        let report = report.with_encoder(3, 2);
+        let report = report.with_encoder(3, 2, 5_700);
         let line = report.to_string();
         assert!(line.contains("\"encoder_backend\":3"));
         assert!(line.contains("\"encoder_driver\":2"));
+        assert!(line.contains("\"encoder_bitrate_kbps\":5700"));
         assert!(line.contains("\"encode_avg_ms\":7.000"));
         assert!(line.contains("\"enqueue_avg_ms\":1.000"));
         assert!(line.contains("\"encoded_output_count\":1"));

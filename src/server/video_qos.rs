@@ -431,6 +431,17 @@ impl VideoQoS {
     }
 
     #[cfg(any(all(feature = "gpui-host", feature = "udp-media"), test))]
+    pub fn user_transport_congestion(&mut self, id: i32, budget: u32) {
+        if self
+            .users
+            .get(&id)
+            .is_some_and(|user| user.transport_bitrate.is_none_or(|previous| budget < previous))
+        {
+            self.user_transport_bitrate(id, Some(budget));
+        }
+    }
+
+    #[cfg(any(all(feature = "gpui-host", feature = "udp-media"), test))]
     pub fn transport_bitrate_for_connections(&self, ids: &[i32]) -> Option<u32> {
         ids.iter()
             .filter_map(|id| self.users.get(id)?.transport_bitrate)
@@ -1145,6 +1156,24 @@ mod bitrate_limit_tests {
         assert_eq!(qos.transport_bitrate_for_connections(&[1]), None);
         qos.on_connection_close(2);
         assert_eq!(qos.transport_bitrate_for_connections(&[1, 2]), None);
+    }
+
+    #[test]
+    fn fast_congestion_update_reduces_budget_without_accelerating_recovery() {
+        let mut qos = VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.user_bitrate_limit(1, Some(8_000));
+        qos.user_transport_bitrate(1, Some(9_000));
+
+        qos.user_transport_congestion(1, 5_700);
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(5_700));
+        qos.user_transport_congestion(1, 5_500);
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(5_700));
+        qos.user_transport_congestion(1, 11_000);
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(5_700));
+        qos.user_transport_bitrate(1, Some(11_000));
+        assert_eq!(qos.transport_bitrate_for_connections(&[1]), Some(11_000));
+        assert_eq!(qos.bitrate_limit_for_connections(&[1]), Some(8_000));
     }
 
     #[cfg(feature = "gpui-host")]

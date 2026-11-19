@@ -584,6 +584,9 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
+        #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+        let mut congestion_timer =
+            crate::rustdesk_interval(time::interval(Duration::from_millis(250)));
 
         loop {
             tokio::select! {
@@ -870,6 +873,18 @@ impl Connection {
                             break;
                         }
                         _ => {}
+                    }
+                }
+                _ = async {
+                    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+                    congestion_timer.tick().await;
+                    #[cfg(not(all(feature = "gpui-host", feature = "udp-media")))]
+                    std::future::pending::<()>().await;
+                }, if conn.authorized => {
+                    // Pass a constrained path budget to the encoder within a fraction of a second.
+                    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+                    if let Some(budget) = conn.stream.video_bitrate_budget() {
+                        video_service::VIDEO_QOS.lock().unwrap().user_transport_congestion(conn.inner.id(), budget);
                     }
                 }
                 _ = second_timer.tick() => {
