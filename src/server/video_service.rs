@@ -1982,10 +1982,12 @@ mod tests {
             .unwrap()
             .insert(idx, (tx.clone(), Arc::new(Mutex::new(rx))));
         let mut controller = VideoFrameController::new(idx);
-        controller.send_conn_ids.extend([1, 2]);
+        controller.send_conn_ids.extend([1, 2, 3]);
+        let current_frame = controller.cur;
+        tx.send((3, Some(current_frame - Duration::from_secs(1))))
+            .unwrap();
         for id in [1, 1, 2, 99] {
-            tx.send((id, Some(Instant::now() - Duration::from_secs(1))))
-                .unwrap();
+            tx.send((id, Some(current_frame))).unwrap();
         }
         let mut fetched = HashSet::new();
         controller.try_wait_next(&mut fetched, 0);
