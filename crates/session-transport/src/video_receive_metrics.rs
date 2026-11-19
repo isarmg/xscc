@@ -29,6 +29,7 @@ pub(super) struct VideoReceiveSample {
     pub(super) video_wrong_epoch_fragments: u64,
     pub(super) video_capacity_rejections: u64,
     pub(super) video_receive_queue_drops: u64,
+    pub(super) video_receive_queue_recovered: u64,
     pub(super) keyframe_nacks: u64,
     pub(super) superseded_keyframes: u64,
     pub(super) stalled_keyframes: usize,

@@ -57,6 +57,7 @@ use std::{
 
 const CONTROL_QUEUE: usize = 32;
 const MEDIA_QUEUE: usize = 2;
+const VIDEO_RECEIVE_QUEUE_GRACE: Duration = Duration::from_millis(4);
 const VIDEO_QUEUE: usize = 64;
 const VIDEO_QUEUE_BYTES: usize = 2 * media::MAX_VIDEO_FRAME;
 const VIDEO_QUEUE_AGE: Duration = Duration::from_millis(600);
@@ -1759,6 +1760,58 @@ mod tests {
         serving.await.unwrap();
     }
     #[tokio::test]
+    async fn a_completed_video_frame_survives_a_short_receive_queue_burst() {
+        let (client, _host) = backpressured_streams();
+        let sid = SessionId([19; 16]);
+        let (mut transport, channels) = HybridTransport::new(client, sid, false).unwrap();
+        let payload: Bytes = video(false, 100).write_to_bytes().unwrap().into();
+        let frame = |frame_id| CompletedFrame {
+            metadata: FrameMetadata {
+                kind: MediaKind::Video,
+                display_id: 0,
+                epoch: 1,
+                frame_id,
+                keyframe: false,
+            },
+            payload: payload.clone(),
+        };
+        let queued = channels.completed.max_capacity() as u64;
+        for frame_id in 0..queued {
+            channels.completed.try_send(frame(frame_id)).unwrap();
+        }
+        #[cfg(debug_assertions)]
+        let mut metrics = VideoReceiveMetrics::new(Instant::now(), None);
+        {
+            let admission = recovery(
+                &transport.writer,
+                sid,
+                ReceiveOutcome {
+                    frame: Some(frame(queued)),
+                    ..Default::default()
+                },
+                &channels.completed,
+                &transport.video_recovery,
+                #[cfg(debug_assertions)]
+                &mut metrics,
+            );
+            tokio::pin!(admission);
+            tokio::select! {
+                biased;
+                result = &mut admission => panic!("completed frame discarded immediately: {result:?}"),
+                _ = std::future::ready(()) => {}
+            }
+            assert_eq!(transport.media.recv().await.unwrap().metadata.frame_id, 0);
+            admission.await.unwrap();
+        }
+        for frame_id in 1..=queued {
+            assert_eq!(
+                transport.media.try_recv().unwrap().metadata.frame_id,
+                frame_id
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn gpui_delta_gap_preserves_late_keyframes_and_reuses_payload() {
         let (client, _host, _listener) = streams().await;
         let (mut transport, _channels) =
@@ -2373,7 +2426,7 @@ fn request_refresh(writer: &ReliableWriter, display: u32) -> ResultType<()> {
     message.set_misc(misc);
     writer.enqueue(message.write_to_bytes()?, false, None)
 }
-fn recovery(
+async fn recovery(
     writer: &ReliableWriter,
     sid: SessionId,
     outcome: ReceiveOutcome,
@@ -2419,11 +2472,25 @@ fn recovery(
             Err(mpsc::error::TrySendError::Full(frame))
                 if frame.metadata.kind == MediaKind::Video =>
             {
-                #[cfg(debug_assertions)]
-                {
-                    video_metrics.window.video_receive_queue_drops += 1;
+                // Give the consumer a short turn to drain a receive burst before
+                // dropping a frame that the decoder may need as a reference.
+                match timeout(VIDEO_RECEIVE_QUEUE_GRACE, completed.reserve()).await {
+                    Ok(Ok(slot)) => {
+                        slot.send(frame);
+                        #[cfg(debug_assertions)]
+                        {
+                            video_metrics.window.video_receive_queue_recovered += 1;
+                        }
+                    }
+                    Ok(Err(_)) => bail!("UDP media consumer stopped"),
+                    Err(_) => {
+                        #[cfg(debug_assertions)]
+                        {
+                            video_metrics.window.video_receive_queue_drops += 1;
+                        }
+                        refresh(writer, frame.metadata, frame.metadata.keyframe, gate)?;
+                    }
                 }
-                refresh(writer, frame.metadata, frame.metadata.keyframe, gate)?
             }
             Err(mpsc::error::TrySendError::Full(_)) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => bail!("UDP media consumer stopped"),
@@ -2559,7 +2626,7 @@ async fn client_media(
                                     _ => {}
                                 }
                                 recovery(&writer, pending.session_id, outcome, &completed, &video_recovery,
-                                    #[cfg(debug_assertions)] &mut video_metrics)?;
+                                    #[cfg(debug_assertions)] &mut video_metrics).await?;
                             }
                             Err(MediaError::WrongEpoch) => {}
                             Err(error) => return Err(error.into()),
@@ -2588,7 +2655,7 @@ async fn client_media(
                         next_probe = now + if path_ready { Duration::from_secs(15) } else { Duration::from_millis(250) };
                     }
                     recovery(&writer, pending.session_id, reassembler.expire(now), &completed, &video_recovery,
-                        #[cfg(debug_assertions)] &mut video_metrics)?;
+                        #[cfg(debug_assertions)] &mut video_metrics).await?;
                     let tick = video_recovery.lock().unwrap().tick(now);
                     #[cfg(debug_assertions)]
                     {
@@ -2641,7 +2708,7 @@ async fn client_media(
                                         }
                                     }
                                     recovery(&writer, pending.session_id, outcome, &completed, &video_recovery,
-                                        #[cfg(debug_assertions)] &mut video_metrics)?;
+                                        #[cfg(debug_assertions)] &mut video_metrics).await?;
                                 }
                                 Err(MediaError::WrongEpoch) => {
                                     #[cfg(debug_assertions)]
