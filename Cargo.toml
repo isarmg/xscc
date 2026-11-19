@@ -257,3 +257,7 @@ debug = 0
 [profile.stream-debug]
 inherits = "release"
 debug-assertions = true
+
+# The Windows service needs the bounded file logger, including during Debug soaks.
+[profile.stream-debug.package.hbb_common]
+debug-assertions = false
