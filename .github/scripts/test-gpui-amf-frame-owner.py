@@ -179,6 +179,7 @@ int main(void)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cc', default='cc')
+    parser.add_argument('--cxx')
     parser.add_argument('--pkg-config', default='pkg-config')
     parser.add_argument('--cflags')
     parser.add_argument('--ldflags')
@@ -218,13 +219,16 @@ def main():
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(executable)], check=True, timeout=20)
     # These CPU-only checks share the existing mandatory AMF regression step.
-    subprocess.run(
-        [sys.executable, str(root / '.github/scripts/test-gpui-amf-keyframe.py'),
-         '--cc', args.cc], check=True, timeout=150)
+    keyframe_command = [
+        sys.executable, str(root / '.github/scripts/test-gpui-amf-keyframe.py'),
+        '--cc', args.cc]
+    if args.cxx:
+        keyframe_command += ['--cxx', args.cxx]
+    subprocess.run(keyframe_command, check=True, timeout=150)
     retirement_command = [
         sys.executable, str(root / '.github/scripts/test-gpui-gpu-retirement.py')]
     if os.name == 'nt':
-        retirement_command += ['--cxx', args.cc]
+        retirement_command += ['--cxx', args.cxx or args.cc]
     subprocess.run(retirement_command, check=True, timeout=150)
     subprocess.run(
         [sys.executable, str(root / '.github/scripts/test-gpui-encoder-retirement.py')],

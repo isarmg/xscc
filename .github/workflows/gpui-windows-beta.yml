@@ -153,6 +153,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native codec dependency build failed' }
       - name: Test AMF asynchronous input and retirement
         if: matrix.role == 'host'
+        env:
+          XSCC_BUILD_ONLY: ${{ inputs.build_only }}
         run: |
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -163,12 +165,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'AMF asynchronous input regression failed' }
           python .github/scripts/test-gpui-gpu-retirement.py --cxx cl.exe
           if ($LASTEXITCODE -ne 0) { throw 'GPU retirement regression failed' }
-      - name: Test AMF hardware frame ownership without a GPU
-        if: matrix.role == 'host' && !inputs.build_only
-        run: |
-          $env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT/installed/x64-windows-static/lib/pkgconfig"
-          python ./.github/scripts/test-gpui-amf-frame-owner.py --cc "$env:ProgramFiles/LLVM/bin/clang.exe" --pkg-config "$env:VCPKG_ROOT/installed/x64-windows-static/tools/pkgconf/pkgconf.exe"
-          if ($LASTEXITCODE -ne 0) { throw 'AMF CPU ownership regression failed' }
+          if ($env:XSCC_BUILD_ONLY -ne 'true') {
+            $env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT/installed/x64-windows-static/lib/pkgconfig"
+            python ./.github/scripts/test-gpui-amf-frame-owner.py --cc "$env:ProgramFiles/LLVM/bin/clang.exe" --cxx cl.exe --pkg-config "$env:VCPKG_ROOT/installed/x64-windows-static/tools/pkgconf/pkgconf.exe"
+            if ($LASTEXITCODE -ne 0) { throw 'AMF CPU ownership regression failed' }
+          }
       - name: Save successful native dependency binary archives
         # One writer per matrix; GitHub cache entries are immutable if another run saved first.
         if: matrix.role == 'controller' && steps.native-dependencies.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
