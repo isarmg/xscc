@@ -76,8 +76,8 @@ try {
 } finally {
     & $AdbPath @taskDeviceArgs shell rm -f $taskRemoteTrace | Out-Null
 }
-Invoke-TraceAdb -Arguments @('logcat', '-d', '-v', 'threadtime', "--pid=$taskAppPid") |
-    Select-String 'session_pipeline|android_gpu_pipeline|android_frame_pipeline|android_fps_control|Set fps to|Android surface configured|Android display streaming limit|Choreographer|Vulkan|VK_ERROR' |
+Invoke-TraceAdb -Arguments @('logcat', '-d', '-v', 'epoch', "--pid=$taskAppPid") |
+    Select-String 'client_udp_video_(pipeline|order_gap|stale|reference_ready)|session_pipeline|android_gpu_pipeline|android_frame_pipeline|android_fps_control|Set fps to|Android surface configured|Android display streaming limit|Choreographer|Vulkan|VK_ERROR' |
     Set-Content -LiteralPath (Join-Path $taskOutput 'pipeline.txt') -Encoding UTF8
 Invoke-TraceAdb -Arguments @('shell', 'dumpsys', 'display') |
     Set-Content -LiteralPath (Join-Path $taskOutput 'display-after.txt') -Encoding UTF8

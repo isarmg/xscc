@@ -19,14 +19,16 @@ CLIENT = (
     b"client_udp_video_reference_ready",
     b"session_pipeline",
 )
-ANDROID = (b"android_frame_pipeline",)
+ANDROID = (b"android_frame_pipeline", b"android_gpu_pipeline")
+ANDROID_SESSION = (b"android_fps_control",)
 REQUIRED = {
     "host": HOST,
     "controller": CLIENT,
-    "management": CLIENT + ANDROID,
-    "landirect": CLIENT + ANDROID,
+    "management": CLIENT + ANDROID + ANDROID_SESSION,
+    "landirect": CLIENT + ANDROID + ANDROID_SESSION,
     "smoke": ANDROID,
 }
+MARKERS = HOST + CLIENT + ANDROID + ANDROID_SESSION
 
 
 def main():
@@ -40,7 +42,7 @@ def main():
     if not data:
         raise SystemExit("Stream diagnostics gate received an empty binary")
     if args.profile == "release":
-        unexpected = [tag.decode() for tag in HOST + CLIENT + ANDROID if tag in data]
+        unexpected = [tag.decode() for tag in MARKERS if tag in data]
         if unexpected:
             raise SystemExit(f"Release contains stream diagnostics: {', '.join(unexpected)}")
     else:

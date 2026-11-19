@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "android", test))]
 mod android_image_upload;
-#[cfg(target_os = "android")]
+#[cfg(all(target_os = "android", debug_assertions))]
 mod android_render_timing;
 mod cosmic_text_system;
 #[cfg(any(target_os = "android", test))]

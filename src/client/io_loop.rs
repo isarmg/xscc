@@ -739,7 +739,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 msg.set_misc(misc);
                 self.sender.send(Data::Message(msg)).ok();
                 log::info!("Set fps to {}", auto_fps);
-                #[cfg(target_os = "android")]
+                #[cfg(all(target_os = "android", debug_assertions))]
                 log::info!(
                     "android_fps_control target={} requested={} decode_capacity={} limited={} compressed_queue={} decrease={} increase={} direct={}",
                     auto_fps, custom_fps, min_decode_fps, limited_fps, max_queue_len,

@@ -1216,7 +1216,7 @@ impl WgpuRenderer {
             self.failed_frame_count = 0;
         }
 
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let acquired = std::time::Instant::now();
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -1239,7 +1239,7 @@ impl WgpuRenderer {
             }
         };
 
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         crate::android_render_timing::record(
             crate::android_render_timing::Stage::Acquire,
             acquired,
@@ -1256,7 +1256,7 @@ impl WgpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let premultiplied_alpha =
             self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied;
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let render_started = std::time::Instant::now();
         if let Err(error) = core.render_frame(
             scene,
@@ -1269,15 +1269,15 @@ impl WgpuRenderer {
             return false;
         }
 
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         crate::android_render_timing::record(
             crate::android_render_timing::Stage::Render,
             render_started,
         );
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let present_started = std::time::Instant::now();
         core.resources.queue.present(frame);
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         {
             crate::android_render_timing::record(
                 crate::android_render_timing::Stage::Present,
@@ -1578,7 +1578,7 @@ impl WgpuRendererCore {
                 )
             })?;
         self.prepare_texture_bind_groups(scene);
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let upload_started = std::time::Instant::now();
         let mut encoder =
             self.resources()
@@ -1606,7 +1606,7 @@ impl WgpuRendererCore {
 
         #[cfg(any(target_os = "android", test))]
         self.atlas.encode_uploads(&mut encoder)?;
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         crate::android_render_timing::record(
             crate::android_render_timing::Stage::Upload,
             upload_started,
@@ -1725,18 +1725,18 @@ impl WgpuRendererCore {
             }
         }
 
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let finish_started = std::time::Instant::now();
         let commands = encoder.finish();
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         crate::android_render_timing::record(
             crate::android_render_timing::Stage::Finish,
             finish_started,
         );
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         let submit_started = std::time::Instant::now();
         let submission = self.resources().queue.submit(std::iter::once(commands));
-        #[cfg(target_os = "android")]
+        #[cfg(all(target_os = "android", debug_assertions))]
         crate::android_render_timing::record(
             crate::android_render_timing::Stage::Submit,
             submit_started,
