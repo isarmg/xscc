@@ -295,12 +295,15 @@ def main():
             ('backpressure.c', args.cc, 'c11'),
         ):
             executable = work / (source + ('.exe' if os.name == 'nt' else '.out'))
-            subprocess.run(
-                [compiler, '-std=' + standard, '-Wall', '-Wextra', '-Werror', *runtime,
-                 '-I' + str(work), '-I' + str(include), '-I' + str(latch),
-                 str(work / source), '-o', str(executable)],
-                check=True, timeout=120,
-            )
+            if Path(compiler).stem.lower() == 'cl':
+                command = [compiler, '/nologo', '/MT', '/std:' + standard, '/W3', '/WX',
+                           '/EHsc', '/I' + str(work), '/I' + str(include), '/I' + str(latch),
+                           str(work / source), '/Fe' + str(executable)]
+            else:
+                command = [compiler, '-std=' + standard, '-Wall', '-Wextra', '-Werror', *runtime,
+                           '-I' + str(work), '-I' + str(include), '-I' + str(latch),
+                           str(work / source), '-o', str(executable)]
+            subprocess.run(command, cwd=work, check=True, timeout=120)
             subprocess.run([str(executable)], check=True, timeout=20)
 
 

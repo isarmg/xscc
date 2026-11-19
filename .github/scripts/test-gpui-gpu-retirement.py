@@ -236,12 +236,14 @@ def main():
         source.write_text(TEST)
         executable = work / ('test.exe' if os.name == 'nt' else 'test')
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
-        subprocess.run(
-            [args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror', *runtime,
-             '-I' + str(root / 'vendor/hwcodec/cpp/common'),
-             str(source), '-o', str(executable)],
-            check=True, timeout=120,
-        )
+        include = root / 'vendor/hwcodec/cpp/common'
+        if Path(args.cxx).stem.lower() == 'cl':
+            command = [args.cxx, '/nologo', '/MT', '/std:c++17', '/W3', '/WX', '/EHsc',
+                       '/I' + str(include), str(source), '/Fe' + str(executable)]
+        else:
+            command = [args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror', *runtime,
+                       '-I' + str(include), str(source), '-o', str(executable)]
+        subprocess.run(command, cwd=work, check=True, timeout=120)
         subprocess.run([str(executable)], check=True, timeout=10)
 
 

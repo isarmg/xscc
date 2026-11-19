@@ -154,9 +154,14 @@ jobs:
       - name: Test AMF asynchronous input and retirement
         if: matrix.role == 'host'
         run: |
-          python .github/scripts/test-gpui-amf-keyframe.py --cc "$env:ProgramFiles/LLVM/bin/clang.exe" --cxx "$env:ProgramFiles/LLVM/bin/clang++.exe"
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual Studio C++ tools are missing' }
+          Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          python .github/scripts/test-gpui-amf-keyframe.py --cc cl.exe --cxx cl.exe
           if ($LASTEXITCODE -ne 0) { throw 'AMF asynchronous input regression failed' }
-          python .github/scripts/test-gpui-gpu-retirement.py --cxx "$env:ProgramFiles/LLVM/bin/clang++.exe"
+          python .github/scripts/test-gpui-gpu-retirement.py --cxx cl.exe
           if ($LASTEXITCODE -ne 0) { throw 'GPU retirement regression failed' }
       - name: Test AMF hardware frame ownership without a GPU
         if: matrix.role == 'host' && !inputs.build_only

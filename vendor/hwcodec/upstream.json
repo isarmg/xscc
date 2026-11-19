@@ -16,6 +16,7 @@
     "src/ffmpeg_ram/decode.rs",
     "cpp/common/util.cpp",
     "cpp/common/platform/win/win.cpp",
+    "cpp/common/platform/win/win.h",
     "cpp/ffmpeg_vram/ffmpeg_vram_encode.cpp",
     "cpp/ffmpeg_vram/ffmpeg_vram_ffi.h",
     "cpp/ffmpeg_vram/amf_keyframe_request.h",
