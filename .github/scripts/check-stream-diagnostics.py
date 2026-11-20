@@ -8,9 +8,12 @@ from pathlib import Path
 HOST = (
     b"host_dxgi_pipeline",
     b"host_video_pipeline",
+    b"host_capture_scheduler",
+    b"encoded_output_frame_count",
     b"host_amf_transfer=",
     b"host_amf_slow phase=",
     b"host_udp_video_pipeline",
+    b"sent_delta_repair_datagrams",
 )
 CLIENT = (
     b"client_udp_video_pipeline",

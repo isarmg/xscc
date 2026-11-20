@@ -29,10 +29,14 @@ actual phone FPS and the Windows compositor counter for the output clock.
 | Decode and submit | `session_pipeline`, `android_fps_control` | Receive, decode and Surface submission rates, adaptive frame rate decisions |
 | Schedule and render | `android_frame_pipeline`, `android_gpu_pipeline` | Callback and application dispatch timing, GPU acquire, submit and present time |
 
-Match events by clock-adjusted time, display, epoch and frame ID. The sending
-sample includes the last video datagram sequence and completed video message.
-It also identifies the slowest completed keyframe and records time spent
-waiting for congestion-window space, pacing tokens and feedback. Retry
+Match events by clock-adjusted time, display, epoch and frame ID.
+The encoder reports `encoded_output_frame_count` for individual frames and
+`encoded_output_count` for messages, which can carry several frames.
+The sending sample includes the last video datagram sequence and completed
+video message. It counts selectively retransmitted delta fragments, incoming
+feedback reports and congestion-window reductions. It records the longest
+interval between consecutive feedback reports. For the slowest completed
+keyframe, it separates time waiting for window space, pacing tokens and feedback. Retry
 lateness counts time after the requested retry time, including scheduler delay
 and work on other traffic.
 The receiving sample includes the highest authenticated sequence and last

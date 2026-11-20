@@ -1,6 +1,8 @@
 //! TCP owns authorization and ordered control; authenticated UDP owns all media.
 mod client;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod delta_repair;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod host;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod send_timer;
@@ -8,6 +10,8 @@ mod send_timer;
 mod video_receive_metrics;
 mod video_send_queue;
 use crate::client::PendingAssociation;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::delta_repair::DeltaRepairs;
 #[cfg(debug_assertions)]
 use crate::video_receive_metrics::VideoReceiveMetrics;
 #[cfg(test)]
@@ -62,7 +66,7 @@ const VIDEO_QUEUE: usize = 64;
 const VIDEO_QUEUE_BYTES: usize = 2 * media::MAX_VIDEO_FRAME;
 const VIDEO_QUEUE_AGE: Duration = Duration::from_millis(600);
 const VIDEO_REORDER_WINDOW: Duration = Duration::from_millis(24);
-const VIDEO_REORDER_FRAMES: usize = 8;
+const VIDEO_REORDER_FRAMES: usize = 16;
 const CONTROL_LIMIT: usize = 128 * 1024;
 const MAX_STREAMS: usize = 65;
 const RELIABLE_BYTES: usize = 64 * 1024 * 1024;
@@ -1930,6 +1934,15 @@ mod tests {
         assert!(transport.take_reordered(expired).unwrap().is_none());
         assert!(transport.deliver(frame(11, false)).unwrap().is_none());
         assert!(transport.deliver(frame(13, true)).unwrap().is_some());
+
+        // A single receive burst can bring nine later frames before the missing one.
+        for id in 15..=23 {
+            assert!(transport.deliver(frame(id, false)).unwrap().is_none());
+        }
+        assert!(transport.deliver(frame(14, false)).unwrap().is_some());
+        for _ in 15..=23 {
+            assert!(transport.take_reordered(Instant::now()).unwrap().is_some());
+        }
     }
     #[tokio::test]
     async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
@@ -2810,7 +2823,6 @@ struct Transmission {
     initial: bool,
     #[cfg(debug_assertions)]
     queued: Instant,
-    #[cfg(debug_assertions)]
     selected: Instant,
     #[cfg(debug_assertions)]
     first_fragment: Option<Instant>,
@@ -2881,6 +2893,11 @@ struct VideoSendMetrics {
     slowest_keyframe: KeyframeTiming,
     max_keyframe_repair_time: Duration,
     keyframe_feedback_probes: u32,
+    sent_delta_repair_datagrams: u32,
+    feedback_reports: u32,
+    last_feedback: Option<Instant>,
+    max_feedback_gap: Duration,
+    congestion_reductions: u32,
 }
 
 #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
@@ -2899,6 +2916,19 @@ impl VideoSendMetrics {
             slowest_keyframe: KeyframeTiming::default(),
             max_keyframe_repair_time: Duration::ZERO,
             keyframe_feedback_probes: 0,
+            sent_delta_repair_datagrams: 0,
+            feedback_reports: 0,
+            last_feedback: None,
+            max_feedback_gap: Duration::ZERO,
+            congestion_reductions: 0,
+        }
+    }
+
+    fn received_feedback(&mut self, now: Instant, window_reduced: bool) {
+        self.feedback_reports += 1;
+        self.congestion_reductions += u32::from(window_reduced);
+        if let Some(previous) = self.last_feedback.replace(now) {
+            self.max_feedback_gap = self.max_feedback_gap.max(now.saturating_duration_since(previous));
         }
     }
 
@@ -2911,6 +2941,7 @@ impl VideoSendMetrics {
             || self.expired_messages > 0
             || !self.max_keyframe_repair_time.is_zero()
             || self.keyframe_feedback_probes > 0
+            || self.feedback_reports > 0
         {
             hbb_common::log::info!(
                 target: "xscc::host_udp_metrics",
@@ -2931,6 +2962,10 @@ impl VideoSendMetrics {
                     "max_keyframe_send_ms": self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
                     "max_keyframe_repair_ms": self.max_keyframe_repair_time.as_secs_f64() * 1_000.0,
                     "keyframe_feedback_probes": self.keyframe_feedback_probes,
+                    "sent_delta_repair_datagrams": self.sent_delta_repair_datagrams,
+                    "feedback_reports": self.feedback_reports,
+                    "max_feedback_gap_ms": self.max_feedback_gap.as_secs_f64() * 1_000.0,
+                    "congestion_reductions": self.congestion_reductions,
                     "slowest_keyframe": self.slowest_keyframe.metadata,
                     "slowest_keyframe_size_bytes": self.slowest_keyframe.size_bytes,
                     "slowest_keyframe_queue_ms": self.slowest_keyframe.queue.as_secs_f64() * 1_000.0,
@@ -2944,7 +2979,10 @@ impl VideoSendMetrics {
                 }),
             );
         }
-        *self = Self::new(now);
+        *self = Self {
+            last_feedback: self.last_feedback,
+            ..Self::new(now)
+        };
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2971,7 +3009,6 @@ fn transmission(
         initial,
         #[cfg(debug_assertions)]
         queued,
-        #[cfg(debug_assertions)]
         selected,
         #[cfg(debug_assertions)]
         first_fragment: None,
@@ -3013,6 +3050,7 @@ async fn host_media(
         let mut sound: Option<Transmission> = None;
         let mut repair: Option<Transmission> = None;
         let mut retries = VecDeque::new();
+        let mut delta_repairs = DeltaRepairs::default();
         let mut probe: Option<([u8; 16], Instant)> = None;
         let started = Instant::now();
         let mut next_send = started;
@@ -3022,9 +3060,14 @@ async fn host_media(
         let mut timer = interval(media::REPORT_INTERVAL); timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             if closing.borrow().is_some() { return Ok(()); }
-            if repair.is_none() && !retries.is_empty() {
-                repair = retries.pop_front();
-                next_send = Instant::now();
+            if repair.is_none() && (!retries.is_empty() || delta_repairs.has_queued()) {
+                let now = Instant::now();
+                repair = retries.pop_front().or_else(|| delta_repairs.take(now).map(|fragment| {
+                    let mut retry = transmission(fragment.plan, false, vec![fragment.index], pacer.effective_bitrate(), now);
+                    retry.deadline = fragment.deadline;
+                    retry
+                }));
+                if repair.is_some() { next_send = now; }
             }
             tokio::select! {
                 biased;
@@ -3041,6 +3084,7 @@ async fn host_media(
                             for metadata in cached.iter().copied().filter(|metadata| (metadata.kind, metadata.display_id) == key) { cache.complete(KeyframeComplete { metadata }); }
                             cached.retain(|metadata| (metadata.kind, metadata.display_id) != key);
                             retries.retain(|retry: &Transmission| (retry.plan.descriptor().metadata.kind, retry.plan.descriptor().metadata.display_id) != key);
+                            delta_repairs.retain(|metadata| (metadata.kind, metadata.display_id) != key);
                             if current.as_ref().is_some_and(|frame| (frame.plan.descriptor().metadata.kind, frame.plan.descriptor().metadata.display_id) == key) {
                                 current = None;
                             }
@@ -3052,7 +3096,12 @@ async fn host_media(
                         if retries.len() < 2 {
                             let now = Instant::now();
                             match cache.retransmit(&nack, now) {
-                                Ok(retry) if !retry.indices.is_empty() => retries.push_back(transmission(retry.frame, false, retry.indices, pacer.effective_bitrate(), now)),
+                                Ok(retry) if !retry.indices.is_empty() => {
+                                    if repair.as_ref().is_some_and(|frame| !frame.plan.descriptor().metadata.keyframe) {
+                                        repair = None;
+                                    }
+                                    retries.push_back(transmission(retry.frame, false, retry.indices, pacer.effective_bitrate(), now));
+                                }
                                 Ok(_) | Err(MediaError::Expired) => {}
                                 Err(error) => return Err(error.into()),
                             }
@@ -3084,7 +3133,11 @@ async fn host_media(
                 packet = session.next() => match packet.context("UDP host session closed")? {
                     AuthenticatedPacket::Report(report) => {
                         let now = Instant::now();
-                        pacer.on_report(&report, now)?;
+                        #[cfg(debug_assertions)]
+                        let previous_window = pacer.congestion_window();
+                        delta_repairs.on_report(&mut pacer, &report, now)?;
+                        #[cfg(debug_assertions)]
+                        video_metrics.received_feedback(now, pacer.congestion_window() < previous_window);
                         // Delayed probe responses must not reset newly acknowledged traffic.
                         probe = None;
                         let estimate = pacer.effective_bitrate();
@@ -3134,6 +3187,7 @@ async fn host_media(
                         if repair.as_ref().is_some_and(|frame| supersedes(frame.plan.descriptor().metadata)) {
                             repair = None;
                         }
+                        delta_repairs.retain(|prior| !supersedes(prior));
                         retries.retain(|frame| !supersedes(frame.plan.descriptor().metadata));
                         cached.retain(|prior| {
                             if supersedes(*prior) {
@@ -3161,10 +3215,13 @@ async fn host_media(
                             let metadata = expired.plan.descriptor().metadata;
                             #[cfg(debug_assertions)]
                             if expired.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
-                            frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
-                            cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
+                            if expired.initial || metadata.keyframe {
+                                frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
+                                cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
+                            }
                         }
                     }
+                    delta_repairs.expire(now);
                     for expired in cache.expire(now) {
                         cached.retain(|metadata| *metadata != expired); frame_notice(&writer, sid, FrameNotice::Abandoned(expired))?;
                     }
@@ -3226,17 +3283,27 @@ async fn host_media(
                         SendDecision::Expired => {
                             #[cfg(debug_assertions)]
                             if frame.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
-                            frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
-                            cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata); *active = None; next_send = now; break;
+                            if frame.initial || metadata.keyframe {
+                                frame_notice(&writer, sid, FrameNotice::Abandoned(metadata))?;
+                                cache.complete(KeyframeComplete { metadata }); cached.retain(|entry| *entry != metadata);
+                            }
+                            *active = None; next_send = now; break;
                         }
                         SendDecision::Send => {
                             let packet = udp.send_fragment(&frame.plan, index).await?;
                             let sent = Instant::now();
                             pacer.on_sent(packet.sequence, packet.bytes.len(), sent)?;
+                            if frame.initial && metadata.kind == MediaKind::Video && !metadata.keyframe {
+                                let deadline = (frame.selected + delta_repair::REPAIR_AGE).min(frame.deadline);
+                                delta_repairs.track(packet.sequence, &frame.plan, index, deadline, sent);
+                            }
                             #[cfg(debug_assertions)]
                             if metadata.kind == MediaKind::Video {
                                 video_metrics.sent_datagrams += 1;
                                 video_metrics.last_video_datagram_sequence = Some(packet.sequence);
+                                if !frame.initial && !metadata.keyframe {
+                                    video_metrics.sent_delta_repair_datagrams += 1;
+                                }
                             }
                             #[cfg(debug_assertions)]
                             if metadata.keyframe && frame.initial {
@@ -3275,13 +3342,13 @@ async fn host_media(
                                         cache.initial_sent(metadata, Instant::now(), pacer.effective_bitrate())?;
                                     }
                                     frame_notice(&writer, sid, FrameNotice::Sent(frame.plan.descriptor()))?;
-                                } else {
+                                } else if metadata.keyframe {
                                     #[cfg(debug_assertions)]
                                     {
                                         video_metrics.max_keyframe_repair_time = video_metrics.max_keyframe_repair_time.max(elapsed);
                                     }
                                 }
-                                let next_repair = !frame.initial && !retries.is_empty();
+                                let next_repair = !frame.initial && (!retries.is_empty() || delta_repairs.has_queued());
                                 *active = None;
                                 if next_repair { break; }
                             }

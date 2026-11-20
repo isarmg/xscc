@@ -1086,13 +1086,15 @@ fn run_encoder(
                 #[cfg(all(windows, feature = "vram"))]
                 if let Some(mut frame) = pending_frame {
                     frame.display = display_idx as _;
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
+                    let encoded_frames = crate::common::video_frame_count(&frame);
                     let mut message = Message::new();
                     message.set_video_frame(frame);
                     #[cfg(all(feature = "gpui-host", debug_assertions))]
                     let enqueue_started = Instant::now();
                     let ids = sp.send_video_frame(message);
                     #[cfg(all(feature = "gpui-host", debug_assertions))]
-                    stages.enqueue_time(enqueue_started.elapsed());
+                    stages.enqueue_time(enqueue_started.elapsed(), encoded_frames);
                     frame_controller.set_send(now, ids);
                     encoder_warmed_up = true;
                     send_counter += 1;
@@ -1536,13 +1538,15 @@ fn handle_one_frame(
             *encode_fail_counter = 0;
             *encoder_warmed_up = true;
             vf.display = display as _;
+            #[cfg(all(feature = "gpui-host", debug_assertions))]
+            let encoded_frames = crate::common::video_frame_count(&vf);
             let mut msg = Message::new();
             msg.set_video_frame(vf);
             #[cfg(all(feature = "gpui-host", debug_assertions))]
             let enqueue_started = Instant::now();
             send_conn_ids = sp.send_video_frame(msg);
             #[cfg(all(feature = "gpui-host", debug_assertions))]
-            stages.enqueue_time(enqueue_started.elapsed());
+            stages.enqueue_time(enqueue_started.elapsed(), encoded_frames);
         }
         Err(e) => {
             *encode_fail_counter += 1;

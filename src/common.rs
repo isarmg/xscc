@@ -55,6 +55,22 @@ pub const TIMER_OUT: Duration = Duration::from_secs(1);
 pub(crate) const API_LOG_INTERVAL: Duration = Duration::from_secs(600);
 pub const DEFAULT_KEEP_ALIVE: i32 = 60_000;
 
+#[cfg(any(feature = "gpui-session", all(feature = "gpui-host", debug_assertions)))]
+pub(crate) fn video_frame_count(frame: &VideoFrame) -> usize {
+    use video_frame::Union;
+    match &frame.union {
+        Some(
+            Union::Vp9s(frames)
+            | Union::H264s(frames)
+            | Union::H265s(frames)
+            | Union::Vp8s(frames)
+            | Union::Av1s(frames),
+        ) => frames.frames.len(),
+        Some(Union::Rgb(_) | Union::Yuv(_)) => 1,
+        _ => 0,
+    }
+}
+
 const MIN_VER_MULTI_UI_SESSION: &str = "1.2.4";
 
 lazy_static::lazy_static! {

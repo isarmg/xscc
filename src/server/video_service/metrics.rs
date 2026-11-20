@@ -52,6 +52,7 @@ pub(super) struct Metrics {
     outcomes: [u64; 4],
     encoder_backpressure: u64,
     encodes: [u64; 3],
+    encoded_output_frames: usize,
 }
 
 impl Metrics {
@@ -69,6 +70,7 @@ impl Metrics {
             outcomes: [0; 4],
             encoder_backpressure: 0,
             encodes: [0; 3],
+            encoded_output_frames: 0,
         }
     }
 
@@ -95,8 +97,9 @@ impl Metrics {
         self.encode.record(elapsed);
     }
 
-    pub(super) fn enqueue_time(&mut self, elapsed: Duration) {
+    pub(super) fn enqueue_time(&mut self, elapsed: Duration, frames: usize) {
         self.enqueue.record(elapsed);
+        self.encoded_output_frames += frames;
     }
 
     pub(super) fn preflight(&mut self, elapsed: Duration) {
@@ -168,7 +171,8 @@ impl fmt::Display for Sample {
             "\"encode_calls\":{},\"fresh_encode_calls\":{},\"replay_encode_calls\":{},\"repeat_encode_calls\":{},",
             "\"encode_send_avg_ms\":{:.3},\"encode_send_max_ms\":{:.3},\"capture_gdi\":{},",
             "\"encoder_backend\":{},\"encoder_driver\":{},\"encoder_texture\":{},\"encoder_bitrate_kbps\":{},",
-            "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},\"encoded_output_count\":{},",
+            "\"encode_avg_ms\":{:.3},\"encode_max_ms\":{:.3},\"enqueue_avg_ms\":{:.3},\"enqueue_max_ms\":{:.3},",
+            "\"encoded_output_count\":{},\"encoded_output_frame_count\":{},",
             "\"preflight_calls\":{},\"preflight_avg_ms\":{:.3},\"preflight_max_ms\":{:.3},",
             "\"handoff_calls\":{},\"handoff_avg_ms\":{:.3},\"handoff_max_ms\":{:.3},",
             "\"pacing_calls\":{},\"pacing_avg_ms\":{:.3},\"pacing_max_ms\":{:.3}}}"
@@ -183,6 +187,7 @@ impl fmt::Display for Sample {
             self.encoder_bitrate_kbps,
             values.encode.average_ms(), milliseconds(values.encode.max),
             values.enqueue.average_ms(), milliseconds(values.enqueue.max), values.enqueue.calls,
+            values.encoded_output_frames,
             values.preflight.calls, values.preflight.average_ms(), milliseconds(values.preflight.max),
             values.handoff.calls, values.handoff.average_ms(), milliseconds(values.handoff.max),
             values.pacing.calls, values.pacing.average_ms(), milliseconds(values.pacing.max))
@@ -231,7 +236,7 @@ mod tests {
         }
         metrics.converted(Duration::from_millis(3));
         metrics.encode_time(Duration::from_millis(7));
-        metrics.enqueue_time(Duration::from_millis(1));
+        metrics.enqueue_time(Duration::from_millis(1), 2);
         metrics.preflight(Duration::from_millis(2));
         metrics.handoff(Duration::from_millis(3));
         metrics.paced(Duration::from_millis(4));
@@ -260,6 +265,7 @@ mod tests {
         assert!(line.contains("\"encode_avg_ms\":7.000"));
         assert!(line.contains("\"enqueue_avg_ms\":1.000"));
         assert!(line.contains("\"encoded_output_count\":1"));
+        assert!(line.contains("\"encoded_output_frame_count\":2"));
         assert!(line.contains("\"preflight_avg_ms\":2.000"));
         assert!(line.contains("\"handoff_avg_ms\":3.000"));
         assert!(line.contains("\"pacing_avg_ms\":4.000"));

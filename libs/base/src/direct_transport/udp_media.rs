@@ -1652,6 +1652,14 @@ impl Pacer {
         Ok(())
     }
     pub fn on_report(&mut self, report: &ReceiveReport, now: Instant) -> Result<(), MediaError> {
+        self.on_report_with_losses(report, now, |_| {})
+    }
+    pub fn on_report_with_losses(
+        &mut self,
+        report: &ReceiveReport,
+        now: Instant,
+        mut on_loss: impl FnMut(u64),
+    ) -> Result<(), MediaError> {
         report.validate()?;
         if self
             .highest_sent
@@ -1684,15 +1692,17 @@ impl Pacer {
         }
         self.last_feedback = now;
         let loss_age = self.feedback_timeout();
-        let srtt = self.srtt;
+        // Allow a regular feedback interval for a reordered packet to fill the hole.
+        let reorder_age = self.srtt.mul_f64(1.125).max(REPORT_INTERVAL);
         let mut latest_loss = None;
         for (sequence, flight) in self.flights.extract_if(.., |&sequence, flight| {
             let age = now.saturating_duration_since(flight.sent);
             age >= loss_age
-                || (sequence.saturating_add(3) <= report.largest && age >= srtt.mul_f64(1.125))
+                || (sequence.saturating_add(3) <= report.largest && age >= reorder_age)
         }) {
             latest_loss = Some(sequence);
             self.inflight_bytes -= flight.bytes;
+            on_loss(sequence);
         }
         if let Some(sequence) = latest_loss {
             // Delayed reports of the same flight must not halve the window again.
@@ -2601,6 +2611,33 @@ mod tests {
             .on_report(&report(7), now + Duration::from_millis(340))
             .unwrap();
         assert_eq!(pacer.congestion_window(), reduced);
+    }
+
+    #[test]
+    fn short_reordering_does_not_reduce_the_congestion_window() {
+        let now = Instant::now();
+        let mut pacer = Pacer::new(DEFAULT_MTU, 8_000_000, now).unwrap();
+        pacer.on_probe_response(Duration::from_millis(4), now).unwrap();
+        for sequence in 0..8 {
+            pacer.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+        }
+        let initial_window = pacer.congestion_window();
+        let early = ReceiveReport {
+            largest: 7,
+            ack_delay_us: 4_000,
+            ranges: vec![AckRange { first: 1, last: 7 }],
+        };
+        pacer.on_report(&early, now + Duration::from_millis(8)).unwrap();
+        assert_eq!(pacer.inflight_bytes(), DEFAULT_MTU);
+        assert!(pacer.congestion_window() >= initial_window);
+
+        let filled = ReceiveReport {
+            ranges: vec![AckRange { first: 0, last: 7 }],
+            ..early
+        };
+        pacer.on_report(&filled, now + Duration::from_millis(14)).unwrap();
+        assert_eq!(pacer.inflight_bytes(), 0);
+        assert!(pacer.congestion_window() >= initial_window);
     }
 
     #[test]
