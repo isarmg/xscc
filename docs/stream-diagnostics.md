@@ -31,6 +31,10 @@ actual phone FPS and the Windows compositor counter for the output clock.
 
 Match events by clock-adjusted time, display, epoch and frame ID. The sending
 sample includes the last video datagram sequence and completed video message.
+It also identifies the slowest completed keyframe and records time spent
+waiting for congestion-window space, pacing tokens and feedback. Retry
+lateness counts time after the requested retry time, including scheduler delay
+and work on other traffic.
 The receiving sample includes the highest authenticated sequence and last
 reassembled video message. A sequence gap records a hole when it opens. The
 late-packet counter records subsequently accepted out-of-order arrivals.

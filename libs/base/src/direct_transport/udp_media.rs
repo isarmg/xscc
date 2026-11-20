@@ -1582,6 +1582,10 @@ impl Pacer {
             .min(self.window.min(16 * self.mtu) as f64);
         self.refilled = now;
     }
+    pub fn congestion_window_blocks(&self, bytes: usize) -> bool {
+        let usable = self.window.saturating_sub(2 * self.mtu).max(2 * self.mtu);
+        self.flights.len() >= 65_536 || self.inflight_bytes.saturating_add(bytes) > usable
+    }
     /// A waiting reliable TCP writer has precedence; writing into its local buffer is not an ACK.
     pub fn decide(
         &mut self,
@@ -1610,8 +1614,7 @@ impl Pacer {
         if reliable_pending {
             return SendDecision::Wait(Duration::from_millis(1));
         }
-        let usable = self.window.saturating_sub(2 * self.mtu).max(2 * self.mtu);
-        if self.flights.len() >= 65_536 || self.inflight_bytes + bytes > usable {
+        if self.congestion_window_blocks(bytes) {
             // A lost window cannot elicit another report. Probe after allowing
             // several report intervals and at least four measured round trips.
             if now.saturating_duration_since(self.last_feedback)
@@ -1632,12 +1635,10 @@ impl Pacer {
     /// Call only after a successful socket send of an ACK-eliciting fragment.
     pub fn on_sent(&mut self, sequence: u64, bytes: usize, now: Instant) -> Result<(), MediaError> {
         self.refill(now);
-        let usable = self.window.saturating_sub(2 * self.mtu).max(2 * self.mtu);
         if bytes == 0
             || bytes > self.mtu
             || self.highest_sent.is_some_and(|highest| sequence <= highest)
-            || self.flights.len() >= 65_536
-            || self.inflight_bytes + bytes > usable
+            || self.congestion_window_blocks(bytes)
             || self.tokens + 0.001 < bytes as f64
         {
             return Err(MediaError::InvalidFeedback);

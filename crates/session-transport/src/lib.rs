@@ -2748,15 +2748,55 @@ struct Transmission {
     first_fragment: Option<Instant>,
     #[cfg(debug_assertions)]
     send_calls: Duration,
+    #[cfg(debug_assertions)]
+    waits: KeyframeWaits,
+}
+
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
+#[derive(Clone, Copy)]
+enum KeyframeWait {
+    Window,
+    Pacing,
+    Feedback,
+}
+
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
+#[derive(Clone, Copy, Default)]
+struct KeyframeWaits {
+    pending: Option<(KeyframeWait, Instant, Duration)>,
+    window: Duration,
+    pacing: Duration,
+    feedback: Duration,
+    retry_lateness: Duration,
+}
+
+#[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
+impl KeyframeWaits {
+    fn account_until(&mut self, now: Instant) {
+        let Some((reason, started, requested)) = self.pending.take() else {
+            return;
+        };
+        let elapsed = now.saturating_duration_since(started);
+        let waited = elapsed.min(requested);
+        match reason {
+            KeyframeWait::Window => self.window += waited,
+            KeyframeWait::Pacing => self.pacing += waited,
+            KeyframeWait::Feedback => self.feedback += waited,
+        }
+        self.retry_lateness += elapsed.saturating_sub(requested);
+    }
 }
 
 #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
 #[derive(Default)]
 struct KeyframeTiming {
+    metadata: Option<FrameMetadata>,
+    size_bytes: u32,
     queue: Duration,
     first_fragment: Duration,
     transfer: Duration,
     send_calls: Duration,
+    waits: KeyframeWaits,
 }
 
 #[cfg(all(debug_assertions, not(any(target_os = "android", target_os = "ios"))))]
@@ -2823,10 +2863,16 @@ impl VideoSendMetrics {
                     "max_keyframe_send_ms": self.max_keyframe_send_time.as_secs_f64() * 1_000.0,
                     "max_keyframe_repair_ms": self.max_keyframe_repair_time.as_secs_f64() * 1_000.0,
                     "keyframe_feedback_probes": self.keyframe_feedback_probes,
+                    "slowest_keyframe": self.slowest_keyframe.metadata,
+                    "slowest_keyframe_size_bytes": self.slowest_keyframe.size_bytes,
                     "slowest_keyframe_queue_ms": self.slowest_keyframe.queue.as_secs_f64() * 1_000.0,
                     "slowest_keyframe_first_fragment_ms": self.slowest_keyframe.first_fragment.as_secs_f64() * 1_000.0,
                     "slowest_keyframe_transfer_ms": self.slowest_keyframe.transfer.as_secs_f64() * 1_000.0,
                     "slowest_keyframe_send_calls_ms": self.slowest_keyframe.send_calls.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_window_wait_ms": self.slowest_keyframe.waits.window.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_pacing_wait_ms": self.slowest_keyframe.waits.pacing.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_feedback_wait_ms": self.slowest_keyframe.waits.feedback.as_secs_f64() * 1_000.0,
+                    "slowest_keyframe_retry_lateness_ms": self.slowest_keyframe.waits.retry_lateness.as_secs_f64() * 1_000.0,
                 }),
             );
         }
@@ -2863,6 +2909,8 @@ fn transmission(
         first_fragment: None,
         #[cfg(debug_assertions)]
         send_calls: Duration::ZERO,
+        #[cfg(debug_assertions)]
+        waits: KeyframeWaits::default(),
     }
 }
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -3076,7 +3124,27 @@ async fn host_media(
                     let metadata = frame.plan.descriptor().metadata;
                     if !ready.load(Ordering::Acquire) || !epochs.get(&(metadata.kind, metadata.display_id)).is_some_and(|(epoch, ack)| *epoch == metadata.epoch && *ack) { next_send = now + media::REPORT_INTERVAL; break; }
                     let Some(&index) = frame.indices.front() else { *active = None; break; };
-                    match pacer.decide(frame.plan.packet_len(index)?, frame.deadline, now, false) {
+                    let packet_len = frame.plan.packet_len(index)?;
+                    let decision = pacer.decide(packet_len, frame.deadline, now, false);
+                    #[cfg(debug_assertions)]
+                    if frame.initial && metadata.keyframe {
+                        frame.waits.account_until(now);
+                        frame.waits.pending = match decision {
+                            SendDecision::Wait(wait) => {
+                                let reason = if pacer.congestion_window_blocks(packet_len) {
+                                    KeyframeWait::Window
+                                } else {
+                                    KeyframeWait::Pacing
+                                };
+                                Some((reason, now, wait))
+                            }
+                            SendDecision::FeedbackRequired => {
+                                Some((KeyframeWait::Feedback, now, media::REPORT_INTERVAL))
+                            }
+                            _ => None,
+                        };
+                    }
+                    match decision {
                         SendDecision::Wait(wait) => { next_send = now + wait; break; }
                         SendDecision::FeedbackRequired => {
                             if probe.is_none_or(|(_, sent)| sent.elapsed() >= Duration::from_millis(500)) {
@@ -3126,10 +3194,13 @@ async fn host_media(
                                                 let first = frame.first_fragment.expect("invariant: keyframe fragment sent");
                                                 video_metrics.max_keyframe_send_time = elapsed;
                                                 video_metrics.slowest_keyframe = KeyframeTiming {
+                                                    metadata: Some(metadata),
+                                                    size_bytes: frame.plan.descriptor().total_size,
                                                     queue: frame.selected.saturating_duration_since(frame.queued),
                                                     first_fragment: first.saturating_duration_since(frame.selected),
                                                     transfer: sent.saturating_duration_since(first),
                                                     send_calls: frame.send_calls,
+                                                    waits: frame.waits,
                                                 };
                                             }
                                         }
