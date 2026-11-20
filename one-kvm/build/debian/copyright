@@ -24,59 +24,59 @@ Comment:
  Code derived from the RustDesk project, modified for One-KVM.
  See src/rustdesk/NOTICE for the full attribution.
 
-Files: libs/hwcodec/*
+Files: libs/video-codec-backends/*
 Copyright: the RustDesk contributors
            2025 One-KVM contributors
 License: AGPL-3.0-only
 Comment:
- Derived from the RustDesk hwcodec component. See libs/hwcodec/NOTICE.
+ Derived from the RustDesk hwcodec component. See libs/video-codec-backends/NOTICE.
 
-Files: libs/v4l2r/*
+Files: libs/linux-video-device/*
 Copyright: 2023-2024 Andrei Lytkin, Daniel Almeida, Collabora Ltd. and other v4l2r contributors
 License: Expat
 
-Files: libs/ventoy-img-rs/resources/*
+Files: libs/bootable-virtual-media/resources/*
 Copyright: Ventoy contributors
 License: GPL-3.0+
 Comment:
  Pre-built Ventoy boot files (boot.img, core.img.xz, ventoy.disk.img.xz).
  Ventoy upstream: https://github.com/ventoy/Ventoy, licensed GPL-3.0-or-later.
 
-Files: res/vcpkg/libyuv/*
+Files: libs/pixel-conversion/*
 Copyright: The LibYuv Project Authors
 License: BSD-3-Clause
 
-Files: third-party/ffmpeg
+Files: build/native-sources/rockchip-media-codec.tar.gz build/windows/ports/ffmpeg/video-codecs.tar.gz
 Copyright: FFmpeg developers and contributors
 License: GPL-2.0+
 Comment:
  FFmpeg is built with --enable-gpl --enable-version3 and linked against
  x264/x265; the resulting build is GPL-compatible with the AGPL-3.0 main
  program. Upstream: https://ffmpeg.org/
- The Linux builds use nyanmisaka/ffmpeg-rockchip at the commit pinned by
- FFMPEG_ROCKCHIP_REV in build/cross/Dockerfile.*.
+ Linux builds use the Rockchip codec variant recorded in build/native-sources/SOURCE.json.
+ Windows builds use the DirectShow configuration under build/windows/ports/ffmpeg.
 
-Files: third-party/x264
+Files: build/native-sources/h264-encoder.tar.gz build/windows/ports/x264/h264-encoder.tar.gz
 Copyright: x264 LLC and x264 contributors
 License: GPL-2.0+
 Comment: Upstream: https://www.videolan.org/developers/x264.html
 
-Files: third-party/x265
+Files: build/native-sources/h265-encoder.tar.gz build/windows/ports/x265/h265-encoder.tar.gz
 Copyright: MulticoreWare, Inc. and x265 contributors
 License: GPL-2.0+
 Comment: Upstream: https://www.x265.org/
 
-Files: third-party/libvpx
+Files: build/native-sources/vp8-vp9-codec.tar.gz
 Copyright: The WebM Project authors
 License: BSD-3-Clause
 Comment: Upstream: https://www.webmproject.org/code/
 
-Files: third-party/libopus
+Files: build/native-sources/opus-codec.tar.gz
 Copyright: Opus contributors
 License: BSD-3-Clause
 Comment: Upstream: https://opus-codec.org/
 
-Files: third-party/libjpeg-turbo
+Files: build/native-sources/jpeg-codec.tar.gz build/windows/ports/libjpeg-turbo/jpeg-codec.tar.gz
 Copyright: D. R. Commander and other libjpeg-turbo contributors
 License: BSD-3-Clause
 Comment: Upstream: https://libjpeg-turbo.org/

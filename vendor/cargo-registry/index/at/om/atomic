@@ -1,0 +1,1 @@
+{"name":"atomic","vers":"0.5.3","deps":[],"cksum":"c59bdb34bc650a32731b31bd8f0829cc15d24a708ee31559e0bb34f2bc320cba","features":{"default":["fallback"],"fallback":[],"nightly":[],"std":[]},"yanked":false,"pubtime":"2023-05-15T15:18:16Z"}

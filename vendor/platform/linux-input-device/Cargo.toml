@@ -1,0 +1,28 @@
+[package]
+name = "evdev"
+version = "0.11.5"
+authors = ["Corey Richardson <corey@octayn.net>"]
+description = "evdev interface for Linux"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/cmr/evdev"
+documentation = "https://docs.rs/evdev"
+edition = "2021"
+
+[features]
+tokio = ["tokio_1", "futures-core"]
+
+[dependencies]
+libc = "0.2.121"
+bitvec = "1.0.0"
+nix = "0.23"
+
+tokio_1 = { package = "tokio", version = "1.17", features = ["net"], optional = true }
+futures-core = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio_1 = { package = "tokio", version = "1.17", features = ["macros", "rt-multi-thread"] }
+itertools = "0.10"
+
+[[example]]
+name = "evtest_tokio"
+required-features = ["tokio"]

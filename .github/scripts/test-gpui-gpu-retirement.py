@@ -236,7 +236,7 @@ def main():
         source.write_text(TEST)
         executable = work / ('test.exe' if os.name == 'nt' else 'test')
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
-        include = root / 'vendor/hwcodec/cpp/common'
+        include = root / 'libs/hardware-video-codecs/cpp/common'
         if Path(args.cxx).stem.lower() == 'cl':
             command = [args.cxx, '/nologo', '/MT', '/std:c++17', '/W3', '/WX', '/EHsc',
                        '/I' + str(include), str(source), '/Fe' + str(executable)]

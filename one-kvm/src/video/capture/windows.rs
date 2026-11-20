@@ -53,7 +53,7 @@ pub struct CaptureStream {
 }
 
 enum WindowsCapture {
-    DirectShow(hwcodec::capture::DshowCapture),
+    DirectShow(video_codec_backends::capture::DshowCapture),
     Desktop(DesktopCapture),
 }
 
@@ -86,7 +86,7 @@ impl CaptureStream {
                 path.display()
             ))
         })?;
-        let capture = hwcodec::capture::DshowCapture::open(
+        let capture = video_codec_backends::capture::DshowCapture::open(
             &display_name,
             resolution.width as i32,
             resolution.height as i32,
@@ -353,44 +353,48 @@ mod desktop_tests {
     }
 }
 
-fn map_pixel_format(format: PixelFormat) -> hwcodec::capture::CapturePixelFormat {
+fn map_pixel_format(format: PixelFormat) -> video_codec_backends::capture::CapturePixelFormat {
     match format {
-        PixelFormat::Mjpeg => hwcodec::capture::CapturePixelFormat::Mjpeg,
-        PixelFormat::Jpeg => hwcodec::capture::CapturePixelFormat::Jpeg,
-        PixelFormat::Yuyv => hwcodec::capture::CapturePixelFormat::Yuyv,
-        PixelFormat::Yvyu => hwcodec::capture::CapturePixelFormat::Yvyu,
-        PixelFormat::Uyvy => hwcodec::capture::CapturePixelFormat::Uyvy,
-        PixelFormat::Nv12 => hwcodec::capture::CapturePixelFormat::Nv12,
-        PixelFormat::Nv21 => hwcodec::capture::CapturePixelFormat::Nv21,
-        PixelFormat::Nv16 => hwcodec::capture::CapturePixelFormat::Nv16,
-        PixelFormat::Nv24 => hwcodec::capture::CapturePixelFormat::Nv24,
-        PixelFormat::Yuv420 => hwcodec::capture::CapturePixelFormat::Yuv420,
-        PixelFormat::Yvu420 => hwcodec::capture::CapturePixelFormat::Yvu420,
-        PixelFormat::Rgb24 => hwcodec::capture::CapturePixelFormat::Rgb24,
-        PixelFormat::Bgr24 => hwcodec::capture::CapturePixelFormat::Bgr24,
-        PixelFormat::Grey => hwcodec::capture::CapturePixelFormat::Grey,
-        PixelFormat::Rgb565 => hwcodec::capture::CapturePixelFormat::Unknown,
+        PixelFormat::Mjpeg => video_codec_backends::capture::CapturePixelFormat::Mjpeg,
+        PixelFormat::Jpeg => video_codec_backends::capture::CapturePixelFormat::Jpeg,
+        PixelFormat::Yuyv => video_codec_backends::capture::CapturePixelFormat::Yuyv,
+        PixelFormat::Yvyu => video_codec_backends::capture::CapturePixelFormat::Yvyu,
+        PixelFormat::Uyvy => video_codec_backends::capture::CapturePixelFormat::Uyvy,
+        PixelFormat::Nv12 => video_codec_backends::capture::CapturePixelFormat::Nv12,
+        PixelFormat::Nv21 => video_codec_backends::capture::CapturePixelFormat::Nv21,
+        PixelFormat::Nv16 => video_codec_backends::capture::CapturePixelFormat::Nv16,
+        PixelFormat::Nv24 => video_codec_backends::capture::CapturePixelFormat::Nv24,
+        PixelFormat::Yuv420 => video_codec_backends::capture::CapturePixelFormat::Yuv420,
+        PixelFormat::Yvu420 => video_codec_backends::capture::CapturePixelFormat::Yvu420,
+        PixelFormat::Rgb24 => video_codec_backends::capture::CapturePixelFormat::Rgb24,
+        PixelFormat::Bgr24 => video_codec_backends::capture::CapturePixelFormat::Bgr24,
+        PixelFormat::Grey => video_codec_backends::capture::CapturePixelFormat::Grey,
+        PixelFormat::Rgb565 => video_codec_backends::capture::CapturePixelFormat::Unknown,
     }
 }
 
-fn map_capture_format(format: hwcodec::capture::CapturePixelFormat) -> Result<PixelFormat> {
+fn map_capture_format(
+    format: video_codec_backends::capture::CapturePixelFormat,
+) -> Result<PixelFormat> {
     match format {
-        hwcodec::capture::CapturePixelFormat::Mjpeg => Ok(PixelFormat::Mjpeg),
-        hwcodec::capture::CapturePixelFormat::Jpeg => Ok(PixelFormat::Jpeg),
-        hwcodec::capture::CapturePixelFormat::Yuyv => Ok(PixelFormat::Yuyv),
-        hwcodec::capture::CapturePixelFormat::Yvyu => Ok(PixelFormat::Yvyu),
-        hwcodec::capture::CapturePixelFormat::Uyvy => Ok(PixelFormat::Uyvy),
-        hwcodec::capture::CapturePixelFormat::Nv12 => Ok(PixelFormat::Nv12),
-        hwcodec::capture::CapturePixelFormat::Nv21 => Ok(PixelFormat::Nv21),
-        hwcodec::capture::CapturePixelFormat::Nv16 => Ok(PixelFormat::Nv16),
-        hwcodec::capture::CapturePixelFormat::Nv24 => Ok(PixelFormat::Nv24),
-        hwcodec::capture::CapturePixelFormat::Yuv420 => Ok(PixelFormat::Yuv420),
-        hwcodec::capture::CapturePixelFormat::Yvu420 => Ok(PixelFormat::Yvu420),
-        hwcodec::capture::CapturePixelFormat::Rgb24 => Ok(PixelFormat::Rgb24),
-        hwcodec::capture::CapturePixelFormat::Bgr24 => Ok(PixelFormat::Bgr24),
-        hwcodec::capture::CapturePixelFormat::Grey => Ok(PixelFormat::Grey),
-        hwcodec::capture::CapturePixelFormat::Unknown => Err(AppError::ServiceUnavailable(
-            "DirectShow returned an unsupported pixel format".to_string(),
-        )),
+        video_codec_backends::capture::CapturePixelFormat::Mjpeg => Ok(PixelFormat::Mjpeg),
+        video_codec_backends::capture::CapturePixelFormat::Jpeg => Ok(PixelFormat::Jpeg),
+        video_codec_backends::capture::CapturePixelFormat::Yuyv => Ok(PixelFormat::Yuyv),
+        video_codec_backends::capture::CapturePixelFormat::Yvyu => Ok(PixelFormat::Yvyu),
+        video_codec_backends::capture::CapturePixelFormat::Uyvy => Ok(PixelFormat::Uyvy),
+        video_codec_backends::capture::CapturePixelFormat::Nv12 => Ok(PixelFormat::Nv12),
+        video_codec_backends::capture::CapturePixelFormat::Nv21 => Ok(PixelFormat::Nv21),
+        video_codec_backends::capture::CapturePixelFormat::Nv16 => Ok(PixelFormat::Nv16),
+        video_codec_backends::capture::CapturePixelFormat::Nv24 => Ok(PixelFormat::Nv24),
+        video_codec_backends::capture::CapturePixelFormat::Yuv420 => Ok(PixelFormat::Yuv420),
+        video_codec_backends::capture::CapturePixelFormat::Yvu420 => Ok(PixelFormat::Yvu420),
+        video_codec_backends::capture::CapturePixelFormat::Rgb24 => Ok(PixelFormat::Rgb24),
+        video_codec_backends::capture::CapturePixelFormat::Bgr24 => Ok(PixelFormat::Bgr24),
+        video_codec_backends::capture::CapturePixelFormat::Grey => Ok(PixelFormat::Grey),
+        video_codec_backends::capture::CapturePixelFormat::Unknown => {
+            Err(AppError::ServiceUnavailable(
+                "DirectShow returned an unsupported pixel format".to_string(),
+            ))
+        }
     }
 }

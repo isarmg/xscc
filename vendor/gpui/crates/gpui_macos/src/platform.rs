@@ -36,7 +36,7 @@ use gpui_apple::{
     keychain,
     thermal::{self, ThermalObserver},
 };
-use gpui_util::{ResultExt, new_std_command};
+use gpui_support::{ResultExt, new_std_command};
 use itertools::Itertools;
 use objc::{
     class,

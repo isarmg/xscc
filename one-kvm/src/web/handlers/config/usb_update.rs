@@ -94,7 +94,7 @@ where
     let mut resource_reservation = state.config.reserve_resources(&staged_config)?;
     #[cfg(target_os = "linux")]
     if reset {
-        use one_kvm_bluetooth_hid::{
+        use crate::hid::bluetooth_device::{
             adapters,
             bonds::{self, Bond, BondStore},
         };

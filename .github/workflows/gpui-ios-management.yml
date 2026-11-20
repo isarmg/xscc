@@ -19,6 +19,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'vcpkg.json'
+      - 'res/native-package-build/**'
       - 'res/vcpkg/**'
       - 'res/vcpkg-triplets/**'
       - 'packaging/gpui-ios/**'
@@ -50,7 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
@@ -142,16 +142,17 @@ jobs:
           set -o pipefail
           cargo test --locked -p gpui --lib raw_touch_ 2>&1 | tee "$RUNNER_TEMP/gpui-raw-touch-tests.log"
           grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' "$RUNNER_TEMP/gpui-raw-touch-tests.log"
-      - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
-        with:
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: true
+      - name: Set up repository native dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/setup-pinned-vcpkg.py --root "$RUNNER_TEMP/xscc-vcpkg"
+
       - name: Restore native dependency binary archives
         id: native-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: mobile-vcpkg-macOS-arm64-ios-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: mobile-vcpkg-macOS-arm64-ios-${{ steps.apple.outputs.xcode }}-${{ steps.apple.outputs.sdk }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**', 'res/native-package-build/**') }}
       - name: Build native codec dependencies
         id: native-dependencies
         run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --overlay-triplets="$GITHUB_WORKSPACE/res/vcpkg-triplets" --x-install-root="$VCPKG_ROOT/installed"'
@@ -192,7 +193,6 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:

@@ -5,8 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use collections::HashMap;
-use gpui_util::{ResultExt, maybe};
+use gpui_support::{ResultExt, collections::HashMap, maybe};
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use windows::{
     Win32::{

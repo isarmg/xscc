@@ -209,7 +209,7 @@ def main():
             raise ValueError('Ownership test directory escaped the intended temporary directory')
         (work / 'amfenc_frame_ref.h').write_text(header)
         (work / 'test.c').write_text(TEST)
-        shutil.copytree(root / 'vendor/hwcodec/externals/AMF_v1.4.35/amf/public/include',
+        shutil.copytree(root / 'libs/hardware-video-codecs/externals/AMF_v1.4.35/amf/public/include',
                         work / 'AMF')
         executable = work / ('test.exe' if os.name == 'nt' else 'test')
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []

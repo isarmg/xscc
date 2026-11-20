@@ -1,0 +1,1 @@
+{"name":"custom_debug","vers":"0.6.2","deps":[{"name":"custom_debug_derive","req":"^0.6.2","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"2da7d1ad9567b3e11e877f1d7a0fa0360f04162f94965fc4448fbed41a65298e","features":{},"yanked":false,"pubtime":"2024-11-26T00:29:41Z"}

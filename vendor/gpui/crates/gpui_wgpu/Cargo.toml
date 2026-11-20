@@ -15,14 +15,13 @@ doctest = false
 [features]
 default = []
 bench-support = ["gpui/bench-support", "dep:image"]
-font-kit = ["dep:font-kit"]
+font-style-matching = ["dep:font_style_matching"]
 test-support = ["gpui/test-support", "dep:image"]
 
 [dependencies]
 gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
-collections.workspace = true
 cosmic-text = "0.19.0"
 etagere.workspace = true
 itertools.workspace = true
@@ -35,11 +34,9 @@ smallvec.workspace = true
 swash.workspace = true
 unicode-bidi.workspace = true
 unicode-segmentation.workspace = true
-gpui_util.workspace = true
+gpui_support.workspace = true
 
-# Optional: only needed on platforms with multiple font sources (e.g. Linux)
-# WARNING: If you change this, you must also publish a new version of zed-font-kit to crates.io
-font-kit = { workspace = true, optional = true }
+font_style_matching = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 wgpu = { workspace = true, features = ["std", "metal", "gles", "vulkan", "wgsl", "webgpu"] }
@@ -56,7 +53,7 @@ criterion.workspace = true
 gpui = { workspace = true, features = ["bench-support"] }
 image.workspace = true
 # Validate shaders with the same Naga revision that wgpu uses at runtime.
-naga = { git = "https://github.com/gfx-rs/wgpu", rev = "3b3506ea31154edc04de64debda0e780cba2639c", features = ["wgsl-in"] }
+naga = { path = "../../../platform/gpu-rendering/naga", features = ["wgsl-in"] }
 
 [[bench]]
 name = "layout_line"

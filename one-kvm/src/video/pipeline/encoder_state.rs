@@ -8,11 +8,11 @@ use crate::video::codec::vp8::{VP8Config, VP8Encoder};
 use crate::video::codec::vp9::{VP9Config, VP9Encoder};
 use crate::video::format::{PixelFormat, Resolution};
 use bytes::Bytes;
+use tracing::info;
 #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
-use hwcodec::ffmpeg_hw::{
+use video_codec_backends::ffmpeg_hw::{
     last_error_message as ffmpeg_hw_last_error, HwMjpegH26xConfig, HwMjpegH26xPipeline,
 };
-use tracing::info;
 
 use super::shared::SharedVideoPipelineConfig;
 

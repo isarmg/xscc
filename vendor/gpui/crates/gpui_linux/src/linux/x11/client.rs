@@ -4,10 +4,9 @@ use calloop::{
     LoopHandle, RegistrationToken,
     generic::{FdWrapper, Generic},
 };
-use collections::HashMap;
 use core::str;
 use gpui::{Capslock, GraphicalEnvironment};
-use gpui_util::ResultExt as _;
+use gpui_support::{ResultExt as _, collections::HashMap};
 use http_client::Url;
 use log::Level;
 use smallvec::SmallVec;

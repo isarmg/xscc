@@ -57,11 +57,10 @@ accesskit.workspace = true
 accesskit_unix = { workspace = true, optional = true }
 anyhow.workspace = true
 bytemuck.workspace = true
-collections.workspace = true
 futures.workspace = true
 gpui.workspace = true
-gpui_util.workspace = true
-gpui_wgpu = { workspace = true, optional = true, features = ["font-kit"] }
+gpui_support.workspace = true
+gpui_wgpu = { workspace = true, optional = true, features = ["font-style-matching"] }
 http_client.workspace = true
 libc.workspace = true
 log.workspace = true
@@ -124,7 +123,7 @@ x11rb = { version = "0.13.1", features = [
     "dri3",
 ], optional = true }
 # WARNING: If you change this, you must also publish a new version of zed-xim to crates.io
-xim = { git = "https://github.com/zed-industries/xim-rs.git", rev = "16f35a2c881b815a2b6cdfd6687988e84f8447d8", features = [
+xim = { path = "../../../platform/x11-input-method", features = [
     "x11rb-xcb",
     "x11rb-client",
 ], package = "zed-xim", version = "0.4.0-zed", optional = true }

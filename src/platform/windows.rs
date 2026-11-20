@@ -95,6 +95,7 @@ mod installer_handoff;
 mod installer_shell;
 mod verified_update;
 mod msi_registry;
+mod portable_service_launch;
 pub(crate) use acl::current_process_user_sid_string;
 pub use acl::{
     set_path_permission, set_path_permission_for_portable_service_shmem_dir,
@@ -2362,14 +2363,6 @@ pub fn elevate(arg: &str) -> ResultType<bool> {
     )
 }
 
-pub fn run_as_system(arg: &str) -> ResultType<()> {
-    let exe = std::env::current_exe()?.to_string_lossy().to_string();
-    if impersonate_system::run_as_system(&exe, arg).is_err() {
-        bail!(format!("Failed to run {} as system", exe));
-    }
-    Ok(())
-}
-
 pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_system: bool) {
     // avoid possible run recursively due to failed run.
     log::info!(
@@ -2385,12 +2378,6 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
         "--elevate"
     }
     .to_owned();
-    let mut arg_run_as_system = if is_setup {
-        "--noinstall --run-as-system"
-    } else {
-        "--run-as-system"
-    }
-    .to_owned();
     let shmem_name_from_args = crate::portable_service::portable_service_shmem_name_from_args();
     if shmem_name_from_args.is_none() && crate::portable_service::has_portable_service_shmem_arg() {
         log::error!("Invalid portable service shared memory argument, aborting elevation flow");
@@ -2399,12 +2386,10 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
         // with inconsistent shared-memory contract.
         std::process::exit(1);
     }
-    if let Some(shmem_name) = shmem_name_from_args {
-        let shmem_arg = crate::portable_service::portable_service_shmem_arg(&shmem_name);
+    if let Some(shmem_name) = &shmem_name_from_args {
+        let shmem_arg = crate::portable_service::portable_service_shmem_arg(shmem_name);
         arg_elevate.push(' ');
         arg_elevate.push_str(&shmem_arg);
-        arg_run_as_system.push(' ');
-        arg_run_as_system.push_str(&shmem_arg);
     }
     if is_root() {
         if is_run_as_system {
@@ -2416,13 +2401,12 @@ pub fn elevate_or_run_as_system(is_setup: bool, is_elevate: bool, is_run_as_syst
             Ok(elevated) => {
                 if elevated {
                     if !is_run_as_system {
-                        if run_as_system(arg_run_as_system.as_str()).is_ok() {
-                            std::process::exit(0);
-                        } else {
-                            log::error!(
-                                "Failed to run as system, error {}",
-                                io::Error::last_os_error()
-                            );
+                        match portable_service_launch::start(
+                            is_setup,
+                            shmem_name_from_args.as_deref(),
+                        ) {
+                            Ok(()) => std::process::exit(0),
+                            Err(error) => log::error!("Failed to start portable service: {error:#}"),
                         }
                     }
                 } else {

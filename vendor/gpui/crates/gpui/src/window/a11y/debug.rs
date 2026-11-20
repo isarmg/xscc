@@ -6,7 +6,7 @@
 //! we capture extra info.
 
 use accesskit::{Action, NodeId, TreeUpdate};
-use collections::FxHashMap;
+use gpui_support::collections::FxHashMap;
 
 use crate::{Pixels, SharedString, Size};
 

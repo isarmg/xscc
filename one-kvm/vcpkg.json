@@ -1,5 +1,4 @@
 {
-  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "one-kvm",
   "version-string": "0.2.8",
   "dependencies": [

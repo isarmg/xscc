@@ -10,6 +10,23 @@ packages its actual `libxscc_gpui_android_smoke.so` with GameActivity 4.4.0.
 Rust android-activity 0.6.1 supplies the native GameActivity glue; Gradle supplies
 the matching Java side, without a second Prefab/CMake native implementation.
 
+Android application libraries come from [the in-tree Maven snapshot](vendor/maven).
+The Android Gradle Plugin and its build tools, including the Kotlin compiler used
+by lint, come from a separate cache outside the checkout. The setup command
+downloads the pinned artifacts and verifies their SHA-256 hashes. Gradle can
+then assemble the APK offline.
+
+With the JDK, Gradle, Android SDK and build-tools 36.0.0 installed, run these
+commands from the repository root.
+
+```sh
+export XSCC_ANDROID_TOOL_MAVEN="${GRADLE_USER_HOME:-$HOME/.gradle}/xscc-android-tools"
+python3 .github/scripts/prepare-gpui-android-toolchain.py "$XSCC_ANDROID_TOOL_MAVEN"
+gradle --offline --no-daemon -p packaging/gpui-android \
+  -Pandroid.aapt2FromMavenOverride="$ANDROID_HOME/build-tools/36.0.0/aapt2" \
+  :app:assembleSmokeRelease
+```
+
 The release-optimized smoke APK uses the runner's disposable Android debug key.
 The management preview uses a fixed repository preview signing identity, supplied
 from Actions secrets rather than committed source. This lets subsequent preview

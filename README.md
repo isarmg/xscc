@@ -38,7 +38,9 @@ GPUI 产品入口使用实例绑定和授权列表，不显示临时 IP 直连�
 - `src/`、`libs/`：共享 Rust 原生会话、传输、捕获、编解码与输入核心。
 - `crates/management/`、`crates/native-management/`：内嵌管理库、私有存储、后台生命周期和会话证明。
 - `vendor/gpui/`：本仓库维护的 GPUI 平台后端与渲染实现。
-- 根 `Cargo.lock` 和各 GPUI 应用锁文件固定相应依赖；Rust 工具链为 1.99。
+- 根工作区、GPUI 和 One-KVM 各自的锁文件固定依赖版本，统一通过 [本地 Cargo 仓库](vendor/cargo-registry/README.md) 解析。原 Git 依赖按职责放在 [vendor/platform](vendor/platform/README.md)，来源提交仅用于溯源。
+- 原生库的源码和构建配方位于 `res/vcpkg` 和 One-KVM 的 [native-sources](one-kvm/build/native-sources/)。Rust 1.99、Cargo、平台 SDK 和构建工具由开发机或 CI 提供。
+- Windows 虚拟显示控制位于 `libs/windows-display-control`，Rust 间接显示驱动位于 [drivers/virtual-display](drivers/virtual-display/NOTICE.md)。
 - `flutter/` 和旧 Rust 前端适配仍有历史源码与回归夹具，保留源码不代表产品入口继续支持它们。GPUI 应用直接使用 Rust 核心，不需要 Flutter SDK、Dart 或 Flutter bridge 生成。旧 `build.py --flutter` 不是 GPUI 产品构建命令。
 
 [开发验证](docs/development.md) · [原生工具链](docs/BUILD-TOOLCHAIN.md) · [管理接入](docs/native-management.md) · [验收条件](docs/readiness.md) · [性能优化记录](docs/performance-2026-10-24.txt) · [源码来源](docs/rustdesk-source.md)

@@ -524,7 +524,7 @@ fn restore_configuration(
     Ok(())
 }
 
-fn configure_count(count: u32, requested: &[virtual_display::MonitorMode]) -> ResultType<()> {
+fn configure_count(count: u32, requested: &[windows_display_control::MonitorMode]) -> ResultType<()> {
     let modes = requested
         .iter()
         .map(|mode| {
@@ -755,7 +755,7 @@ pub(super) fn plug_in_headless() -> ResultType<()> {
     Ok(())
 }
 
-pub(super) fn plug_in_monitor(modes: &[virtual_display::MonitorMode]) -> ResultType<()> {
+pub(super) fn plug_in_monitor(modes: &[windows_display_control::MonitorMode]) -> ResultType<()> {
     let _guard = LOCK.lock().unwrap();
     let _capture_idle = configuration::capture_idle_for_change()?;
     let count = u32::try_from(get_monitor_count())?

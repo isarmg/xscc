@@ -25,10 +25,13 @@ pub use bench_context::{
     BenchAppContext, BenchMeasurement, BenchReport, BenchWindowContext, CountingAllocator,
     MetricReport, bench_platform,
 };
-use collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque};
 pub use context::*;
 pub use entity_map::*;
-use gpui_util::{ResultExt, debug_panic};
+use gpui_support::{
+    ResultExt,
+    collections::{FxHashMap, FxHashSet, HashMap, TypeIdHashMap, TypeIdHashSet, VecDeque},
+    debug_panic,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use headless_app_context::*;
 use http_client::{HttpClient, Url};

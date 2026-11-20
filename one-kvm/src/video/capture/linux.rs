@@ -9,20 +9,20 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use tracing::{debug, info, warn};
-use v4l2r::bindings::{
+use linux_video_device::bindings::{
     v4l2_dv_timings, v4l2_requestbuffers, v4l2_streamparm, v4l2_streamparm__bindgen_ty_1,
     V4L2_DV_BT_656_1120,
 };
-use v4l2r::ioctl::{
+use linux_video_device::ioctl::{
     self, Capabilities, Capability as V4l2rCapability, EventType, IntoErrno, MemoryConsistency,
     PlaneMapping, QBufPlane, QBuffer, QueryBuffer, QueryDvTimingsError, SubscribeEventFlags,
     V4l2Buffer,
 };
-use v4l2r::memory::{MemoryType, MmapHandle};
-use v4l2r::nix::errno::Errno;
-use v4l2r::{Format as V4l2rFormat, PixelFormat as V4l2rPixelFormat, QueueType};
+use linux_video_device::memory::{MemoryType, MmapHandle};
+use linux_video_device::nix::errno::Errno;
+use linux_video_device::{Format as V4l2rFormat, PixelFormat as V4l2rPixelFormat, QueueType};
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+use tracing::{debug, info, warn};
 
 use super::CaptureReadError;
 use crate::error::{AppError, Result};
@@ -523,7 +523,7 @@ impl CaptureStream {
 
     /// Run a synchronous consumer while a buffer is dequeued. QBUF occurs only
     /// after the callback returns, including its error path. Consumers must end
-    /// hardware access before returning; see hwcodec::rkmpp_dmabuf::encode.
+    /// hardware access before returning; see video_codec_backends::rkmpp_dmabuf::encode.
     #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
     pub(crate) fn with_next_dmabuf<T>(
         &mut self,
@@ -545,14 +545,15 @@ impl CaptureStream {
             self.queue_buffer(index as u32)
                 .map_err(|e| io::Error::other(e.to_string()))
         }));
-        if buffer.as_v4l2_buffer().flags & v4l2r::bindings::V4L2_BUF_FLAG_ERROR != 0 {
+        if buffer.as_v4l2_buffer().flags & linux_video_device::bindings::V4L2_BUF_FLAG_ERROR != 0 {
             // A corrupt UVC frame is not a source change or a DMA failure.
             // Return it without ever letting the encoder read its payload.
             lease.finish()?;
             return Err(io::Error::from(io::ErrorKind::WouldBlock).into());
         }
         if !native_hdmi
-            && buffer.as_v4l2_buffer().field != v4l2r::bindings::v4l2_field_V4L2_FIELD_NONE
+            && buffer.as_v4l2_buffer().field
+                != linux_video_device::bindings::v4l2_field_V4L2_FIELD_NONE
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1137,8 +1138,8 @@ fn set_fps(fd: &File, queue: QueueType, fps: u32) -> std::result::Result<(), ioc
     let mut params = unsafe { std::mem::zeroed::<v4l2_streamparm>() };
     params.type_ = queue as u32;
     params.parm = v4l2_streamparm__bindgen_ty_1 {
-        capture: v4l2r::bindings::v4l2_captureparm {
-            timeperframe: v4l2r::bindings::v4l2_fract {
+        capture: linux_video_device::bindings::v4l2_captureparm {
+            timeperframe: linux_video_device::bindings::v4l2_fract {
                 numerator: 1,
                 denominator: fps,
             },

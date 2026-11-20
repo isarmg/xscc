@@ -1,0 +1,1 @@
+{"name":"reborrow","vers":"0.5.5","deps":[{"name":"reborrow-derive","req":"^0.5","features":[],"optional":true,"default_features":true,"target":null,"kind":"normal"}],"cksum":"03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430","features":{"default":[],"derive":["reborrow-derive"]},"yanked":false,"pubtime":"2023-10-04T07:58:26Z"}

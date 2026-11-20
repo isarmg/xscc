@@ -1,0 +1,1 @@
+{"name":"cgl","vers":"0.3.2","deps":[{"name":"libc","req":"^0.2","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"0ced0551234e87afee12411d535648dd89d2e7f34c78b753395567aff3d447ff","features":{},"yanked":false,"pubtime":"2019-09-11T17:54:10Z"}

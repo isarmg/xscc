@@ -1,0 +1,2 @@
+{"name":"mach2","vers":"0.4.3","deps":[{"name":"libc","req":"^0.2","features":[],"optional":false,"default_features":false,"target":"cfg(any(target_os = \"macos\", target_os = \"ios\"))","kind":"normal"}],"cksum":"d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44","features":{"default":[],"unstable":[]},"yanked":false,"pubtime":"2025-06-22T02:30:54Z"}
+{"name":"mach2","vers":"0.6.0","deps":[],"cksum":"dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b","features":{"default":[],"unstable":[]},"yanked":false,"pubtime":"2025-11-16T01:16:34Z"}

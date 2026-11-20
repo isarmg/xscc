@@ -5,8 +5,10 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'vendor/gpui/**'
-      - 'vendor/hwcodec/**'
-      - 'res/vcpkg/ffmpeg/**'
+      - 'libs/hardware-video-codecs/**'
+      - 'vcpkg.json'
+      - 'res/vcpkg*/**'
+      - 'res/native-package-build/**'
       - 'experiments/shared/**'
       - 'src/gpui*'
       - 'src/gpui_session/**'
@@ -37,7 +39,6 @@ on:
       - 'packaging/gpui-windows/**'
       - '.github/workflows/gpui-windows-beta.yml'
       - '.github/scripts/*pinned*'
-      - '.github/scripts/pinned-assets/**'
       - '.github/scripts/*gpui*'
   pull_request:
   workflow_dispatch:
@@ -141,7 +142,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-files-v2-Windows-2025-${{ steps.native-toolchain.outputs.image_version }}-x64-windows-static-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: vcpkg-files-v2-Windows-2025-${{ steps.native-toolchain.outputs.image_version }}-x64-windows-static-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**', 'res/native-package-build/**') }}
       - name: Build pinned native dependencies (no driver installation)
         id: native-dependencies
         env:
@@ -224,8 +225,7 @@ jobs:
       - name: Test FFmpeg decoded-plane reuse with native bindings
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
-          $env:PATH = (Resolve-Path vendor/hwcodec/externals/SDL/lib/x64).Path + [IO.Path]::PathSeparator + $env:PATH
-          $decodeTests = & cargo test --locked -p hwcodec --lib --target x86_64-pc-windows-msvc ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1
+          $decodeTests = & cargo test --locked -p hardware-video-codecs --lib --target x86_64-pc-windows-msvc ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1
           $decodeExit = $LASTEXITCODE
           $decodeTests | Write-Output
           if ($decodeExit -ne 0 -or ($decodeTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
@@ -285,6 +285,12 @@ jobs:
       - name: Test configurable virtual display mode preservation
         if: matrix.role == 'host' && !inputs.build_only
         run: |
+          $controlTests = & cargo test --locked -p windows-display-control --lib --target x86_64-pc-windows-msvc 2>&1
+          $controlExit = $LASTEXITCODE
+          $controlTests | Write-Output
+          if ($controlExit -ne 0 -or ($controlTests | Out-String) -notmatch '(?m)^test result: ok\. 2 passed; 0 failed;') {
+            throw 'Windows display control wire format tests did not pass'
+          }
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::profile::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::configuration::tests"
@@ -292,6 +298,7 @@ jobs:
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::mtt_vdd::presentation::tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::display_service::session_resolution_cleanup_tests"
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "platform::win_device::install_parameters::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "virtual_display_manager::windows::tests"
       - name: Test encrypted management handshake and connection-close errors
         if: ${{ !inputs.build_only }}
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "management::transport::tests"

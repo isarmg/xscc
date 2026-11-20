@@ -3,7 +3,7 @@ use calloop::{
     channel::{self, Sender},
     timer::TimeoutAction,
 };
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 
 use std::{mem::MaybeUninit, thread, time::Duration};
 

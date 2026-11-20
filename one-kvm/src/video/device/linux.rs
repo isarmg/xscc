@@ -1,20 +1,20 @@
 //! V4L2 device enumeration and capability query
 
+use linux_video_device::bindings::{
+    v4l2_bt_timings, v4l2_dv_timings, v4l2_frmivalenum, v4l2_frmsizeenum, v4l2_streamparm,
+    V4L2_DV_BT_656_1120,
+};
+use linux_video_device::ioctl::{
+    self, Capabilities, Capability as V4l2rCapability, FormatIterator, FrmIvalTypes, FrmSizeTypes,
+};
+use linux_video_device::nix::errno::Errno;
+use linux_video_device::{Format as V4l2rFormat, QueueType};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
-use v4l2r::bindings::{
-    v4l2_bt_timings, v4l2_dv_timings, v4l2_frmivalenum, v4l2_frmsizeenum, v4l2_streamparm,
-    V4L2_DV_BT_656_1120,
-};
-use v4l2r::ioctl::{
-    self, Capabilities, Capability as V4l2rCapability, FormatIterator, FrmIvalTypes, FrmSizeTypes,
-};
-use v4l2r::nix::errno::Errno;
-use v4l2r::{Format as V4l2rFormat, QueueType};
 
 use super::bridge as csi_bridge;
 use super::{
@@ -540,7 +540,10 @@ impl VideoDevice {
     }
 
     /// Enumerate resolutions for a specific format
-    fn enumerate_resolutions(&self, fourcc: v4l2r::PixelFormat) -> Result<Vec<ResolutionInfo>> {
+    fn enumerate_resolutions(
+        &self,
+        fourcc: linux_video_device::PixelFormat,
+    ) -> Result<Vec<ResolutionInfo>> {
         let mut resolutions = Vec::new();
         let mut should_fallback_to_current_mode = false;
 
@@ -585,11 +588,11 @@ impl VideoDevice {
                 Err(e) => {
                     let is_einval = matches!(
                         e,
-                        v4l2r::ioctl::FrameSizeError::IoctlError(err) if err == Errno::EINVAL
+                        linux_video_device::ioctl::FrameSizeError::IoctlError(err) if err == Errno::EINVAL
                     );
                     let is_unsupported = matches!(
                         e,
-                        v4l2r::ioctl::FrameSizeError::IoctlError(err)
+                        linux_video_device::ioctl::FrameSizeError::IoctlError(err)
                             if matches!(err, Errno::ENOTTY | Errno::ENOSYS | Errno::EOPNOTSUPP)
                     );
                     if is_unsupported && resolutions.is_empty() {
@@ -630,7 +633,7 @@ impl VideoDevice {
     /// Enumerate FPS for a specific resolution
     fn enumerate_fps(
         &self,
-        fourcc: v4l2r::PixelFormat,
+        fourcc: linux_video_device::PixelFormat,
         width: u32,
         height: u32,
     ) -> Result<Vec<f64>> {
@@ -671,11 +674,11 @@ impl VideoDevice {
                 Err(e) => {
                     let is_einval = matches!(
                         e,
-                        v4l2r::ioctl::FrameIntervalsError::IoctlError(err) if err == Errno::EINVAL
+                        linux_video_device::ioctl::FrameIntervalsError::IoctlError(err) if err == Errno::EINVAL
                     );
                     let is_unsupported = matches!(
                         e,
-                        v4l2r::ioctl::FrameIntervalsError::IoctlError(err)
+                        linux_video_device::ioctl::FrameIntervalsError::IoctlError(err)
                             if matches!(err, Errno::ENOTTY | Errno::ENOSYS | Errno::EOPNOTSUPP)
                     );
                     if is_unsupported && fps_list.is_empty() {
@@ -887,7 +890,7 @@ impl VideoDevice {
         PixelFormat::from_v4l2r(format.pixelformat)
     }
 
-    fn format_description(&self, fourcc: v4l2r::PixelFormat) -> Option<String> {
+    fn format_description(&self, fourcc: linux_video_device::PixelFormat) -> Option<String> {
         let queue = self.capture_queue_type().ok()?;
         FormatIterator::new(&self.fd, queue)
             .find(|desc| desc.pixelformat == fourcc)
@@ -896,7 +899,7 @@ impl VideoDevice {
 
     fn format_works_for_resolution(
         &self,
-        fourcc: v4l2r::PixelFormat,
+        fourcc: linux_video_device::PixelFormat,
         width: u32,
         height: u32,
     ) -> bool {

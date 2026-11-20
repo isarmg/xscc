@@ -29,7 +29,6 @@ accesskit_macos.workspace = true
 anyhow.workspace = true
 block2.workspace = true
 cocoa.workspace = true
-collections.workspace = true
 core-foundation.workspace = true
 core-foundation-sys.workspace = true
 core-graphics.workspace = true
@@ -38,7 +37,7 @@ dispatch2 = { workspace = true, features = ["block2", "objc2"] }
 foreign-types.workspace = true
 futures.workspace = true
 gpui_apple.workspace = true
-gpui_util.workspace = true
+gpui_support.workspace = true
 image.workspace = true
 itertools.workspace = true
 log.workspace = true

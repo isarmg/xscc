@@ -1,4 +1,4 @@
-use one_kvm_bluetooth_hid::bonds::{Bond, BondStore, Operation};
+use crate::hid::bluetooth_device::bonds::{Bond, BondStore, Operation};
 use sqlx::{Pool, Sqlite};
 
 #[derive(Clone)]

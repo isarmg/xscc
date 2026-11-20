@@ -1,7 +1,7 @@
 use crate::{App, AppContext, GpuiBorrow, VisualContext, Window, seal::Sealed};
 use anyhow::{Context as _, Result};
-use collections::FxHashSet;
 use derive_more::{Deref, DerefMut};
+use gpui_support::collections::FxHashSet;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use slotmap::{KeyData, SecondaryMap, SlotMap};
 use std::{
@@ -22,7 +22,7 @@ use std::{
 use super::Context;
 use crate::util::atomic_incr_if_not_zero;
 #[cfg(any(test, gpui_leak_detection))]
-use collections::HashMap;
+use gpui_support::collections::HashMap;
 
 slotmap::new_key_type! {
     /// A unique identifier for a entity across the application.
@@ -972,7 +972,7 @@ pub(crate) struct LeakDetector {
 #[derive(Default)]
 pub struct LeakDetectorSnapshot {
     #[cfg(any(test, gpui_leak_detection))]
-    entity_ids: collections::HashSet<EntityId>,
+    entity_ids: gpui_support::collections::HashSet<EntityId>,
 }
 
 #[cfg(any(test, gpui_leak_detection))]
@@ -994,7 +994,7 @@ impl LeakDetector {
         entity_id: EntityId,
         type_name: Option<&'static str>,
     ) -> HandleId {
-        let id = gpui_util::post_inc(&mut self.next_handle_id);
+        let id = gpui_support::post_inc(&mut self.next_handle_id);
         let handle_id = HandleId { id };
         let handles = self
             .entity_handles

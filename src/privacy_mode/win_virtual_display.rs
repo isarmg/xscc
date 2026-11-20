@@ -7,7 +7,7 @@ use std::{
     thread,
     time::Duration,
 };
-use virtual_display::MonitorMode;
+use windows_display_control::MonitorMode;
 use winapi::{
     shared::{
         minwindef::{DWORD, FALSE},
@@ -96,8 +96,7 @@ impl PrivacyModeImpl {
 
         let mut i: DWORD = 0;
         loop {
-            #[allow(invalid_value)]
-            let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
             dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
             let ok = unsafe { EnumDisplayDevicesW(std::ptr::null(), i, &mut dd as _, 0) };
             if ok == FALSE {
@@ -109,8 +108,7 @@ impl PrivacyModeImpl {
             {
                 continue;
             }
-            #[allow(invalid_value)]
-            let mut dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
             dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
             dm.dmDriverExtra = 0;
             unsafe {
@@ -144,7 +142,7 @@ impl PrivacyModeImpl {
 
             let ds = virtual_display_manager::get_cur_device_string();
             if let Ok(s) = String::from_utf16(&dd.DeviceString) {
-                if s.len() >= ds.len() && &s[..ds.len()] == ds {
+                if s.starts_with(ds) {
                     self.virtual_displays.push(display);
                     continue;
                 }
@@ -180,8 +178,7 @@ impl PrivacyModeImpl {
         let display = &self.virtual_displays[0];
         let display_name = std::string::String::from_utf16(&display.name)?;
 
-        #[allow(invalid_value)]
-        let mut new_primary_dm: DEVMODEW = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut new_primary_dm: DEVMODEW = unsafe { std::mem::zeroed() };
         new_primary_dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
         new_primary_dm.dmDriverExtra = 0;
         unsafe {
@@ -227,8 +224,7 @@ impl PrivacyModeImpl {
 
             let mut i: DWORD = 0;
             loop {
-                #[allow(invalid_value)]
-                let mut dd: DISPLAY_DEVICEW = std::mem::MaybeUninit::uninit().assume_init();
+                let mut dd: DISPLAY_DEVICEW = std::mem::zeroed();
                 dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as _;
                 if FALSE
                     == EnumDisplayDevicesW(NULL as _, i, &mut dd, EDD_GET_DEVICE_INTERFACE_NAME)
@@ -244,8 +240,7 @@ impl PrivacyModeImpl {
                     continue;
                 }
 
-                #[allow(invalid_value)]
-                let mut dm: DEVMODEW = std::mem::MaybeUninit::uninit().assume_init();
+                let mut dm: DEVMODEW = std::mem::zeroed();
                 dm.dmSize = std::mem::size_of::<DEVMODEW>() as _;
                 dm.dmDriverExtra = 0;
                 if FALSE

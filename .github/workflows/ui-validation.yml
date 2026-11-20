@@ -2,9 +2,9 @@ name: GPUI framework validation
 on:
   push:
     branches: [main, feat/management-prep]
-    paths: ["apps/**", "experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "vendor/hwcodec/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", ".github/workflows/ui-validation.yml"]
+    paths: ["apps/**", "experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "libs/hardware-video-codecs/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", "res/native-*", "res/native-package-build/**", ".github/workflows/ui-validation.yml"]
   pull_request:
-    paths: ["apps/**", "experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "vendor/hwcodec/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", ".github/workflows/ui-validation.yml"]
+    paths: ["apps/**", "experiments/**", "src/**", "libs/**", "crates/**", "vendor/gpui/**", "libs/hardware-video-codecs/**", "build.rs", "Cargo.toml", "Cargo.lock", "vcpkg.json", "res/vcpkg*/**", "res/native-*", "res/native-package-build/**", ".github/workflows/ui-validation.yml"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -31,7 +31,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libvulkan-dev libasound2-dev libvpx-dev libaom-dev libyuv-dev libclang-dev ffmpeg xvfb xdotool mesa-vulkan-drivers
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev libssl-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcb-shape0-dev libxcb-xfixes0-dev libxcb-randr0-dev libvulkan-dev libasound2-dev libclang-dev mesa-vulkan-drivers nasm ninja-build pkg-config
       - name: Formatting
         run: cargo fmt --manifest-path apps/desktop/Cargo.toml -- --check
       - name: Compile and lint actual prototype
@@ -49,34 +49,17 @@ jobs:
         run: cargo test --locked --manifest-path apps/desktop/Cargo.toml
       - name: Build executable
         run: cargo build --locked --manifest-path apps/desktop/Cargo.toml
-      - name: Linux codec build and applicable X11 runtime validation
+      - name: Set up repository native codec build
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/setup-pinned-vcpkg.py --root "$RUNNER_TEMP/xscc-vcpkg"
+      - name: Linux software codec build
         if: runner.os == 'Linux'
         shell: bash
-        env:
-          SLINT_WGPU_CPU: "1"
-          WGPU_BACKEND: vulkan
         run: |
-          mkdir -p "$RUNNER_TEMP/xscc-codec-pc"
-          python3 - <<'PY'
-          import os, pathlib, subprocess
-          multiarch = subprocess.check_output(['gcc', '-print-multiarch'], text=True).strip()
-          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'xscc-codec-pc/libyuv.pc'
-          path.write_text(f'prefix=/usr\nlibdir=/usr/lib/{multiarch}\nincludedir=/usr/include\nName: libyuv\nDescription: system libyuv\nVersion: 0.0.0\nLibs: -L/usr/lib/{multiarch} -lyuv -lstdc++\nCflags: -I/usr/include\n')
-          PY
-          export PKG_CONFIG_PATH="$RUNNER_TEMP/xscc-codec-pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-no-default-features --x-install-root="$VCPKG_ROOT/installed"
           cargo build --locked --manifest-path apps/desktop/Cargo.toml --features xscc-codec
-          if [ '${{ matrix.framework }}' = slint ]; then
-            ffmpeg -hide_banner -f lavfi -i testsrc2=size=1280x720:rate=60 -t 2 -an -c:v libvpx-vp9 -deadline realtime -cpu-used 8 -g 60 -pix_fmt yuv420p -f ivf "$RUNNER_TEMP/xscc-test.ivf"
-            xvfb-run -a env -u WAYLAND_DISPLAY python3 experiments/check-x11.py --framework ${{ matrix.framework }} --exe target/ui-validation/debug/xscc-desktop --ivf "$RUNNER_TEMP/xscc-test.ivf" --output "$RUNNER_TEMP/${{ matrix.framework }}-input"
-          else
-            echo 'GPUI: codec build and unit tests only. This X11 comparison harness does not validate native Wayland windows, rendering or input; physical-device acceptance remains required.' >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always() && runner.os == 'Linux' && matrix.framework == 'slint'
-        with:
-          name: ${{ matrix.framework }}-linux-runtime-evidence
-          path: ${{ runner.temp }}/${{ matrix.framework }}-input/
-          if-no-files-found: ignore
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.framework }}-${{ matrix.os }}

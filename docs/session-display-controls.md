@@ -47,7 +47,7 @@ Windows Host 新默认后端为 Virtual Display Driver 25.7.23。原始 AMD64 �
 
 ## Intel 高码率
 
-原固定 hwcodec 的 Direct-MFX 路径直接把 kbps 写入 16 位字段。现将同一固定源码及 SDK 头本地化到 `vendor/hwcodec`，仅为显式限制增加专用接口。使用 `BRCParamMultiplier` 表示高码率，保持有效目标不超过请求，避免 65535 以上回绕，并按比例换算缓冲，避免随倍率放大延迟。SDK Query、Reset 与实际参数查询必须成功，且不得悄悄改变 profile、level 或画面几何。恢复自动会恢复原有倍率和缓冲参数；未启用显式上限的原 setter 保持原实现。固定编码级别与具体 GPU/SDK 的真实限制继续有效，不将支持 1 Gbps 参数解释成每台硬件均能输出 1 Gbps。
+原固定 hwcodec 的 Direct-MFX 路径直接把 kbps 写入 16 位字段。现将同一固定源码及 SDK 头本地化到 `libs/hardware-video-codecs`，仅为显式限制增加专用接口。使用 `BRCParamMultiplier` 表示高码率，保持有效目标不超过请求，避免 65535 以上回绕，并按比例换算缓冲，避免随倍率放大延迟。SDK Query、Reset 与实际参数查询必须成功，且不得悄悄改变 profile、level 或画面几何。恢复自动会恢复原有倍率和缓冲参数；未启用显式上限的原 setter 保持原实现。固定编码级别与具体 GPU/SDK 的真实限制继续有效，不将支持 1 Gbps 参数解释成每台硬件均能输出 1 Gbps。
 
 ## 必要回归面
 

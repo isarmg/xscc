@@ -63,8 +63,8 @@ sha2 = "0.10"
 repng = "0.2"
 zstd = "0.13"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
-parity-tokio-ipc = { git = "https://github.com/rustdesk-org/parity-tokio-ipc" }
-magnum-opus = { git = "https://github.com/rustdesk-org/magnum-opus" }
+parity-tokio-ipc = { path = "vendor/platform/local-ipc" }
+magnum-opus = { path = "vendor/platform/opus-audio" }
 dasp = { version = "0.11", features = ["signal", "interpolate-linear", "interpolate"], optional = true }
 rubato = { version = "0.12", optional = true }
 samplerate = { version = "0.2", optional = true }
@@ -75,7 +75,7 @@ bytes = { version = "1.4", features = ["serde"] }
 wol-rs = "1.0"
 flutter_rust_bridge = { version = "=1.80", features = ["uuid"], optional = true}
 errno = "0.3"
-rdev = { git = "https://github.com/rustdesk-org/rdev" }
+rdev = { path = "vendor/platform/global-input-events" }
 url = { version = "2.3", features = ["serde"] }
 crossbeam-queue = "0.3"
 hex = "0.4"
@@ -91,7 +91,7 @@ default-net = "0.14"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 # https://github.com/rustdesk/rustdesk/discussions/10197, not use cpal on linux
-cpal = { git = "https://github.com/rustdesk-org/cpal", branch = "osx-screencapturekit" }
+cpal = { path = "vendor/platform/audio-device-io" }
 ringbuf = "0.3"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -101,8 +101,8 @@ sys-locale = "0.3"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 ctrlc = "3.2"
 # arboard = { version = "3.4", features = ["wayland-data-control"] }
-arboard = { git = "https://github.com/rustdesk-org/arboard", features = ["wayland-data-control"] }
-clipboard-master = { git = "https://github.com/rustdesk-org/clipboard-master" }
+arboard = { path = "vendor/platform/clipboard-access", features = ["wayland-data-control"] }
+clipboard-master = { path = "vendor/platform/clipboard-change-monitor" }
 
 system_shutdown = "4.0"
 
@@ -149,14 +149,17 @@ windows = { version = "0.61", features = [
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Ole",
+    "Win32_System_TaskScheduler",
+    "Win32_System_Variant",
     "Win32_System_JobObjects",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 winreg = "0.11"
 windows-service = "0.6"
-virtual_display = { path = "libs/virtual_display" }
-impersonate_system = { git = "https://github.com/rustdesk-org/impersonate-system" }
+windows-display-control = { path = "libs/windows-display-control" }
 shared_memory = "0.12"
 tauri-winrt-notification = "0.1"
 
@@ -176,23 +179,22 @@ foreign-types = "0.3"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 # Only custom tray actions are used; X11 edit-menu emulation is unnecessary.
-tray-icon = { git = "https://github.com/tauri-apps/tray-icon", version = "0.21.3", default-features = false }
-tao = { git = "https://github.com/rustdesk-org/tao", branch = "dev" }
+tray-icon = { path = "vendor/platform/system-tray", version = "0.21.3", default-features = false }
+tao = { path = "vendor/platform/desktop-event-loop" }
 image = "0.24"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
-keepawake = { git = "https://github.com/rustdesk-org/keepawake-rs" }
+keepawake = { path = "vendor/platform/sleep-inhibition" }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
-wallpaper = { git = "https://github.com/rustdesk-org/wallpaper.rs" }
+wallpaper = { path = "vendor/platform/desktop-wallpaper" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 scrap = { path = "libs/scrap", features = ["wayland"] }
 psimple = { package = "libpulse-simple-binding", version = "2.27" }
 pulse = { package = "libpulse-binding", version = "2.27" }
-rust-pulsectl = { path = "vendor/rust-pulsectl" }
 async-process = "1.7"
-evdev = { git="https://github.com/rustdesk-org/evdev" }
+evdev = { path = "vendor/platform/linux-input-device" }
 dbus = "0.9"
 dbus-crossroads = "0.5"
 nix = { version = "0.29", features = ["term", "process"]}
@@ -216,15 +218,15 @@ block = "0.1"
 
 [workspace]
 resolver = "3"
-members = ["crates/native-ui", "crates/session-model", "crates/session-transport", "vendor/hwcodec", "apps/desktop", "apps/mobile", "crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable"]
-exclude = ["vendor/gpui", "vendor/rust-pulsectl", "one-kvm"]
+members = ["crates/native-ui", "crates/session-model", "crates/session-transport", "libs/hardware-video-codecs", "apps/desktop", "apps/mobile", "crates/native-management", "crates/management", "libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/windows-display-control", "libs/portable"]
+exclude = ["vendor/gpui", "vendor/platform", "one-kvm"]
 
 [patch.crates-io]
 # Upstream reserves a frame's whole declared length as soon as its header is in, so a header alone
 # buys an allocation the size it names, bounded only by max_frame_size. This fork grows the read
 # buffer one read_buffer_size chunk at a time as the bytes actually arrive. Patched rather than
 # depended on directly, so tokio-tungstenite's own tungstenite resolves to the same copy.
-tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
+tungstenite = { path = "vendor/platform/websocket-protocol" }
 [package.metadata.winres]
 LegalCopyright = "Copyright © 2026 Purslane Tech Pte. Ltd. All rights reserved."
 ProductName = "RustDesk"

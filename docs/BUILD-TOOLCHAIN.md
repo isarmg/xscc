@@ -7,7 +7,7 @@
 - Windows: LLVM/Clang **23.1.3**, installed from the official architecture-specific MSI.
 - Linux build containers: Ubuntu **26.04**, Clang/libclang/LLVM **21.1.6** from its stable package repositories.
 - Apple platforms: Xcode **26** or newer, with deployment target **26.0**.
-- Android: JDK **27**, Gradle **9.8.1**, AGP **9.4.0**, NDK **r30 / 30.0.16248370**, cargo-ndk **4.1.2**. The GPUI package uses GameActivity and the native Rust library.
+- Android: JDK **27**, Gradle **9.8.1**, AGP **9.4.0**, NDK **r30 / 30.0.16248370**, cargo-ndk **4.1.2**. The [Android setup](../packaging/gpui-android/README.md) stages the pinned AGP and lint artifacts outside the checkout. The GPUI package uses GameActivity and the native Rust library.
 
 Android GPUI builds target Java bytecode 17 and minimum API 29. The dedicated native workflow validates the actual APK, JNI interfaces, input privacy checks and 16 KB alignment.
 

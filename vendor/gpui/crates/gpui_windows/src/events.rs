@@ -1,7 +1,7 @@
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
 use anyhow::Context as _;
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use windows::{
     Win32::{
         Foundation::*,

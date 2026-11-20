@@ -6,7 +6,7 @@ use crate::{
         round_to_device_pixel,
     },
 };
-use collections::{FxHashMap, FxHashSet};
+use gpui_support::collections::{FxHashMap, FxHashSet};
 use std::{fmt::Debug, ops::Range};
 use taffy::{
     TaffyTree, TraversePartialTree as _,

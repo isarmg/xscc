@@ -4,10 +4,10 @@
   "version": "0.2.8",
   "type": "module",
   "scripts": {
-    "build": "cargo +1.99.0 run --locked --manifest-path ../tools/web-build/Cargo.toml -- build --product-root ..",
-    "dev": "cargo +1.99.0 run --locked --manifest-path ../tools/web-build/Cargo.toml -- serve --product-root .. --debug",
-    "preview": "cargo +1.99.0 run --locked --manifest-path ../tools/web-build/Cargo.toml -- preview --product-root ..",
-    "check": "cargo +1.99.0 check --locked --manifest-path xcss-web/Cargo.toml --target wasm32-unknown-unknown",
+    "build": "cargo +1.99.0 run --locked --offline --manifest-path ../tools/web-build/Cargo.toml -- build --product-root .. --offline",
+    "dev": "cargo +1.99.0 run --locked --offline --manifest-path ../tools/web-build/Cargo.toml -- serve --product-root .. --offline --debug",
+    "preview": "cargo +1.99.0 run --locked --offline --manifest-path ../tools/web-build/Cargo.toml -- preview --product-root ..",
+    "check": "cargo +1.99.0 check --locked --offline --manifest-path xcss-web/Cargo.toml --target wasm32-unknown-unknown",
     "test:browser": "node tests/managed-browser.mjs",
     "test:instances": "node --test tests/instance-paths.mjs"
   }

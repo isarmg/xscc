@@ -42,6 +42,8 @@ use std::{
 use terminfo::{capability as cap, Database};
 use wallpaper;
 
+mod pulse_sources;
+
 pub const PA_SAMPLE_RATE: u32 = 48000;
 static mut UNMODIFIED: bool = true;
 
@@ -1135,42 +1137,23 @@ pub fn get_pa_source_name(desc: &str) -> String {
 }
 
 pub fn get_pa_sources() -> Vec<(String, String)> {
-    use pulsectl::controllers::*;
-    let mut out = Vec::new();
-    match SourceController::create() {
-        Ok(mut handler) => {
-            if let Ok(devices) = handler.list_devices() {
-                for dev in devices.clone() {
-                    out.push((
-                        dev.name.unwrap_or("".to_owned()),
-                        dev.description.unwrap_or("".to_owned()),
-                    ));
-                }
-            }
-        }
-        Err(err) => {
-            log::error!("Failed to get_pa_sources: {:?}", err);
+    match pulse_sources::list() {
+        Ok(sources) => sources,
+        Err(error) => {
+            log::error!("Failed to list audio inputs: {error}");
+            Vec::new()
         }
     }
-    out
 }
 
 pub fn get_default_pa_source() -> Option<(String, String)> {
-    use pulsectl::controllers::*;
-    match SourceController::create() {
-        Ok(mut handler) => {
-            if let Ok(dev) = handler.get_default_device() {
-                return Some((
-                    dev.name.unwrap_or("".to_owned()),
-                    dev.description.unwrap_or("".to_owned()),
-                ));
-            }
-        }
-        Err(err) => {
-            log::error!("Failed to get_pa_source: {:?}", err);
+    match pulse_sources::default() {
+        Ok(source) => source,
+        Err(error) => {
+            log::error!("Failed to get the default audio input: {error}");
+            None
         }
     }
-    None
 }
 
 pub fn lock_screen() {

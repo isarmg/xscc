@@ -18,9 +18,8 @@ use calloop::{
     timer::{TimeoutAction, Timer},
 };
 use calloop_wayland_source::WaylandSource;
-use collections::HashMap;
 use filedescriptor::Pipe;
-use gpui_util::ResultExt as _;
+use gpui_support::{ResultExt as _, collections::HashMap};
 use http_client::Url;
 use smallvec::SmallVec;
 use wayland_backend::client::ObjectId;

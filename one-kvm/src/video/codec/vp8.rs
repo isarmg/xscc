@@ -10,10 +10,10 @@ use bytes::Bytes;
 use std::sync::Once;
 use tracing::{debug, error, info, warn};
 
-use hwcodec::common::{DataFormat, Quality, RateControl};
-use hwcodec::ffmpeg::{resolve_pixel_format, AVPixelFormat};
-use hwcodec::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
-use hwcodec::ffmpeg_ram::CodecInfo;
+use video_codec_backends::common::{DataFormat, Quality, RateControl};
+use video_codec_backends::ffmpeg::{resolve_pixel_format, AVPixelFormat};
+use video_codec_backends::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
+use video_codec_backends::ffmpeg_ram::CodecInfo;
 
 use super::detect_best_codec_for_format;
 use super::registry::{EncoderBackend, EncoderRegistry, VideoEncoderType};
@@ -388,7 +388,7 @@ impl VP8Encoder {
     }
 }
 
-// SAFETY: VP8Encoder contains hwcodec::ffmpeg_ram::encode::Encoder which has raw pointers
+// SAFETY: VP8Encoder contains video_codec_backends::ffmpeg_ram::encode::Encoder which has raw pointers
 // that are not Send by default. However, we ensure that VP8Encoder is only used from
 // a single task/thread at a time (encoding is sequential), so this is safe.
 unsafe impl Send for VP8Encoder {}

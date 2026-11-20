@@ -1,7 +1,6 @@
 # GPUI source provenance
 
-This directory contains the XSCC-maintained GPUI implementation. It is ordinary
-repository source, not a submodule, generated download, or build-time patch.
+This directory contains the GPUI implementation maintained by XSCC.
 
 Initial source: [zed-industries/zed](https://github.com/zed-industries/zed), commit
 [`28d0a3547f16b9609b301b48ab363bfca649c864`](https://github.com/zed-industries/zed/tree/28d0a3547f16b9609b301b48ab363bfca649c864).
@@ -9,8 +8,8 @@ The machine-readable inventory is [upstream.json](upstream.json).
 
 ## Scope and licensing
 
-The initial import contained 28 workspace members. The maintained workspace now
-contains 20. It keeps native platform backends, required build dependencies,
+The source import reduced the upstream workspace from 28 to 20 members.
+The current workspace contains 14 members. It keeps native platform backends, required build dependencies,
 core tests, benchmarks, shaders, resources, and their font licenses. iOS remains
 available for future client work; the Web backend has been removed.
 
@@ -42,9 +41,8 @@ The application must explicitly construct this surface to use the new path.
 Vendoring does not switch XSCC's existing CPU presentation path or enable
 shared-texture presentation for production sessions.
 
-Further fixes belong directly in this source tree, with ordinary XSCC review and
-testing. Any future upstream import must be explicit and update this provenance;
-builds must not silently advance the upstream revision.
+XSCC maintains this source tree independently. The original commit records the
+import and attribution.
 
 ## Rust 1.99 maintenance
 
@@ -150,3 +148,22 @@ portrait/landscape orientation through the same Java UI-thread bridge; UIKit
 updates only the active session's controller policy and public scene geometry.
 Exit restores the original orientation policy. The application control remains
 an overlay and does not request a remote display mode or change desktop windows.
+
+## Module and dependency consolidation
+
+`gpui_support` owns shared collections, process launch and diagnostics. GPUI
+owns style refinement types and public exports, with their derive macro in
+`gpui_macros`. The HTTP client package is now `ui_http_client` and the native
+scheduler is `gpui_task_scheduler`. The GPUI facade still provides
+`gpui::http_client`.
+
+The unused GitHub release client, vector map, browser threads and browser
+tracing integration are removed. The sum tree uses the optional `tracing`
+feature for instrumentation and the shared test logger for test diagnostics.
+
+Window focus management, typed handles and window tests are in separate
+modules. The GPUI facade continues to export the window and focus types.
+
+The WGPU renderer uses the shared CSS font matcher on Linux. Font loading and
+rasterization remain with the platform text system. Apple retains its Core Text
+integration through the font loader, which uses the same style matcher.

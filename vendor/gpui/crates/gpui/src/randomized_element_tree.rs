@@ -3,7 +3,7 @@ use crate::{
     ParentElement, Render, StatefulInteractiveElement, Styled, Window, div, px,
     util::FluentBuilder,
 };
-use collections::{HashMap, HashSet};
+use gpui_support::collections::{HashMap, HashSet};
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 use std::{
     cell::RefCell,

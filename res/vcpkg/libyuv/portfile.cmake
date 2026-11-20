@@ -1,10 +1,8 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-vcpkg_from_git(
-    OUT_SOURCE_PATH SOURCE_PATH
-    URL https://chromium.googlesource.com/libyuv/libyuv
-    REF 0faf8dd0e004520a61a603a4d2996d5ecc80dc3f
-    # Check https://chromium.googlesource.com/libyuv/libyuv/+/refs/heads/main/include/libyuv/version.h for a version!
+vcpkg_extract_source_archive(SOURCE_PATH
+    ARCHIVE "${CURRENT_PORT_DIR}/pixel-conversion-source.tar.gz"
+    NO_REMOVE_ONE_LEVEL
     PATCHES
         fix-cmakelists.patch
 )

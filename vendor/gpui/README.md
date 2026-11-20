@@ -2,7 +2,7 @@
 
 GPUI is maintained here as part of XSCC. See [UPSTREAM.md](UPSTREAM.md) for source provenance, licenses, and the initial local changes.
 
-The workspace contains 20 crates. Applications use `gpui_platform` as the single
+The workspace contains 15 crates. Applications use `gpui_platform` as the single
 public facade; XSCC imports it under the dependency name `gpui`. Linux defaults
 to Wayland.
 

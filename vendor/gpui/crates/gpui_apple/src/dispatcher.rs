@@ -1,6 +1,6 @@
 use dispatch2::{DispatchQueue, DispatchQueueGlobalPriority, DispatchTime, GlobalQueueIdentifier};
 use gpui::{ActivityGuard, PlatformDispatcher, Priority, RunnableMeta, RunnableVariant};
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use mach2::{
     kern_return::KERN_SUCCESS,
     mach_time::mach_timebase_info_data_t,

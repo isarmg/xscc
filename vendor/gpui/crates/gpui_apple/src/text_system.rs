@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use collections::{HashMap, HashSet};
+use gpui_support::collections::{HashMap, HashSet};
 use core_foundation::{
     array::{CFArray, CFArrayRef},
     attributed_string::CFMutableAttributedString,

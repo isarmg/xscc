@@ -1,8 +1,11 @@
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
     println,
 };
+
+#[path = "../../res/native-library-path.rs"]
+mod native_libraries;
 
 #[cfg(all(target_os = "linux", feature = "linux-pkg-config"))]
 fn link_pkg_config(name: &str) -> Vec<PathBuf> {
@@ -24,43 +27,7 @@ fn link_pkg_config(_name: &str) -> Vec<PathBuf> {
 }
 
 /// Link vcpkg package.
-fn link_vcpkg(mut path: PathBuf, name: &str) -> PathBuf {
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let mut target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    if target_arch == "x86_64" {
-        target_arch = "x64".to_owned();
-    } else if target_arch == "x86" {
-        target_arch = "x86".to_owned();
-    } else if target_arch == "loongarch64" {
-        target_arch = "loongarch64".to_owned();
-    } else if target_arch == "aarch64" {
-        target_arch = "arm64".to_owned();
-    } else {
-        target_arch = "arm".to_owned();
-    }
-    let mut target = if target_os == "macos" {
-        if target_arch == "x64" {
-            "x64-osx".to_owned()
-        } else if target_arch == "arm64" {
-            "arm64-osx".to_owned()
-        } else {
-            format!("{}-{}", target_arch, target_os)
-        }
-    } else if target_os == "windows" {
-        format!("{}-windows-static", target_arch)
-    } else {
-        format!("{}-{}", target_arch, target_os)
-    };
-    if target_arch == "x86" {
-        target = target.replace("x64", "x86");
-    }
-    println!("cargo:info={}", target);
-    if let Ok(vcpkg_root) = std::env::var("VCPKG_INSTALLED_ROOT") {
-        path = vcpkg_root.into();
-    } else {
-        path.push("installed");
-    }
-    path.push(target);
+fn link_vcpkg(path: PathBuf, name: &str) -> PathBuf {
     println!(
         "cargo:rustc-link-lib=static={}",
         name.trim_start_matches("lib")
@@ -129,21 +96,15 @@ fn find_package(name: &str) -> Vec<PathBuf> {
         && std::env::var(no_pkg_config_var_name).as_deref() != Ok("1")
     {
         link_pkg_config(name)
-    } else if let Ok(vcpkg_root) = std::env::var("VCPKG_ROOT") {
-        vec![link_vcpkg(vcpkg_root.into(), name)]
+    } else if let Some(path) = native_libraries::installed_target() {
+        vec![link_vcpkg(path, name)]
     } else {
         // Try using homebrew
         vec![link_homebrew_m1(name)]
     }
 }
 
-fn generate_bindings(
-    ffi_header: &Path,
-    include_paths: &[PathBuf],
-    ffi_rs: &Path,
-    exact_file: &Path,
-    regex: &str,
-) {
+fn generate_bindings(ffi_header: &Path, include_paths: &[PathBuf], ffi_rs: &Path, regex: &str) {
     let mut b = bindgen::builder()
         .header(ffi_header.to_str().unwrap())
         .allowlist_type(regex)
@@ -159,7 +120,6 @@ fn generate_bindings(
     }
 
     b.generate().unwrap().write_to_file(ffi_rs).unwrap();
-    fs::copy(ffi_rs, exact_file).ok(); // ignore failure
 }
 
 fn gen_vcpkg_package(package: &str, ffi_header: &str, generated: &str, regex: &str) {
@@ -170,61 +130,14 @@ fn gen_vcpkg_package(package: &str, ffi_header: &str, generated: &str, regex: &s
     let out_dir = Path::new(&out_dir);
 
     let ffi_header = src_dir.join("src").join("bindings").join(ffi_header);
-    println!("rerun-if-changed={}", ffi_header.display());
+    println!("cargo:rerun-if-changed={}", ffi_header.display());
     for dir in &includes {
-        println!("rerun-if-changed={}", dir.display());
+        println!("cargo:rerun-if-changed={}", dir.display());
     }
 
     let ffi_rs = out_dir.join(generated);
-    let exact_file = src_dir.join("generated").join(generated);
-    generate_bindings(&ffi_header, &includes, &ffi_rs, &exact_file, regex);
+    generate_bindings(&ffi_header, &includes, &ffi_rs, regex);
 }
-
-// If you have problems installing ffmpeg, you can download $VCPKG_ROOT/installed from ci
-// Linux require link in hwcodec
-/*
-fn ffmpeg() {
-    // ffmpeg
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let static_libs = vec!["avcodec", "avutil", "avformat"];
-    static_libs.iter().for_each(|lib| {
-        find_package(lib);
-    });
-    if target_os == "windows" {
-        println!("cargo:rustc-link-lib=static=libmfx");
-    }
-
-    // os
-    let dyn_libs: Vec<&str> = if target_os == "windows" {
-        ["User32", "bcrypt", "ole32", "advapi32"].to_vec()
-    } else if target_os == "linux" {
-        let mut v = ["va", "va-drm", "va-x11", "vdpau", "X11", "stdc++"].to_vec();
-        if target_arch == "x86_64" {
-            v.push("z");
-        }
-        v
-    } else if target_os == "macos" || target_os == "ios" {
-        ["c++", "m"].to_vec()
-    } else if target_os == "android" {
-        ["z", "m", "android", "atomic"].to_vec()
-    } else {
-        panic!("unsupported os");
-    };
-    dyn_libs
-        .iter()
-        .map(|lib| println!("cargo:rustc-link-lib={}", lib))
-        .count();
-
-    if target_os == "macos" || target_os == "ios" {
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
-        println!("cargo:rustc-link-lib=framework=CoreVideo");
-        println!("cargo:rustc-link-lib=framework=CoreMedia");
-        println!("cargo:rustc-link-lib=framework=VideoToolbox");
-        println!("cargo:rustc-link-lib=framework=AVFoundation");
-    }
-}
-*/
 
 fn main() {
     // in this crate, these are also valid configurations
@@ -233,22 +146,9 @@ fn main() {
     // there is problem with cfg(target_os) in build.rs, so use our workaround
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
-    // note: all link symbol names in x86 (32-bit) are prefixed wth "_".
-    // run "rustup show" to show current default toolchain, if it is stable-x86-pc-windows-msvc,
-    // please install x64 toolchain by "rustup toolchain install stable-x86_64-pc-windows-msvc",
-    // then set x64 to default by "rustup default stable-x86_64-pc-windows-msvc"
-    let target = target_build_utils::TargetInfo::new();
-    if target.unwrap().target_pointer_width() != "64" {
-        // panic!("Only support 64bit system");
-    }
-    env::remove_var("CARGO_CFG_TARGET_FEATURE");
-    env::set_var("CARGO_CFG_TARGET_FEATURE", "crt-static");
-
-    find_package("libyuv");
     gen_vcpkg_package("libvpx", "vpx_ffi.h", "vpx_ffi.rs", "^[vV].*");
     gen_vcpkg_package("aom", "aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*");
     gen_vcpkg_package("libyuv", "yuv_ffi.h", "yuv_ffi.rs", ".*");
-    // ffmpeg();
 
     if target_os == "ios" {
         // nothing

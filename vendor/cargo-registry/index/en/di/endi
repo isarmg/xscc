@@ -1,0 +1,2 @@
+{"name":"endi","vers":"1.1.0","deps":[],"cksum":"a3d8a32ae18130a3c84dd492d4215c3d913c3b07c6b63c2eb3eb7ff1101ab7bf","features":{"default":["std"],"std":[]},"yanked":false,"rust_version":"1.60","pubtime":"2023-12-12T12:27:19Z"}
+{"name":"endi","vers":"1.1.1","deps":[],"cksum":"66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099","features":{"default":["std"],"std":[]},"yanked":false,"rust_version":"1.60","pubtime":"2025-11-26T17:18:58Z"}

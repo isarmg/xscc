@@ -1,11 +1,7 @@
 # FFmpeg 7.1.1 includes the HEVC WPP slice-thread deadlock fix:
 # https://github.com/FFmpeg/FFmpeg/commit/79c47dfd25f101b6842bbec8c6ffef8d5077c3ae
-vcpkg_from_github(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO ffmpeg/ffmpeg
-    REF "n${VERSION}"
-    SHA512 6b9a5ee501be41d6abc7579a106263b31f787321cbc45dedee97abf992bf8236cdb2394571dd256a74154f4a20018d429ae7e7f0409611ddc4d6f529d924d175
-    HEAD_REF master
+vcpkg_extract_source_archive(SOURCE_PATH
+    ARCHIVE "${CURRENT_PORT_DIR}/video-codecs-source.tar.gz"
     PATCHES
     0001-create-lib-libraries.patch
     0002-fix-msvc-link.patch
@@ -104,8 +100,8 @@ if(VCPKG_TARGET_IS_LINUX)
 --disable-vdpau \
 ")
 
-    if(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm")
-    else()
+    # The codec loaders use CUDA at runtime. CUDA filters are disabled.
+    if(NOT VCPKG_TARGET_ARCHITECTURE STREQUAL "arm")
         string(APPEND OPTIONS "\
 --enable-cuda \
 --enable-ffnvcodec \
@@ -121,12 +117,6 @@ if(VCPKG_TARGET_IS_LINUX)
 --enable-encoder=h264_vaapi \
 --enable-encoder=hevc_vaapi \
 ")
-
-        if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
-            string(APPEND OPTIONS "\
-    --enable-cuda_llvm \
-")
-        endif()
     endif()
 elseif(VCPKG_TARGET_IS_WINDOWS)
     string(APPEND OPTIONS "\

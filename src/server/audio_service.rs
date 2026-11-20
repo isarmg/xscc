@@ -10,7 +10,6 @@
 // sudo apt-get --purge --reinstall install pulseaudio
 // https://askubuntu.com/questions/403416/how-to-listen-live-sounds-from-input-from-external-sound-card
 // https://wiki.debian.org/audio-loopback
-// https://github.com/krruzic/pulsectl
 
 use super::*;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]

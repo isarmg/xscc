@@ -10,10 +10,7 @@ $payload = (Resolve-Path -LiteralPath $PayloadDirectory).Path
 $destination = Join-Path $payload 'mtt_vdd'
 if (Test-Path -LiteralPath $destination) { throw 'VDD payload already exists' }
 if (-not $ArchivePath) {
-    $ArchivePath = Join-Path $env:RUNNER_TEMP ('xscc-vdd-' + $manifest.sha256 + '.zip')
-    if (-not (Test-Path -LiteralPath $ArchivePath)) {
-        Invoke-WebRequest -Uri $manifest.source -OutFile $ArchivePath -TimeoutSec 60
-    }
+    $ArchivePath = Join-Path (Split-Path $manifestPath -Parent) 'driver-packages/configurable-virtual-display-amd64.zip'
 }
 if ((Get-Item -LiteralPath $ArchivePath).Length -ne $manifest.bytes -or
     (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash -ine $manifest.sha256) {
@@ -27,7 +24,7 @@ try {
         throw 'Unexpected VDD archive inventory'
     }
     foreach ($name in @('MttVDD.inf', 'MttVDD.dll', 'mttvdd.cat', 'vdd_settings.xml')) {
-        $entry = $archive.GetEntry($manifest.archive_prefix + $name)
+        $entry = $archive.GetEntry('driver-packages/configurable-virtual-display-amd64.zip'_prefix + $name)
         if ($null -eq $entry -or $entry.Length -le 0 -or $entry.Length -gt 1048576) {
             throw "Missing or unbounded VDD file: $name"
         }

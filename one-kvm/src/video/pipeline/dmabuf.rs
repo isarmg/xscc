@@ -3,7 +3,7 @@
 use super::*;
 use crate::video::capture::status::capture_recovery_status;
 use crate::video::codec::registry::EncoderRegistry;
-use hwcodec::rkmpp_dmabuf::{DmaEncoder, DmaEncoderConfig, DmaFormat};
+use video_codec_backends::rkmpp_dmabuf::{DmaEncoder, DmaEncoderConfig, DmaFormat};
 
 pub(super) fn eligible(config: &SharedVideoPipelineConfig) -> bool {
     if std::env::var("ONE_KVM_RKMPP_DMABUF").as_deref() == Ok("0") {

@@ -42,7 +42,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 scrap = { path = "../../libs/scrap", optional = true, features = ["linux-pkg-config"] }
 
 [patch.crates-io]
-tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "efce47e5364f00a63302cf07ab1fb13ded478914" }
+tungstenite = { path = "../../vendor/platform/websocket-protocol" }
 
 [profile.dev]
 debug = 0

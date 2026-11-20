@@ -2262,7 +2262,7 @@ def is_msd_environment_error(text: str) -> bool:
 
 
 def default_ventoy_resources_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "libs" / "ventoy-img-rs" / "resources"
+    return Path(__file__).resolve().parents[2] / "libs" / "bootable-virtual-media" / "resources"
 
 
 def shell_quote(value: str) -> str:
@@ -2325,7 +2325,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--agent-timeout", type=int, default=180)
     run.add_argument("--msd-size-mb", type=int, default=256)
     run.add_argument("--msd-probe-bytes", type=int, default=1024 * 1024)
-    run.add_argument("--ventoy-resources-dir", default=None, help="local Ventoy resource directory; defaults to repo libs/ventoy-img-rs/resources")
+    run.add_argument("--ventoy-resources-dir", default=None, help="local Ventoy resource directory; defaults to repo libs/bootable-virtual-media/resources")
     run.add_argument("--no-ventoy-sync", action="store_true", help="do not copy Ventoy resources to the target before MSD testing")
     run.add_argument("--strict-performance", action="store_true", help="fail video results below the expected FPS threshold; default only requires fps > 0")
     run.add_argument("--no-color", action="store_true", help="disable colored terminal output")

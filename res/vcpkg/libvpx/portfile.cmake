@@ -1,11 +1,7 @@
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
-vcpkg_from_github(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO webmproject/libvpx
-    REF "v${VERSION}"
-    SHA512 824fe8719e4115ec359ae0642f5e1cea051d458f09eb8c24d60858cf082f66e411215e23228173ab154044bafbdfbb2d93b589bb726f55b233939b91f928aae0
-    HEAD_REF master
+vcpkg_extract_source_archive(SOURCE_PATH
+    ARCHIVE "${CURRENT_PORT_DIR}/vp8-vp9-source.tar.gz"
     PATCHES
         0003-add-uwp-v142-and-v143-support.patch
         0004-remove-library-suffixes.patch

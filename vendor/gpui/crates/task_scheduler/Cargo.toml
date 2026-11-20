@@ -1,0 +1,26 @@
+[package]
+name = "gpui_task_scheduler"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "Apache-2.0"
+description = "Native and deterministic test task scheduling for GPUI"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/scheduler.rs"
+doctest = false
+
+[features]
+test-support = []
+[dependencies]
+async-task.workspace = true
+backtrace.workspace = true
+chrono = { workspace = true, features = ["now"] }
+flume.workspace = true
+futures.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+web-time.workspace = true

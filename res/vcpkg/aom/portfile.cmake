@@ -10,10 +10,9 @@ vcpkg_add_to_path(${PERL_PATH})
 
 if(DEFINED ENV{USE_AOM_391})
     set(AOM_CONFIG_PATH "lib/cmake/aom")
-    vcpkg_from_git(
-        OUT_SOURCE_PATH SOURCE_PATH
-        URL "https://aomedia.googlesource.com/aom"
-        REF 8ad484f8a18ed1853c094e7d3a4e023b2a92df28 # 3.9.1
+    vcpkg_extract_source_archive(SOURCE_PATH
+        ARCHIVE "${CURRENT_PORT_DIR}/av1-3.9.1-source.tar.gz"
+        NO_REMOVE_ONE_LEVEL
         PATCHES
             aom-uninitialized-pointer-3.9.1.diff
             aom-avx2.diff
@@ -21,10 +20,9 @@ if(DEFINED ENV{USE_AOM_391})
     )
 else()
     set(AOM_CONFIG_PATH "lib/cmake/AOM")
-    vcpkg_from_git(
-        OUT_SOURCE_PATH SOURCE_PATH
-        URL "https://aomedia.googlesource.com/aom"
-        REF 03087864cf4bea6abb0d28f95cf7843511413d8f # 3.14.1
+    vcpkg_extract_source_archive(SOURCE_PATH
+        ARCHIVE "${CURRENT_PORT_DIR}/av1-source.tar.gz"
+        NO_REMOVE_ONE_LEVEL
         PATCHES
             aom-uninitialized-pointer.diff
     )

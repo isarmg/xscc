@@ -1,0 +1,1 @@
+{"name":"muldiv","vers":"0.2.1","deps":[{"name":"quickcheck","req":"^0.9","features":[],"optional":false,"default_features":true,"target":null,"kind":"dev"}],"cksum":"0419348c027fa7be448d2ae7ea0e4e04c2334c31dc4e74ab29f00a2a7ca69204","features":{},"yanked":false,"pubtime":"2019-12-29T14:34:44Z"}

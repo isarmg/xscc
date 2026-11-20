@@ -1920,8 +1920,20 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.30.0",
  "url",
- "xscs-protocol",
+ "xscc-management-protocol",
  "zeroize",
+]
+
+[[package]]
+name = "xscc-management-protocol"
+version = "4.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]
@@ -1944,19 +1956,6 @@ dependencies = [
  "windows",
  "xscc",
  "zeroize",
-]
-
-[[package]]
-name = "xscs-protocol"
-version = "4.0.0"
-source = "git+https://github.com/isarmg/xscs.git?rev=567a8df7e883b5a9a86af58a6a5d88898a535e01#567a8df7e883b5a9a86af58a6a5d88898a535e01"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "uuid",
 ]
 
 [[package]]

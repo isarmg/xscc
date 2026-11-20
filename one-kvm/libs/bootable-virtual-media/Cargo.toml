@@ -1,0 +1,24 @@
+[package]
+name = "bootable-virtual-media"
+version = "0.1.0"
+edition = "2021"
+description = "Create and manage Ventoy bootable IMG files without root or loop devices"
+license = "AGPL-3.0-only"
+
+[[bin]]
+name = "ventoy-img"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "2"
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

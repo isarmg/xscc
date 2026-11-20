@@ -1,8 +1,8 @@
 //! MJPEG decoder using RKMPP via hwcodec (FFmpeg RAM).
 
-use hwcodec::ffmpeg::AVPixelFormat;
-use hwcodec::ffmpeg_ram::decode::{DecodeContext, Decoder};
 use tracing::{info, warn};
+use video_codec_backends::ffmpeg::AVPixelFormat;
+use video_codec_backends::ffmpeg_ram::decode::{DecodeContext, Decoder};
 
 use crate::error::{AppError, Result};
 use crate::video::codec::convert::Nv12Converter;

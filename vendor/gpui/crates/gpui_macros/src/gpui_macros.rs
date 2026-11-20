@@ -2,6 +2,7 @@ mod bench;
 mod derive_action;
 mod derive_app_context;
 mod derive_into_element;
+mod derive_refineable;
 mod derive_render;
 mod derive_visual_context;
 mod property_test;
@@ -91,6 +92,12 @@ pub fn derive_app_context(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(VisualContext, attributes(window, app))]
 pub fn derive_visual_context(input: TokenStream) -> TokenStream {
     derive_visual_context::derive_visual_context(input)
+}
+
+/// Generates a refinement type that can apply partial changes to a value.
+#[proc_macro_derive(Refineable, attributes(refineable))]
+pub fn derive_refineable(input: TokenStream) -> TokenStream {
+    derive_refineable::derive_refineable(input)
 }
 
 /// Used by GPUI to generate the style helpers.

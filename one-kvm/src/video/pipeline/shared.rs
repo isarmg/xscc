@@ -270,7 +270,7 @@ fn spawn_mjpeg_decode_workers(
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "arm"))]
-use hwcodec::ffmpeg_hw::last_error_message as ffmpeg_hw_last_error;
+use video_codec_backends::ffmpeg_hw::last_error_message as ffmpeg_hw_last_error;
 
 /// Encoded video frame for distribution
 #[derive(Debug, Clone)]

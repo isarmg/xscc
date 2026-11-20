@@ -1,6 +1,7 @@
 //! Translate canonical One-KVM input into the native BlueZ peripheral.
 use super::{
     backend::{HidBackend, HidBackendRuntimeSnapshot},
+    bluetooth_device::{bonds::BondStore, Action, Config, Peripheral, Report},
     types::{
         ConsumerEvent, KeyEventType, KeyboardEvent, KeyboardReport, MouseEvent, MouseEventType,
     },
@@ -11,7 +12,7 @@ use crate::{
     events::LedState,
 };
 use async_trait::async_trait;
-use one_kvm_bluetooth_hid::{Action, Config, Peripheral, Report};
+use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
 
 fn error(message: String) -> AppError {
@@ -34,10 +35,7 @@ pub struct BluetoothBackend {
     worker: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl BluetoothBackend {
-    pub fn new(
-        config: BluetoothHidConfig,
-        bonds: Option<std::sync::Arc<dyn one_kvm_bluetooth_hid::bonds::BondStore>>,
-    ) -> Result<Self> {
+    pub fn new(config: BluetoothHidConfig, bonds: Option<Arc<dyn BondStore>>) -> Result<Self> {
         let peripheral = Peripheral::start_with_store(
             Config {
                 adapter: config.adapter,

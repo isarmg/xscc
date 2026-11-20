@@ -1,0 +1,1 @@
+{"name":"inotify-sys","vers":"0.1.8","deps":[{"name":"libc","req":"^0.2","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"c033f80b2c113cdf91ab7a33faa9cbc014726dcad99880c8609af2a370edf37d","features":{"freebsd-native":[]},"yanked":false,"pubtime":"2026-07-07T14:33:29Z"}

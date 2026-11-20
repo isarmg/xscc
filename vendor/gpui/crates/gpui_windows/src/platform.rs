@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use futures::channel::oneshot::Receiver;
-use gpui_util::{ResultExt, get_powershell, new_std_command};
+use gpui_support::{ResultExt, get_powershell, new_std_command};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use smallvec::SmallVec;

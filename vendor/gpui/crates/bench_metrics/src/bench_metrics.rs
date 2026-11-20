@@ -1011,9 +1011,7 @@ impl Measurement for ResourceCounter {
 ///     bench_metrics::CountingAllocator::new(mimalloc::MiMalloc);
 /// ```
 ///
-/// A binary has exactly one global allocator, so this can't be installed where a
-/// dependency already sets one (such as `ztracing` built with
-/// `ztracing_with_memory`); allocation metrics are then skipped.
+/// Binaries with an existing global allocator skip allocation metrics.
 pub struct CountingAllocator<A = std::alloc::System> {
     inner: A,
 }

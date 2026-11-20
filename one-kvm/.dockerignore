@@ -1,0 +1,7 @@
+**
+!build/
+build/*
+!build/native-sources/
+!build/native-sources/**
+!build/cross/
+!build/cross/**

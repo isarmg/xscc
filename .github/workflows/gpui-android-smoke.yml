@@ -15,12 +15,12 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'vcpkg.json'
+      - 'res/native-package-build/**'
       - 'res/vcpkg*/**'
       - 'vendor/gpui/**'
       - 'packaging/gpui-android/**'
       - '.github/workflows/gpui-android-smoke.yml'
       - '.github/scripts/*pinned*'
-      - '.github/scripts/pinned-assets/**'
       - '.github/scripts/*gpui-android*'
       - '.github/scripts/*gpui-game-activity*'
       - '.github/scripts/*gpui*mobile*'
@@ -86,7 +86,6 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-          submodules: recursive
 
       - name: Check source and package validation tests
         if: ${{ !inputs.build_only }}
@@ -129,7 +128,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ github.workspace }}/.vcpkg-binary-cache
-          key: mobile-vcpkg-Linux-arm64-android-${{ env.NDK_VERSION }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: mobile-vcpkg-Linux-arm64-android-${{ env.NDK_VERSION }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**', 'res/native-package-build/**') }}
 
       - name: Build Android native codec dependencies
         if: matrix.flavor != 'smoke'
@@ -297,7 +296,7 @@ jobs:
           python3 .github/scripts/test-gpui-android-ime.py
           python3 .github/scripts/test-gpui-android-editor-action.py
 
-      - name: Install pinned Gradle and Android SDK components
+      - name: Install pinned Gradle, Android SDK, and Maven build tools
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -306,6 +305,9 @@ jobs:
           unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
+          android_tool_maven="$RUNNER_TEMP/xscc-android-tools"
+          python3 .github/scripts/prepare-gpui-android-toolchain.py "$android_tool_maven"
+          echo "XSCC_ANDROID_TOOL_MAVEN=$android_tool_maven" >> "$GITHUB_ENV"
 
       - name: Prepare stable management-preview signature
         if: matrix.flavor == 'management'
@@ -326,7 +328,10 @@ jobs:
             test -n "$XSCC_ANDROID_PREVIEW_PASSWORD"
             export XSCC_ANDROID_PREVIEW_KEYSTORE="$RUNNER_TEMP/xscc-preview.jks"
           fi
-          gradle --no-daemon -p packaging/gpui-android :app:assemble${VARIANT}Release
+          (cd packaging/gpui-android/vendor/maven && sha256sum --check --quiet SHA256SUMS)
+          gradle --offline --no-daemon -p packaging/gpui-android \
+            -Pandroid.aapt2FromMavenOverride="$ANDROID_HOME/build-tools/36.0.0/aapt2" \
+            ":app:assemble${VARIANT}Release"
 
       - name: Verify actual APK and package evidence
         id: verify-apk
@@ -352,11 +357,10 @@ jobs:
           grep -Eq ' T Java_org_xscc_gpui_AndroidImeBridge_nativeAction$' "$RUNNER_TEMP/gpui-symbols.txt"
           "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" --dynamic --undefined-only "$RUNNER_TEMP/gpui-smoke.so" > "$RUNNER_TEMP/gpui-imports.txt"
           grep -Eq ' U AChoreographer_postVsyncCallback(@[^[:space:]]+)?$' "$RUNNER_TEMP/gpui-imports.txt"
-          mapfile -t GAME_AARS < <(find "$HOME/.gradle/caches/modules-2/files-2.1/androidx.games/games-activity/4.4.0" -name '*.aar')
-          test "${#GAME_AARS[@]}" -eq 1
+          game_activity_aar=packaging/gpui-android/vendor/maven/google/androidx/games/games-activity/4.4.0/games-activity-4.4.0.aar
           privacy_args=()
           if [ "$FLAVOR" != smoke ]; then privacy_args+=(--management); fi
-          python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "${GAME_AARS[0]}" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
+          python3 .github/scripts/verify-gpui-android-privacy.py "$APK" "$game_activity_aar" "${privacy_args[@]}" | tee dist/gpui-android/dex-privacy.txt
           profile_suffix=
           if [ "$XSCC_RUST_PROFILE" = stream-debug ]; then profile_suffix=-debug; fi
           candidate_apk="dist/gpui-android/xscc-gpui-android-arm64-$FLAVOR-${GITHUB_SHA:0:12}$profile_suffix.apk"

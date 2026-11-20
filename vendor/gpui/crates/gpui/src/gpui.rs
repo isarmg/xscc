@@ -56,6 +56,7 @@ mod shared_string;
 mod shared_uri;
 mod spring;
 mod style;
+mod style_refinement;
 mod styled;
 mod subscription;
 mod svg_renderer;
@@ -184,7 +185,7 @@ macro_rules! bench_main {
         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
     };
 }
-pub use gpui_util::arc_cow::ArcCow;
+pub use gpui_support::arc_cow::ArcCow;
 pub use http_client;
 pub use input::*;
 pub use inspector::*;
@@ -196,12 +197,12 @@ pub use platform::*;
 pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux", target_family = "wasm"))]
 pub use queue::{PriorityQueueReceiver, PriorityQueueSender};
-pub use refineable::*;
 pub use scene::*;
 pub use shared_string::*;
 pub use shared_uri::*;
 use std::{any::Any, future::Future};
 pub use style::*;
+pub use style_refinement::*;
 pub use styled::*;
 pub use subscription::*;
 pub use svg_renderer::*;

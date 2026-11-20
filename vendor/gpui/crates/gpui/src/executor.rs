@@ -2,7 +2,7 @@ use crate::{ActivityGuard, App, PlatformDispatcher, PlatformScheduler};
 #[cfg(not(target_family = "wasm"))]
 use futures::channel::mpsc;
 use futures::prelude::*;
-use gpui_util::{TryFutureExt, TryFutureExtBacktrace};
+use gpui_support::{TryFutureExt, TryFutureExtBacktrace};
 use scheduler::Instant;
 use scheduler::Scheduler;
 use std::{future::Future, marker::PhantomData, rc::Rc, sync::Arc, time::Duration};

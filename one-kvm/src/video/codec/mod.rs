@@ -1,7 +1,7 @@
 //! Video codec, conversion, encoding, and decoding implementations.
 
-use hwcodec::common::DataFormat;
-use hwcodec::ffmpeg_ram::CodecInfo;
+use video_codec_backends::common::DataFormat;
+use video_codec_backends::ffmpeg_ram::CodecInfo;
 
 pub mod convert;
 

@@ -1,0 +1,1 @@
+{"name":"protobuf-support","vers":"3.7.2","deps":[{"name":"thiserror","req":"^1.0.30","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6","features":{},"yanked":false,"pubtime":"2025-03-10T14:06:51Z"}

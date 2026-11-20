@@ -104,7 +104,7 @@ pub(crate) mod debug;
 
 use crate::{App, Bounds, FocusId, Pixels, SharedString, Window};
 use accesskit::{Action, NodeId, TreeUpdate};
-use collections::{FxHashMap, FxHashSet};
+use gpui_support::collections::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 use std::sync::{

@@ -227,15 +227,19 @@ impl FingerprintingInfo {
             addr: "0".repeat(16),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             addr: {
-                let mut addr = default_net::get_mac().map(|m| m.addr).unwrap_or_default();
-                if addr.is_empty() {
-                    addr = mac_address::get_mac_address()
-                        .ok()
-                        .and_then(|mac| mac)
-                        .map(|mac| mac.to_string())
-                        .unwrap_or_else(|| "".to_string());
-                }
-                addr = addr.replace(":", "");
+                let addr = default_net::get_default_interface()
+                    .ok()
+                    .and_then(|interface| interface.mac_addr)
+                    .filter(|mac| mac.octets() != [0; 6])
+                    .map(|mac| mac.to_string())
+                    .or_else(|| {
+                        mac_address::get_mac_address()
+                            .ok()
+                            .flatten()
+                            .map(|mac| mac.to_string())
+                    })
+                    .unwrap_or_default()
+                    .replace(':', "");
                 format!("{:0<16}", addr)
             },
         }

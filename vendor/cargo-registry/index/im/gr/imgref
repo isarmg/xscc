@@ -1,0 +1,2 @@
+{"name":"imgref","vers":"1.12.0","deps":[],"cksum":"e7c5cedc30da3a610cac6b4ba17597bdf7152cf974e8aab3afb3d54455e371c8","features":{"default":["deprecated"],"deprecated":[]},"yanked":false,"rust_version":"1.61","pubtime":"2025-09-23T20:11:11Z"}
+{"name":"imgref","vers":"1.12.3","deps":[],"cksum":"6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f","features":{"default":["deprecated"],"deprecated":[]},"yanked":false,"rust_version":"1.63","pubtime":"2026-08-26T16:59:29Z"}

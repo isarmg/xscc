@@ -1,7 +1,7 @@
 use crate::linux::Globals;
 use crate::linux::{DEFAULT_CURSOR_ICON_NAME, log_cursor_icon_warning};
 use anyhow::{Context as _, anyhow};
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 
 use wayland_client::Connection;
 use wayland_client::protocol::wl_surface::WlSurface;

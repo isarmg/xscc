@@ -46,9 +46,20 @@ class SetupTests(unittest.TestCase):
             sentinel = root / "preserve.txt"
             sentinel.write_text("existing contents")
             with self.assertRaisesRegex(RuntimeError, "nonempty"):
-                SETUP.checkout(root)
+                SETUP.prepare_root(root)
             self.assertEqual(sentinel.read_text(), "existing contents")
             self.assertEqual(list(root.iterdir()), [sentinel])
+
+    def test_prepares_a_repeatable_local_build_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "native"
+            SETUP.prepare_root(root)
+            sentinel = root / "build-result"
+            sentinel.touch()
+            SETUP.prepare_root(root)
+            self.assertTrue(sentinel.is_file())
+            self.assertTrue((root / "scripts" / "ports.cmake").is_file())
+            self.assertFalse((root / ".git").exists())
 
     def test_exports_preserve_existing_environment_and_require_the_tool_version(self):
         SETUP.check_version(

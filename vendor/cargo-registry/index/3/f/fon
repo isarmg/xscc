@@ -1,0 +1,1 @@
+{"name":"fon","vers":"0.6.0","deps":[{"name":"libm","req":"^0.2","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"ad46a0e6c9bc688823a742aa969b5c08fdc56c2a436ee00d5c6fbcb5982c55c4","features":{},"yanked":false,"rust_version":"1.56.1","pubtime":"2022-01-29T23:24:41Z"}

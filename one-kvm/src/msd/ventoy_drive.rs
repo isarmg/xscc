@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-use ventoy_img::{FileInfo as VentoyFileInfo, VentoyError, VentoyImage};
+use bootable_virtual_media::{FileInfo as VentoyFileInfo, VentoyError, VentoyImage};
 
 use super::types::{DriveFile, DriveFileAccess, DriveInfo};
 use crate::error::{AppError, MsdErrorCode, Result};
@@ -506,7 +506,10 @@ mod tests {
     use std::sync::OnceLock;
     use tempfile::TempDir;
 
-    static RESOURCE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ventoy-img-rs/resources");
+    static RESOURCE_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/libs/bootable-virtual-media/resources"
+    );
 
     #[test]
     fn classifies_drive_creation_io_errors() {
@@ -540,68 +543,35 @@ mod tests {
         ));
     }
 
-    fn init_ventoy_resources() -> bool {
-        static INIT: OnceLock<bool> = OnceLock::new();
-        *INIT.get_or_init(|| {
-            let resource_path = std::path::Path::new(RESOURCE_DIR);
-
-            let core_xz = resource_path.join("core.img.xz");
-            let core_img = resource_path.join("core.img");
-            if core_xz.exists() && !core_img.exists() {
-                if let Err(e) = decompress_xz(&core_xz, &core_img) {
-                    eprintln!("Failed to decompress core.img.xz: {}", e);
-                    return false;
-                }
+    fn ensure_resources() {
+        static INIT: OnceLock<()> = OnceLock::new();
+        INIT.get_or_init(|| {
+            let source = std::path::Path::new(RESOURCE_DIR);
+            let destination = TempDir::new().expect("create Ventoy test resource directory");
+            std::fs::copy(source.join("boot.img"), destination.path().join("boot.img"))
+                .expect("copy checked-in Ventoy boot image");
+            for name in ["core.img", "ventoy.disk.img"] {
+                let output = Command::new("xz")
+                    .args(["-d", "-c"])
+                    .arg(source.join(format!("{name}.xz")))
+                    .output()
+                    .expect("run xz to unpack checked-in Ventoy test resources");
+                assert!(
+                    output.status.success(),
+                    "failed to decompress {name}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                std::fs::write(destination.path().join(name), output.stdout)
+                    .expect("write Ventoy test resource");
             }
-
-            let disk_xz = resource_path.join("ventoy.disk.img.xz");
-            let disk_img = resource_path.join("ventoy.disk.img");
-            if disk_xz.exists() && !disk_img.exists() {
-                if let Err(e) = decompress_xz(&disk_xz, &disk_img) {
-                    eprintln!("Failed to decompress ventoy.disk.img.xz: {}", e);
-                    return false;
-                }
-            }
-
-            if let Err(e) = ventoy_img::resources::init_resources(resource_path) {
-                eprintln!("Failed to init ventoy resources: {}", e);
-                return false;
-            }
-
-            true
-        })
-    }
-
-    fn decompress_xz(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-        let output = Command::new("xz")
-            .args(["-d", "-k", "-c", src.to_str().unwrap()])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(std::io::Error::other(format!(
-                "xz decompress failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-
-        std::fs::write(dst, &output.stdout)?;
-        Ok(())
-    }
-
-    fn ensure_resources() -> bool {
-        if !init_ventoy_resources() {
-            eprintln!("Skipping test: ventoy resources not available");
-            false
-        } else {
-            true
-        }
+            bootable_virtual_media::resources::init_resources(destination.path())
+                .expect("load Ventoy test resources");
+        });
     }
 
     #[tokio::test]
     async fn test_drive_init() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path);
@@ -660,9 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn supported_drive_info_has_space_values() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive = VentoyDrive::new(temp_dir.path().join("supported.img"));
         drive.init(MIN_DRIVE_SIZE_MB).await.unwrap();
@@ -675,9 +643,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drive_mkdir() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path);
@@ -693,9 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drive_file_write_and_read() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path.clone());
@@ -720,9 +684,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drive_get_file_info() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path.clone());
@@ -762,9 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drive_stream_read() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path.clone());
@@ -800,9 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drive_stream_read_small_file() {
-        if !ensure_resources() {
-            return;
-        }
+        ensure_resources();
         let temp_dir = TempDir::new().unwrap();
         let drive_path = temp_dir.path().join("test_ventoy.img");
         let drive = VentoyDrive::new(drive_path.clone());

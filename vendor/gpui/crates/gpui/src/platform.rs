@@ -48,7 +48,7 @@ use crate::{
 use anyhow::bail;
 use anyhow::{Context as _, Result};
 use async_task::Runnable;
-use collections::FxHashMap;
+use gpui_support::collections::FxHashMap;
 use futures::channel::oneshot;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
 use image::RgbaImage;
@@ -184,14 +184,14 @@ pub use visual_test::VisualTestPlatform;
 
 /// Keeps an operating system activity, such as an idle sleep inhibitor, alive until dropped.
 pub struct ActivityGuard {
-    _release: gpui_util::Deferred<Box<dyn FnOnce() + Send>>,
+    _release: gpui_support::Deferred<Box<dyn FnOnce() + Send>>,
 }
 
 impl ActivityGuard {
     /// Runs `release` when the guard is dropped.
     pub fn new(release: impl FnOnce() + Send + 'static) -> Self {
         Self {
-            _release: gpui_util::defer(Box::new(release)),
+            _release: gpui_support::defer(Box::new(release)),
         }
     }
 
@@ -1445,7 +1445,7 @@ pub trait PlatformHeadlessRenderer {
 pub type RunnableVariant = Runnable<RunnableMeta>;
 
 #[doc(hidden)]
-pub type TimerResolutionGuard = gpui_util::Deferred<Box<dyn FnOnce() + Send>>;
+pub type TimerResolutionGuard = gpui_support::Deferred<Box<dyn FnOnce() + Send>>;
 
 #[doc(hidden)]
 pub enum TasksIncluded {
@@ -1482,7 +1482,7 @@ pub trait PlatformDispatcher: Send + Sync {
     }
 
     fn increase_timer_resolution(&self) -> TimerResolutionGuard {
-        gpui_util::defer(Box::new(|| {}))
+        gpui_support::defer(Box::new(|| {}))
     }
 
     fn prevent_app_nap(&self, _reason: &str) -> ActivityGuard {

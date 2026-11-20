@@ -6,21 +6,20 @@ on:
       - 'apps/desktop/**'
       - 'experiments/shared/**'
       - 'vendor/gpui/**'
-      - 'vendor/hwcodec/**'
-      - 'vendor/rust-pulsectl/**'
+      - 'libs/hardware-video-codecs/**'
       - 'src/**'
       - 'libs/**'
       - 'crates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'vcpkg.json'
+      - 'res/native-package-build/**'
       - 'res/vcpkg/**'
       - 'res/vcpkg-triplets/**'
       - 'packaging/gpui-*/**'
       - '.github/scripts/*gpui*'
       - '.github/workflows/gpui-unix-beta.yml'
       - '.github/scripts/*pinned*'
-      - '.github/scripts/pinned-assets/**'
   pull_request:
   workflow_dispatch:
     inputs:
@@ -97,7 +96,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: gpui-unix-linux-x64-linux-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: gpui-unix-linux-x64-linux-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**', 'res/native-package-build/**') }}
       - name: Build pinned native dependencies
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite
@@ -240,7 +239,7 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: gpui-unix-macos-arm64-osx-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**') }}
+          key: gpui-unix-macos-arm64-osx-9e593bb18ea69cc5095e012465dcd675a822ed0d-${{ hashFiles('vcpkg.json', 'res/vcpkg/**', 'res/vcpkg-triplets/**', 'res/native-package-build/**') }}
       - name: Build pinned native dependencies
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ runner.temp }}/vcpkg-binary-cache,readwrite

@@ -1,0 +1,13 @@
+[package]
+name = "font_style_matching"
+version = "0.1.0"
+edition = "2018"
+rust-version = "1.77"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "CSS font style, width and weight matching"
+
+[workspace]
+
+[dependencies]
+float-ord = "0.3"

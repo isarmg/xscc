@@ -10,11 +10,10 @@
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
     FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
+    Overflow, Pixels, Point, Refineable as _, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
     Window, point, px, size,
 };
-use collections::VecDeque;
-use refineable::Refineable as _;
+use gpui_support::collections::VecDeque;
 use std::{cell::RefCell, ops::Range, rc::Rc};
 use sum_tree::{Bias, Dimensions, SumTree};
 

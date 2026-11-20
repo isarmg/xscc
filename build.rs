@@ -1,3 +1,6 @@
+#[path = "res/native-library-path.rs"]
+mod native_libraries;
+
 #[cfg(windows)]
 fn build_windows() {
     let file = "src/platform/windows.cc";
@@ -51,28 +54,11 @@ fn install_android_deps() {
     if target_os != "android" {
         return;
     }
-    let mut target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    if target_arch == "x86_64" {
-        target_arch = "x64".to_owned();
-    } else if target_arch == "x86" {
-        target_arch = "x86".to_owned();
-    } else if target_arch == "aarch64" {
-        target_arch = "arm64".to_owned();
-    } else {
-        target_arch = "arm".to_owned();
-    }
-    let target = format!("{}-android", target_arch);
-    let vcpkg_root = std::env::var("VCPKG_ROOT").unwrap();
-    let mut path: std::path::PathBuf = vcpkg_root.into();
-    if let Ok(vcpkg_root) = std::env::var("VCPKG_INSTALLED_ROOT") {
-        path = vcpkg_root.into();
-    } else {
-        path.push("installed");
-    }
-    path.push(target);
+    let path = native_libraries::installed_target()
+        .expect("Set VCPKG_ROOT or VCPKG_INSTALLED_ROOT for the Android native libraries");
     println!(
-        "cargo:rustc-link-search={}",
-        path.join("lib").to_str().unwrap()
+        "cargo:rustc-link-search=native={}",
+        path.join("lib").display()
     );
     println!("cargo:rustc-link-lib=ndk_compat");
     println!("cargo:rustc-link-lib=c++");

@@ -1,15 +1,21 @@
 pluginManagement {
+    def tools = file(System.getenv('XSCC_ANDROID_TOOL_MAVEN') ?: new File(gradle.gradleUserHomeDir, 'xscc-android-tools'))
     repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
+        maven { url = uri(new File(tools, 'google')) }
+        maven { url = uri(file('vendor/maven/google')) }
+        maven { url = uri(new File(tools, 'central')) }
+        maven { url = uri(file('vendor/maven/central')) }
     }
 }
 dependencyResolutionManagement {
+    def tools = file(System.getenv('XSCC_ANDROID_TOOL_MAVEN') ?: new File(gradle.gradleUserHomeDir, 'xscc-android-tools'))
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google()
-        mavenCentral()
+        maven { url = uri(file('vendor/maven/google')) }
+        maven { url = uri(file('vendor/maven/central')) }
+        // AGP resolves lint and release build tools from the project's repositories.
+        maven { url = uri(new File(tools, 'google')) }
+        maven { url = uri(new File(tools, 'central')) }
     }
 }
 rootProject.name = 'XSCCGPUIAndroidSmoke'

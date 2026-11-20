@@ -12,10 +12,10 @@ use bytes::Bytes;
 use std::sync::Once;
 use tracing::{debug, error, info, warn};
 
-use hwcodec::common::{Quality, RateControl};
-use hwcodec::ffmpeg::{resolve_pixel_format, AVPixelFormat};
-use hwcodec::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
-use hwcodec::ffmpeg_ram::CodecInfo;
+use video_codec_backends::common::{Quality, RateControl};
+use video_codec_backends::ffmpeg::{resolve_pixel_format, AVPixelFormat};
+use video_codec_backends::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
+use video_codec_backends::ffmpeg_ram::CodecInfo;
 
 use super::detect_best_codec_for_format;
 use super::registry::EncoderBackend;
@@ -212,9 +212,11 @@ pub fn get_available_encoders(width: u32, height: u32) -> Vec<CodecInfo> {
 pub fn detect_best_encoder(width: u32, height: u32) -> (H264EncoderType, Option<String>) {
     let encoders = get_available_encoders(width, height);
 
-    if let Some((encoder_type, codec_name)) =
-        detect_best_codec_for_format(&encoders, hwcodec::common::DataFormat::H264, |_| true)
-    {
+    if let Some((encoder_type, codec_name)) = detect_best_codec_for_format(
+        &encoders,
+        video_codec_backends::common::DataFormat::H264,
+        |_| true,
+    ) {
         info!("Best H.264 encoder: {} ({})", codec_name, encoder_type);
         (encoder_type, Some(codec_name))
     } else {
@@ -394,7 +396,10 @@ impl H264Encoder {
     }
 
     fn finish_encode(
-        result: std::result::Result<Vec<hwcodec::ffmpeg_ram::encode::EncodeBytesFrame>, i32>,
+        result: std::result::Result<
+            Vec<video_codec_backends::ffmpeg_ram::encode::EncodeBytesFrame>,
+            i32,
+        >,
     ) -> Result<Vec<HwEncodeFrame>> {
         match result {
             Ok(frames) => {
@@ -440,7 +445,7 @@ impl H264Encoder {
     }
 }
 
-// SAFETY: H264Encoder contains hwcodec::ffmpeg_ram::encode::Encoder which has raw pointers
+// SAFETY: H264Encoder contains video_codec_backends::ffmpeg_ram::encode::Encoder which has raw pointers
 // that are not Send by default. However, we ensure that H264Encoder is only used from
 // a single task/thread at a time (encoding is sequential), so this is safe.
 // The raw pointers are internal FFmpeg context that doesn't escape the encoder.

@@ -5,7 +5,7 @@ pub use binding::*;
 pub use context::*;
 
 use crate::{Action, AsKeystroke, Keystroke, Unbind, is_no_action, is_unbind};
-use collections::{HashSet, TypeIdHashMap};
+use gpui_support::collections::{HashSet, TypeIdHashMap};
 use smallvec::SmallVec;
 
 /// An opaque identifier of which version of the keymap is currently active.

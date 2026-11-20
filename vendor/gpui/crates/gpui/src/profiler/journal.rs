@@ -21,7 +21,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use scheduler::Instant;
 
 use super::{ActionTiming, FrameTiming, PresentTiming, TaskTiming, ViewTiming};

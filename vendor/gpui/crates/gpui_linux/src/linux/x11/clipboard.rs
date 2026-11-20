@@ -847,7 +847,7 @@ fn serve_requests(context: Arc<Inner>) -> Result<(), Box<dyn std::error::Error>>
 
     log::trace!("Started serve requests thread.");
 
-    let _guard = gpui_util::defer(|| {
+    let _guard = gpui_support::defer(|| {
         context.serve_stopped.store(true, Ordering::Relaxed);
     });
 

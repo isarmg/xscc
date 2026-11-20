@@ -34,7 +34,7 @@ librustdesk = { package = "rustdesk", path = "../..", default-features = false, 
 
 [target.'cfg(target_os = "linux")'.dependencies]
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-session"], optional = true }
-scrap = { path = "../../libs/scrap", optional = true, features = ["linux-pkg-config"] }
+scrap = { path = "../../libs/scrap", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-session", "screencapturekit"], optional = true }

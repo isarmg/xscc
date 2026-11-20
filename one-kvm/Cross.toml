@@ -7,10 +7,10 @@
 default-target = "x86_64-unknown-linux-gnu"
 
 [target.x86_64-unknown-linux-gnu]
-dockerfile = "build/cross/Dockerfile.x86_64"
+dockerfile = { file = "one-kvm/build/cross/Dockerfile.x86_64", context = "one-kvm" }
 
 [target.aarch64-unknown-linux-gnu]
-dockerfile = "build/cross/Dockerfile.arm64"
+dockerfile = { file = "one-kvm/build/cross/Dockerfile.arm64", context = "one-kvm" }
 
 [target.armv7-unknown-linux-gnueabihf]
-dockerfile = "build/cross/Dockerfile.armv7"
+dockerfile = { file = "one-kvm/build/cross/Dockerfile.armv7", context = "one-kvm" }

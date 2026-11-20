@@ -1,0 +1,2 @@
+{"name":"linktime-proc-macro","vers":"0.2.2","deps":[],"cksum":"348d0075b1fc163b26d72a7f75fc5141daf2fd1bdf128d873cbaf6785d495bdf","features":{"ctor":[],"default":[],"dtor":[],"link_section":[],"scattered_collect":[]},"yanked":false,"pubtime":"2026-07-29T23:08:11Z"}
+{"name":"linktime-proc-macro","vers":"0.2.3","deps":[],"cksum":"7e57c38c1e860fd37c604281cdfb1dd2216977fd76a50f85ba2f388ef3219616","features":{"ctor":[],"default":[],"dtor":[],"link_section":[],"scattered_collect":[]},"yanked":false,"pubtime":"2026-08-09T22:01:10Z"}

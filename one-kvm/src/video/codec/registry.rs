@@ -10,10 +10,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use hwcodec::common::{DataFormat, Quality, RateControl};
-use hwcodec::ffmpeg::{resolve_pixel_format, AVPixelFormat};
-use hwcodec::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
-use hwcodec::ffmpeg_ram::CodecInfo;
+use video_codec_backends::common::{DataFormat, Quality, RateControl};
+use video_codec_backends::ffmpeg::{resolve_pixel_format, AVPixelFormat};
+use video_codec_backends::ffmpeg_ram::encode::{EncodeContext, Encoder as HwEncoder};
+use video_codec_backends::ffmpeg_ram::CodecInfo;
 
 /// Video encoder format type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

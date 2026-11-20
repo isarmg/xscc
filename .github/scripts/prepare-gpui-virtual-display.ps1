@@ -10,10 +10,7 @@ $payload = (Resolve-Path -LiteralPath $PayloadDirectory).Path
 $destination = Join-Path $payload 'usbmmidd_v2'
 if (Test-Path -LiteralPath $destination) { throw 'Virtual display payload already exists' }
 if (-not $ArchivePath) {
-    $ArchivePath = Join-Path $env:RUNNER_TEMP ('xscc-usbmmidd-' + $manifest.sha256 + '.zip')
-    if (-not (Test-Path -LiteralPath $ArchivePath)) {
-        Invoke-WebRequest -Uri $manifest.source -OutFile $ArchivePath -TimeoutSec 60
-    }
+    $ArchivePath = Join-Path (Split-Path $manifestPath -Parent) 'driver-packages/legacy-virtual-display-amd64.zip'
 }
 if ((Get-Item -LiteralPath $ArchivePath).Length -ne $manifest.bytes -or
     (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash -ine $manifest.sha256) {

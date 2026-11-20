@@ -33,7 +33,9 @@ def check():
     assert 'experimental-quic' not in core['features']
     assert core['dependencies']['xscc-session-transport']['path'] == 'crates/session-transport'
     protocol = manifest('crates/management')['dependencies']['xscs-protocol']
-    assert protocol['version'] == '=4.0.0' and len(protocol['rev']) == 40
+    assert protocol['version'] == '=4.0.0'
+    assert protocol['package'] == 'xscc-management-protocol'
+    assert (ROOT / 'crates/management' / protocol['path']).resolve() == ROOT / 'vendor/platform/management-protocol'
     assert protocol['default-features'] is False
     for relative in ('apps', 'crates/native-ui'):
         for source in (ROOT / relative).rglob('*.rs'):

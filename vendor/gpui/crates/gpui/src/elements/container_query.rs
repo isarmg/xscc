@@ -2,11 +2,10 @@
 //! The element's own size is determined solely by its style and the space
 //! offered by its parent.
 
-use refineable::Refineable as _;
 
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
-    InspectorElementId, IntoElement, LayoutId, Pixels, Size, Style, StyleRefinement, Styled,
+    InspectorElementId, IntoElement, LayoutId, Pixels, Refineable as _, Size, Style, StyleRefinement, Styled,
     Window, relative,
 };
 

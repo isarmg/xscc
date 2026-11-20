@@ -1,0 +1,81 @@
+{
+  "format": 1,
+  "archives": {
+    "jpeg-codec.tar.gz": {
+      "origin": "https://github.com/libjpeg-turbo/libjpeg-turbo",
+      "revision": "3.1.4.1",
+      "archive_source": "https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/tar.gz/refs/tags/3.1.4.1",
+      "sha256": "a7da42b640377c2a9a9665e2c4b0ea60cd5599afb48c2521e6df0c9dc9d15a25",
+      "license_files": "LICENSE.md"
+    },
+    "pixel-conversion.tar.gz": {
+      "origin": "https://github.com/lemenkov/libyuv",
+      "revision": "957f295ea946cbbd13fcfc46e7066f2efa801233",
+      "archive_source": "https://codeload.github.com/lemenkov/libyuv/tar.gz/957f295ea946cbbd13fcfc46e7066f2efa801233",
+      "sha256": "570581a689634f5332a76780f70a1a140285d4cecb16d6b9f6b3637cc2711120",
+      "license_files": "LICENSE, PATENTS"
+    },
+    "vp8-vp9-codec.tar.gz": {
+      "origin": "https://github.com/webmproject/libvpx",
+      "revision": "v1.16.0",
+      "archive_source": "https://codeload.github.com/webmproject/libvpx/tar.gz/refs/tags/v1.16.0",
+      "sha256": "7a479a3c66b9f5d5542a4c6a1b7d3768a983b1e5c14c60a9396edc9b649e015c",
+      "license_files": "LICENSE, PATENTS"
+    },
+    "h264-encoder.tar.gz": {
+      "origin": "https://github.com/mirror/x264",
+      "revision": "c24e06c2e184345ceb33eb20a15d1024d9fd3497",
+      "archive_source": "https://codeload.github.com/mirror/x264/tar.gz/c24e06c2e184345ceb33eb20a15d1024d9fd3497",
+      "sha256": "090d730e867fc63631782a1287974635d1237d0fa7c6fd1d09fd543620a56689",
+      "license_files": "COPYING"
+    },
+    "h265-encoder.tar.gz": {
+      "origin": "https://github.com/videolan/x265",
+      "revision": "3.4",
+      "archive_source": "https://codeload.github.com/videolan/x265/tar.gz/refs/tags/3.4",
+      "sha256": "544d147bf146f8994a7bf8521ed878c93067ea1c7c6e93ab602389be3117eaaf",
+      "license_files": "COPYING"
+    },
+    "opus-codec.tar.gz": {
+      "origin": "https://github.com/xiph/opus",
+      "revision": "1.5.2",
+      "archive_source": "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz",
+      "sha256": "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1",
+      "license_files": "COPYING"
+    },
+    "rockchip-media-platform.tar.gz": {
+      "origin": "https://github.com/nyanmisaka/mpp",
+      "revision": "848b885f95587994a53216e435f650041a894e31",
+      "archive_source": "https://codeload.github.com/nyanmisaka/mpp/tar.gz/848b885f95587994a53216e435f650041a894e31",
+      "sha256": "e8076a86cd741a55528f174caff3aa3a190f413fb201d1a0fd12abb75fa5fafe",
+      "license_files": "LICENSES/",
+      "original_sha256": "a48862fd054c930f81135b7cc9f561a0ee1fa6a2094db3f664f9c3a012b24ff8",
+      "excluded_unbuilt_binaries": [
+        "build/android/aarch64/fix/libc.so",
+        "tools/AStyle.exe",
+        "tools/TextEncoding.exe"
+      ]
+    },
+    "rockchip-pixel-accelerator.tar.gz": {
+      "origin": "https://github.com/nyanmisaka/rk-mirrors",
+      "revision": "1d330cc28551943bed3380261a5a9c6fbd58ff53",
+      "archive_source": "https://codeload.github.com/nyanmisaka/rk-mirrors/tar.gz/1d330cc28551943bed3380261a5a9c6fbd58ff53",
+      "sha256": "168551dcf6afce1ca1d4fe5e17df404dc422446488271ad69c77745774431601",
+      "license_files": "COPYING",
+      "original_sha256": "30bd712507fcc6be075cd4aaa2622d46fde203fa6f3418b85d0fc1e2136b8ec4",
+      "excluded_unbuilt_binaries": [
+        "samples/utils/3rdparty/libdrm/lib/android/arm32/libdrm.so",
+        "samples/utils/3rdparty/libdrm/lib/android/arm64/libdrm.so",
+        "samples/utils/3rdparty/libdrm/lib/arm32/libdrm.so",
+        "samples/utils/3rdparty/libdrm/lib/arm64/libdrm.so"
+      ]
+    },
+    "rockchip-media-codec.tar.gz": {
+      "origin": "https://github.com/nyanmisaka/ffmpeg-rockchip",
+      "revision": "40c412daccf08164493da0de990eb99a8948116b",
+      "archive_source": "https://codeload.github.com/nyanmisaka/ffmpeg-rockchip/tar.gz/40c412daccf08164493da0de990eb99a8948116b",
+      "sha256": "709d870e88e5f21cafa3f95ff9c2da9782aba47bc348c6302e28208713e7e22e",
+      "license_files": "COPYING.*, LICENSE.md"
+    }
+  }
+}

@@ -284,8 +284,8 @@ def main():
                       if line.startswith((' ', '+')) and 'block_and_wait' not in line]
         (work / 'amf_backpressure.h').write_text('\n'.join(wait_lines) + '\n')
         (work / 'backpressure.c').write_text(BACKPRESSURE_TEST)
-        include = root / 'vendor/hwcodec/externals/AMF_v1.4.35/amf/public/include'
-        latch = root / 'vendor/hwcodec/cpp/ffmpeg_vram'
+        include = root / 'libs/hardware-video-codecs/externals/AMF_v1.4.35/amf/public/include'
+        latch = root / 'libs/hardware-video-codecs/cpp/ffmpeg_vram'
         runtime = ['-fms-runtime-lib=static'] if os.name == 'nt' else []
         for source, compiler, standard in (
             ('latch.cpp', args.cxx or args.cc, 'c++17'),

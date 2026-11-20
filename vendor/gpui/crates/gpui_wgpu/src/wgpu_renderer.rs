@@ -1,7 +1,7 @@
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
-use collections::FxHashMap;
+use gpui_support::collections::FxHashMap;
 use gpui::{
     AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
     ScaledPixels, Scene, Size, get_gamma_correction_ratios,

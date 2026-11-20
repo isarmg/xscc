@@ -1,14 +1,19 @@
 * text=auto
 /packaging/gpui-windows/VDD-LICENSE-MIT.txt text eol=lf
+/res/native-package-build/** -whitespace
+/res/vcpkg/**/*.patch -whitespace
+/res/vcpkg/vcpkg-*/** -whitespace
+/res/vcpkg/amd-amf/LICENSE.txt -whitespace
 /res/vcpkg/ffmpeg/patch/0012-amf-poll-pending-hardware-output.patch text eol=lf
 /res/vcpkg/ffmpeg/patch/0013-amf-own-pending-hardware-frames.patch text eol=lf
-/.github/scripts/pinned-assets/sha512-* -text whitespace=-blank-at-eol
+/res/vcpkg/mfx-dispatch/fix-missing-cstdint-import.patch -text whitespace=-blank-at-eol
 
-# Preserve the fixed MTT driver source evidence across Windows checkouts.
-vendor/mtt-vdd/upstream/** -text whitespace=-blank-at-eol
-vendor/mtt-vdd/source/** -text whitespace=-blank-at-eol
-vendor/mtt-vdd/patches/** -text
-vendor/mtt-vdd/tests/** -text
-vendor/mtt-vdd/LICENSE -text
+/vendor/cargo-registry/*.crate binary
 /res/vcpkg/ffmpeg/patch/0014-amf-owner-thread-idr.patch text eol=lf
 /res/vcpkg/ffmpeg/patch/0015-amf-live-nonblocking-retirement.patch text eol=lf
+
+# Preserve the original formatting of imported sources and port recipes.
+/vendor/platform/** -whitespace
+/vendor/drm-screen-capture/** -whitespace
+/res/vcpkg/** -whitespace
+/one-kvm/test/okvm-test/agent/vendor/** -whitespace

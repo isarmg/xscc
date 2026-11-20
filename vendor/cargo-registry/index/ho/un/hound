@@ -1,0 +1,1 @@
+{"name":"hound","vers":"3.5.1","deps":[{"name":"cpal","req":"^0.2.12","features":[],"optional":false,"default_features":true,"target":null,"kind":"dev"}],"cksum":"62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f","features":{},"yanked":false,"pubtime":"2023-09-25T20:36:49Z"}

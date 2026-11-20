@@ -1,5 +1,4 @@
-use collections::BTreeMap;
-use gpui_util::post_inc;
+use gpui_support::{collections::BTreeMap, post_inc};
 use std::{
     cell::{Cell, RefCell},
     fmt::Debug,

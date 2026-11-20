@@ -1,0 +1,1 @@
+{"name":"unescaper","vers":"0.1.10","deps":[{"name":"thiserror","req":"^2.0","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"7285e83a80ce76f5e7bce79fa41f68d78ba62d1003cf27bf748ab24413808cf4","features":{},"yanked":false,"pubtime":"2026-07-04T16:59:03Z"}

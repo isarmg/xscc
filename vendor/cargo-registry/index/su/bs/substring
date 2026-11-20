@@ -1,0 +1,1 @@
+{"name":"substring","vers":"1.4.5","deps":[{"name":"autocfg","req":"^1.0.1","features":[],"optional":false,"default_features":true,"target":null,"kind":"build"}],"cksum":"42ee6433ecef213b2e72f587ef64a2f5943e7cd16fbd82dbe8bc07486c534c86","features":{},"yanked":false,"pubtime":"2021-02-04T16:27:54Z"}

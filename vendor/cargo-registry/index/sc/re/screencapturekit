@@ -1,0 +1,1 @@
+{"name":"screencapturekit","vers":"0.2.8","deps":[{"name":"screencapturekit-sys","req":"^0.2.8","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"1a5eeeb57ac94960cfe5ff4c402be6585ae4c8d29a2cf41b276048c2e849d64e","features":{"ci":[]},"yanked":false,"rust_version":"1.75","pubtime":"2024-04-29T18:16:16Z"}

@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use block2::RcBlock;
-use collections::HashMap;
+use gpui_support::collections::HashMap;
 use futures::channel::oneshot;
 use gpui::{
     DevicePixels, ForegroundExecutor, ScreenCaptureFrame, ScreenCaptureSource, ScreenCaptureStream,

@@ -1,9 +1,9 @@
 //! Pixel format definitions and conversions
 
+#[cfg(unix)]
+use linux_video_device::PixelFormat as V4l2rPixelFormat;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-#[cfg(unix)]
-use v4l2r::PixelFormat as V4l2rPixelFormat;
 
 /// Supported pixel formats
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

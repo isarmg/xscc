@@ -1,7 +1,6 @@
-use refineable::Refineable as _;
 
 use crate::{
-    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Pixels,
+    App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement, Pixels, Refineable as _,
     Style, StyleRefinement, Styled, Window,
 };
 

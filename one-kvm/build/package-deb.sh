@@ -64,8 +64,8 @@ package_arch() {
     chmod 755 "$PKG_DIR/usr/bin/one-kvm"
 
     # Copy and process ventoy resources (decompress .xz files)
-    if [ -d "$PROJECT_DIR/libs/ventoy-img-rs/resources" ]; then
-        for file in "$PROJECT_DIR/libs/ventoy-img-rs/resources/"*; do
+    if [ -d "$PROJECT_DIR/libs/bootable-virtual-media/resources" ]; then
+        for file in "$PROJECT_DIR/libs/bootable-virtual-media/resources/"*; do
             if [ -f "$file" ]; then
                 local filename=$(basename "$file")
                 if [[ "$filename" == *.xz ]]; then

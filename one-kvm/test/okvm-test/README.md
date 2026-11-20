@@ -12,7 +12,7 @@
 ```powershell
 cd test/okvm-test/agent
 New-Item -ItemType Directory -Force ..\bin
-go build -o ..\bin\okvm-win-agent-amd64.exe .
+go build -mod=vendor -o ..\bin\okvm-win-agent-amd64.exe .
 ```
 
 编译产物输出到：
@@ -157,7 +157,7 @@ HID 延迟默认 5 次采样，可通过 `--hid-latency-trials <次数>` 调整�
 MSD 测试依赖 OTG。流程如下：
 
 1. 确认目标机 `/etc/one-kvm/ventoy` 存在 `boot.img`、`core.img`、`ventoy.disk.img`。
-2. 如果资源缺失，默认从 `libs/ventoy-img-rs/resources` 解压并通过 SSH/SFTP 同步到目标机。
+2. 如果资源缺失，默认从 `libs/bootable-virtual-media/resources` 解压并通过 SSH/SFTP 同步到目标机。
 3. 启用 MSD 后重启 `one-kvm`，确保 Ventoy 资源在服务进程中初始化。
 4. 通过 `/api/msd/drive/init` 创建小型虚拟盘。
 5. 通过 `/api/msd/drive/mount` 连接到 Windows。

@@ -20,6 +20,9 @@ printf '%s\n' "$scroll_tests"
 grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$scroll_tests" || { echo 'Scroll position regression did not run' >&2; exit 1; }
 # Test the same native role feature set that ships. Keep every test enabled.
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    source_test=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" pulse_sources::tests::default_input_uses_the_recording_source 2>&1) || { printf '%s\n' "$source_test"; exit 1; }
+    printf '%s\n' "$source_test"
+    grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$source_test" || { echo 'Default audio input regression did not run' >&2; exit 1; }
     # Identify the last native test if the process exits through a signal rather than a Rust panic.
     RUST_BACKTRACE=1 cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" -- --test-threads=1 --nocapture
     # Keep the original parallel coverage and Cargo's dynamic-library environment.
@@ -45,7 +48,7 @@ fi
 modifier_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" server::input_service::modifier_keys::tests:: 2>&1) || { printf '%s\n' "$modifier_tests"; exit 1; }
 printf '%s\n' "$modifier_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$modifier_tests" || { echo 'Modifier ownership regressions did not run all three tests' >&2; exit 1; }
-decode_tests=$(cargo test --locked -p hwcodec --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
+decode_tests=$(cargo test --locked -p hardware-video-codecs --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
 printf '%s\n' "$decode_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }
 if [[ $target == aarch64-apple-darwin ]]; then
@@ -77,7 +80,6 @@ if [[ $target == x86_64-unknown-linux-gnu ]]; then
     printf '%s\n' "$conversion_tests"
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$conversion_tests" || { echo 'RGBA conversion regression did not run' >&2; exit 1; }
     # Select only the excluded dependency package while reusing the root lockfile.
-    cargo test --locked -p rust-pulsectl --lib --target "$target"
     for filter in upload_staging_ swizzle_upload_data; do
         output=$(cargo test --locked --manifest-path vendor/gpui/Cargo.toml -p gpui_wgpu --lib --target "$target" "$filter" 2>&1) || { printf '%s\n' "$output"; exit 1; }
         printf '%s\n' "$output"

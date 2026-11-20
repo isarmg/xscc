@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use anyhow::Result;
 use gpui::*;
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use windows::Win32::{
     Foundation::*,
     Graphics::{DirectManipulation::*, Gdi::*},

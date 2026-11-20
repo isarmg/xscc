@@ -1,7 +1,7 @@
 use std::{borrow::Cow, sync::LazyLock};
 
 use anyhow::Result;
-use collections::FxHashMap;
+use gpui_support::collections::FxHashMap;
 use itertools::Itertools;
 use windows::Win32::{
     Foundation::{HANDLE, HGLOBAL},

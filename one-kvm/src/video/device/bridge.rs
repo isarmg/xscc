@@ -11,15 +11,15 @@ use std::thread;
 use std::time::Duration;
 
 use libc;
-use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use tracing::{debug, info, warn};
-use v4l2r::bindings::{
+use linux_video_device::bindings::{
     v4l2_bt_timings, v4l2_dv_timings, V4L2_DV_BT_656_1120, V4L2_DV_FL_HAS_CEA861_VIC,
 };
-use v4l2r::ioctl::{
+use linux_video_device::ioctl::{
     self, Event as V4l2Event, EventType, IntoErrno, QueryDvTimingsError, SubscribeEventFlags,
 };
-use v4l2r::nix::errno::Errno;
+use linux_video_device::nix::errno::Errno;
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+use tracing::{debug, info, warn};
 
 use crate::video::signal::SignalStatus;
 

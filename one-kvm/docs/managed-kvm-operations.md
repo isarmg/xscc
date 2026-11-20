@@ -9,15 +9,16 @@
 ```bash
 rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129 --locked
-cargo run --manifest-path tools/web-build/Cargo.toml --locked --release -- build --product-root .
-cargo build --locked --release
+cargo run --manifest-path tools/web-build/Cargo.toml --locked --offline --release -- build --product-root . --offline
 ```
 
-Linux 仍需真实 FFmpeg、libyuv、ALSA、udev、D-Bus、OpenSSL 等开发依赖，以及 CMake、汇编器和 C/C++ 工具链。固定 libyuv 修订为 `957f295ea946cbbd13fcfc46e7066f2efa801233`，必须提供实际 `RGB24ToNV12` 等符号；系统旧库不能替代。依赖闭包见 `build/cross/Dockerfile.*`。使用 `cross` 编译 Linux 产物时运行 `bash build/build-images.sh`，随后 `bash build/package-deb.sh`；后者也接受 `amd64`、`arm64`、`armhf` 单架构。
+Linux 构建使用已安装的 `cross` 0.2.5、容器工具和 Debian 12 平台开发库。运行 `bash build/build-images.sh` 从 `build/native-sources/` 中编译媒体库及 Rockchip 支持，再运行 `bash build/package-deb.sh` 打包。可用 `bash build/build-images.sh test` 检查 x86_64 宿主逻辑。源码归档及保留的原始许可证记录在 `build/native-sources/SOURCE.json`。
 
-Windows 在 MSVC 原生环境准备本目录 `vcpkg.json`、`vcpkg-configuration.json` 固定的 `x64-windows-static` 依赖，设置 `VCPKG_ROOT` 与 `VCPKG_INSTALLED_DIR`，再执行：
+Windows 构建需要 MSVC、Windows SDK、vcpkg 和配套构建工具。在 MSVC 环境中设置 `VCPKG_ROOT`，再使用 `vcpkg-configuration.json` 选定的本地端口构建静态依赖。DirectShow 采集依赖的 FFmpeg 带有独立的构建配置。
 
 ```powershell
+$env:VCPKG_INSTALLED_DIR = Join-Path $PWD "vcpkg_installed"
+& "$env:VCPKG_ROOT\vcpkg.exe" install --triplet x64-windows-static --x-install-root="$env:VCPKG_INSTALLED_DIR"
 .\build\windows\build.ps1 -Configuration release -Package
 ```
 

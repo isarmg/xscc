@@ -18,6 +18,8 @@ jobs:
           toolchain: 1.99.0
       - name: Validate system ownership boundaries
         run: python3 .github/scripts/check-system-architecture.py
+      - name: Verify repository Cargo sources
+        run: python3 .github/scripts/check-local-rust-dependencies.py
       - name: Validate workspace layout
         shell: bash
         run: |

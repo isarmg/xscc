@@ -51,7 +51,7 @@ impl MsdController {
     pub async fn init(&self, ventoy_resource_dir: &Path) -> Result<()> {
         info!("Initializing MSD controller");
 
-        match ventoy_img::init_resources(ventoy_resource_dir) {
+        match bootable_virtual_media::init_resources(ventoy_resource_dir) {
             Ok(()) => info!(
                 "Ventoy resources ready from {}",
                 ventoy_resource_dir.display()

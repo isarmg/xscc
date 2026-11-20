@@ -14,5 +14,8 @@ rustflags = [
 #rustflags = [
 #    "-C", "link-args=-Wl,-Bstatic -lc -Wl,-Bdynamic"
 #]
-[net]
-git-fetch-with-cli = true
+[source.crates-io]
+replace-with = "xscc-local"
+
+[source.xscc-local]
+local-registry = "vendor/cargo-registry"

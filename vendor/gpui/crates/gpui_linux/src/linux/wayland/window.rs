@@ -8,7 +8,7 @@ use std::{
 };
 
 use calloop::ping::Ping;
-use collections::{FxHashMap, HashMap};
+use gpui_support::collections::{FxHashMap, HashMap};
 use futures::channel::oneshot::Receiver;
 
 use raw_window_handle as rwh;

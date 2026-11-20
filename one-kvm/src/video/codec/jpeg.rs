@@ -146,7 +146,7 @@ impl JpegEncoder {
         }
 
         // Convert YUYV to I420 using libyuv (SIMD accelerated)
-        libyuv::yuy2_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
+        pixel_conversion::yuy2_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
             .map_err(|e| AppError::VideoError(format!("libyuv YUYV→I420 failed: {}", e)))?;
 
         self.encode_i420_to_jpeg(sequence)
@@ -181,7 +181,7 @@ impl JpegEncoder {
             chunk_dst[3] = chunk_src[1]; // V0
         }
 
-        libyuv::yuy2_to_i420(dst, &mut self.i420_buffer, width as i32, height as i32)
+        pixel_conversion::yuy2_to_i420(dst, &mut self.i420_buffer, width as i32, height as i32)
             .map_err(|e| AppError::VideoError(format!("libyuv YVYU→I420 failed: {}", e)))?;
 
         self.encode_i420_to_jpeg(sequence)
@@ -202,7 +202,7 @@ impl JpegEncoder {
         }
 
         // Convert NV12 to I420 using libyuv (SIMD accelerated)
-        libyuv::nv12_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
+        pixel_conversion::nv12_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
             .map_err(|e| AppError::VideoError(format!("libyuv NV12→I420 failed: {}", e)))?;
 
         self.encode_i420_to_jpeg(sequence)
@@ -229,7 +229,7 @@ impl JpegEncoder {
         let (u_plane_422, rest) = self.uv_split_buffer.split_at_mut(chroma_plane_size);
         let (v_plane_422, _) = rest.split_at_mut(chroma_plane_size);
 
-        libyuv::split_uv_plane(
+        pixel_conversion::split_uv_plane(
             src_uv,
             width as i32,
             u_plane_422,
@@ -241,7 +241,7 @@ impl JpegEncoder {
         )
         .map_err(|e| AppError::VideoError(format!("libyuv NV16 split failed: {}", e)))?;
 
-        libyuv::i422_to_i420_planar(
+        pixel_conversion::i422_to_i420_planar(
             &data[..y_size],
             width as i32,
             u_plane_422,
@@ -278,7 +278,7 @@ impl JpegEncoder {
         let (u_plane_444, rest) = self.uv_split_buffer.split_at_mut(chroma_plane_size);
         let (v_plane_444, _) = rest.split_at_mut(chroma_plane_size);
 
-        libyuv::split_uv_plane(
+        pixel_conversion::split_uv_plane(
             src_uv,
             (width * 2) as i32,
             u_plane_444,
@@ -290,7 +290,7 @@ impl JpegEncoder {
         )
         .map_err(|e| AppError::VideoError(format!("libyuv NV24 split failed: {}", e)))?;
 
-        libyuv::h444_to_bgra(
+        pixel_conversion::h444_to_bgra(
             &data[..y_size],
             u_plane_444,
             v_plane_444,
@@ -318,7 +318,7 @@ impl JpegEncoder {
         }
 
         // Convert RGB24 to I420 using libyuv (SIMD accelerated)
-        libyuv::rgb24_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
+        pixel_conversion::rgb24_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
             .map_err(|e| AppError::VideoError(format!("libyuv RGB24→I420 failed: {}", e)))?;
 
         self.encode_i420_to_jpeg(sequence)
@@ -340,7 +340,7 @@ impl JpegEncoder {
 
         // Convert BGR24 to I420 using libyuv (SIMD accelerated)
         // Note: libyuv's RAWToI420 is BGR24 → I420
-        libyuv::bgr24_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
+        pixel_conversion::bgr24_to_i420(data, &mut self.i420_buffer, width as i32, height as i32)
             .map_err(|e| AppError::VideoError(format!("libyuv BGR24→I420 failed: {}", e)))?;
 
         self.encode_i420_to_jpeg(sequence)

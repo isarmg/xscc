@@ -1,11 +1,10 @@
 use crate::{
     AnyElement, AnyEntity, App, AppContext, Asset, AssetLogger, Bounds, Element, ElementId, Entity,
     GlobalElementId, ImageAssetLoader, ImageCacheError, InspectorElementId, IntoElement, LayoutId,
-    ParentElement, Pixels, RenderImage, Resource, Style, StyleRefinement, Styled, Window, hash,
+    ParentElement, Pixels, Refineable, RenderImage, Resource, Style, StyleRefinement, Styled, Window, hash,
 };
 
 use crate::asset_cache::CachedLoad;
-use refineable::Refineable;
 use smallvec::SmallVec;
 use std::{collections::HashMap, fmt, sync::Arc};
 

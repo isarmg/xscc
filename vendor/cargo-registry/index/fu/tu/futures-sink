@@ -1,0 +1,1 @@
+{"name":"futures-sink","vers":"0.3.34","deps":[],"cksum":"1944426bf7d03f1d14f708785e4b33efd750b36d48a157b836b3efc15ede8e1d","features":{"alloc":[],"default":["std"],"std":["alloc"]},"yanked":false,"rust_version":"1.36","pubtime":"2026-08-11T12:13:06Z"}

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use itertools::Itertools;
 use windows::Win32::{
     Foundation::HMODULE,

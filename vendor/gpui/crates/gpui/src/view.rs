@@ -1,13 +1,12 @@
 use crate::{
     AnyElement, AnyEntity, AnyWeakEntity, App, AvailableSpace, Bounds, ContentMask, Context,
     Element, ElementId, Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Render, RenderOnce, Size, Style,
+    LayoutId, PaintIndex, Pixels, PrepaintStateIndex, Refineable, Render, RenderOnce, Size, Style,
     StyleRefinement, TextStyle, WeakEntity,
 };
 use crate::{Empty, Window};
 use anyhow::Result;
-use collections::FxHashSet;
-use refineable::Refineable;
+use gpui_support::collections::FxHashSet;
 use std::mem;
 use std::{
     any::{TypeId, type_name},

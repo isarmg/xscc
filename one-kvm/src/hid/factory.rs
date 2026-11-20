@@ -9,7 +9,7 @@ use crate::otg::OtgService;
 
 pub struct HidBackendFactory {
     #[cfg(target_os = "linux")]
-    pub bonds: std::sync::OnceLock<Arc<dyn one_kvm_bluetooth_hid::bonds::BondStore>>,
+    pub bonds: std::sync::OnceLock<Arc<dyn crate::hid::bluetooth_device::bonds::BondStore>>,
     #[cfg(unix)]
     otg_service: Option<Arc<OtgService>>,
 }

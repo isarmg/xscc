@@ -1,0 +1,35 @@
+[package]
+name = "clipboard-master"
+version = "4.0.0-beta.6"
+authors = ["Douman <douman@gmx.se>"]
+keywords = ["Windows", "winapi", "clipboard"]
+description = "Simple utility crate to monitor clipboard changes"
+
+homepage = "https://github.com/DoumanAsh/clipboard-master"
+repository = "https://github.com/DoumanAsh/clipboard-master"
+
+license = "MIT"
+readme = "README.md"
+edition = "2018"
+
+[target.'cfg(windows)'.dependencies]
+windows-win = "3"
+
+[target.'cfg(all(unix, not(any(target_os="macos", target_os="ios", target_os="android", target_os="emscripten"))))'.dependencies]
+x11-clipboard = "0.9"
+x11rb = { version = "0.13", features = ["xfixes"] }
+wl-clipboard-rs = { version = "0.9" }
+wayland-protocols = { version = "0.32.6", default-features = false, features = [
+	"unstable",
+	"staging",
+	"client",
+] }
+wayland-protocols-wlr = { version = "0.3.2", default-features = false, features = [
+	"client",
+] }
+wayland-client = { version = "0.31.4" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
+objc_id = "0.1"
+objc-foundation = "0.1"

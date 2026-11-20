@@ -1,0 +1,44 @@
+{
+  "format": 1,
+  "port_origin": "https://github.com/microsoft/vcpkg",
+  "port_revision": "1e199d32ad53aab1defda61ce41c380302e3f95c",
+  "archive_paths_relative_to": "one-kvm/build/windows/ports",
+  "archives": {
+    "ffmpeg/video-codecs.tar.gz": {
+      "origin": "https://codeload.github.com/ffmpeg/ffmpeg/tar.gz/refs/tags/n8.0.1",
+      "sha512": "f31769a7ed52865165e7db4a03e9378b3376012b7aaf0bbc022aa76c3e999e71c3927e6eb8639d8681e04e33362dd73eafa9e7c62a3c71599ff78da09f5cee0a"
+    },
+    "x264/h264-encoder.tar.gz": {
+      "origin": "https://code.videolan.org/videolan/x264/-/archive/31e19f92f00c7003fa115047ce50978bc98c3a0d/x264-31e19f92f00c7003fa115047ce50978bc98c3a0d.tar.gz",
+      "sha512": "707ff486677a1b5502d6d8faa588e7a03b0dee45491c5cba89341be4be23d3f2e48272c3b11d54cfc7be1b8bf4a3dfc3c3bb6d9643a6b5a2ed77539c85ecf294"
+    },
+    "x265/h265-encoder.tar.gz": {
+      "origin": "https://bitbucket.org/multicoreware/x265_git/get/4.1.tar.gz",
+      "sha512": "4b7d71f22f0a7f12ff93f9a01e361df2b80532cd8dac01b5465e63b5d8182f1a05c0289ad95f3aa972c963aa6cd90cb3d594f8b9a96f556a006cf7e1bdd9edda"
+    },
+    "ffnvcodec/nvenc-interface.tar.gz": {
+      "origin": "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n13.0.19.0",
+      "sha512": "103381914daf92ae11a409b2c9d0a9036bd40e3f7f244fa05202ed19c863f0630818c72e09e829b336754d727672b75d2789978a5875b355c3bc107fa9ca3ec6"
+    },
+    "libyuv/pixel-conversion.tar.gz": {
+      "origin": "https://codeload.github.com/lemenkov/libyuv/tar.gz/d98915a654d3564e4802a0004add46221c4e4348",
+      "sha512": "3dcadbf1262a3c81d15b4eab86b004a5ddf811aa29bd37d712e97f7dab849844c00641967fefd90b2ab187569ced3f07b06441b86936e20e7b2dcf122007993d"
+    },
+    "libjpeg-turbo/jpeg-codec.tar.gz": {
+      "origin": "https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/tar.gz/refs/tags/3.1.3",
+      "sha512": "d95bf0689fb2862ad5ea9e902b73724098d911d9c312aa69157bec9de77f32e4d5ac7dfa105d844110cc66dbdb0336056ba7f96781fcbc848b72fd0661604d50"
+    },
+    "amd-amf/AMF-LICENSE.txt": {
+      "origin": "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/AMF/v1.5.0/LICENSE.txt",
+      "sha512": "6b3261e5f38179c0d96483e44b339933a8eb0d9324784953eed74dfe2658ab9d94a9afb09d85ac1138300c8272ac73fb5e1e1f56ea26312f572453fab86f228a"
+    },
+    "amd-amf/amf-interface.tar.gz": {
+      "origin": "https://github.com/GPUOpen-LibrariesAndSDKs/AMF/releases/download/v1.5.0/AMF-headers-v1.5.0.tar.gz",
+      "sha512": "37d618c846bd2ba77ee282ac152fc5f807631007fca8156fca7e541ad1d1cb23786794aaad1ee3d3eb30b2011c4336bec9011031202c3238d91fe48d1e92f97b"
+    }
+  },
+  "shared_sources": {
+    "libvpx": "../../../native-sources/vp8-vp9-codec.tar.gz",
+    "ffmpeg-bin2c": "../ffmpeg/video-codecs.tar.gz"
+  }
+}

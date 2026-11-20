@@ -17,7 +17,7 @@ use crate::{
     StrikethroughStyle, TextRenderingMode, UnderlineStyle, px,
 };
 use anyhow::{Context as _, anyhow};
-use collections::{FxHashMap, FxHashSet};
+use gpui_support::collections::{FxHashMap, FxHashSet};
 use core::fmt;
 use derive_more::{Add, Deref, FromStr, Sub};
 use itertools::Itertools;

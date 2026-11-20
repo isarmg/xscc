@@ -1,4 +1,4 @@
-use collections::HashMap;
+use gpui_support::collections::HashMap;
 
 use crate::{KeybindingKeystroke, Keystroke};
 

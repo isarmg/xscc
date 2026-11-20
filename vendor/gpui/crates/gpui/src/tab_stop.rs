@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use ::sum_tree::SumTree;
-use collections::FxHashMap;
+use gpui_support::collections::FxHashMap;
 use sum_tree::Bias;
 
 use crate::{FocusHandle, FocusId};

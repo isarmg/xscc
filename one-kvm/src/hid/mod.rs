@@ -3,6 +3,8 @@
 pub mod backend;
 #[cfg(target_os = "linux")]
 mod bluetooth;
+#[cfg(target_os = "linux")]
+pub(crate) mod bluetooth_device;
 pub mod ch9329;
 mod ch9329_proto;
 pub mod consumer;

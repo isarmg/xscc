@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use anyhow::Context;
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use windows::{
     UI::{
         Color,

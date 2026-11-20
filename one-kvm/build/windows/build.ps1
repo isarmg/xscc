@@ -26,36 +26,40 @@ if ($Package -and $Configuration -ne "release") {
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $repoRoot
 
-if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
-    $VcpkgRoot = Join-Path (Split-Path $repoRoot -Parent) "vcpkg"
+if (-not $NoDefaultFeatures -or $Features -contains "desktop") {
+    if ([string]::IsNullOrWhiteSpace($VcpkgRoot)) {
+        $VcpkgRoot = Join-Path (Split-Path $repoRoot -Parent) "vcpkg"
+    }
+
+    $VcpkgRoot = [System.IO.Path]::GetFullPath($VcpkgRoot)
+    if ([string]::IsNullOrWhiteSpace($VcpkgInstalledRoot)) {
+        $VcpkgInstalledRoot = Join-Path $VcpkgRoot "installed"
+    }
+
+    $VcpkgInstalledRoot = [System.IO.Path]::GetFullPath($VcpkgInstalledRoot)
+    $vcpkgTripletRoot = Join-Path $VcpkgInstalledRoot $Triplet
+    $turbojpegLibDir = Join-Path $vcpkgTripletRoot "lib"
+    $turbojpegIncludeDir = Join-Path $vcpkgTripletRoot "include"
+
+    if (-not (Test-Path $VcpkgRoot)) {
+        throw "VCPKG_ROOT does not exist: $VcpkgRoot. Prepare the pinned vcpkg manifest dependencies first."
+    }
+
+    if (-not (Test-Path $turbojpegLibDir) -or -not (Test-Path $turbojpegIncludeDir)) {
+        throw "vcpkg triplet is not installed at $vcpkgTripletRoot. Prepare the pinned vcpkg manifest dependencies first."
+    }
+
+    $env:VCPKG_ROOT = $VcpkgRoot
+    $env:VCPKG_DEFAULT_TRIPLET = $Triplet
+    $env:VCPKG_INSTALLED_DIR = $VcpkgInstalledRoot
+    $env:TURBOJPEG_SOURCE = "explicit"
+    $env:TURBOJPEG_STATIC = "1"
+    $env:TURBOJPEG_LIB_DIR = $turbojpegLibDir
+    $env:TURBOJPEG_INCLUDE_DIR = $turbojpegIncludeDir
+    $env:LIBOPUS_LIB_DIR = $turbojpegLibDir
 }
 
-$VcpkgRoot = [System.IO.Path]::GetFullPath($VcpkgRoot)
-if ([string]::IsNullOrWhiteSpace($VcpkgInstalledRoot)) {
-    $VcpkgInstalledRoot = Join-Path $VcpkgRoot "installed"
-}
-
-$VcpkgInstalledRoot = [System.IO.Path]::GetFullPath($VcpkgInstalledRoot)
-$vcpkgTripletRoot = Join-Path $VcpkgInstalledRoot $Triplet
-$turbojpegLibDir = Join-Path $vcpkgTripletRoot "lib"
-$turbojpegIncludeDir = Join-Path $vcpkgTripletRoot "include"
-
-if (-not (Test-Path $VcpkgRoot)) {
-    throw "VCPKG_ROOT does not exist: $VcpkgRoot. Prepare the pinned vcpkg manifest dependencies first."
-}
-
-if (-not (Test-Path $turbojpegLibDir) -or -not (Test-Path $turbojpegIncludeDir)) {
-    throw "vcpkg triplet is not installed at $vcpkgTripletRoot. Prepare the pinned vcpkg manifest dependencies first."
-}
-
-$env:VCPKG_ROOT = $VcpkgRoot
-$env:VCPKG_DEFAULT_TRIPLET = $Triplet
-$env:VCPKG_INSTALLED_DIR = $VcpkgInstalledRoot
-$env:TURBOJPEG_SOURCE = "explicit"
-$env:TURBOJPEG_LIB_DIR = $turbojpegLibDir
-$env:TURBOJPEG_INCLUDE_DIR = $turbojpegIncludeDir
-
-$cargoCommand = @("build", "--locked", "--target", $Target)
+$cargoCommand = @("build", "--locked", "--offline", "--target", $Target)
 
 if ($Configuration -eq "release") {
     $cargoCommand += "--release"
@@ -78,7 +82,7 @@ cargo @cargoCommand
 if ($LASTEXITCODE -ne 0) { throw "One-KVM build failed ($LASTEXITCODE)" }
 
 if ($Package) {
-    $metadataJson = cargo metadata --locked --no-deps --format-version 1
+    $metadataJson = cargo metadata --locked --offline --no-deps --format-version 1
     if ($LASTEXITCODE -ne 0) { throw "Cargo metadata failed ($LASTEXITCODE)" }
     $metadata = $metadataJson | ConvertFrom-Json
     $packageInfo = $metadata.packages | Where-Object { $_.name -eq "one-kvm" } | Select-Object -First 1

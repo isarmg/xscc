@@ -17,6 +17,8 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, target)
         shutil.copytree(ROOT / "licenses", fixture / "licenses")
+        resources = Path("libs/bootable-virtual-media/resources")
+        shutil.copytree(ROOT / resources, fixture / resources)
         (fixture / "Cargo.toml").write_text('[package]\nversion = "0.0.0-test"\n')
         binary = fixture / "target/x86_64-unknown-linux-gnu/release/one-kvm"
         binary.parent.mkdir(parents=True)
@@ -30,6 +32,9 @@ def main():
         assert (extracted / "usr/share/doc/one-kvm/copyright").read_bytes() == (ROOT / "build/debian/copyright").read_bytes()
         assert (extracted / "usr/share/doc/one-kvm/LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
         assert (extracted / "usr/share/doc/one-kvm/SOURCE.json").is_file()
+        ventoy = extracted / "etc/one-kvm/ventoy"
+        assert sorted(path.name for path in ventoy.iterdir()) == ["boot.img", "core.img", "ventoy.disk.img"]
+        assert (ventoy / "boot.img").read_bytes() == (ROOT / resources / "boot.img").read_bytes()
         service = (extracted / "lib/systemd/system/one-kvm.service").read_text()
         assert "--data-dir /etc/one-kvm" in service and "UMask=0077" in service
         postinst = (control / "postinst").read_text()

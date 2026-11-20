@@ -527,6 +527,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "one-kvm-web"
+version = "0.2.8"
+dependencies = [
+ "gloo-timers",
+ "js-sys",
+ "send_wrapper",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "xcss-web",
+]
+
+[[package]]
 name = "or_poisoned"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1110,21 +1125,6 @@ dependencies = [
  "rstml",
  "rustc_version",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "one-kvm-web"
-version = "0.2.8"
-dependencies = [
- "gloo-timers",
- "js-sys",
- "send_wrapper",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "xcss-web",
 ]
 
 [[package]]

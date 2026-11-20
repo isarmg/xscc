@@ -5,17 +5,8 @@ ARG DEBIAN_IMAGE=debian:12
 FROM ${DEBIAN_IMAGE}
 
 ARG CHINAMIRRO=0
-ARG GH_PROXY=https://gh-proxy.com/
 ARG RUSTUP_DIST_SERVER_CN=https://mirrors.ustc.edu.cn/rust-static
 ARG RUSTUP_UPDATE_ROOT_CN=https://mirrors.ustc.edu.cn/rust-static/rustup
-ARG CARGO_INDEX_CN=https://mirrors.ustc.edu.cn/crates.io-index
-ARG CARGO_REGISTRY_CN=sparse+https://mirrors.ustc.edu.cn/crates.io-index/
-ARG LIBJPEG_TURBO_VERSION=3.1.4.1
-ARG LIBYUV_REV=957f295ea946cbbd13fcfc46e7066f2efa801233
-ARG LIBVPX_VERSION=1.16.0
-ARG X265_VERSION=3.4
-ARG OPUS_VERSION=1.5.2
-ARG FFMPEG_ROCKCHIP_REV=40c412daccf08164493da0de990eb99a8948116b
 
 # Optionally use China mirrors for builds in China.
 RUN if [ "$CHINAMIRRO" = "1" ]; then \
@@ -33,21 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         export RUSTUP_UPDATE_ROOT=${RUSTUP_UPDATE_ROOT_CN}; \
     fi \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.0 \
-    && if [ "$CHINAMIRRO" = "1" ]; then \
-        mkdir -p /root/.cargo; \
-        printf '%s\n' \
-            '[source.crates-io]' \
-            "replace-with = 'cn-mirror-sparse'" \
-            '[source.cn-mirror]' \
-            "registry = '${CARGO_INDEX_CN}'" \
-            '[source.cn-mirror-sparse]' \
-            "registry = '${CARGO_REGISTRY_CN}'" \
-            '[registries.cn-mirror]' \
-            "index = '${CARGO_INDEX_CN}'" \
-            '[net]' \
-            'git-fetch-with-cli = true' \
-            > /root/.cargo/config.toml; \
-    fi \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/root/.cargo/bin:${PATH}"
@@ -88,14 +64,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxdmcp-dev \
     && rm -rf /var/lib/apt/lists/*
 
+COPY build/native-sources/ /tmp/native-sources/
+RUN cd /tmp/native-sources && sha256sum -c SHA256SUMS
+
 # Build static libjpeg-turbo from source (needed by libyuv)
-RUN github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git init /tmp/libjpeg-turbo \
+RUN mkdir -p /tmp/libjpeg-turbo \
+    && tar -xzf /tmp/native-sources/jpeg-codec.tar.gz -C /tmp/libjpeg-turbo --strip-components=1 \
     && cd /tmp/libjpeg-turbo \
-    && git remote add origin "${github_prefix}https://github.com/libjpeg-turbo/libjpeg-turbo.git" \
-    && git fetch --depth 1 origin "refs/tags/${LIBJPEG_TURBO_VERSION}" \
-    && git checkout --detach FETCH_HEAD \
     && mkdir build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -106,13 +81,9 @@ RUN github_prefix="" \
     && rm -rf /tmp/libjpeg-turbo
 
 # Build static libyuv from source (uses libjpeg-turbo headers)
-RUN git init /tmp/libyuv \
+RUN mkdir -p /tmp/libyuv \
+    && tar -xzf /tmp/native-sources/pixel-conversion.tar.gz -C /tmp/libyuv --strip-components=1 \
     && cd /tmp/libyuv \
-    && github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git remote add origin "${github_prefix}https://github.com/lemenkov/libyuv" \
-    && git fetch --depth 1 origin ${LIBYUV_REV} \
-    && git checkout --detach FETCH_HEAD \
     && mkdir build && cd build \
     && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DJPEG_FOUND=TRUE \
@@ -125,13 +96,9 @@ RUN git init /tmp/libyuv \
     && rm -rf /tmp/libyuv
 
 # Build static libvpx from source
-RUN github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git init /tmp/libvpx \
+RUN mkdir -p /tmp/libvpx \
+    && tar -xzf /tmp/native-sources/vp8-vp9-codec.tar.gz -C /tmp/libvpx --strip-components=1 \
     && cd /tmp/libvpx \
-    && git remote add origin "${github_prefix}https://github.com/webmproject/libvpx.git" \
-    && git fetch --depth 1 origin "refs/tags/v${LIBVPX_VERSION}" \
-    && git checkout --detach FETCH_HEAD \
     && ./configure \
         --enable-static --disable-shared --enable-pic \
         --disable-examples --disable-tools --disable-docs \
@@ -141,9 +108,8 @@ RUN github_prefix="" \
     && rm -rf /tmp/libvpx
 
 # Build static libx264 from source
-RUN github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git clone --depth 1 "${github_prefix}https://github.com/mirror/x264.git" /tmp/x264 \
+RUN mkdir -p /tmp/x264 \
+    && tar -xzf /tmp/native-sources/h264-encoder.tar.gz -C /tmp/x264 --strip-components=1 \
     && cd /tmp/x264 \
     && ./configure --enable-static --disable-cli \
     && make -j$(nproc) \
@@ -151,13 +117,9 @@ RUN github_prefix="" \
     && rm -rf /tmp/x264
 
 # Build static libx265 from source
-RUN github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git init /tmp/x265 \
+RUN mkdir -p /tmp/x265 \
+    && tar -xzf /tmp/native-sources/h265-encoder.tar.gz -C /tmp/x265 --strip-components=1 \
     && cd /tmp/x265 \
-    && git remote add origin "${github_prefix}https://github.com/videolan/x265.git" \
-    && git fetch --depth 1 origin "refs/tags/${X265_VERSION}" \
-    && git checkout --detach FETCH_HEAD \
     && cd source \
     && mkdir -p build \
     && cd build \
@@ -187,28 +149,20 @@ Cflags: -I\${includedir}
 EOF
 
 # Build static libopus from source
-RUN github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && wget -O /tmp/opus.tar.gz "${github_prefix}https://github.com/xiph/opus/releases/download/v${OPUS_VERSION}/opus-${OPUS_VERSION}.tar.gz" \
-    && tar -xzf /tmp/opus.tar.gz -C /tmp \
-    && mv "/tmp/opus-${OPUS_VERSION}" /tmp/opus \
+RUN mkdir -p /tmp/opus \
+    && tar -xzf /tmp/native-sources/opus-codec.tar.gz -C /tmp/opus --strip-components=1 \
     && cd /tmp/opus \
     && ./configure \
         --enable-static --disable-shared \
         --disable-doc \
     && make -j$(nproc) \
     && make install \
-    && rm -rf /tmp/opus /tmp/opus.tar.gz
+    && rm -rf /tmp/opus
 
-# Download and build FFmpeg with minimal configuration for encoding only
-RUN mkdir -p /tmp/ffmpeg-build && cd /tmp/ffmpeg-build \
-    && github_prefix="" \
-    && if [ "$CHINAMIRRO" = "1" ]; then github_prefix="${GH_PROXY%/}/"; fi \
-    && git init ffmpeg-rockchip \
-    && cd ffmpeg-rockchip \
-    && git remote add origin "${github_prefix}https://github.com/nyanmisaka/ffmpeg-rockchip.git" \
-    && git fetch --depth 1 origin ${FFMPEG_ROCKCHIP_REV} \
-    && git checkout --detach FETCH_HEAD \
+# Build FFmpeg with minimal configuration for encoding only
+RUN mkdir -p /tmp/ffmpeg-build/ffmpeg-rockchip \
+    && tar -xzf /tmp/native-sources/rockchip-media-codec.tar.gz -C /tmp/ffmpeg-build/ffmpeg-rockchip --strip-components=1 \
+    && cd /tmp/ffmpeg-build/ffmpeg-rockchip \
     && ./configure \
         --enable-gpl \
         --enable-version3 \
@@ -289,4 +243,6 @@ RUN if [ "$CHINAMIRRO" = "1" ]; then \
 # Configure environment for static linking
 ENV PKG_CONFIG_ALLOW_CROSS=1\
     FFMPEG_STATIC=1 \
-    LIBYUV_STATIC=1
+    LIBYUV_STATIC=1 \
+    OPUS_STATIC=1 \
+    TURBOJPEG_STATIC=1

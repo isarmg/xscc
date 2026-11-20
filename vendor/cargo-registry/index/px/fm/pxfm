@@ -1,0 +1,2 @@
+{"name":"pxfm","vers":"0.1.25","deps":[{"name":"num-traits","req":"^0.2","features":[],"optional":false,"default_features":true,"target":null,"kind":"normal"}],"cksum":"a3cbdf373972bf78df4d3b518d07003938e2c7d1fb5891e55f9cb6df57009d84","features":{},"yanked":false,"rust_version":"1.85","pubtime":"2025-10-09T14:39:59Z"}
+{"name":"pxfm","vers":"0.1.30","deps":[],"cksum":"d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea","features":{},"yanked":false,"rust_version":"1.85","pubtime":"2026-07-06T06:43:55Z"}

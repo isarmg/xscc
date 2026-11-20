@@ -149,7 +149,7 @@ pub async fn hid_bluetooth_adapters() -> Result<Json<serde_json::Value>> {
     {
         Ok(Json(
             serde_json::to_value(
-                one_kvm_bluetooth_hid::adapters()
+                crate::hid::bluetooth_device::adapters()
                     .await
                     .map_err(AppError::ServiceUnavailable)?,
             )

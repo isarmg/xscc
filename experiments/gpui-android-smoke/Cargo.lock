@@ -734,15 +734,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "collections"
-version = "0.1.0"
-dependencies = [
- "gpui_util",
- "indexmap",
- "rustc-hash 2.1.3",
-]
-
-[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -961,15 +952,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustc_version",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "derive_refineable"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
  "syn 2.0.119",
 ]
 
@@ -1321,6 +1303,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "font_style_matching"
+version = "0.1.0"
+dependencies = [
+ "float-ord",
+]
+
+[[package]]
 name = "fontconfig-parser"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1599,7 +1588,6 @@ dependencies = [
  "backtrace",
  "bitflags 2.13.2",
  "chrono",
- "collections",
  "ctor",
  "derive_more",
  "embed-resource",
@@ -1607,9 +1595,9 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "gpui_macros",
- "gpui_util",
+ "gpui_support",
+ "gpui_task_scheduler",
  "heapless",
- "http_client",
  "image",
  "inventory",
  "itertools",
@@ -1626,10 +1614,8 @@ dependencies = [
  "profiling",
  "rand",
  "raw-window-handle",
- "refineable",
  "regex",
  "resvg",
- "scheduler",
  "schemars",
  "seahash",
  "serde",
@@ -1643,6 +1629,7 @@ dependencies = [
  "taffy",
  "thiserror 2.0.21",
  "ttf-parser",
+ "ui_http_client",
  "url",
  "usvg",
  "uuid",
@@ -1675,7 +1662,6 @@ dependencies = [
  "async-task",
  "block2 0.6.2",
  "cbindgen",
- "collections",
  "core-foundation",
  "core-foundation-sys",
  "core-graphics",
@@ -1686,7 +1672,7 @@ dependencies = [
  "foreign-types",
  "futures",
  "gpui",
- "gpui_util",
+ "gpui_support",
  "image",
  "libc",
  "log",
@@ -1735,11 +1721,9 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "calloop",
- "collections",
  "futures",
  "gpui",
- "gpui_util",
- "http_client",
+ "gpui_support",
  "libc",
  "log",
  "notify-rust",
@@ -1749,6 +1733,7 @@ dependencies = [
  "smallvec",
  "smol",
  "strum",
+ "ui_http_client",
  "url",
  "uuid",
 ]
@@ -1762,7 +1747,6 @@ dependencies = [
  "anyhow",
  "block2 0.6.2",
  "cocoa",
- "collections",
  "core-foundation",
  "core-foundation-sys",
  "core-graphics",
@@ -1772,7 +1756,8 @@ dependencies = [
  "futures",
  "gpui",
  "gpui_apple",
- "gpui_util",
+ "gpui_support",
+ "gpui_task_scheduler",
  "image",
  "itertools",
  "log",
@@ -1784,7 +1769,6 @@ dependencies = [
  "objc2-user-notifications",
  "parking_lot",
  "raw-window-handle",
- "scheduler",
  "semver",
  "smallvec",
  "strum",
@@ -1815,12 +1799,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui_util"
+name = "gpui_support"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "log",
+ "rustc-hash 2.1.3",
  "which",
+]
+
+[[package]]
+name = "gpui_task_scheduler"
+version = "0.1.0"
+dependencies = [
+ "async-task",
+ "backtrace",
+ "chrono",
+ "flume",
+ "futures",
+ "parking_lot",
+ "rand",
+ "web-time",
 ]
 
 [[package]]
@@ -1829,11 +1828,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "collections",
  "cosmic-text",
  "etagere",
  "gpui",
- "gpui_util",
+ "gpui_support",
  "itertools",
  "log",
  "parking_lot",
@@ -1854,19 +1852,18 @@ dependencies = [
  "accesskit",
  "accesskit_windows",
  "anyhow",
- "collections",
  "dunce",
  "etagere",
  "futures",
  "gpui",
- "gpui_util",
+ "gpui_support",
+ "gpui_task_scheduler",
  "image",
  "itertools",
  "log",
  "parking_lot",
  "rand",
  "raw-window-handle",
- "scheduler",
  "smallvec",
  "uuid",
  "windows",
@@ -1999,23 +1996,6 @@ checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
 dependencies = [
  "bytes",
  "http",
-]
-
-[[package]]
-name = "http_client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "futures",
- "http",
- "http-body",
- "log",
- "parking_lot",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "url",
 ]
 
 [[package]]
@@ -2199,8 +2179,6 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
- "serde",
- "serde_core",
 ]
 
 [[package]]
@@ -2661,7 +2639,6 @@ dependencies = [
 [[package]]
 name = "naga"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -2686,7 +2663,6 @@ dependencies = [
 [[package]]
 name = "naga-types"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
@@ -3787,13 +3763,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "refineable"
-version = "0.1.0"
-dependencies = [
- "derive_refineable",
-]
-
-[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3946,20 +3915,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "scheduler"
-version = "0.1.0"
-dependencies = [
- "async-task",
- "backtrace",
- "chrono",
- "flume",
- "futures",
- "parking_lot",
- "rand",
- "web-time",
 ]
 
 [[package]]
@@ -4350,8 +4305,6 @@ version = "0.1.0"
 dependencies = [
  "heapless",
  "rayon",
- "tracing",
- "ztracing",
 ]
 
 [[package]]
@@ -4743,6 +4696,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ui_http_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures",
+ "http",
+ "http-body",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "url",
+]
+
+[[package]]
 name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5019,7 +4988,6 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "wgpu"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",
@@ -5047,7 +5015,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -5082,7 +5049,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5090,7 +5056,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5098,7 +5063,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-linux-android-bsd"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5106,7 +5070,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-wasm"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5114,7 +5077,6 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5122,7 +5084,6 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -5174,7 +5135,6 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "naga",
  "wgpu-types",
@@ -5183,7 +5143,6 @@ dependencies = [
 [[package]]
 name = "wgpu-sync"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "cfg-if",
  "lock_api",
@@ -5196,7 +5155,6 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "30.0.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=3b3506ea31154edc04de64debda0e780cba2639c#3b3506ea31154edc04de64debda0e780cba2639c"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -5592,7 +5550,6 @@ dependencies = [
 [[package]]
 name = "zed-font-kit"
 version = "0.14.1-zed"
-source = "git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f28166665e8fd2f53ff6d268a14955c82269"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
@@ -5601,7 +5558,7 @@ dependencies = [
  "core-text",
  "dirs",
  "dwrote",
- "float-ord",
+ "font_style_matching",
  "freetype-sys",
  "lazy_static",
  "libc",
@@ -5724,18 +5681,6 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[package]]
-name = "ztracing"
-version = "0.1.0"
-dependencies = [
- "tracing",
- "ztracing_macro",
-]
-
-[[package]]
-name = "ztracing_macro"
-version = "0.1.0"
 
 [[package]]
 name = "zune-core"

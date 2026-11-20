@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::Result;
 use futures::FutureExt;
-use gpui_util::Deferred;
+use gpui_support::Deferred;
 use std::{
     any::{Any, TypeId},
     borrow::{Borrow, BorrowMut},
@@ -274,7 +274,7 @@ impl<'a, T: 'static> Context<'a, T> {
     ) -> Deferred<impl FnOnce()> {
         let this = self.weak_entity();
         let mut cx = self.to_async();
-        gpui_util::defer(move || {
+        gpui_support::defer(move || {
             this.update(&mut cx, f).ok();
         })
     }

@@ -1,0 +1,1 @@
+{"name":"ringbuf","vers":"0.3.3","deps":[{"name":"crossbeam-utils","req":"^0.8","features":[],"optional":false,"default_features":false,"target":null,"kind":"normal"}],"cksum":"79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a","features":{"alloc":[],"bench":[],"default":["alloc","std"],"std":["alloc"]},"yanked":false,"pubtime":"2023-03-31T07:22:00Z"}

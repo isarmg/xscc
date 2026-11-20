@@ -13,7 +13,7 @@ use crate::{
 };
 use anyhow::Result;
 #[cfg(any(test, feature = "test-support"))]
-use collections::VecDeque;
+use gpui_support::collections::VecDeque;
 use futures::channel::oneshot;
 use parking_lot::Mutex;
 use std::{

@@ -340,83 +340,8 @@ def ffi_bindgen_function_refactor():
         'sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart')
 
 
-# libdrmtap is fetched at build time from the rustdesk-org fork at a pinned
-# commit — the same way rustdesk sources its other native build deps (vcpkg,
-# flutter_rust_bridge, ...), rather than carrying a git submodule. It is the ONLY
-# pin for the drm backend: rustdesk dlopens this .so at runtime and does not depend on
-# the libdrmtap-sys crate (whose build.rs would statically link the C tree, a helper and
-# libdrm/seccomp/cap). DRMTAP_REPO, DRMTAP_SHA and DRMTAP_PREBUILT_DIR override it for local testing
-# or another fork, and each requires DRMTAP_ALLOW_UNPINNED=1 alongside it (see below).
-# The commit is fetched directly by sha, so no branch or tag name takes part in the build: see
-# build_libdrmtap_so(). This is the SINGLE source of truth for the pin, deliberately not duplicated in
-# any workflow, so a bump is one edit here (plus the informational version comment in
-# libs/scrap/Cargo.toml). This commit is libdrmtap v0.5.12.
-LIBDRMTAP_REPO_PINNED = 'https://github.com/rustdesk-org/libdrmtap'
-LIBDRMTAP_SHA_PINNED = '5936a7a88b94aa43516a3dd0eb509d2383f31e2d'
-LIBDRMTAP_REPO = os.environ.get('DRMTAP_REPO', LIBDRMTAP_REPO_PINNED)
-LIBDRMTAP_SHA = os.environ.get('DRMTAP_SHA', LIBDRMTAP_SHA_PINNED)
-# Every way of getting a different .so than the pin needs the same explicit opt-in. Otherwise the
-# claim this feature rests on -- that the privileged capture library is the reviewed object at
-# LIBDRMTAP_SHA_PINNED -- would hold only as long as nobody happened to have one of these set, and a
-# build that silently used something else would be indistinguishable from one that did not.
-# DRMTAP_PREBUILT_DIR is in the list because it is the widest of the three: it skips both the fetch
-# and the sha verification and hands over an object built from nothing this script can see.
-DRMTAP_UNPINNED_OK = os.environ.get('DRMTAP_ALLOW_UNPINNED') == '1'
-
-
-def _prebuilt_dir_is_the_pinned_checkout(prebuilt_dir):
-    # A .so built from this repo's own third_party/libdrmtap at the pinned sha is the pinned object,
-    # not an override, so it must not need the opt-in. This is how CI hands the library from a step
-    # that has meson to a packaging container that does not.
-    src = os.path.join(REPO_ROOT, 'third_party', 'libdrmtap')
-    try:
-        inside = os.path.commonpath([os.path.abspath(prebuilt_dir), src]) == src
-    except ValueError:
-        return False
-    if not inside or not os.path.isdir(os.path.join(src, '.git')):
-        return False
-    try:
-        head = subprocess.check_output(['git', '-C', src, 'rev-parse', 'HEAD']).decode().strip()
-    except (subprocess.SubprocessError, OSError):
-        return False
-    return head == LIBDRMTAP_SHA
-
-
-def _validate_libdrmtap_pin():
-    # Called from build_libdrmtap_so(), NOT at import: a stock (non --drm) build must stay
-    # byte-identical to upstream in behaviour too, and leftover DRMTAP_* variables in the
-    # environment (or a malformed sha) must not be able to fail a build that never touches
-    # libdrmtap.
-    # `or None` so an empty value reads as unset here exactly as it does in build_libdrmtap_so(),
-    # which tests it for truthiness.
-    prebuilt = os.environ.get('DRMTAP_PREBUILT_DIR') or None
-    if prebuilt and _prebuilt_dir_is_the_pinned_checkout(prebuilt):
-        prebuilt = None
-    overridden = [
-        name
-        for name, value, pinned in (
-            ('DRMTAP_REPO', LIBDRMTAP_REPO, LIBDRMTAP_REPO_PINNED),
-            ('DRMTAP_SHA', LIBDRMTAP_SHA, LIBDRMTAP_SHA_PINNED),
-            ('DRMTAP_PREBUILT_DIR', prebuilt, None),
-        )
-        if value != pinned
-    ]
-    if overridden and not DRMTAP_UNPINNED_OK:
-        raise Exception(
-            f'{", ".join(overridden)} would build libdrmtap from something other than the pinned '
-            f'{LIBDRMTAP_REPO_PINNED} at {LIBDRMTAP_SHA_PINNED}. That is supported for local work and '
-            'cross-builds, but it has to be deliberate: set DRMTAP_ALLOW_UNPINNED=1 as well.')
-    if overridden:
-        print(f'WARNING: libdrmtap is NOT the pinned build ({", ".join(overridden)} set)')
-    # Both are interpolated into shell commands below, and both are env-overridable, so validate
-    # their SHAPE before they get there. This is not only about a hostile environment: a truncated
-    # or abbreviated sha would otherwise reach `git fetch` and fail with something far less obvious
-    # than saying so here, and an abbreviated one would defeat the point of pinning.
-    if not re.fullmatch(r'[0-9a-f]{40}', LIBDRMTAP_SHA):
-        raise Exception(
-            f'DRMTAP_SHA must be a full 40-character commit sha, got {LIBDRMTAP_SHA!r}')
-    if not re.fullmatch(r'(https://|git@)[A-Za-z0-9._~:/@-]+', LIBDRMTAP_REPO):
-        raise Exception(f'DRMTAP_REPO does not look like a git remote url: {LIBDRMTAP_REPO!r}')
+DRM_CAPTURE_SOURCE = os.path.join(REPO_ROOT, 'vendor', 'drm-screen-capture')
+DRM_CAPTURE_BUILD = os.path.join(REPO_ROOT, 'build', 'native-dependencies', 'drm-screen-capture')
 
 
 def _single_real_so(paths, where):
@@ -431,83 +356,25 @@ def _single_real_so(paths, where):
 
 
 def build_libdrmtap_so():
-    # Build libdrmtap.so from the rustdesk-org fork, fetched at the pinned LIBDRMTAP_SHA. The
-    # pivot dlopen-s this .so in-process in the root service (which already holds
-    # CAP_SYS_ADMIN) — no setcap helper, no privileged child. Only the shared
-    # library target is built (the source also carries a helper binary we do not
-    # ship). Returns the path to the built versioned .so (e.g. libdrmtap.so.0.4.x).
-    _validate_libdrmtap_pin()
-    # Allow a caller (e.g. CI) to build the .so ahead of time and hand it in via
-    # DRMTAP_PREBUILT_DIR (must contain the real libdrmtap.so.0.* object).
     prebuilt_dir = os.environ.get('DRMTAP_PREBUILT_DIR')
     if prebuilt_dir:
-        # DRMTAP_PREBUILT_DIR explicitly names the artifact source, so honor it strictly: fail
-        # (rather than silently falling back to a source build) if it holds no single real .so.
-        prebuilt = glob.glob(os.path.join(prebuilt_dir, 'libdrmtap.so.0.*'))
-        so = _single_real_so(prebuilt, f'DRMTAP_PREBUILT_DIR={prebuilt_dir}')
-        # Check the stub case HERE too, not only on the source path below. This is the widest
-        # override of the three -- no fetch, no sha verification, an object built by something this
-        # script cannot see -- so it is the likeliest to hand over a CPU-only build, and skipping the
-        # assertion on exactly this path would leave the check guarding only the case that was
-        # already trustworthy. The helper check rides along for the same reason, and it matters
-        # more here than anywhere: this is the branch the packaging workflow takes.
-        _assert_so_has_egl(so)
-        _assert_so_has_no_helper(so)
-        return so
-    # Fetch the pinned source if it is not already present. third_party/libdrmtap is not a submodule
-    # anymore; it is git-ignored. The commit is fetched BY SHA rather than by cloning a branch:
-    # `clone --depth 1 --branch main` only ever fetches the tip, so the moment upstream pushes to
-    # `main` the pinned commit is not in the shallow clone at all and the build fails on an unreachable
-    # object. Fetching the sha needs no branch name, so it keeps working across every upstream push and
-    # is immune to a ref being moved or repointed.
-    src = os.path.join(REPO_ROOT, 'third_party', 'libdrmtap')
-    if not os.path.exists(os.path.join(src, 'meson.build')):
-        if os.path.isdir(src):
-            shutil.rmtree(src)
-        os.makedirs(src, exist_ok=True)
-        system2(f'git -C "{src}" init -q')
-        system2(f'git -C "{src}" remote add origin {LIBDRMTAP_REPO}')
-        system2(f'git -C "{src}" fetch --depth 1 origin {LIBDRMTAP_SHA}')
-        system2(f'git -C "{src}" checkout -q FETCH_HEAD')
-    # Verify the pin whenever the source is a GIT checkout. A fetch by sha cannot resolve to anything
-    # else, so this now guards the OTHER case: a reused checkout left by an earlier build at a
-    # different pin, which is what a bump leaves behind. Reject and remove it so the next run re-fetches
-    # cleanly. A NON-git tree placed here on purpose (a developer building unreleased local libdrmtap
-    # source) has nothing to verify and is used as-is.
-    if os.path.isdir(os.path.join(src, '.git')):
-        got_sha = subprocess.check_output(
-            ['git', '-C', src, 'rev-parse', 'HEAD']).decode().strip()
-        if got_sha != LIBDRMTAP_SHA:
-            shutil.rmtree(src, ignore_errors=True)
-            raise Exception(
-                f'libdrmtap at {src} is {got_sha}, expected {LIBDRMTAP_SHA} '
-                f'(stale checkout from a different pin; removed, re-run to re-fetch)')
-    build_dir = os.path.join(src, 'build-pkg')
-    # Configure a fresh dir, or RE-configure one an earlier build left behind. Without the second
-    # branch a build-pkg created before this option was added keeps its old configuration, meson
-    # skips setup, and the compile produces a helper-enabled .so. The assertion below then fails
-    # the build rather than shipping it, so this is a developer-build correctness fix and not a
-    # security one -- but it turns a confusing failure into no failure at all.
-    if not os.path.exists(os.path.join(build_dir, 'build.ninja')):
-        # -Dhelper=disabled: rustdesk never uses the privileged helper. The capture context is
-        # opened only in the root service (every drmtap_open lives in src/ipc/drm.rs), which
-        # already has CAP_SYS_ADMIN, and the unprivileged side opens a render node instead. Without
-        # this the library still carries the fallback: a fork/exec that walks six hardcoded paths,
-        # two of them under /usr/local, and execs the first that passes access(X_OK) with no check
-        # of its owner or mode -- inside the ROOT process. The option compiles that path out
-        # entirely. Requested by the maintainer on rustdesk#16242.
-        system2(f'meson setup "{build_dir}" "{src}" --buildtype=release -Dhelper=disabled')
+        if (os.path.realpath(prebuilt_dir) != os.path.realpath(DRM_CAPTURE_BUILD)
+                and os.environ.get('DRMTAP_ALLOW_UNPINNED') != '1'):
+            raise ValueError('Set DRMTAP_ALLOW_UNPINNED=1 to use a DRM capture library from another build.')
+        build_dir = prebuilt_dir
     else:
-        system2(f'meson configure "{build_dir}" -Dhelper=disabled')
-    # Build only the shared library, not the bundled helper binary or the static archive. Since
-    # libdrmtap 0.4.11 the project is `both_libraries` (a version-scripted .so + a static .a), so the
-    # bare `drmtap` target is ambiguous ("drmtap:shared_library" vs "drmtap:static_library"); ask for
-    # the shared one explicitly (rustdesk dlopens the .so and never needs the archive).
-    system2(f'meson compile -C "{build_dir}" drmtap:shared_library')
-    sos = glob.glob(os.path.join(build_dir, 'libdrmtap.so.0.*'))
-    # keep the real object (libdrmtap.so.0.4.x), not the .so/.so.0 symlinks or meson's .p dir, and
-    # require exactly one so a stale object from an earlier build is never silently picked.
-    so = _single_real_so(sos, f'the libdrmtap meson build dir {build_dir}')
+        build_dir = DRM_CAPTURE_BUILD
+        setup = ['meson', 'setup']
+        if os.path.isfile(os.path.join(build_dir, 'build.ninja')):
+            setup.append('--reconfigure')
+        subprocess.run(
+            setup + [build_dir, DRM_CAPTURE_SOURCE, '--buildtype=release',
+                     '--wrap-mode=nodownload', '-Degl=enabled'],
+            check=True,
+        )
+        subprocess.run(['meson', 'compile', '-C', build_dir, 'drmtap'], check=True)
+
+    so = _single_real_so(glob.glob(os.path.join(build_dir, 'libdrmtap.so.0.*')), build_dir)
     _assert_so_has_egl(so)
     _assert_so_has_no_helper(so)
     return so
@@ -529,9 +396,9 @@ def _assert_so_has_no_helper(so_path):
     if found:
         raise Exception(
             f'{so_path} still carries the privileged-helper fallback ({", ".join(found)}). '
-            f'It must be built with -Dhelper=disabled: rustdesk captures as root and never uses '
+            f'Use the repository DRM screen capture sources: rustdesk captures as root and never uses '
             f'the helper, so this is a fork/exec path in the privileged process that nothing '
-            f'reaches. Delete third_party/libdrmtap/build-pkg and rebuild.')
+            f'reaches. Delete the DRM capture build directory and rebuild.')
 
 
 def _assert_so_has_egl(so_path):
@@ -925,8 +792,6 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('flutter')
     system2('flutter build windows --release')
     os.chdir('..')
-    shutil.copy2('target/release/deps/dylib_virtual_display.dll',
-                 flutter_build_dir_2)
     if skip_portable_pack:
         return
     os.chdir('libs/portable')
@@ -983,11 +848,6 @@ def main():
     res_dir = 'resources'
     external_resources(True, args, res_dir)
     if windows:
-        # build virtual display dynamic library
-        os.chdir('libs/virtual_display/dylib')
-        system2('cargo build --locked --release')
-        os.chdir('../../..')
-
         build_flutter_windows(version, features, args.skip_portable_pack)
     elif os.path.isfile('/usr/bin/pacman'):
         system2("sed -i 's/pkgver=.*/pkgver=%s/g' res/PKGBUILD" % version)

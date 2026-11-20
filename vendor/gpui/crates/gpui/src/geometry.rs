@@ -5,7 +5,6 @@
 use anyhow::{Context as _, anyhow};
 use core::fmt::Debug;
 use derive_more::{Add, AddAssign, Div, DivAssign, Mul, Neg, Sub, SubAssign};
-use refineable::Refineable;
 use schemars::{JsonSchema, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::borrow::Cow;
@@ -18,7 +17,7 @@ use std::{
 };
 use taffy::prelude::{TaffyGridLine, TaffyGridSpan};
 
-use crate::{App, DisplayId};
+use crate::{App, DisplayId, Refineable};
 
 /// Axis in a 2D cartesian space.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]

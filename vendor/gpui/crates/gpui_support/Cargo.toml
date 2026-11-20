@@ -1,0 +1,21 @@
+[package]
+name = "gpui_support"
+version = "0.1.0"
+publish.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "Shared data structures, diagnostics and process helpers for GPUI"
+
+[lib]
+doctest = false
+
+[dependencies]
+log = { workspace = true, features = ["serde"] }
+anyhow.workspace = true
+rustc-hash.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+which.workspace = true
+
+[lints]
+workspace = true

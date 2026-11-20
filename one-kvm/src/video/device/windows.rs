@@ -141,7 +141,7 @@ pub(crate) fn directshow_display_name_from_path(path: impl AsRef<Path>) -> Optio
 }
 
 pub fn enumerate_devices() -> Result<Vec<VideoDeviceInfo>> {
-    let names = hwcodec::capture::list_dshow_video_devices().map_err(|e| {
+    let names = video_codec_backends::capture::list_dshow_video_devices().map_err(|e| {
         AppError::VideoError(format!("Failed to enumerate DirectShow devices: {}", e))
     })?;
 
@@ -257,7 +257,8 @@ fn directshow_device_from_name(index: usize, name: String) -> VideoDeviceInfo {
 }
 
 fn enumerate_directshow_formats(name: &str) -> Vec<FormatInfo> {
-    let Ok(capabilities) = hwcodec::capture::list_dshow_device_capabilities(name) else {
+    let Ok(capabilities) = video_codec_backends::capture::list_dshow_device_capabilities(name)
+    else {
         return fallback_windows_formats();
     };
 
@@ -335,23 +336,25 @@ fn b_pixels(resolution: &ResolutionInfo) -> u32 {
     resolution.width.saturating_mul(resolution.height)
 }
 
-fn map_capture_format(format: hwcodec::capture::CapturePixelFormat) -> Option<PixelFormat> {
+fn map_capture_format(
+    format: video_codec_backends::capture::CapturePixelFormat,
+) -> Option<PixelFormat> {
     match format {
-        hwcodec::capture::CapturePixelFormat::Mjpeg => Some(PixelFormat::Mjpeg),
-        hwcodec::capture::CapturePixelFormat::Jpeg => Some(PixelFormat::Jpeg),
-        hwcodec::capture::CapturePixelFormat::Yuyv => Some(PixelFormat::Yuyv),
-        hwcodec::capture::CapturePixelFormat::Yvyu => Some(PixelFormat::Yvyu),
-        hwcodec::capture::CapturePixelFormat::Uyvy => Some(PixelFormat::Uyvy),
-        hwcodec::capture::CapturePixelFormat::Nv12 => Some(PixelFormat::Nv12),
-        hwcodec::capture::CapturePixelFormat::Nv21 => Some(PixelFormat::Nv21),
-        hwcodec::capture::CapturePixelFormat::Nv16 => Some(PixelFormat::Nv16),
-        hwcodec::capture::CapturePixelFormat::Nv24 => Some(PixelFormat::Nv24),
-        hwcodec::capture::CapturePixelFormat::Yuv420 => Some(PixelFormat::Yuv420),
-        hwcodec::capture::CapturePixelFormat::Yvu420 => Some(PixelFormat::Yvu420),
-        hwcodec::capture::CapturePixelFormat::Rgb24 => Some(PixelFormat::Rgb24),
-        hwcodec::capture::CapturePixelFormat::Bgr24 => Some(PixelFormat::Bgr24),
-        hwcodec::capture::CapturePixelFormat::Grey => Some(PixelFormat::Grey),
-        hwcodec::capture::CapturePixelFormat::Unknown => None,
+        video_codec_backends::capture::CapturePixelFormat::Mjpeg => Some(PixelFormat::Mjpeg),
+        video_codec_backends::capture::CapturePixelFormat::Jpeg => Some(PixelFormat::Jpeg),
+        video_codec_backends::capture::CapturePixelFormat::Yuyv => Some(PixelFormat::Yuyv),
+        video_codec_backends::capture::CapturePixelFormat::Yvyu => Some(PixelFormat::Yvyu),
+        video_codec_backends::capture::CapturePixelFormat::Uyvy => Some(PixelFormat::Uyvy),
+        video_codec_backends::capture::CapturePixelFormat::Nv12 => Some(PixelFormat::Nv12),
+        video_codec_backends::capture::CapturePixelFormat::Nv21 => Some(PixelFormat::Nv21),
+        video_codec_backends::capture::CapturePixelFormat::Nv16 => Some(PixelFormat::Nv16),
+        video_codec_backends::capture::CapturePixelFormat::Nv24 => Some(PixelFormat::Nv24),
+        video_codec_backends::capture::CapturePixelFormat::Yuv420 => Some(PixelFormat::Yuv420),
+        video_codec_backends::capture::CapturePixelFormat::Yvu420 => Some(PixelFormat::Yvu420),
+        video_codec_backends::capture::CapturePixelFormat::Rgb24 => Some(PixelFormat::Rgb24),
+        video_codec_backends::capture::CapturePixelFormat::Bgr24 => Some(PixelFormat::Bgr24),
+        video_codec_backends::capture::CapturePixelFormat::Grey => Some(PixelFormat::Grey),
+        video_codec_backends::capture::CapturePixelFormat::Unknown => None,
     }
 }
 

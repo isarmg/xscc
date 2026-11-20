@@ -2,9 +2,9 @@ name: One-KVM bare-metal Web host
 on:
   push:
     branches: [main, feat/management-prep]
-    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
+    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.cargo/**', 'res/vcpkg/**', 'res/native-package-build/**', 'vendor/cargo-registry/**', 'vendor/platform/**', '.github/scripts/pinned_asset_download.py', '.github/scripts/setup-pinned-vcpkg.py', '.github/workflows/one-kvm-native.yml']
   pull_request:
-    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.github/workflows/one-kvm-native.yml']
+    paths: ['one-kvm/**', 'crates/management/**', 'crates/native-management/**', 'crates/session-transport/**', 'libs/base/**', 'libs/hbb_common/**', 'Cargo.toml', '.cargo/**', 'res/vcpkg/**', 'res/native-package-build/**', 'vendor/cargo-registry/**', 'vendor/platform/**', '.github/scripts/pinned_asset_download.py', '.github/scripts/setup-pinned-vcpkg.py', '.github/workflows/one-kvm-native.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,15 +35,15 @@ jobs:
         run: |
           cargo fmt -- --check
           cargo fmt --manifest-path crates/management/Cargo.toml -p one-kvm-management -- --check
-          cargo test --locked --manifest-path crates/management/Cargo.toml --workspace -- --test-threads=2
-          cargo clippy --locked --manifest-path crates/management/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --locked --offline --manifest-path crates/management/Cargo.toml --workspace -- --test-threads=2
+          cargo clippy --locked --offline --manifest-path crates/management/Cargo.toml --workspace --all-targets -- -D warnings
       - name: Check and build the Rust browser application
         run: |
           cargo fmt --manifest-path web/xcss-web/Cargo.toml -- --check
-          cargo test --locked --manifest-path web/xcss-web/Cargo.toml --lib
-          cargo clippy --locked --manifest-path web/xcss-web/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
+          cargo test --locked --offline --manifest-path web/xcss-web/Cargo.toml --lib
+          cargo clippy --locked --offline --manifest-path web/xcss-web/Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
           cargo install wasm-bindgen-cli --version 0.2.129 --locked
-          cargo run --locked --manifest-path tools/web-build/Cargo.toml -- build --product-root .
+          cargo run --locked --offline --manifest-path tools/web-build/Cargo.toml -- build --product-root . --offline
       - uses: actions/upload-artifact@v4
         with:
           name: one-kvm-web-dist
@@ -68,7 +68,7 @@ jobs:
       - name: Install cross-compilation build tool
         run: cargo install cross --version 0.2.5 --locked
       - name: Test native host logic in the x86_64 build environment
-        run: cross test --locked --lib --target x86_64-unknown-linux-gnu
+        run: bash build/build-images.sh test
       - name: Build native Linux binaries and Debian packages
         run: |
           bash build/build-images.sh
@@ -96,34 +96,32 @@ jobs:
           toolchain: 1.99.0
           components: clippy
       - uses: ilammy/msvc-dev-cmd@v1
-      - name: Prepare repository-pinned native libraries
+      - name: Prepare pinned native build tool
         shell: pwsh
         run: |
-          $env:VCPKG_ROOT = Join-Path $env:RUNNER_TEMP "one-kvm-vcpkg"
+          python ..\.github\scripts\setup-pinned-vcpkg.py --root (Join-Path $env:RUNNER_TEMP "one-kvm-native-build")
+          if ($LASTEXITCODE -ne 0) { throw "Native build tool setup failed" }
+      - name: Build repository-owned Windows libraries
+        shell: pwsh
+        run: |
           $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
           $env:VCPKG_INSTALLED_DIR = Join-Path $pwd "vcpkg_installed"
-          $baseline = (Get-Content vcpkg-configuration.json -Raw | ConvertFrom-Json).'default-registry'.baseline
-          git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed" }
-          git -C $env:VCPKG_ROOT checkout --detach $baseline
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg pinned revision unavailable" }
-          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
           & "$env:VCPKG_ROOT\vcpkg.exe" install --triplet $env:VCPKG_DEFAULT_TRIPLET --x-install-root="$env:VCPKG_INSTALLED_DIR"
           if ($LASTEXITCODE -ne 0) { throw "vcpkg manifest dependencies failed" }
           $tripletRoot = Join-Path $env:VCPKG_INSTALLED_DIR $env:VCPKG_DEFAULT_TRIPLET
-          "VCPKG_ROOT=$env:VCPKG_ROOT" | Out-File $env:GITHUB_ENV -Append
           "VCPKG_DEFAULT_TRIPLET=$env:VCPKG_DEFAULT_TRIPLET" | Out-File $env:GITHUB_ENV -Append
           "VCPKG_INSTALLED_DIR=$env:VCPKG_INSTALLED_DIR" | Out-File $env:GITHUB_ENV -Append
           "TURBOJPEG_SOURCE=explicit" | Out-File $env:GITHUB_ENV -Append
+          "TURBOJPEG_STATIC=1" | Out-File $env:GITHUB_ENV -Append
           "TURBOJPEG_LIB_DIR=$(Join-Path $tripletRoot 'lib')" | Out-File $env:GITHUB_ENV -Append
           "TURBOJPEG_INCLUDE_DIR=$(Join-Path $tripletRoot 'include')" | Out-File $env:GITHUB_ENV -Append
+          "LIBOPUS_LIB_DIR=$(Join-Path $tripletRoot 'lib')" | Out-File $env:GITHUB_ENV -Append
       - name: Test and lint Windows host logic
         shell: pwsh
         run: |
-          cargo test --locked --lib --target x86_64-pc-windows-msvc
+          cargo test --locked --offline --lib -p one-kvm -p pixel-conversion --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "Windows host tests failed" }
-          cargo clippy --locked --all-targets --target x86_64-pc-windows-msvc
+          cargo clippy --locked --offline --all-targets --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "Windows host lint failed" }
       - name: Build and package Windows Web host
         shell: pwsh

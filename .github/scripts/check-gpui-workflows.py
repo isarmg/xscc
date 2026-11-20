@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Keep active product automation native and local workflow references valid."""
-from pathlib import Path, PurePosixPath
-import hashlib
+from pathlib import Path
 import json
 import re
 import tomllib
@@ -25,30 +24,42 @@ SDK = re.compile(
 )
 
 
-def check_hwcodec_source(snapshot):
-    metadata = json.loads((snapshot / 'upstream.json').read_text())
-    changes = set(metadata['local_changes'])
-    imported = set()
-    for line in (snapshot / metadata['source_inventory']).read_text().splitlines():
-        digest, relative = line.split('  ', 1)
-        path = PurePosixPath(relative)
-        if (not re.fullmatch(r'[0-9a-f]{64}', digest) or path.is_absolute()
-                or '..' in path.parts or relative in imported):
-            raise ValueError('Invalid hwcodec source inventory entry')
-        imported.add(relative)
-        if relative not in changes:
-            actual = hashlib.sha256((snapshot / relative).read_bytes()).hexdigest()
-            if actual != digest:
-                raise ValueError(f'Unrecorded hwcodec source modification: {relative}')
-    if len(imported) != metadata['source_file_count']:
-        raise ValueError('hwcodec imported source count differs from provenance')
-    for relative in changes:
-        if not (snapshot / relative).is_file():
-            raise ValueError(f'Missing recorded hwcodec local change: {relative}')
+def check_native_ports():
+    manifest = json.loads((ROOT / 'vcpkg.json').read_text())
+    configuration = manifest['vcpkg-configuration']
+    if configuration.get('default-registry', 'builtin') is not None:
+        raise ValueError('Native dependencies must resolve from the repository ports')
+    ports = {p.parent.name: p.parent for overlay in configuration['overlay-ports']
+             for p in (ROOT / overlay).glob('*/vcpkg.json')}
+    dependencies = list(manifest['dependencies'])
+    for feature in manifest.get('features', {}).values():
+        dependencies.extend(feature.get('dependencies', ()))
+    loaded = set()
+    while dependencies:
+        dependency = dependencies.pop()
+        name = dependency if isinstance(dependency, str) else dependency['name']
+        if name in loaded:
+            continue
+        port = ports.get(name)
+        if port is None:
+            raise ValueError(f'Missing repository native port: {name}')
+        loaded.add(name)
+        recipe = (port / 'portfile.cmake').read_text()
+        if re.search(r'vcpkg_from_(?:git|github)\s*\(', recipe):
+            raise ValueError(f'Native port retrieves its source from a registry: {name}')
+        if 'vcpkg_download_distfile(' in recipe and name != 'vcpkg-make':
+            raise ValueError(f'Native port downloads its source: {name}')
+        for archive in re.findall(r'ARCHIVE "\$\{CURRENT_PORT_DIR\}/([^"]+)"', recipe):
+            if not (port / archive).is_file():
+                raise ValueError(f'Missing repository source archive: {name}/{archive}')
+        metadata = json.loads((port / 'vcpkg.json').read_text())
+        dependencies.extend(metadata.get('dependencies', ()))
+        for feature in metadata.get('features', {}).values():
+            dependencies.extend(feature.get('dependencies', ()))
 
 
 def check():
-    check_hwcodec_source(ROOT / 'vendor/hwcodec')
+    check_native_ports()
     manifest = tomllib.loads((ROOT / 'Cargo.toml').read_text())
     for product in ('apps/desktop', 'apps/mobile'):
         if (product not in manifest['workspace']['members']

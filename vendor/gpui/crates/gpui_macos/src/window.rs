@@ -42,7 +42,7 @@ use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
 use core_graphics::display::{CGDirectDisplayID, CGRect};
 use ctor::ctor;
 use futures::channel::oneshot;
-use gpui_util::ResultExt;
+use gpui_support::ResultExt;
 use objc::{
     class,
     declare::ClassDecl,

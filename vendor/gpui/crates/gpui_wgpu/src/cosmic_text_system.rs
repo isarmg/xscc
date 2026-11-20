@@ -1,9 +1,11 @@
 use anyhow::{Context as _, Ok, Result};
-use collections::HashMap;
+use gpui_support::collections::HashMap;
 use cosmic_text::{
     Attrs, AttrsList, Ellipsize, Family, Font as CosmicTextFont,
     FontFeatures as CosmicFontFeatures, FontSystem, ShapeBuffer, ShapeLine, Stretch, Style, Weight,
 };
+#[cfg(feature = "font-style-matching")]
+use font_style_matching::properties as css;
 use gpui::{
     Bounds, DevicePixels, FallbackFontClass, Font, FontFallbacks, FontFeatures, FontId,
     FontMetrics, FontRun, GlyphId, IsZero as _, LineLayout, MissingGlyph, MissingGlyphSink, Pixels,
@@ -963,7 +965,7 @@ fn clip_font_runs(font_runs: &[FontRun], range: Range<usize>) -> SmallVec<[FontR
     clipped
 }
 
-#[cfg(feature = "font-kit")]
+#[cfg(feature = "font-style-matching")]
 fn find_best_match(
     font: &Font,
     candidates: &[FontId],
@@ -983,13 +985,13 @@ fn find_best_match(
         .collect::<Result<SmallVec<[_; 4]>>>()?;
 
     let ix =
-        font_kit::matching::find_best_match(&candidate_properties, &font_into_properties(font))
+        font_style_matching::find_best_match(&candidate_properties, &font_into_properties(font))
             .context("requested font family contains no font matching the other parameters")?;
 
     Ok(ix)
 }
 
-#[cfg(not(feature = "font-kit"))]
+#[cfg(not(feature = "font-style-matching"))]
 fn find_best_match(
     font: &Font,
     candidates: &[FontId],
@@ -1161,40 +1163,38 @@ fn cosmic_font_features(features: &FontFeatures) -> Result<CosmicFontFeatures> {
     Ok(result)
 }
 
-#[cfg(feature = "font-kit")]
-fn font_into_properties(font: &gpui::Font) -> font_kit::properties::Properties {
-    font_kit::properties::Properties {
+#[cfg(feature = "font-style-matching")]
+fn font_into_properties(font: &gpui::Font) -> css::Properties {
+    css::Properties {
         style: match font.style {
-            gpui::FontStyle::Normal => font_kit::properties::Style::Normal,
-            gpui::FontStyle::Italic => font_kit::properties::Style::Italic,
-            gpui::FontStyle::Oblique => font_kit::properties::Style::Oblique,
+            gpui::FontStyle::Normal => css::Style::Normal,
+            gpui::FontStyle::Italic => css::Style::Italic,
+            gpui::FontStyle::Oblique => css::Style::Oblique,
         },
-        weight: font_kit::properties::Weight(font.weight.0),
+        weight: css::Weight(font.weight.0),
         stretch: Default::default(),
     }
 }
 
-#[cfg(feature = "font-kit")]
-fn face_info_into_properties(
-    face_info: &cosmic_text::fontdb::FaceInfo,
-) -> font_kit::properties::Properties {
-    font_kit::properties::Properties {
+#[cfg(feature = "font-style-matching")]
+fn face_info_into_properties(face_info: &cosmic_text::fontdb::FaceInfo) -> css::Properties {
+    css::Properties {
         style: match face_info.style {
-            cosmic_text::Style::Normal => font_kit::properties::Style::Normal,
-            cosmic_text::Style::Italic => font_kit::properties::Style::Italic,
-            cosmic_text::Style::Oblique => font_kit::properties::Style::Oblique,
+            cosmic_text::Style::Normal => css::Style::Normal,
+            cosmic_text::Style::Italic => css::Style::Italic,
+            cosmic_text::Style::Oblique => css::Style::Oblique,
         },
-        weight: font_kit::properties::Weight(face_info.weight.0.into()),
+        weight: css::Weight(face_info.weight.0.into()),
         stretch: match face_info.stretch {
-            cosmic_text::Stretch::Condensed => font_kit::properties::Stretch::CONDENSED,
-            cosmic_text::Stretch::Expanded => font_kit::properties::Stretch::EXPANDED,
-            cosmic_text::Stretch::ExtraCondensed => font_kit::properties::Stretch::EXTRA_CONDENSED,
-            cosmic_text::Stretch::ExtraExpanded => font_kit::properties::Stretch::EXTRA_EXPANDED,
-            cosmic_text::Stretch::Normal => font_kit::properties::Stretch::NORMAL,
-            cosmic_text::Stretch::SemiCondensed => font_kit::properties::Stretch::SEMI_CONDENSED,
-            cosmic_text::Stretch::SemiExpanded => font_kit::properties::Stretch::SEMI_EXPANDED,
-            cosmic_text::Stretch::UltraCondensed => font_kit::properties::Stretch::ULTRA_CONDENSED,
-            cosmic_text::Stretch::UltraExpanded => font_kit::properties::Stretch::ULTRA_EXPANDED,
+            cosmic_text::Stretch::Condensed => css::Stretch::CONDENSED,
+            cosmic_text::Stretch::Expanded => css::Stretch::EXPANDED,
+            cosmic_text::Stretch::ExtraCondensed => css::Stretch::EXTRA_CONDENSED,
+            cosmic_text::Stretch::ExtraExpanded => css::Stretch::EXTRA_EXPANDED,
+            cosmic_text::Stretch::Normal => css::Stretch::NORMAL,
+            cosmic_text::Stretch::SemiCondensed => css::Stretch::SEMI_CONDENSED,
+            cosmic_text::Stretch::SemiExpanded => css::Stretch::SEMI_EXPANDED,
+            cosmic_text::Stretch::UltraCondensed => css::Stretch::ULTRA_CONDENSED,
+            cosmic_text::Stretch::UltraExpanded => css::Stretch::ULTRA_EXPANDED,
         },
     }
 }

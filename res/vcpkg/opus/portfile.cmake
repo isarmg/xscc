@@ -1,9 +1,5 @@
-vcpkg_from_github(
-    OUT_SOURCE_PATH SOURCE_PATH
-    REPO xiph/opus
-    REF "v${VERSION}"
-    SHA512 4ffefd9c035671024f9720c5129bfe395dea04f0d6b730041c2804e89b1db6e4d19633ad1ae58855afc355034233537361e707f26dc53adac916554830038fab
-    HEAD_REF main
+vcpkg_extract_source_archive(SOURCE_PATH
+    ARCHIVE "${CURRENT_PORT_DIR}/voice-codec-source.tar.gz"
     PATCHES fix-pkgconfig-version.patch
 )
 

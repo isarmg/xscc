@@ -3,10 +3,14 @@
 # Usage: ./build/build-images.sh [arch]
 # Example: ./build/build-images.sh x86_64
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Cross mounts the current directory. The parent also holds One-KVM's shared
+# path dependencies and Cargo registry mirror.
+cd "$PROJECT_DIR/.."
 
 # Supported architectures (Rust target)
 ARCH_MAP=(
@@ -25,32 +29,28 @@ build_arch() {
             # Docker bridge on some networks because its CDN blocks the SNAT source IP).
             local rust_dist="${RUSTUP_DIST_SERVER_MIRROR:-https://mirrors.ustc.edu.cn/rust-static}"
             local rust_root="${RUSTUP_UPDATE_ROOT_MIRROR:-https://mirrors.ustc.edu.cn/rust-static/rustup}"
-            local crates_sparse="${CARGO_SPARSE_MIRROR:-sparse+https://mirrors.ustc.edu.cn/crates.io-index/}"
-            local crates_git="${CARGO_GIT_MIRROR:-https://mirrors.ustc.edu.cn/crates.io-index}"
-            local cross_build_opts="${CROSS_BUILD_OPTS:+$CROSS_BUILD_OPTS }--progress=plain --build-arg CHINAMIRRO=1 --build-arg GH_PROXY=${GH_PROXY:-https://ghfast.top/} --build-arg DEBIAN_IMAGE=${DEBIAN_IMAGE:-dockerproxy.net/library/debian:12}"
+            local cross_build_opts="${CROSS_BUILD_OPTS:+$CROSS_BUILD_OPTS }--progress=plain --build-arg CHINAMIRRO=1 --build-arg DEBIAN_IMAGE=${DEBIAN_IMAGE:-dockerproxy.net/library/debian:12}"
+            cross_build_opts="$cross_build_opts --build-arg RUSTUP_DIST_SERVER_CN=$rust_dist --build-arg RUSTUP_UPDATE_ROOT_CN=$rust_root"
             cross_build_opts="$cross_build_opts --build-arg HTTP_PROXY= --build-arg HTTPS_PROXY= --build-arg ALL_PROXY= --build-arg NO_PROXY="
             cross_build_opts="$cross_build_opts --build-arg http_proxy= --build-arg https_proxy= --build-arg all_proxy= --build-arg no_proxy="
             echo "=== China mirror acceleration: enabled ==="
             echo "=== Building: $rust_target (via cross with custom Dockerfile) ==="
-            env \
-                CROSS_BUILD_OPTS="$cross_build_opts" \
-                CARGO_SOURCE_CRATES_IO_REPLACE_WITH=cn-mirror \
-                CARGO_SOURCE_CN-MIRROR_REGISTRY="$crates_sparse" \
-                CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse \
-                CARGO_NET_GIT_FETCH_WITH_CLI=true \
-                RUSTUP_DIST_SERVER="$rust_dist" \
-                RUSTUP_UPDATE_ROOT="$rust_root" \
-                cross build --locked --release --target "$rust_target"
+            CROSS_BUILD_OPTS="$cross_build_opts" RUSTUP_DIST_SERVER="$rust_dist" RUSTUP_UPDATE_ROOT="$rust_root" \
+                cross build --manifest-path one-kvm/Cargo.toml --locked --offline --release --target "$rust_target"
             return
             ;;
     esac
 
     echo "=== Building: $rust_target (via cross with custom Dockerfile) ==="
-    cross build --locked --release --target "$rust_target"
+    cross build --manifest-path one-kvm/Cargo.toml --locked --offline --release --target "$rust_target"
 }
 
 # Main
 case "${1:-all}" in
+    test)
+        cross test --manifest-path one-kvm/Cargo.toml --locked --offline --lib -p one-kvm -p pixel-conversion --target x86_64-unknown-linux-gnu
+        exit
+        ;;
     all)
         for target in "${ARCH_MAP[@]}"; do
             build_arch "$target"
@@ -71,6 +71,7 @@ case "${1:-all}" in
         echo "  x86_64  Build only x86_64"
         echo "  arm64   Build only arm64"
         echo "  armv7   Build only ARMv7"
+        echo "  test    Test the x86_64 host in its build environment"
         echo ""
         echo "Examples:"
         echo "  $0              # Build all"

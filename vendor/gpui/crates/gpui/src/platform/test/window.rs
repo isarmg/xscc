@@ -6,7 +6,7 @@ use crate::{
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowInsets, WindowParams,
     WindowVisibility,
 };
-use gpui_util::ResultExt as _;
+use gpui_support::ResultExt as _;
 #[cfg(any(test, feature = "test-support"))]
 use image::RgbaImage;
 use parking_lot::Mutex;
