@@ -89,6 +89,8 @@ use winreg::{enums::*, RegKey};
 
 pub(crate) mod display_modes;
 mod acl;
+#[cfg(feature = "gpui-host")]
+pub(crate) mod capture_thread;
 mod installer_handoff;
 mod installer_shell;
 mod verified_update;

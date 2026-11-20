@@ -597,6 +597,12 @@ fn run(vs: VideoService) -> ResultType<()> {
         log::info!("disable dxgi with option, fall back to gdi");
         c.set_gdi();
     }
+    #[cfg(all(windows, feature = "gpui-host"))]
+    let _capture_scheduling = if vs.source.is_monitor() && !c.is_gdi() {
+        crate::platform::windows::capture_thread::CaptureThreadScheduling::register()
+    } else {
+        None
+    };
     #[cfg(windows)]
     let mut capture_owner = encoder_retirement::CaptureOwner::new(c, raii, _capture_lifetime);
     #[cfg(windows)]
