@@ -24,7 +24,7 @@ try {
         throw 'Unexpected VDD archive inventory'
     }
     foreach ($name in @('MttVDD.inf', 'MttVDD.dll', 'mttvdd.cat', 'vdd_settings.xml')) {
-        $entry = $archive.GetEntry('driver-packages/configurable-virtual-display-amd64.zip'_prefix + $name)
+        $entry = $archive.GetEntry($manifest.archive_prefix + $name)
         if ($null -eq $entry -or $entry.Length -le 0 -or $entry.Length -gt 1048576) {
             throw "Missing or unbounded VDD file: $name"
         }
