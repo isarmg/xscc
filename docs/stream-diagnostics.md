@@ -43,6 +43,13 @@ The receiving sample includes the highest authenticated sequence and last
 reassembled video message. A sequence gap records a hole when it opens. The
 late-packet counter records subsequently accepted out-of-order arrivals.
 
+Compatible peers negotiate video forward error correction at login. Video
+messages with enough data shards carry up to one interleaved XOR parity shard
+per five data shards. The Host accounts for parity in the UDP send window
+and bitrate budget. Parity yields to queued fresh data and is skipped if it
+would wait on the pacer. Compare `sent_video_parity_datagrams`,
+`received_video_parity_datagrams` and `fec_recovered_fragments` in paired logs.
+
 Use actual presentations to check each two-second interval. In a 120 Hz
 session, count adjacent one-second intervals below 70 FPS and inspect their
 overlapping sender and receiver records. Compare the optimized Debug results

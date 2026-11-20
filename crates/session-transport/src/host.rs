@@ -208,6 +208,21 @@ impl HostWriter {
         frame: &FramePlan,
         index: u16,
     ) -> ResultType<SealedDatagram> {
+        self.send_media(frame, index, false).await
+    }
+    pub(crate) async fn send_video_parity(
+        &self,
+        frame: &FramePlan,
+        group: u16,
+    ) -> ResultType<SealedDatagram> {
+        self.send_media(frame, group, true).await
+    }
+    async fn send_media(
+        &self,
+        frame: &FramePlan,
+        index: u16,
+        parity: bool,
+    ) -> ResultType<SealedDatagram> {
         let state = self
             .state
             .upgrade()
@@ -219,7 +234,12 @@ impl HostWriter {
         let (peer, packet) = {
             let mut control = state.control.lock().unwrap();
             let peer = validated_peer(&state)?;
-            (peer, control.sender.seal_fragment(frame, index)?)
+            let packet = if parity {
+                control.sender.seal_video_parity(frame, index)?
+            } else {
+                control.sender.seal_fragment(frame, index)?
+            };
+            (peer, packet)
         };
         send_datagram(&hub.socket, peer, &packet.bytes).await?;
         Ok(packet)

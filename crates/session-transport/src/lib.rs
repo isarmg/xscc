@@ -210,8 +210,14 @@ impl SessionTransport {
         Ok(())
     }
     pub async fn offer_host(&mut self) -> ResultType<Option<UdpMediaOffer>> {
+        self.offer_host_with_fec(false).await
+    }
+    pub async fn offer_host_with_fec(&mut self, video_fec: bool) -> ResultType<Option<UdpMediaOffer>> {
         #[cfg(any(target_os = "android", target_os = "ios"))]
-        return Ok(None);
+        {
+            let _ = video_fec;
+            Ok(None)
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
             let Self::Handshake(stream) = self else {
@@ -229,12 +235,17 @@ impl SessionTransport {
                 version: u32::from(media::VERSION),
                 session_id: host.session_id().0.to_vec().into(),
                 mtu: host.mtu() as u32,
+                video_fec,
                 ..Default::default()
             };
             let Self::Handshake(stream) = std::mem::replace(self, Self::Closed) else {
                 unreachable!()
             };
-            *self = Self::Hybrid(Box::new(HybridTransport::host(stream.stream, host)?));
+            *self = Self::Hybrid(Box::new(HybridTransport::host(
+                stream.stream,
+                host,
+                video_fec,
+            )?));
             Ok(Some(offer))
         }
     }
@@ -840,7 +851,7 @@ impl HybridTransport {
         Ok(transport)
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn host(stream: Stream, session: HostSession) -> ResultType<Self> {
+    fn host(stream: Stream, session: HostSession, video_fec: bool) -> ResultType<Self> {
         let (mut transport, channels) = Self::new(stream, session.session_id(), true)?;
         transport.tasks.push(tokio::spawn(host_media(
             session,
@@ -848,6 +859,7 @@ impl HybridTransport {
             transport.writer.clone(),
             transport.ready.clone(),
             transport.bitrate_budget.clone(),
+            video_fec,
         )));
         Ok(transport)
     }
@@ -1572,7 +1584,8 @@ mod tests {
     async fn hybrid_fragmented_video_audio_and_control_use_real_sockets() {
         let (client, host, _listener, _udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(_udp.registration()));
-        let offer = host.offer_host().await.unwrap().unwrap();
+        let offer = host.offer_host_with_fec(true).await.unwrap().unwrap();
+        assert!(offer.video_fec);
         let mut client: SessionTransport = client.into();
         client.enable_client(&offer).await.unwrap();
         assert_eq!(client.protocol(), "TCP");
@@ -2186,7 +2199,7 @@ mod tests {
             let stale = session.writer();
             let mut status = session.ready();
             let mut host =
-                SessionTransport::Hybrid(Box::new(HybridTransport::host(host, session).unwrap()));
+                SessionTransport::Hybrid(Box::new(HybridTransport::host(host, session, false).unwrap()));
             if mode == 1 {
                 host.revoke_media();
             }
@@ -2520,6 +2533,7 @@ async fn recovery(
         video_metrics.window.expired_video_assemblies += outcome.expired_video.assemblies;
         video_metrics.window.expired_missing_video_fragments += outcome.expired_video.missing_fragments;
         video_metrics.window.expired_video_sent_notices += outcome.expired_video.sent_notices;
+        video_metrics.window.fec_recovered_fragments += outcome.fec_recovered_fragments;
     }
     for recovery in outcome.recovery {
         match recovery {
@@ -2757,20 +2771,32 @@ async fn client_media(
                     #[cfg(debug_assertions)]
                     video_metrics.authenticated(pending.receiver.highest_authenticated_sequence()
                         .expect("invariant: accepted datagram updates the sequence window"));
+                    let parity = matches!(&packet, AuthenticatedPacket::VideoParity(_));
                     match packet {
                         AuthenticatedPacket::Probe { kind: ProbeKind::Challenge, token } => {
                             let response = pending.sender.seal_probe(ProbeKind::Response, token)?;
                             pending.socket.send(&response.bytes).await.context("Reply to UDP media challenge")?;
                         }
-                        AuthenticatedPacket::Fragment(fragment) if ready.load(Ordering::Acquire) => {
+                        AuthenticatedPacket::Fragment(fragment) | AuthenticatedPacket::VideoParity(fragment)
+                            if ready.load(Ordering::Acquire) && (!parity || pending.video_fec) =>
+                        {
                             if fragment.descriptor.total_size as usize > receive_limit.load(Ordering::Acquire) { bail!("UDP frame exceeds application receive limit"); }
                             let now = Instant::now();
                             let descriptor = fragment.descriptor;
                             #[cfg(debug_assertions)]
                             let is_video = descriptor.metadata.kind == MediaKind::Video;
                             #[cfg(debug_assertions)]
-                            if is_video { video_metrics.video_fragment(now); }
-                            match reassembler.push(fragment, now) {
+                            if parity {
+                                video_metrics.window.received_video_parity_datagrams += 1;
+                            } else if is_video {
+                                video_metrics.video_fragment(now);
+                            }
+                            let result = if parity {
+                                reassembler.push_video_parity(fragment, now)
+                            } else {
+                                reassembler.push(fragment, now)
+                            };
+                            match result {
                                 Ok(outcome) => {
                                     if let Some(bps) = receive_rate.received(count, now) {
                                         reassembler.set_effective_rate(bps)?;
@@ -2819,6 +2845,7 @@ async fn client_media(
 struct Transmission {
     plan: FramePlan,
     indices: VecDeque<u16>,
+    parity_groups: std::ops::Range<u16>,
     deadline: Instant,
     initial: bool,
     #[cfg(debug_assertions)]
@@ -2894,6 +2921,7 @@ struct VideoSendMetrics {
     max_keyframe_repair_time: Duration,
     keyframe_feedback_probes: u32,
     sent_delta_repair_datagrams: u32,
+    sent_video_parity_datagrams: u32,
     feedback_reports: u32,
     last_feedback: Option<Instant>,
     max_feedback_gap: Duration,
@@ -2917,6 +2945,7 @@ impl VideoSendMetrics {
             max_keyframe_repair_time: Duration::ZERO,
             keyframe_feedback_probes: 0,
             sent_delta_repair_datagrams: 0,
+            sent_video_parity_datagrams: 0,
             feedback_reports: 0,
             last_feedback: None,
             max_feedback_gap: Duration::ZERO,
@@ -2963,6 +2992,7 @@ impl VideoSendMetrics {
                     "max_keyframe_repair_ms": self.max_keyframe_repair_time.as_secs_f64() * 1_000.0,
                     "keyframe_feedback_probes": self.keyframe_feedback_probes,
                     "sent_delta_repair_datagrams": self.sent_delta_repair_datagrams,
+                    "sent_video_parity_datagrams": self.sent_video_parity_datagrams,
                     "feedback_reports": self.feedback_reports,
                     "max_feedback_gap_ms": self.max_feedback_gap.as_secs_f64() * 1_000.0,
                     "congestion_reductions": self.congestion_reductions,
@@ -3005,6 +3035,7 @@ fn transmission(
     Transmission {
         plan,
         indices: indices.into(),
+        parity_groups: 0..0,
         deadline,
         initial,
         #[cfg(debug_assertions)]
@@ -3029,6 +3060,7 @@ async fn host_media(
     writer: ReliableWriter,
     ready: Arc<AtomicBool>,
     bitrate_budget: Arc<AtomicU64>,
+    video_fec: bool,
 ) {
     let WorkerChannels {
         frames,
@@ -3116,7 +3148,16 @@ async fn host_media(
                             next_send = Instant::now();
                         }
                     }
-                    Command::Limit(bps) => pacer.set_bitrate_limit(bps)?,
+                    Command::Limit(bps) => {
+                        pacer.set_bitrate_limit(bps)?;
+                        if video_fec && bps < 1_000_000_000 {
+                            let reserved = media::video_fec_data_budget_bps(bps);
+                            let previous = bitrate_budget.load(Ordering::Acquire);
+                            if previous == 0 || reserved < previous {
+                                bitrate_budget.store(reserved, Ordering::Release);
+                            }
+                        }
+                    }
                     Command::Notice(_) => bail!("Invalid host UDP media command"),
                 },
                 changed = path.changed() => {
@@ -3140,7 +3181,11 @@ async fn host_media(
                         video_metrics.received_feedback(now, pacer.congestion_window() < previous_window);
                         // Delayed probe responses must not reset newly acknowledged traffic.
                         probe = None;
-                        let estimate = pacer.effective_bitrate();
+                        let estimate = if video_fec {
+                            media::video_fec_data_budget_bps(pacer.effective_bitrate())
+                        } else {
+                            pacer.effective_bitrate()
+                        };
                         let previous = bitrate_budget.load(Ordering::Acquire);
                         // Idle restart windows and large IDRs are not evidence of a slow path.
                         let backlogged = current.as_ref().is_some_and(|frame|
@@ -3168,7 +3213,7 @@ async fn host_media(
                     next_send = Instant::now();
                 }
                 frame = frames.next(
-                    current.as_ref().map(|frame| frame.plan.descriptor().metadata),
+                    current.as_ref().filter(|frame| !frame.indices.is_empty()).map(|frame| frame.plan.descriptor().metadata),
                     repair.as_ref().map(|frame| frame.plan.descriptor().metadata),
                 ) => {
                     let QueuedFrame { plan: frame, queued } = frame;
@@ -3203,7 +3248,11 @@ async fn host_media(
                         cached.push(metadata);
                     }
                     let indices = (0..frame.fragment_count()).collect();
-                    current = Some(transmission(frame, true, indices, pacer.effective_bitrate(), queued));
+                    let mut transmission = transmission(frame, true, indices, pacer.effective_bitrate(), queued);
+                    if video_fec {
+                        transmission.parity_groups = 0..transmission.plan.video_parity_count();
+                    }
+                    current = Some(transmission);
                     next_send = Instant::now();
                 }
                 _ = timer.tick() => {
@@ -3212,6 +3261,9 @@ async fn host_media(
                     for slot in [&mut current, &mut sound, &mut repair] {
                         if slot.as_ref().is_some_and(|frame| frame.deadline <= now) {
                             let expired = slot.take().expect("invariant: expired transmission exists");
+                            if expired.indices.is_empty() {
+                                continue;
+                            }
                             let metadata = expired.plan.descriptor().metadata;
                             #[cfg(debug_assertions)]
                             if expired.initial && metadata.kind == MediaKind::Video { video_metrics.expired_messages += 1; }
@@ -3236,7 +3288,9 @@ async fn host_media(
                         let metadata = frame.plan.descriptor().metadata;
                         frame.deadline > now && epochs.get(&(metadata.kind, metadata.display_id)).is_some_and(|(epoch, ack)| *epoch == metadata.epoch && *ack)
                     });
-                    let initial_keyframe = current.as_ref().is_some_and(|frame| frame.plan.descriptor().metadata.keyframe);
+                    let initial_keyframe = current.as_ref().is_some_and(|frame| {
+                        !frame.indices.is_empty() && frame.plan.descriptor().metadata.keyframe
+                    });
                     let active = if sound_ready {
                         &mut sound
                     } else if !initial_keyframe && repair.is_some() {
@@ -3248,11 +3302,24 @@ async fn host_media(
                     let Some(frame) = active.as_mut() else { next_send = now + media::REPORT_INTERVAL; break; };
                     let metadata = frame.plan.descriptor().metadata;
                     if !ready.load(Ordering::Acquire) || !epochs.get(&(metadata.kind, metadata.display_id)).is_some_and(|(epoch, ack)| *epoch == metadata.epoch && *ack) { next_send = now + media::REPORT_INTERVAL; break; }
-                    let Some(&index) = frame.indices.front() else { *active = None; break; };
-                    let packet_len = frame.plan.packet_len(index)?;
+                    let parity = frame.indices.is_empty();
+                    let (index, packet_len) = if let Some(&index) = frame.indices.front() {
+                        (index, frame.plan.packet_len(index)?)
+                    } else if let Some(group) = frame.parity_groups.clone().next() {
+                        (group, media::DEFAULT_MTU)
+                    } else {
+                        *active = None;
+                        break;
+                    };
                     let decision = pacer.decide(packet_len, frame.deadline, now, false);
+                    // Optional redundancy yields as soon as it would block fresh data.
+                    if parity && decision != SendDecision::Send {
+                        *active = None;
+                        next_send = now;
+                        break;
+                    }
                     #[cfg(debug_assertions)]
-                    if frame.initial && metadata.keyframe {
+                    if !parity && frame.initial && metadata.keyframe {
                         frame.waits.account_until(now);
                         frame.waits.pending = match decision {
                             SendDecision::Wait(wait) => {
@@ -3290,9 +3357,27 @@ async fn host_media(
                             *active = None; next_send = now; break;
                         }
                         SendDecision::Send => {
-                            let packet = udp.send_fragment(&frame.plan, index).await?;
+                            let packet = if parity {
+                                udp.send_video_parity(&frame.plan, index).await?
+                            } else {
+                                udp.send_fragment(&frame.plan, index).await?
+                            };
                             let sent = Instant::now();
                             pacer.on_sent(packet.sequence, packet.bytes.len(), sent)?;
+                            if parity {
+                                #[cfg(debug_assertions)]
+                                {
+                                    video_metrics.sent_datagrams += 1;
+                                    video_metrics.last_video_datagram_sequence = Some(packet.sequence);
+                                    video_metrics.sent_video_parity_datagrams += 1;
+                                }
+                                frame.parity_groups.next();
+                                if frame.parity_groups.is_empty() {
+                                    *active = None;
+                                }
+                                next_send = sent;
+                                continue;
+                            }
                             if frame.initial && metadata.kind == MediaKind::Video && !metadata.keyframe {
                                 let deadline = (frame.selected + delta_repair::REPAIR_AGE).min(frame.deadline);
                                 delta_repairs.track(packet.sequence, &frame.plan, index, deadline, sent);
@@ -3349,7 +3434,9 @@ async fn host_media(
                                     }
                                 }
                                 let next_repair = !frame.initial && (!retries.is_empty() || delta_repairs.has_queued());
-                                *active = None;
+                                if frame.parity_groups.is_empty() {
+                                    *active = None;
+                                }
                                 if next_repair { break; }
                             }
                             next_send = Instant::now();

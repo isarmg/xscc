@@ -1979,6 +1979,7 @@ impl LoginConfigHandler {
             hwid,
             avatar,
             supports_udp_media: true,
+            supports_udp_video_fec: true,
             session_revision: base::session_protocol::NATIVE_SESSION_REVISION,
             ..Default::default()
         };

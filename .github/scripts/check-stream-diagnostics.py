@@ -14,9 +14,11 @@ HOST = (
     b"host_amf_slow phase=",
     b"host_udp_video_pipeline",
     b"sent_delta_repair_datagrams",
+    b"sent_video_parity_datagrams",
 )
 CLIENT = (
     b"client_udp_video_pipeline",
+    b"fec_recovered_fragments",
     b"client_udp_video_order_gap",
     b"client_udp_video_stale",
     b"client_udp_video_reference_ready",

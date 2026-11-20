@@ -1419,7 +1419,7 @@ impl Connection {
                     }
                     #[cfg(feature = "udp-media")]
                     if self.lr.supports_udp_media {
-                        match self.stream.offer_host().await {
+                        match self.stream.offer_host_with_fec(self.lr.supports_udp_video_fec).await {
                             Ok(Some(offer)) => {
                                 let limit = self
                                     .lr

@@ -81,6 +81,7 @@ message LoginRequest {
   // Current native sessions require authenticated UDP media.
   bool supports_udp_media = 18;
   uint32 session_revision = 19;
+  bool supports_udp_video_fec = 20;
 }
 
 // Public nonce only. Keys are derived locally from the authenticated TCP session.
@@ -89,6 +90,7 @@ message UdpMediaOffer {
   uint32 version = 1;
   bytes session_id = 2;
   uint32 mtu = 3;
+  bool video_fec = 4;
 }
 
 // Small authenticated recovery/configuration messages, carried only by TCP.

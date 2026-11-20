@@ -1,5 +1,7 @@
 //! Authenticated UDP media primitives. TCP owns login, permission and format epochs.
 //! A SID lookup is not authentication; path validation must precede sending media.
+mod video_fec;
+
 use bytes::Bytes;
 use hbb_common::sodiumoxide::{
     self,
@@ -29,6 +31,7 @@ pub const AUDIO_TTL: Duration = Duration::from_millis(40);
 const MAGIC: &[u8; 4] = b"XSMU";
 const PREFIX: usize = 30;
 const FRAGMENT_HEADER: usize = 30;
+const VIDEO_PARITY: u8 = 6;
 pub const FRAGMENT_OVERHEAD: usize = PREFIX + aead::TAGBYTES + FRAGMENT_HEADER;
 const REPLAY_BUCKETS: usize = REPLAY_WINDOW as usize / 64 + 1;
 
@@ -227,6 +230,12 @@ impl FramePlan {
     pub fn fragment_count(&self) -> u16 {
         self.descriptor.fragment_count
     }
+    pub fn video_parity_count(&self) -> u16 {
+        if self.capacity != video_fec::SHARD_BYTES {
+            return 0;
+        }
+        video_fec::Layout::new(self.descriptor).map_or(0, |layout| layout.groups)
+    }
     pub fn packet_len(&self, index: u16) -> Result<usize, MediaError> {
         Ok(FRAGMENT_OVERHEAD + self.fragment(index)?.len())
     }
@@ -256,6 +265,7 @@ pub struct Fragment {
 pub enum AuthenticatedPacket {
     Probe { kind: ProbeKind, token: [u8; 16] },
     Fragment(Fragment),
+    VideoParity(Fragment),
     Report(ReceiveReport),
 }
 
@@ -282,7 +292,7 @@ pub fn peek_session_id(packet: &[u8]) -> Result<SessionId, MediaError> {
         || packet.len() > MAX_DATAGRAM_SIZE
         || &packet[..4] != MAGIC
         || packet[4] != VERSION
-        || !(1..=5).contains(&packet[5])
+        || !(1..=VIDEO_PARITY).contains(&packet[5])
     {
         return Err(MediaError::InvalidEnvelope);
     }
@@ -347,7 +357,7 @@ impl DatagramSender {
         Ok(SealedDatagram {
             sequence,
             bytes,
-            ack_eliciting: kind == 1,
+            ack_eliciting: matches!(kind, 1 | VIDEO_PARITY),
         })
     }
     pub fn seal_probe(
@@ -370,9 +380,28 @@ impl DatagramSender {
         frame: &FramePlan,
         index: u16,
     ) -> Result<SealedDatagram, MediaError> {
-        let descriptor = frame.descriptor;
+        self.seal_media_fragment(1, frame.descriptor, index, frame.fragment(index)?)
+    }
+    pub fn seal_video_parity(
+        &mut self,
+        frame: &FramePlan,
+        group: u16,
+    ) -> Result<SealedDatagram, MediaError> {
+        if frame.capacity != video_fec::SHARD_BYTES {
+            return Err(MediaError::InvalidEnvelope);
+        }
+        let layout = video_fec::Layout::new(frame.descriptor).ok_or(MediaError::InvalidEnvelope)?;
+        let payload = layout.encode(frame, group)?;
+        self.seal_media_fragment(VIDEO_PARITY, frame.descriptor, group, &payload)
+    }
+    fn seal_media_fragment(
+        &mut self,
+        kind: u8,
+        descriptor: FrameDescriptor,
+        index: u16,
+        payload: &[u8],
+    ) -> Result<SealedDatagram, MediaError> {
         let metadata = descriptor.metadata;
-        let payload = frame.fragment(index)?;
         let mut header = [0; FRAGMENT_HEADER];
         header[0] = match metadata.kind {
             MediaKind::Video => 1,
@@ -385,7 +414,7 @@ impl DatagramSender {
         header[22..26].copy_from_slice(&descriptor.total_size.to_be_bytes());
         header[26..28].copy_from_slice(&index.to_be_bytes());
         header[28..30].copy_from_slice(&descriptor.fragment_count.to_be_bytes());
-        self.seal(1, &header, payload)
+        self.seal(kind, &header, payload)
     }
     pub fn seal_report(&mut self, report: &ReceiveReport) -> Result<SealedDatagram, MediaError> {
         report.validate()?;
@@ -491,6 +520,11 @@ impl DatagramReceiver {
         .map_err(|_| MediaError::Crypto)?;
         let packet = match bytes[5] {
             1 => AuthenticatedPacket::Fragment(decode_fragment(body)?),
+            VIDEO_PARITY => {
+                let fragment = decode_fragment(body)?;
+                video_parity_layout(&fragment)?;
+                AuthenticatedPacket::VideoParity(fragment)
+            }
             kind @ 2..=4 if body.len() == 16 => {
                 let mut token = [0; 16];
                 token.copy_from_slice(&body);
@@ -508,7 +542,9 @@ impl DatagramReceiver {
         };
         let previous = self.replay.highest;
         self.replay.commit(sequence);
-        if let AuthenticatedPacket::Fragment(fragment) = &packet {
+        if let AuthenticatedPacket::Fragment(fragment) | AuthenticatedPacket::VideoParity(fragment) =
+            &packet
+        {
             let reordered = previous.is_some_and(|last| sequence < last);
             self.received(sequence, now);
             self.prompt_report |= fragment.descriptor.metadata.keyframe || reordered;
@@ -635,6 +671,14 @@ fn decode_fragment(body: Vec<u8>) -> Result<Fragment, MediaError> {
         payload: Bytes::from(body).slice(FRAGMENT_HEADER..),
     })
 }
+fn video_parity_layout(fragment: &Fragment) -> Result<video_fec::Layout, MediaError> {
+    video_fec::Layout::new(fragment.descriptor)
+        .filter(|layout| {
+            fragment.index < layout.groups && fragment.payload.len() == video_fec::SHARD_BYTES
+        })
+        .ok_or(MediaError::InvalidEnvelope)
+}
+
 fn decode_report(body: &[u8]) -> Result<ReceiveReport, MediaError> {
     if body.len() < 13 {
         return Err(MediaError::InvalidFeedback);
@@ -696,6 +740,10 @@ pub fn video_payload_bitrate_limit_kbps(wire_limit_kbps: u32) -> Result<u32, Med
         (u64::from(wire_limit_kbps) * (DEFAULT_MTU - FRAGMENT_OVERHEAD) as u64 * 90
             / (DEFAULT_MTU as u64 * 100)) as u32,
     )
+}
+
+pub fn video_fec_data_budget_bps(wire_bps: u64) -> u64 {
+    video_fec::reserve_wire_budget(wire_bps)
 }
 
 /// A codec drain can contain old deltas followed by an independently decodable IDR.
@@ -1028,12 +1076,15 @@ pub struct ReceiveOutcome {
     pub recovery: Vec<Recovery>,
     #[cfg(debug_assertions)]
     pub expired_video: VideoAssemblyExpiry,
+    #[cfg(debug_assertions)]
+    pub fec_recovered_fragments: usize,
 }
 
 struct PendingFrame {
     descriptor: FrameDescriptor,
     deadline: Instant,
     fragments: Vec<Option<Bytes>>,
+    video_parity: BTreeMap<u16, Bytes>,
     received: usize,
     remaining: usize,
     sent_complete: bool,
@@ -1159,6 +1210,7 @@ impl Reassembler {
                 descriptor,
                 deadline: now + ttl,
                 fragments: vec![None; descriptor.fragment_count as usize],
+                video_parity: BTreeMap::new(),
                 received: 0,
                 remaining: descriptor.fragment_count as usize,
                 sent_complete: false,
@@ -1238,6 +1290,23 @@ impl Reassembler {
         Ok(outcome)
     }
     pub fn push(&mut self, fragment: Fragment, now: Instant) -> Result<ReceiveOutcome, MediaError> {
+        self.push_fragment(fragment, now, false)
+    }
+
+    pub fn push_video_parity(
+        &mut self,
+        fragment: Fragment,
+        now: Instant,
+    ) -> Result<ReceiveOutcome, MediaError> {
+        self.push_fragment(fragment, now, true)
+    }
+
+    fn push_fragment(
+        &mut self,
+        fragment: Fragment,
+        now: Instant,
+        parity: bool,
+    ) -> Result<ReceiveOutcome, MediaError> {
         let mut outcome = ReceiveOutcome::default();
         let descriptor = fragment.descriptor;
         descriptor.validate()?;
@@ -1247,6 +1316,9 @@ impl Reassembler {
             || fragment.payload.len() > descriptor.total_size as usize
         {
             return Err(MediaError::InvalidEnvelope);
+        }
+        if parity {
+            video_parity_layout(&fragment)?;
         }
         let key = frame_key(descriptor.metadata);
         if self.completed.contains(&key) {
@@ -1267,19 +1339,48 @@ impl Reassembler {
         if frame.descriptor != descriptor {
             return Err(MediaError::ConflictingFragment);
         }
-        let slot = &mut frame.fragments[fragment.index as usize];
-        if let Some(previous) = slot {
-            if previous != &fragment.payload {
-                return Err(MediaError::ConflictingFragment);
+        if parity {
+            if let Some(previous) = frame.video_parity.get(&fragment.index) {
+                if previous != &fragment.payload {
+                    return Err(MediaError::ConflictingFragment);
+                }
+                return Ok(outcome);
             }
-            return Ok(outcome);
+            frame.video_parity.insert(fragment.index, fragment.payload);
+        } else {
+            let slot = &mut frame.fragments[usize::from(fragment.index)];
+            if let Some(previous) = slot {
+                if previous != &fragment.payload {
+                    return Err(MediaError::ConflictingFragment);
+                }
+                return Ok(outcome);
+            }
+            if frame.received + fragment.payload.len() > descriptor.total_size as usize {
+                return Err(MediaError::InvalidEnvelope);
+            }
+            frame.received += fragment.payload.len();
+            frame.remaining -= 1;
+            *slot = Some(fragment.payload);
         }
-        if frame.received + fragment.payload.len() > descriptor.total_size as usize {
-            return Err(MediaError::InvalidEnvelope);
+        if !frame.video_parity.is_empty() {
+            let layout = video_fec::Layout::new(descriptor).expect("invariant: validated video parity");
+            let group = if parity { fragment.index } else { fragment.index % layout.groups };
+            if let Some((index, recovered)) = frame.video_parity.get(&group)
+                .and_then(|parity| layout.recover(group, parity, &frame.fragments))
+            {
+                if frame.received + recovered.len() > descriptor.total_size as usize {
+                    return Err(MediaError::InvalidEnvelope);
+                }
+                frame.received += recovered.len();
+                frame.remaining -= 1;
+                frame.fragments[index] = Some(recovered);
+                frame.video_parity.remove(&group);
+                #[cfg(debug_assertions)]
+                {
+                    outcome.fec_recovered_fragments += 1;
+                }
+            }
         }
-        frame.received += fragment.payload.len();
-        frame.remaining -= 1;
-        *slot = Some(fragment.payload);
         if frame.remaining != 0 {
             return Ok(outcome);
         }
@@ -2611,6 +2712,44 @@ mod tests {
             .on_report(&report(7), now + Duration::from_millis(340))
             .unwrap();
         assert_eq!(pacer.congestion_window(), reduced);
+    }
+
+    #[test]
+    fn interleaved_video_parity_repairs_adjacent_missing_fragments() {
+        let now = Instant::now();
+        let sid = SessionId([5; 16]);
+        let seed = [7; 32];
+        let mut sender = DatagramSender::new(&seed, sid, Direction::HostToController).unwrap();
+        let mut receiver = DatagramReceiver::new(&seed, sid, Direction::HostToController).unwrap();
+        let mut assembler = Reassembler::default();
+        let size = 10 * video_fec::SHARD_BYTES - 7;
+        let payload: Bytes = (0..size).map(|byte| (byte % 251) as u8).collect::<Vec<_>>().into();
+        let frame = FramePlan::new(metadata(1, false), payload.clone(), DEFAULT_MTU).unwrap();
+        assert_eq!(frame.video_parity_count(), 2);
+
+        let early = sender.seal_video_parity(&frame, 0).unwrap();
+        assert_eq!(early.bytes.len(), DEFAULT_MTU);
+        assert!(early.ack_eliciting);
+        let AuthenticatedPacket::VideoParity(parity) = receiver.open(&early.bytes, now).unwrap() else {
+            panic!("expected video parity");
+        };
+        assert!(assembler.push_video_parity(parity, now).unwrap().frame.is_none());
+
+        for index in 0..8 {
+            let data = sender.seal_fragment(&frame, index).unwrap();
+            let AuthenticatedPacket::Fragment(fragment) = receiver.open(&data.bytes, now).unwrap() else {
+                panic!("expected video data");
+            };
+            assert!(assembler.push(fragment, now).unwrap().frame.is_none());
+        }
+        let late = sender.seal_video_parity(&frame, 1).unwrap();
+        let AuthenticatedPacket::VideoParity(parity) = receiver.open(&late.bytes, now).unwrap() else {
+            panic!("expected video parity");
+        };
+        let completed = assembler.push_video_parity(parity, now).unwrap().frame.unwrap();
+        assert_eq!(completed.payload, payload);
+        assert_eq!(completed.metadata, frame.descriptor().metadata);
+        assert!(sender.seal_video_parity(&frame, 2).is_err());
     }
 
     #[test]

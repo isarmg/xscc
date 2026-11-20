@@ -25,6 +25,8 @@ pub(super) struct VideoReceiveSample {
     pub(super) expired_video_assemblies: usize,
     pub(super) expired_missing_video_fragments: usize,
     pub(super) expired_video_sent_notices: usize,
+    pub(super) fec_recovered_fragments: usize,
+    pub(super) received_video_parity_datagrams: u64,
     pub(super) sender_abandoned_video_messages: u64,
     pub(super) video_wrong_epoch_fragments: u64,
     pub(super) video_capacity_rejections: u64,

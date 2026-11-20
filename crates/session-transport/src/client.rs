@@ -24,6 +24,7 @@ pub struct PendingAssociation {
     pub receiver: DatagramReceiver,
     pub session_id: SessionId,
     pub mtu: usize,
+    pub video_fec: bool,
 }
 
 pub async fn associate(
@@ -72,6 +73,7 @@ pub async fn associate(
                     socket.send(&response.bytes).await.context("Send UDP media response")?;
                     return Ok(PendingAssociation {
                         socket, sender, receiver, session_id: sid, mtu: DEFAULT_MTU,
+                        video_fec: offer.video_fec,
                     });
                 }
             }
