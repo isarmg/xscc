@@ -32,7 +32,7 @@ use std::{
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
-use xscc_native_management::manager::NativeManager;
+use xscc_native_management::manager::{NativeManager, TargetAvailability};
 
 pub enum SessionUiEvent {
     BackToDevices,
@@ -327,9 +327,9 @@ impl SessionView {
     pub fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.stop();
         self.selected = Some(device_id.clone());
-        if !self.authorized() {
+        if let Some(reason) = self.authorization_blocker() {
             self.selected = None;
-            self.notice = "设备授权已失效，请刷新服务端绑定。".into();
+            self.notice = reason.into();
             cx.notify();
             return;
         }
@@ -356,21 +356,44 @@ impl SessionView {
     }
 
     fn authorized(&self) -> bool {
-        let (Some(manager), Some(id)) = (&self.manager, &self.selected) else {
-            return false;
+        self.authorization_blocker().is_none()
+    }
+
+    fn authorization_blocker(&self) -> Option<&'static str> {
+        let Some(id) = self.selected.as_ref() else {
+            return Some("未选择被控端。");
         };
-        id.parse()
-            .ok()
-            .is_some_and(|id| manager.target_available(id))
+        let Some(manager) = self.manager.as_ref() else {
+            return Some("管理连接暂时不可用，请在恢复后重连。");
+        };
+        let availability = id
+            .parse()
+            .map_or(TargetAvailability::Denied, |id| manager.target_availability(id));
+        match availability {
+            TargetAvailability::Available => None,
+            TargetAvailability::ManagementUnavailable => {
+                Some("管理连接暂时不可用，请在恢复后重连。")
+            }
+            TargetAvailability::Denied => Some("当前设备没有访问该被控端的授权。"),
+            TargetAvailability::Offline => Some("被控端暂时不可达，请确认被控端在线。"),
+        }
     }
 
     pub fn check_authorization(&mut self, cx: &mut Context<Self>) {
-        if self.selected.is_some() && !self.authorized() {
-            self.stop();
-            self.notice = "设备授权已失效，会话已关闭。".into();
+        if self.selected.is_some()
+            && let Some(reason) = self.authorization_blocker()
+        {
+            self.stop_for_authorization(reason);
             self.publish_chrome(cx);
             cx.notify();
         }
+    }
+
+    fn stop_for_authorization(&mut self, reason: &'static str) {
+        #[cfg(debug_assertions)]
+        log::info!("session_management_gate closed reason={reason}");
+        self.stop();
+        self.notice = reason.into();
     }
 
     fn input_allowed(&self) -> bool {
@@ -704,7 +727,11 @@ impl SessionView {
             changed = true;
             drop(self.connecting.take());
             match result {
-                Ok(session) if self.authorized() => {
+                Ok(session) => {
+                    if let Some(reason) = self.authorization_blocker() {
+                        self.stop_for_authorization(reason);
+                        continue;
+                    }
                     let updates = session.updates();
                     let wake = self.wake.clone();
                     self.updates = Some(self.runtime.spawn(async move {
@@ -728,19 +755,16 @@ impl SessionView {
                     self.keyboard_control = Some(control);
                     self.session = Some(session);
                 }
-                Ok(_) => {
-                    self.stop();
-                    self.notice = "设备授权已失效。".into();
-                }
                 Err(error) => {
                     self.stop();
                     self.notice = error;
                 }
             }
         }
-        if self.selected.is_some() && !self.authorized() {
-            self.stop();
-            self.notice = "设备授权已失效，会话已关闭。".into();
+        if self.selected.is_some()
+            && let Some(reason) = self.authorization_blocker()
+        {
+            self.stop_for_authorization(reason);
             changed = true;
         }
         let events = self

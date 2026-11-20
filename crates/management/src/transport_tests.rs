@@ -440,14 +440,45 @@ fn permission_observations_expire_and_replacements_invalidate_copies() {
         ..observation.clone()
     };
     assert!(!expired.permits(&peer));
-    let (sender, _receiver) = watch::channel(Some(observation.clone()));
-    publish_policy(&sender, None);
+    let (sender, receiver) = watch::channel(Some(observation.clone()));
+    let renewed = AccessObservation {
+        current: Arc::new(AtomicBool::new(true)),
+        received_at: Instant::now(),
+        ..observation.clone()
+    };
+    let view = receiver.borrow();
+    let starting = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        let sender = &sender;
+        let starting = &starting;
+        scope.spawn(move || {
+            starting.wait();
+            publish_policy(sender, Some(renewed));
+        });
+        starting.wait();
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let still_authorized = loop {
+            if !view.as_ref().unwrap().permits(&peer) {
+                break false;
+            }
+            if Instant::now() >= deadline {
+                break true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        drop(view);
+        assert!(still_authorized, "renewing a valid lease must not interrupt its reader");
+    });
     assert!(!observation.permits(&peer));
+    let current = receiver.borrow().as_ref().unwrap().clone();
+    assert!(current.permits(&peer));
+    publish_policy(&sender, None);
+    assert!(!current.permits(&peer));
 }
 
 #[tokio::test]
 async fn address_heartbeats_follow_role_and_observation_freshness() {
-    async fn scenario(role: InstanceRole, fresh: bool) {
+    async fn scenario(role: InstanceRole, fresh: bool, observe_after_policy: bool) {
         let binding = Binding {
             manager_id: uuid::Uuid::new_v4(),
             device_id: uuid::Uuid::new_v4(),
@@ -477,12 +508,12 @@ async fn address_heartbeats_follow_role_and_observation_freshness() {
             Zeroizing::new("a".repeat(64)),
         )
         .unwrap();
-        let access = connection.access_policy();
+        let mut access = connection.access_policy();
         let addresses = vec![HostAddress {
             host: "host.example.com".into(),
             port: 21118,
         }];
-        let (_health, receiver) = watch::channel(HealthObservation {
+        let observation = HealthObservation {
             diagnostics: None,
             addresses: addresses.clone(),
             observed_at: Some(
@@ -493,6 +524,11 @@ async fn address_heartbeats_follow_role_and_observation_freshness() {
                         Duration::from_secs(31)
                     },
             ),
+        };
+        let (health, receiver) = watch::channel(if observe_after_policy {
+            HealthObservation::default()
+        } else {
+            observation.clone()
         });
         let (client, mut peer) = sockets().await;
         let policy = AccessPolicy {
@@ -532,39 +568,53 @@ async fn address_heartbeats_follow_role_and_observation_freshness() {
             },
         )
         .await;
-        loop {
-            match peer.next().await.unwrap().unwrap() {
-                Message::Text(text) => {
-                    if let ClientMessage::Heartbeat {
-                        addresses: actual, ..
-                    } = serde_json::from_str(&text).unwrap()
-                    {
-                        assert_eq!(
-                            actual,
-                            if fresh && role == InstanceRole::Controlled {
-                                addresses
-                            } else {
-                                vec![]
-                            }
-                        );
-                        break;
-                    }
-                }
-                Message::Ping(bytes) => {
-                    peer.send(Message::Pong(bytes)).await.unwrap();
-                }
-                _ => {}
-            }
+        if observe_after_policy {
+            let authorized = access.wait_for(Option::is_some).await.unwrap();
+            assert!(authorized.is_some());
+            drop(authorized);
+            health.send_replace(observation);
         }
+        let expected = if fresh && role == InstanceRole::Controlled {
+            addresses
+        } else {
+            vec![]
+        };
+        let limit = if expected.is_empty() {
+            HEARTBEAT_INTERVAL + Duration::from_secs(2)
+        } else {
+            Duration::from_secs(2)
+        };
+        let actual = timeout(limit, async {
+            loop {
+                match peer.next().await.unwrap().unwrap() {
+                    Message::Text(text) => {
+                        if let ClientMessage::Heartbeat {
+                            addresses: actual, ..
+                        } = serde_json::from_str(&text).unwrap()
+                        {
+                            break actual;
+                        }
+                    }
+                    Message::Ping(bytes) => {
+                        peer.send(Message::Pong(bytes)).await.unwrap();
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("expected the address advertisement within its readiness deadline");
+        assert_eq!(actual, expected);
         transmit(&mut peer, ManagerMessage::Revoked {}).await;
         assert_eq!(running.await.unwrap(), Err(TransportError::Revoked));
         assert!(access.borrow().is_none());
     }
     timeout(Duration::from_secs(25), async {
         tokio::join!(
-            scenario(InstanceRole::Controlled, true),
-            scenario(InstanceRole::Controller, true),
-            scenario(InstanceRole::Controlled, false)
+            scenario(InstanceRole::Controlled, true, false),
+            scenario(InstanceRole::Controlled, true, true),
+            scenario(InstanceRole::Controller, true, false),
+            scenario(InstanceRole::Controlled, false, false)
         );
     })
     .await

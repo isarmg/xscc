@@ -109,10 +109,12 @@ fn publish_policy(
     sender: &watch::Sender<Option<AccessObservation>>,
     next: Option<AccessObservation>,
 ) {
-    if let Some(current) = sender.borrow().as_ref() {
-        current.current.store(false, Ordering::Release);
-    }
-    sender.send_replace(next);
+    sender.send_modify(|slot| {
+        // A reader of the current policy must observe either side of a renewal.
+        if let Some(previous) = std::mem::replace(slot, next) {
+            previous.current.store(false, Ordering::Release);
+        }
+    });
 }
 impl Drop for PolicySession<'_> {
     fn drop(&mut self) {
@@ -301,6 +303,9 @@ impl ManagerConnection {
         session_log(binding, "xscc.session.connected", None);
         let mut tick = tokio::time::interval(HEARTBEAT_INTERVAL);
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut health = health.clone();
+        let mut health_open = true;
+        let mut advertised_addresses = Vec::new();
         let mut last_peer = Instant::now();
         // JoinHandle is retained by run() across sessions; dropping a socket cannot cancel effects.
         for (operation_id, (_, report)) in &execution.completed {
@@ -331,6 +336,9 @@ impl ManagerConnection {
                                 policy.validate(binding).map_err(|_| TransportError::Protocol)?;
                                 if policy.role != capabilities.role { return Err(TransportError::Protocol); }
                                 publish_policy(&self.access, Some(AccessObservation { policy: *policy, received_at: Instant::now(), current: Arc::new(AtomicBool::new(true)) }));
+                                if self.advertisable_addresses(&health.borrow()) != advertised_addresses.as_slice() {
+                                    tick.reset_immediately();
+                                }
                             }
                             ManagerMessage::ResultAccepted { operation_id, fingerprint, report_digest, finalized } => {
                                 if receipt_requires_commit(execution.completed.get(&operation_id), superseded.get(&operation_id), &fingerprint, &report_digest, finalized)? {
@@ -367,6 +375,12 @@ impl ManagerConnection {
                         superseded.remove(&id);
                     }
                 },
+                changed = health.changed(), if health_open => {
+                    health_open = changed.is_ok();
+                    if health_open && self.advertisable_addresses(&health.borrow()) != advertised_addresses.as_slice() {
+                        tick.reset_immediately();
+                    }
+                },
                 _ = tick.tick() => {
                     if last_peer.elapsed() >= PEER_TIMEOUT { return Err(TransportError::Disconnected); }
                     if execution.active.is_none() {
@@ -381,18 +395,34 @@ impl ManagerConnection {
                     }
                     let observation = health.borrow().clone();
                     let fresh = observation.observed_at.is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+                    let addresses = self.advertisable_addresses(&observation).to_vec();
                     if let Some(active) = &execution.active {
                         send(&mut socket, ClientMessage::Progress { operation_id: active.id.clone(), fingerprint: active.fingerprint.clone() }).await?;
                     }
                     let diagnostics = if fresh { observation.diagnostics.filter(|snapshot| last_snapshot.as_ref() != Some(snapshot)) } else { None };
                     if let Some(snapshot) = &diagnostics { last_snapshot = Some(snapshot.clone()); }
-                    let controlled = self.access.borrow().as_ref().and_then(AccessObservation::policy).is_some_and(|p| p.role == InstanceRole::Controlled);
-                    let addresses = if fresh && controlled { observation.addresses } else { Vec::new() };
                     xscs_protocol::validate_addresses(&addresses).map_err(|_| TransportError::Configuration)?;
+                    advertised_addresses.clone_from(&addresses);
                     send(&mut socket, ClientMessage::Heartbeat { diagnostics, addresses }).await?;
                     send_frame(&mut socket, Message::Ping(Vec::new().into())).await?;
                 },
             }
+        }
+    }
+
+    fn advertisable_addresses<'a>(&self, observation: &'a HealthObservation) -> &'a [HostAddress] {
+        let fresh = observation
+            .observed_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(30));
+        let access = self.access.borrow();
+        let controlled = access
+            .as_ref()
+            .and_then(AccessObservation::policy)
+            .is_some_and(|p| p.role == InstanceRole::Controlled);
+        if fresh && controlled {
+            &observation.addresses
+        } else {
+            &[]
         }
     }
 }

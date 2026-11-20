@@ -85,6 +85,13 @@ pub struct Target {
     pub permit: SessionPermit,
     pub addresses: Vec<HostAddress>,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TargetAvailability {
+    Available,
+    ManagementUnavailable,
+    Denied,
+    Offline,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
@@ -251,21 +258,28 @@ impl NativeManager {
         }
     }
     pub fn target_available(&self, id: uuid::Uuid) -> bool {
+        self.target_availability(id) == TargetAvailability::Available
+    }
+    pub fn target_availability(&self, id: uuid::Uuid) -> TargetAvailability {
         let access = self.access.read().unwrap();
         let Some(receiver) = access.as_ref() else {
-            return false;
+            return TargetAvailability::ManagementUnavailable;
         };
         let observation = receiver.borrow();
-        observation
-            .as_ref()
-            .and_then(AccessObservation::policy)
-            .is_some_and(|policy| {
-                policy.role == self.identity.role
-                    && policy.role == InstanceRole::Controller
-                    && policy.peers.iter().any(|peer| {
-                        peer.binding.device_id == id && peer.online && !peer.addresses.is_empty()
-                    })
-            })
+        let Some(policy) = observation.as_ref().and_then(AccessObservation::policy) else {
+            return TargetAvailability::ManagementUnavailable;
+        };
+        if policy.role != self.identity.role || policy.role != InstanceRole::Controller {
+            return TargetAvailability::Denied;
+        }
+        let mut availability = TargetAvailability::Denied;
+        for peer in policy.peers.iter().filter(|peer| peer.binding.device_id == id) {
+            if peer.online && !peer.addresses.is_empty() {
+                return TargetAvailability::Available;
+            }
+            availability = TargetAvailability::Offline;
+        }
+        availability
     }
     pub fn target(&self, id: uuid::Uuid) -> Result<Target> {
         let access = self.access.read().unwrap();
