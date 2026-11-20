@@ -1,4 +1,6 @@
 mod media_controls;
+#[cfg(all(target_os = "macos", feature = "gpui-host"))]
+mod macos_virtual_display;
 use crate::session_transport::{MediaSender, SessionTransport};
 
 use super::{input_service::*, *};
@@ -54,7 +56,7 @@ use std::{
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use system_shutdown;
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "gpui-host")))]
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
@@ -805,6 +807,8 @@ impl Connection {
                             _ => {}
                         }
                     }
+                    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+                    let mut display_change = None;
                     match &msg.union {
                         Some(message::Union::Misc(m)) => {
                             // This is the typed internal service channel, not
@@ -827,8 +831,17 @@ impl Connection {
                         }
                         Some(message::Union::PeerInfo(_pi)) => {
                             conn.refresh_video_display(None);
-                            #[cfg(target_os = "macos")]
+                            #[cfg(all(target_os = "macos", not(feature = "gpui-host")))]
                             conn.retina.set_displays(&_pi.displays);
+                            #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+                            {
+                                if crate::platform::macos_virtual_display::available()
+                                    && _pi.displays != display_service::get_sync_displays()
+                                {
+                                    continue;
+                                }
+                                display_change = conn.synchronize_macos_display_topology(&_pi.displays);
+                            }
                         }
                         Some(message::Union::CursorPosition(pos)) => {
                             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -859,6 +872,10 @@ impl Connection {
                     if let Err(err) = conn.stream.send(msg).await {
                         conn.on_close(&err.to_string(), false).await;
                         break;
+                    }
+                    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+                    if let Some(display_change) = display_change {
+                        conn.send(display_change).await;
                     }
                 },
                 Some(data) = rx_from_authed.recv() => {
@@ -1320,6 +1337,8 @@ impl Connection {
         }
         #[cfg(target_os = "macos")]
         {
+            #[cfg(feature = "gpui-host")]
+            platform_additions.extend(virtual_display_manager::get_platform_additions());
             platform_additions.insert(
                 "supported_privacy_mode_impl".into(),
                 json!(privacy_mode::get_supported_privacy_mode_impl()),
@@ -2491,7 +2510,7 @@ impl Connection {
                         let set = displays.set.iter().map(|d| *d as usize).collect::<Vec<_>>();
                         self.capture_displays(&add, &sub, &set).await;
                     }
-                    #[cfg(windows)]
+                    #[cfg(any(windows, all(target_os = "macos", feature = "gpui-host")))]
                     Some(misc::Union::VirtualDisplayConfig(request)) => {
                         self.configure_virtual_displays(request).await;
                     }

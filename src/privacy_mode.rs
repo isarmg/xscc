@@ -249,6 +249,11 @@ async fn turn_on_privacy_async(impl_key: String, conn_id: i32) -> Option<ResultT
 }
 
 fn turn_on_privacy_sync(impl_key: &str, conn_id: i32) -> Option<ResultType<bool>> {
+    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+    let _display_change = match crate::virtual_display_manager::before_privacy_change() {
+        Ok(change) => change,
+        Err(error) => return Some(Err(error)),
+    };
     #[cfg(windows)]
     {
         let owner = get_privacy_mode_conn_id().unwrap_or(INVALID_PRIVACY_MODE_CONN_ID);

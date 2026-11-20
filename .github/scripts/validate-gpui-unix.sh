@@ -55,9 +55,14 @@ if [[ $target == aarch64-apple-darwin ]]; then
     audio_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" client::audio_state_tests::playback_sessions_shrink_backlogs_independently 2>&1) || { printf '%s\n' "$audio_tests"; exit 1; }
     printf '%s\n' "$audio_tests"
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$audio_tests" || { echo 'Audio playback backlog regression did not run' >&2; exit 1; }
-    quartz_tests=$(cargo test --locked -p scrap --lib --no-default-features --features capture --target "$target" quartz::frame::tests:: -- --nocapture 2>&1) || { printf '%s\n' "$quartz_tests"; exit 1; }
+    quartz_tests=$(cargo test --locked -p scrap --lib --no-default-features --features capture --target "$target" quartz:: -- --nocapture 2>&1) || { printf '%s\n' "$quartz_tests"; exit 1; }
     printf '%s\n' "$quartz_tests"
-    grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz borrowed-plane tests did not run both tests' >&2; exit 1; }
+    grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz display and frame tests did not all run' >&2; exit 1; }
+    if [[ ,$core_features, == *,gpui-host,* ]]; then
+        virtual_display_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" virtual_display_manager::tests:: 2>&1) || { printf '%s\n' "$virtual_display_tests"; exit 1; }
+        printf '%s\n' "$virtual_display_tests"
+        grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$virtual_display_tests" || { echo 'macOS virtual display tests did not all run' >&2; exit 1; }
+    fi
 fi
 parse_tests=$(cargo test --locked -p enigo --lib --target "$target" dsl::tests::parse_error_display_describes_the_invalid_input 2>&1) || { printf '%s\n' "$parse_tests"; exit 1; }
 printf '%s\n' "$parse_tests"

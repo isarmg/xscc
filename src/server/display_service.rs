@@ -927,6 +927,13 @@ fn displays_to_msg(displays: Vec<DisplayInfo>) -> Message {
         let m = crate::virtual_display_manager::get_platform_additions();
         pi.platform_additions = serde_json::to_string(&m).unwrap_or_default();
     }
+    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+    {
+        let additions = crate::virtual_display_manager::get_platform_additions();
+        if !additions.is_empty() {
+            pi.platform_additions = serde_json::Value::Object(additions).to_string();
+        }
+    }
 
     // current_display should not be used in server.
     // It is set to 0 for compatibility with old clients.

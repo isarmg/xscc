@@ -9,6 +9,9 @@ pub struct Frame {
     bgra_stride: usize,
 }
 
+// The retained IOSurface remains locked for reading while the frame moves to the capture thread.
+unsafe impl Send for Frame {}
+
 impl Frame {
     pub unsafe fn new(surface: IOSurfaceRef) -> io::Result<Frame> {
         if surface.is_null() {

@@ -2,10 +2,11 @@ pub(super) use xscc_native_ui::virtual_display_controls as form;
 
 use super::{ManagementPanel, Reply, toolbar_controls::ToolbarMenu};
 use crate::theme;
+use base::session_protocol::virtual_display::PROTOCOL_VERSION;
 use gpui::{Context, Window, div};
 use librustdesk::{
     gpui_management,
-    gpui_session::{VirtualDisplayConfiguration, VirtualDisplayState},
+    gpui_session::{MediaControls, VirtualDisplayConfiguration, VirtualDisplayState},
 };
 
 pub(super) fn project(state: &VirtualDisplayState) -> form::State {
@@ -24,16 +25,34 @@ enum LocalRequest {
     Configure(VirtualDisplayConfiguration),
 }
 
+fn remote_configuration(controls: &MediaControls) -> Option<&VirtualDisplayState> {
+    controls
+        .virtual_display_configuration
+        .as_ref()
+        .filter(|state| state.protocol_version == PROTOCOL_VERSION)
+}
+
+fn remote_virtual_display_menu_enabled(connected: bool, controls: &MediaControls) -> bool {
+    connected && (remote_configuration(controls).is_some() || controls.virtual_display_supported)
+}
+
 impl ManagementPanel {
+    pub(super) fn virtual_display_menu_enabled(&self) -> bool {
+        if self.host {
+            self.initialized
+        } else {
+            remote_virtual_display_menu_enabled(
+                self.video_state.connected,
+                &self.video_state.media_controls,
+            )
+        }
+    }
+
     fn virtual_display_state(&self) -> Option<form::State> {
         if self.host {
             self.local_virtual_display.clone()
         } else {
-            self.video_state
-                .media_controls
-                .virtual_display_configuration
-                .as_ref()
-                .map(project)
+            remote_configuration(&self.video_state.media_controls).map(project)
         }
     }
 
@@ -49,7 +68,10 @@ impl ManagementPanel {
     }
 
     fn request_local_virtual_displays(&mut self, request: LocalRequest) {
-        if !self.host || !self.virtual_display_idle() {
+        if !self.host
+            || !self.virtual_display_idle()
+            || !gpui_management::local_virtual_display_supported()
+        {
             return;
         }
         self.local_virtual_pending = true;
@@ -64,16 +86,15 @@ impl ManagementPanel {
                     }
                 }
             };
-            let result = match tokio::time::timeout(std::time::Duration::from_secs(25), operation)
-                .await
-            {
-                Ok(result) => result
-                    .map(|state| project(&state))
-                    .map_err(|error| error.to_string()),
-                Err(_) => Err(
-                    "尚未确认 Windows 操作结果，请重新打开菜单查询；操作可能仍在主机执行。".into(),
-                ),
-            };
+            let result =
+                match tokio::time::timeout(std::time::Duration::from_secs(25), operation).await {
+                    Ok(result) => result
+                        .map(|state| project(&state))
+                        .map_err(|error| error.to_string()),
+                    Err(_) => {
+                        Err("尚未确认操作结果，请重新打开菜单查询。操作可能仍在主机执行。".into())
+                    }
+                };
             let _ = sender.send(Reply::VirtualDisplay(result));
             wake.notify_one();
         });
@@ -89,10 +110,7 @@ impl ManagementPanel {
         }
         if self.host {
             self.query_local_virtual_displays();
-        } else if self
-            .virtual_display_state()
-            .is_some_and(|state| state.protocol_version >= 1)
-        {
+        } else if remote_configuration(&self.video_state.media_controls).is_some() {
             self.video
                 .update(cx, |video, cx| video.query_virtual_displays(cx));
         }
@@ -165,5 +183,49 @@ impl ManagementPanel {
             self.render_legacy_virtual_display_controls(window, cx)
         };
         self.render_toolbar_dropdown(ToolbarMenu::VirtualDisplays, body, window, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modern_host_can_expose_virtual_display_controls_without_windows_legacy_support() {
+        let controls = MediaControls {
+            virtual_display_configuration: Some(VirtualDisplayState {
+                protocol_version: PROTOCOL_VERSION,
+                status: "disabled".into(),
+                maximum_count: Some(1),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(remote_virtual_display_menu_enabled(true, &controls));
+        assert!(!remote_virtual_display_menu_enabled(false, &controls));
+        assert_eq!(
+            remote_configuration(&controls)
+                .map(project)
+                .and_then(|state| state.configuration_step(true, false)),
+            Some(form::Configuration {
+                count: 1,
+                persistent: false,
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_protocol_keeps_existing_windows_legacy_controls() {
+        let mut controls = MediaControls {
+            virtual_display_configuration: Some(VirtualDisplayState {
+                protocol_version: PROTOCOL_VERSION + 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(remote_configuration(&controls).is_none());
+        assert!(!remote_virtual_display_menu_enabled(true, &controls));
+        controls.virtual_display_supported = true;
+        assert!(remote_virtual_display_menu_enabled(true, &controls));
     }
 }

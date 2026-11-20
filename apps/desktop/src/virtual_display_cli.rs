@@ -1,6 +1,11 @@
 //! Local Host management uses the same authenticated owner as the native UI.
 use base::session_protocol::virtual_display::{MAX_JSON_BYTES, VirtualDisplayConfiguration};
 
+pub const SUPPORTED_BUILD: bool = cfg!(all(
+    feature = "native-host",
+    any(windows, all(target_os = "macos", target_arch = "aarch64"))
+));
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Status,
@@ -31,7 +36,10 @@ impl Command {
         }
     }
 
-    #[cfg(all(target_os = "windows", feature = "native-host"))]
+    #[cfg(all(
+        feature = "native-host",
+        any(windows, all(target_os = "macos", target_arch = "aarch64"))
+    ))]
     pub async fn execute(
         &self,
     ) -> Result<librustdesk::gpui_management::VirtualDisplayState, Box<dyn std::error::Error>> {

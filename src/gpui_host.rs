@@ -22,13 +22,17 @@ pub fn is_host() -> bool {
     cfg!(feature = "gpui-host")
 }
 
-fn prepare(_headless: bool) -> Result<(), String> {
+fn set_application_name() {
     *config::APP_NAME.write().unwrap() = if is_host() {
         "XSCC Host"
     } else {
         "XSCC Controller"
     }
     .into();
+}
+
+fn prepare(_headless: bool) -> Result<(), String> {
+    set_application_name();
     if !is_host() {
         config::HARD_SETTINGS
             .write()
@@ -86,6 +90,23 @@ pub fn initialize() -> Result<(), String> {
             .name("xscc-native-owner".into())
             .spawn(|| crate::start_server(false, false))
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[cfg(all(
+    feature = "gpui-host",
+    any(windows, all(target_os = "macos", target_arch = "aarch64"))
+))]
+pub fn initialize_virtual_display_cli() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        initialize()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // The running graphical Host owns the displays for their full lifetime.
+        set_application_name();
         Ok(())
     }
 }

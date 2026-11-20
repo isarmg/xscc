@@ -54,6 +54,13 @@ pub use base::session_protocol::virtual_display::{
     VirtualDisplayConfiguration, VirtualDisplayState,
 };
 
+pub fn local_virtual_display_supported() -> bool {
+    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+    return crate::platform::macos_virtual_display::available();
+    #[cfg(not(all(target_os = "macos", feature = "gpui-host")))]
+    cfg!(all(windows, feature = "gpui-host"))
+}
+
 pub async fn virtual_display_status() -> ResultType<VirtualDisplayState> {
     virtual_display_rpc(crate::management::DisplayRequest::Query).await
 }

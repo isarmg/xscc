@@ -22,9 +22,9 @@ impl Options {
         let mut result = Self::default();
         let arguments: Vec<_> = arguments.into_iter().collect();
         if let Some(command) = crate::virtual_display_cli::Command::parse(&arguments)? {
-            if !cfg!(all(target_os = "windows", feature = "native-host")) {
+            if !crate::virtual_display_cli::SUPPORTED_BUILD {
                 return Err(
-                    "Virtual display management requires the installed Windows Host".into(),
+                    "Virtual display management requires a supported XSCC Host build".into(),
                 );
             }
             result.virtual_display = Some(command);
@@ -90,10 +90,14 @@ impl Default for Options {
 
 fn help_text() -> String {
     let (name, normal) = if cfg!(feature = "native-host") {
-        (
-            "XSCC Host Beta",
-            "xscc-host.exe\nOpen the installed host as administrator to bind its instance and configure its system service.\n  --virtual-display-status\n  --virtual-display-configure JSON (count, modes, persistent)\nLocal management requires the installed administrator Host and its running SYSTEM service.",
-        )
+        let normal = if cfg!(windows) {
+            "xscc-host.exe\nOpen the installed host as administrator to bind its instance and configure its system service.\n  --virtual-display-status\n  --virtual-display-configure JSON (count, modes, persistent)\nLocal management requires the installed administrator Host and its running SYSTEM service."
+        } else if crate::virtual_display_cli::SUPPORTED_BUILD {
+            "xscc-host\nStart XSCC Host on macOS 27, then run its matching binary in the same desktop session.\n  --virtual-display-status\n  --virtual-display-configure JSON (count, modes, persistent=false)"
+        } else {
+            "xscc-host\nOpen XSCC Host to bind its instance and manage its permitted controllers."
+        };
+        ("XSCC Host Beta", normal)
     } else if cfg!(feature = "live-session") {
         (
             "XSCC Controller Beta",
@@ -121,6 +125,10 @@ mod tests {
         assert!(help.contains("Normal use:"));
         assert!(help.contains("not a remote session"));
         assert!(help.find("Normal use:").unwrap() < help.find("Diagnostics (").unwrap());
+        assert_eq!(
+            help.contains("--virtual-display-status"),
+            crate::virtual_display_cli::SUPPORTED_BUILD
+        );
         if cfg!(feature = "native-host") {
             assert!(help.contains("XSCC Host Beta"));
         } else if cfg!(feature = "live-session") {
@@ -131,7 +139,7 @@ mod tests {
     #[test]
     fn virtual_management_is_host_only_and_does_not_start_diagnostics() {
         let result = parse(&["--virtual-display-status"]);
-        if cfg!(all(target_os = "windows", feature = "native-host")) {
+        if crate::virtual_display_cli::SUPPORTED_BUILD {
             let options = result.unwrap();
             assert!(matches!(
                 options.virtual_display,

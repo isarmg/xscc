@@ -27,7 +27,7 @@ managed = ["dep:xscc-native-management"]
 udp-media = ["managed", "base/udp-media"]
 gpui-session = ["managed", "udp-media"]
 gpui-mobile-session = ["gpui-session"]
-gpui-host = ["gpui-session"]
+gpui-host = ["gpui-session", "dep:objc2", "dep:objc2-foundation"]
 test-lan-direct = ["gpui-session"]
 hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
@@ -166,6 +166,8 @@ tauri-winrt-notification = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 scrap = { path = "libs/scrap", features = ["capture"] }
 objc = "0.2"
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSProcessInfo", "NSString", "NSGeometry", "objc2-core-foundation"], optional = true }
 cocoa = "0.24"
 dispatch = "0.2"
 core-foundation = "0.9"

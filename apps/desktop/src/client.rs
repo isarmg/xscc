@@ -595,9 +595,10 @@ impl ManagementPanel {
                             })),
                         )
                     })
-                    .when(self.host && cfg!(windows), |row| {
-                        row.child(self.render_virtual_display_dropdown(window, cx))
-                    })
+                    .when(
+                        self.host && gpui_management::local_virtual_display_supported(),
+                        |row| row.child(self.render_virtual_display_dropdown(window, cx)),
+                    )
                     .when(self.confirm_unbind, |row| {
                         row.child(
                             header_button("cancel-unbind", "取消", false, true).on_click(

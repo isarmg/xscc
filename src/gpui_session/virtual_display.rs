@@ -96,7 +96,7 @@ impl SessionHandle {
                 Handler(mailbox).event(SessionEvent::VirtualDisplayResult(VirtualDisplayResult {
                     request_id: id,
                     state,
-                    error: Some("尚未确认，请查询状态；Windows 操作可能仍在执行。".into()),
+                    error: Some("尚未确认，请查询状态。被控端可能仍在执行操作。".into()),
                 }));
             }
         });

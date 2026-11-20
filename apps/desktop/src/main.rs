@@ -251,17 +251,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()?;
     if let Some(command) = options.virtual_display.as_ref() {
-        #[cfg(all(target_os = "windows", feature = "native-host"))]
+        #[cfg(all(
+            feature = "native-host",
+            any(windows, all(target_os = "macos", target_arch = "aarch64"))
+        ))]
         {
-            librustdesk::gpui_host::initialize().map_err(std::io::Error::other)?;
+            if !librustdesk::gpui_management::local_virtual_display_supported() {
+                return Err("Virtual display management is unavailable on this system".into());
+            }
+            librustdesk::gpui_host::initialize_virtual_display_cli()
+                .map_err(std::io::Error::other)?;
             let state = runtime.block_on(command.execute())?;
             println!("{}", serde_json::to_string(&state)?);
             return Ok(());
         }
-        #[cfg(not(all(target_os = "windows", feature = "native-host")))]
+        #[cfg(not(all(
+            feature = "native-host",
+            any(windows, all(target_os = "macos", target_arch = "aarch64"))
+        )))]
         {
             let _ = command;
-            return Err("Virtual display management requires the installed Windows Host".into());
+            return Err("Virtual display management requires a supported XSCC Host build".into());
         }
     }
     #[cfg(all(

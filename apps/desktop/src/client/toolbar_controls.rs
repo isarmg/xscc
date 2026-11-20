@@ -110,11 +110,7 @@ impl ManagementPanel {
                 } else {
                     128.
                 },
-                if self.host {
-                    self.initialized
-                } else {
-                    self.video_state.connected
-                },
+                self.virtual_display_menu_enabled(),
             ),
         };
         let trigger = ui::button(id, &label, open, enabled, palette)
@@ -134,7 +130,7 @@ impl ManagementPanel {
                 let enabled = match menu {
                     ToolbarMenu::Display => view.display_switch_enabled(),
                     ToolbarMenu::Resolution => view.resolution_edit_enabled(),
-                    ToolbarMenu::VirtualDisplays if view.host => view.initialized,
+                    ToolbarMenu::VirtualDisplays => view.virtual_display_menu_enabled(),
                     ToolbarMenu::RefreshRate => {
                         view.resolution_edit_enabled()
                             && !refresh_modes(
@@ -143,9 +139,7 @@ impl ManagementPanel {
                             )
                             .is_empty()
                     }
-                    ToolbarMenu::Bitrate | ToolbarMenu::VirtualDisplays => {
-                        view.video_state.connected
-                    }
+                    ToolbarMenu::Bitrate => view.video_state.connected,
                 };
                 if enabled {
                     view.toolbar_menu = menu.toggle(view.toolbar_menu);

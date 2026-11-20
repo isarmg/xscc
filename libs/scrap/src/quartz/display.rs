@@ -1,5 +1,3 @@
-use std::mem;
-
 use super::ffi::*;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -12,22 +10,18 @@ impl Display {
     }
 
     pub fn online() -> Result<Vec<Display>, CGError> {
-        unsafe {
-            #[allow(invalid_value)]
-            let mut arr: [u32; 16] = mem::MaybeUninit::uninit().assume_init();
-            let mut len: u32 = 0;
-
-            match CGGetOnlineDisplayList(16, arr.as_mut_ptr(), &mut len) {
-                CGError::Success => (),
-                x => return Err(x),
+        read_online_displays(|ids| {
+            let mut count = 0;
+            let buffer = if ids.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                ids.as_mut_ptr()
+            };
+            match unsafe { CGGetOnlineDisplayList(ids.len() as u32, buffer, &mut count) } {
+                CGError::Success => Ok(count),
+                error => Err(error),
             }
-
-            let mut res = Vec::with_capacity(16);
-            for i in 0..len as usize {
-                res.push(Display(*arr.get_unchecked(i)));
-            }
-            Ok(res)
-        }
+        })
     }
 
     pub fn id(self) -> u32 {
@@ -83,5 +77,45 @@ impl Display {
 
     pub fn bounds(self) -> CGRect {
         unsafe { CGDisplayBounds(self.0) }
+    }
+}
+
+fn read_online_displays(
+    mut query: impl FnMut(&mut [u32]) -> Result<u32, CGError>,
+) -> Result<Vec<Display>, CGError> {
+    let mut capacity = query(&mut [])?.checked_add(1).ok_or(CGError::RangeCheck)?;
+    for _ in 0..3 {
+        let mut ids = vec![0; capacity as usize];
+        let count = query(&mut ids)?;
+        // A full buffer may hide newly attached displays.
+        if count < capacity {
+            ids.truncate(count as usize);
+            return Ok(ids.into_iter().map(Display).collect());
+        }
+        capacity = capacity.checked_mul(2).ok_or(CGError::RangeCheck)?;
+    }
+    Err(CGError::CannotComplete)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enumerates_displays_added_during_the_count_query() {
+        let expected: Vec<_> = (100..119).collect();
+        let displays = read_online_displays(|ids| {
+            if ids.is_empty() {
+                return Ok(16);
+            }
+            let count = expected.len().min(ids.len());
+            ids[..count].copy_from_slice(&expected[..count]);
+            Ok(count as u32)
+        })
+        .unwrap();
+        assert_eq!(
+            displays.into_iter().map(Display::id).collect::<Vec<_>>(),
+            expected
+        );
     }
 }

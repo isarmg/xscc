@@ -111,3 +111,6 @@ pub mod privacy_mode;
 
 #[cfg(windows)]
 pub mod virtual_display_manager;
+#[cfg(all(target_os = "macos", feature = "gpui-host"))]
+#[path = "virtual_display_manager/macos.rs"]
+pub(crate) mod virtual_display_manager;

@@ -26,7 +26,7 @@ pub enum DisplayRequest {
 }
 
 pub(crate) async fn display(request: DisplayRequest) -> super::Reply {
-    #[cfg(all(windows, feature = "gpui-host"))]
+    #[cfg(all(any(windows, target_os = "macos"), feature = "gpui-host"))]
     {
         let result = hbb_common::tokio::task::spawn_blocking(
             move || -> hbb_common::ResultType<serde_json::Value> {
@@ -53,11 +53,9 @@ pub(crate) async fn display(request: DisplayRequest) -> super::Reply {
             Err(error) => super::Reply::error(error),
         }
     }
-    #[cfg(not(all(windows, feature = "gpui-host")))]
+    #[cfg(not(all(any(windows, target_os = "macos"), feature = "gpui-host")))]
     {
         let _ = request;
-        super::Reply::error(
-            "Local virtual display configuration requires an installed Windows host",
-        )
+        super::Reply::error("Local virtual display configuration requires a supported desktop host")
     }
 }

@@ -64,6 +64,34 @@ Do not infer permission from a successful build or bundle creation. macOS privac
 identity depends on the final application/signature; grants for an older
 application do not establish permission for these separate bundles.
 
+## Virtual external displays on macOS 27
+
+An Apple Silicon Host can add virtual external displays on macOS 27 or later
+when the CoreGraphics virtual display API is available. The displays extend the
+Mac desktop and appear in System Settings under Displays and in the controller's
+display picker.
+
+In the running Host, open **虚拟显示器** and use **+** or **−** to change the
+display count. An authorized desktop or mobile controller with control
+permission can use the same count controls in its session display settings to
+manage the Host's XSCC virtual displays.
+
+The default is manual removal. Displays remain available after the last
+controller disconnects. Reduce the count to remove displays or set it to zero
+to remove all XSCC virtual displays. Exiting the Host releases the native
+display objects.
+
+With the graphical Host running in the same desktop session, use the executable
+from that installation to query, create, or remove displays. Pass
+`"persistent": false` for a configuration scoped to the running Host.
+
+```sh
+host="/Applications/XSCC Host.app/Contents/MacOS/xscc-host"
+"$host" --virtual-display-status
+"$host" --virtual-display-configure '{"count":1,"modes":[],"persistent":false}'
+"$host" --virtual-display-configure '{"count":0,"modes":[],"persistent":false}'
+```
+
 ## Rendering, input and audio boundaries
 
 - GPUI uses its native Metal window renderer on macOS. Remote video still passes
@@ -104,6 +132,11 @@ Before calling the macOS candidate usable, record physical-Mac evidence for:
    monitor changes, resize and trackpad scrolling behave correctly.
 5. System audio, mute, device changes and permission revocation/recovery work.
 6. Sustained frame pacing, CPU/GPU usage and memory are measured on actual hardware.
+7. On macOS 27, add a virtual display, drag a window onto it, and select it from
+   an authorized controller. Disconnect and reconnect, confirm the display is
+   still available, then remove it explicitly. Verify capture moves to a
+   remaining display and exiting the Host releases any virtual displays still
+   present.
 
 Linux-hosted metadata/plist tests are not a macOS compile, native runner result,
 physical-device acceptance, signing or distribution approval.

@@ -73,29 +73,64 @@ impl Connection {
             return;
         }
         let index = display.unwrap_or(self.display_idx);
+        #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+        let expected_name = match self.retina.displays.get(index) {
+            Some(display) if display.online => display.name.clone(),
+            _ => {
+                self.media_control_error(
+                    "Display resolution",
+                    "The display is no longer available".into(),
+                )
+                .await;
+                return;
+            }
+        };
+        #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+        let target_name = expected_name.clone();
         #[cfg(feature = "managed")]
         let permit = self.managed_permit.clone();
         #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
         let test_lan = self.test_lan;
+        #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+        let connection_id = self.inner.id();
         let result = tokio::task::spawn_blocking(move || -> ResultType<()> {
-            #[cfg(feature = "managed")]
-            {
-                #[cfg(feature = "test-lan-direct")]
-                let valid = test_lan || crate::management::permits_host(permit.as_ref());
-                #[cfg(not(feature = "test-lan-direct"))]
-                let valid = crate::management::permits_host(permit.as_ref());
-                if !valid {
-                    bail!("Session authorization expired");
+            let authorize = || -> ResultType<()> {
+                #[cfg(feature = "managed")]
+                {
+                    #[cfg(feature = "test-lan-direct")]
+                    let valid = test_lan || crate::management::permits_host(permit.as_ref());
+                    #[cfg(not(feature = "test-lan-direct"))]
+                    let valid = crate::management::permits_host(permit.as_ref());
+                    if !valid {
+                        bail!("Session authorization expired");
+                    }
                 }
-            }
+                #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+                if !super::macos_virtual_display::remote_is_connected(connection_id) {
+                    bail!("Session has already disconnected");
+                }
+                Ok(())
+            };
+            authorize()?;
             let displays = display_service::try_get_displays()?;
+            #[cfg(all(target_os = "macos", feature = "gpui-host"))]
             let display = displays
-                .get(index)
+                .iter()
+                .find(|display| display.is_online() && display.name() == target_name);
+            #[cfg(not(all(target_os = "macos", feature = "gpui-host")))]
+            let display = displays.get(index);
+            let display = display
                 .ok_or_else(|| hbb_common::anyhow::anyhow!("The display is no longer available"))?;
             let name = display.name();
             #[cfg(not(windows))]
             let original = display_service::original_capture_size(display);
             drop(displays);
+            #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+            if let Some(result) =
+                virtual_display_manager::change_session_mode(&name, &mode, authorize)
+            {
+                return result;
+            }
             #[cfg(not(windows))]
             if mode.refresh_rate != 0 {
                 bail!("The host does not support refresh rate changes");
@@ -138,16 +173,41 @@ impl Connection {
         .await;
         match result {
             Ok(Ok(())) => {
-                let snapshot = tokio::task::spawn_blocking(move || -> ResultType<Message> {
-                    display_service::check_displays_changed()?;
-                    video_service::make_display_changed_msg(index, None, VideoSource::Monitor)
+                let snapshot =
+                    tokio::task::spawn_blocking(move || -> ResultType<(usize, Message)> {
+                        #[cfg(not(all(target_os = "macos", feature = "gpui-host")))]
+                        display_service::check_displays_changed()?;
+                        #[cfg(not(all(target_os = "macos", feature = "gpui-host")))]
+                        let display = None;
+                        #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+                        let (index, display) = {
+                            let displays = display_service::try_get_displays()?;
+                            display_service::update_sync_displays(&displays)
+                                .into_iter()
+                                .enumerate()
+                                .find(|(_, display)| {
+                                    display.online && display.name == expected_name
+                                })
+                                .map(|(index, display)| (index, Some(display)))
+                                .ok_or_else(|| {
+                                    hbb_common::anyhow::anyhow!(
+                                        "The display is no longer available"
+                                    )
+                                })?
+                        };
+                        video_service::make_display_changed_msg(
+                            index,
+                            display,
+                            VideoSource::Monitor,
+                        )
+                        .map(|message| (index, message))
                         .ok_or_else(|| {
                             hbb_common::anyhow::anyhow!("The display is no longer available")
                         })
-                })
-                .await;
+                    })
+                    .await;
                 match snapshot {
-                    Ok(Ok(message)) => {
+                    Ok(Ok((index, message))) => {
                         self.send(message).await;
                         self.refresh_video_display(Some(index));
                     }
@@ -262,7 +322,7 @@ impl Connection {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "macos", feature = "gpui-host")))]
 impl Connection {
     pub(super) async fn configure_virtual_displays(
         &mut self,
@@ -304,19 +364,30 @@ impl Connection {
                     let permit = self.managed_permit.clone();
                     #[cfg(all(feature = "managed", feature = "test-lan-direct"))]
                     let test_lan = self.test_lan;
+                    #[cfg(target_os = "macos")]
+                    let connection_id = self.inner.id();
                     match tokio::task::spawn_blocking(move || -> ResultType<_> {
-                        #[cfg(feature = "managed")]
-                        {
-                            #[cfg(feature = "test-lan-direct")]
-                            let valid =
-                                test_lan || crate::management::permits_host(permit.as_ref());
-                            #[cfg(not(feature = "test-lan-direct"))]
-                            let valid = crate::management::permits_host(permit.as_ref());
-                            if !valid {
-                                bail!("Session authorization expired");
+                        let authorize = || -> ResultType<()> {
+                            #[cfg(feature = "managed")]
+                            {
+                                #[cfg(feature = "test-lan-direct")]
+                                let valid =
+                                    test_lan || crate::management::permits_host(permit.as_ref());
+                                #[cfg(not(feature = "test-lan-direct"))]
+                                let valid = crate::management::permits_host(permit.as_ref());
+                                if !valid {
+                                    bail!("Session authorization expired");
+                                }
                             }
-                        }
+                            #[cfg(target_os = "macos")]
+                            if !super::macos_virtual_display::remote_is_connected(connection_id) {
+                                bail!("Session has already disconnected");
+                            }
+                            Ok(())
+                        };
+                        authorize()?;
                         match config {
+                            #[cfg(windows)]
                             Some(config) => {
                                 let result = virtual_display_manager::configure_displays(&config);
                                 // The connection can close while this blocking operation continues.
@@ -324,6 +395,10 @@ impl Connection {
                                 super::raii::AuthedConnID::cleanup_last_remote_session(true);
                                 result
                             }
+                            #[cfg(target_os = "macos")]
+                            Some(config) => virtual_display_manager::configure_session_displays(
+                                &config, authorize,
+                            ),
                             None => Ok(virtual_display_manager::configuration_state()),
                         }
                     })
@@ -343,9 +418,13 @@ impl Connection {
         let (mut state, mut error) = match result {
             Ok(state) => (state, None),
             Err(error) => {
+                #[allow(unused_mut)]
                 let mut state = virtual_display_manager::configuration_state();
-                if error.to_string().to_ascii_lowercase().contains("restart") {
-                    state.status = "reboot_required".into();
+                #[cfg(windows)]
+                {
+                    if error.to_string().to_ascii_lowercase().contains("restart") {
+                        state.status = "reboot_required".into();
+                    }
                 }
                 (state, Some(format!("{error:#}")))
             }
@@ -373,6 +452,8 @@ impl Connection {
                     );
                     // A Hz-only change does not alter the capture rectangle, so the
                     // video service may not otherwise publish fresh current modes.
+                    #[cfg(target_os = "macos")]
+                    let topology_change = self.synchronize_macos_display_topology(&displays);
                     let current_display = displays
                         .get(self.display_idx)
                         .filter(|display| input && display.online)
@@ -383,6 +464,8 @@ impl Connection {
                                 self.video_source(),
                             )
                         });
+                    #[cfg(target_os = "macos")]
+                    let current_display = topology_change.or(current_display);
                     snapshot.set_peer_info(PeerInfo {
                         displays,
                         platform_additions: serde_json::Value::Object(additions).to_string(),

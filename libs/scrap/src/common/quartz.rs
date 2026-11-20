@@ -26,7 +26,7 @@ impl Capturer {
                 }
             },
         )
-        .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
+        .map_err(|error| io::Error::other(format!("Could not start Quartz capture: {error:?}")))?;
 
         Ok(Capturer {
             inner,
@@ -46,6 +46,12 @@ impl Capturer {
 
 impl crate::TraitCapturer for Capturer {
     fn frame<'a>(&'a mut self, _timeout_ms: std::time::Duration) -> io::Result<Frame<'a>> {
+        if self.inner.is_stopped() {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "Quartz display stream stopped",
+            ));
+        }
         match self.frame.try_lock() {
             Ok(mut handle) => {
                 let mut frame = None;
@@ -115,7 +121,9 @@ impl Display {
 
     pub fn all() -> io::Result<Vec<Display>> {
         Ok(quartz::Display::online()
-            .map_err(|_| io::Error::from(io::ErrorKind::Other))?
+            .map_err(|error| {
+                io::Error::other(format!("Could not list Quartz displays: {error:?}"))
+            })?
             .into_iter()
             .map(Display)
             .collect())

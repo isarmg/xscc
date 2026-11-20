@@ -8028,6 +8028,8 @@ dependencies = [
  "nix 0.29.0",
  "num_cpus",
  "objc",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
  "objc_id",
  "openssl",
  "parity-tokio-ipc",

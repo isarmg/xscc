@@ -421,6 +421,8 @@ pub(super) struct CapturerInfo {
     pub height: usize,
     pub ndisplay: usize,
     pub current: usize,
+    #[cfg(target_os = "macos")]
+    display_name: String,
     pub privacy_mode_id: i32,
     pub _capturer_privacy_mode_id: i32,
     pub capturer: Box<dyn TraitCapturer>,
@@ -520,6 +522,8 @@ fn get_capturer_monitor(
         height,
         ndisplay,
         current,
+        #[cfg(target_os = "macos")]
+        display_name: name,
         privacy_mode_id,
         _capturer_privacy_mode_id: capturer_privacy_mode_id,
         capturer,
@@ -1620,12 +1624,23 @@ fn try_broadcast_display_changed(
         // Get display information immediately.
         crate::display_service::check_displays_changed().ok();
     }
-    if let Some(display) = check_display_changed(
+    let display = check_display_changed(
         cap.ndisplay,
         cap.current,
         (cap.origin.0, cap.origin.1, cap.width, cap.height),
-    ) {
+    );
+    #[cfg(target_os = "macos")]
+    let display = display.or_else(|| {
+        display_service::get_display_info(cap.current)
+            .filter(|display| display.name != cap.display_name)
+    });
+    if let Some(display) = display {
         log::info!("Display {} changed", display);
+        #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+        if display.name != cap.display_name {
+            // The topology notification remaps the selected monitor using its display ID.
+            bail!(VideoRestart::DisplayChanged);
+        }
         if let Some(msg_out) =
             make_display_changed_msg(display_idx, Some(display), VideoSource::Monitor)
         {

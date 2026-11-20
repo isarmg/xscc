@@ -17,6 +17,9 @@ pub mod win_device;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(all(target_os = "macos", feature = "gpui-host"))]
+pub(crate) mod macos_virtual_display;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 
@@ -94,6 +97,10 @@ pub fn breakdown_callback() {
 pub(crate) fn session_resolutions(name: &str) -> base::message_proto::SupportedResolutions {
     #[cfg(windows)]
     return windows::display_modes::supported(name);
+    #[cfg(all(target_os = "macos", feature = "gpui-host"))]
+    if let Some(resolutions) = crate::virtual_display_manager::supported_resolutions(name) {
+        return resolutions;
+    }
     #[cfg(not(windows))]
     base::message_proto::SupportedResolutions {
         resolutions: resolutions(name),
