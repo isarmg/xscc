@@ -22,9 +22,8 @@ pub const MAX_FRAGMENTS: usize = 8192;
 pub const MAX_ACK_RANGES: usize = 64;
 pub const REPLAY_WINDOW: u64 = 8192;
 pub const REPORT_INTERVAL: Duration = Duration::from_millis(20);
-// A recovery frame may be paced two packets at a time at the minimum send
-// window. Release that window sooner while keyframe fragments are arriving.
-const KEYFRAME_REPORT_INTERVAL: Duration = Duration::from_millis(4);
+// Return credit sooner when a keyframe or a reordered fragment reaches the receiver.
+const PROMPT_REPORT_INTERVAL: Duration = Duration::from_millis(4);
 pub const DELTA_TTL: Duration = Duration::from_millis(100);
 pub const AUDIO_TTL: Duration = Duration::from_millis(40);
 const MAGIC: &[u8; 4] = b"XSMU";
@@ -455,7 +454,7 @@ pub struct DatagramReceiver {
     largest_at: Option<Instant>,
     last_report: Option<Instant>,
     unreported: usize,
-    unreported_keyframe: bool,
+    prompt_report: bool,
 }
 impl DatagramReceiver {
     pub fn new(seed: &[u8; 32], sid: SessionId, direction: Direction) -> Result<Self, MediaError> {
@@ -467,7 +466,7 @@ impl DatagramReceiver {
             largest_at: None,
             last_report: None,
             unreported: 0,
-            unreported_keyframe: false,
+            prompt_report: false,
         })
     }
     pub fn open(&mut self, bytes: &[u8], now: Instant) -> Result<AuthenticatedPacket, MediaError> {
@@ -507,10 +506,12 @@ impl DatagramReceiver {
             5 => AuthenticatedPacket::Report(decode_report(&body)?),
             _ => return Err(MediaError::InvalidEnvelope),
         };
+        let previous = self.replay.highest;
         self.replay.commit(sequence);
         if let AuthenticatedPacket::Fragment(fragment) = &packet {
+            let reordered = previous.is_some_and(|last| sequence < last);
             self.received(sequence, now);
-            self.unreported_keyframe |= fragment.descriptor.metadata.keyframe;
+            self.prompt_report |= fragment.descriptor.metadata.keyframe || reordered;
         }
         Ok(packet)
     }
@@ -561,8 +562,8 @@ impl DatagramReceiver {
         if self.unreported >= 32 {
             return Some(largest_at);
         }
-        let interval = if self.unreported_keyframe {
-            KEYFRAME_REPORT_INTERVAL
+        let interval = if self.prompt_report {
+            PROMPT_REPORT_INTERVAL
         } else {
             REPORT_INTERVAL
         };
@@ -576,7 +577,7 @@ impl DatagramReceiver {
         let largest_at = self.largest_at?;
         self.last_report = Some(now);
         self.unreported = 0;
-        self.unreported_keyframe = false;
+        self.prompt_report = false;
         Some(ReceiveReport {
             largest: self.ranges[0].last,
             ack_delay_us: now
@@ -2144,6 +2145,35 @@ mod tests {
             SendDecision::Send,
         );
         assert!(receiver.next_report_at().is_none());
+    }
+
+    #[test]
+    fn a_reordered_delta_releases_send_credit_before_the_regular_report() {
+        let now = Instant::now();
+        let sid = SessionId([6; 16]);
+        let mut sender = DatagramSender::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let mut receiver =
+            DatagramReceiver::new(&[7; 32], sid, Direction::HostToController).unwrap();
+        let plan = FramePlan::new(metadata(0, false), Bytes::from_static(b"x"), DEFAULT_MTU)
+            .unwrap();
+        let first = sender.seal_fragment(&plan, 0).unwrap();
+        let delayed = sender.seal_fragment(&plan, 0).unwrap();
+        let ahead = sender.seal_fragment(&plan, 0).unwrap();
+        receiver.open(&first.bytes, now).unwrap();
+        let regular = now + REPORT_INTERVAL;
+        receiver.take_report(regular).unwrap();
+        receiver.open(&ahead.bytes, regular).unwrap();
+        let prompt_at = regular + PROMPT_REPORT_INTERVAL;
+        assert!(receiver.take_report(prompt_at).is_none());
+        receiver.open(&delayed.bytes, prompt_at).unwrap();
+        let report = receiver.take_report(prompt_at).unwrap();
+        assert_eq!(
+            report.ranges,
+            [AckRange {
+                first: first.sequence,
+                last: ahead.sequence,
+            }]
+        );
     }
 
     #[test]

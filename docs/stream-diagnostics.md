@@ -25,7 +25,7 @@ actual phone FPS and the Windows compositor counter for the output clock.
 | Encode | `host_video_pipeline`, `host_amf_slow` | Captured and encoded FPS, encoder bitrate, keyed release and conversion delays |
 | Send | `host_udp_video_pipeline` | Sent messages and datagrams, sequence, window and in-flight bytes, keyframe timings |
 | Receive and assemble | `client_udp_video_pipeline` | Authenticated datagrams, sequence gaps and late packets, missing fragments, queue drops and recovery |
-| Order | `client_udp_video_order_gap`, `client_udp_video_stale`, `client_udp_video_reference_ready` | Expected and received frame IDs, discarded frames and recovery |
+| Order | `client_udp_video_order_gap`, `client_udp_video_gap_recovered`, `client_udp_video_stale`, `client_udp_video_reference_ready` | Expected and received frame IDs, discarded frames and recovery |
 | Decode and submit | `session_pipeline`, `android_fps_control` | Receive, decode and Surface submission rates, adaptive frame rate decisions |
 | Schedule and render | `android_frame_pipeline`, `android_gpu_pipeline` | Callback and application dispatch timing, GPU acquire, submit and present time |
 

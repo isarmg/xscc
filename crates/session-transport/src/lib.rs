@@ -498,6 +498,7 @@ struct ReceiveStream {
     last: Option<u64>,
     needs_keyframe: bool,
     held: BTreeMap<u64, (CompletedFrame, Instant)>,
+    recovery_requested: bool,
 }
 
 impl ReceiveStream {
@@ -505,13 +506,25 @@ impl ReceiveStream {
         self.last.and_then(|last| last.checked_add(1))
     }
 
+    fn expected_is_held(&self) -> bool {
+        self.expected()
+            .is_some_and(|id| self.held.contains_key(&id))
+    }
+
+    fn gap_deadline(&self) -> Option<Instant> {
+        self.held.values().map(|(_, deadline)| *deadline).min()
+    }
+
     fn reorder_due(&self, now: Instant) -> Option<Instant> {
-        let (&first, _) = self.held.first_key_value()?;
-        if self.expected() == Some(first) {
-            Some(now)
-        } else {
-            self.held.values().map(|(_, deadline)| *deadline).min()
+        if self.expected_is_held() {
+            return Some(now);
         }
+        let deadline = self.gap_deadline()?;
+        Some(if self.recovery_requested {
+            deadline + VIDEO_REORDER_WINDOW
+        } else {
+            deadline
+        })
     }
 }
 struct QueuedFrame {
@@ -1135,6 +1148,16 @@ impl HybridTransport {
                 self.request_gap_recovery(metadata, Instant::now())?;
                 return Ok(None);
             }
+            #[cfg(debug_assertions)]
+            if state.recovery_requested && !metadata.keyframe {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(1),
+                    info,
+                    "client_udp_video_gap_recovered display={} epoch={} frame={}",
+                    metadata.display_id, metadata.epoch, metadata.frame_id
+                );
+            }
+            state.recovery_requested = false;
             state.held.retain(|id, _| *id > metadata.frame_id);
         }
         state.last = Some(metadata.frame_id);
@@ -1156,23 +1179,55 @@ impl HybridTransport {
     }
 
     fn take_reordered(&mut self, now: Instant) -> ResultType<Option<BytesMut>> {
+        if let Some(stream) = self
+            .receiving
+            .values_mut()
+            .find(|stream| stream.expected_is_held())
+        {
+            let (_, (frame, _)) = stream
+                .held
+                .pop_first()
+                .expect("invariant: expected frame is held");
+            return self.deliver(frame);
+        }
+        // The expected frame can already be queued when a late consumer wakes on the timer.
+        for _ in 0..self.media.len() {
+            let Ok(frame) = self.media.try_recv() else {
+                break;
+            };
+            if let Some(bytes) = self.deliver(frame)? {
+                return Ok(Some(bytes));
+            }
+        }
         let Some(stream) = self.receiving.values_mut().find(|stream| {
             stream.reorder_due(now).is_some_and(|due| due <= now)
         }) else {
             return Ok(None);
         };
-        let (id, (frame, _)) = stream.held.pop_first().expect("invariant: reordered frame due");
-        if stream.expected() == Some(id) {
-            return self.deliver(frame);
+        let deadline = stream.gap_deadline().expect("invariant: reordered frame due");
+        let (_, (frame, _)) = stream
+            .held
+            .first_key_value()
+            .expect("invariant: reordered frame due");
+        let first = frame.metadata;
+        if now < deadline + VIDEO_REORDER_WINDOW {
+            // Start recovery on time while a late missing frame can still repair the chain.
+            stream.recovery_requested = true;
+            let missing = FrameMetadata {
+                frame_id: stream.expected().expect("invariant: delta gap has a reference"),
+                ..first
+            };
+            self.request_gap_recovery(missing, now)?;
+            return Ok(None);
         }
         #[cfg(debug_assertions)]
         hbb_common::throttled_log!(
             Duration::from_secs(1),
             info,
-            "client_udp_video_order_gap reason=reorder_timeout display={} epoch={} expected={:?} next={id} discarded={}",
-            frame.metadata.display_id, frame.metadata.epoch, stream.expected(), stream.held.len() + 1
+            "client_udp_video_order_gap reason=reorder_timeout display={} epoch={} expected={:?} next={} discarded={}",
+            first.display_id, first.epoch, stream.expected(), first.frame_id, stream.held.len()
         );
-        let gap = stream.held.last_key_value().map_or(frame.metadata, |(_, (latest, _))| latest.metadata);
+        let gap = stream.held.last_key_value().map_or(first, |(_, (latest, _))| latest.metadata);
         stream.held.clear();
         stream.needs_keyframe = true;
         self.request_gap_recovery(gap, now)?;
@@ -1814,7 +1869,7 @@ mod tests {
     #[tokio::test]
     async fn gpui_delta_gap_preserves_late_keyframes_and_reuses_payload() {
         let (client, _host, _listener) = streams().await;
-        let (mut transport, _channels) =
+        let (mut transport, channels) =
             HybridTransport::new(client, SessionId([9; 16]), false).unwrap();
         transport.ready.store(true, Ordering::Release);
         transport.receiving.insert(
@@ -1859,9 +1914,22 @@ mod tests {
         assert!(transport.deliver(frame(6, false)).unwrap().is_some());
 
         assert!(transport.deliver(frame(8, false)).unwrap().is_none());
-        assert!(transport.take_reordered(Instant::now() + VIDEO_REORDER_WINDOW).unwrap().is_none());
-        assert!(transport.deliver(frame(7, false)).unwrap().is_none());
-        assert!(transport.deliver(frame(9, true)).unwrap().is_some());
+        let repair_started = Instant::now() + VIDEO_REORDER_WINDOW;
+        assert!(transport.take_reordered(repair_started).unwrap().is_none());
+        assert!(transport.deliver(frame(7, false)).unwrap().is_some());
+        assert!(transport.take_reordered(repair_started).unwrap().is_some());
+
+        assert!(transport.deliver(frame(10, false)).unwrap().is_none());
+        channels.completed.try_send(frame(9, false)).unwrap();
+        let expired = Instant::now() + VIDEO_REORDER_WINDOW * 2;
+        assert!(transport.take_reordered(expired).unwrap().is_some());
+        assert!(transport.take_reordered(expired).unwrap().is_some());
+
+        assert!(transport.deliver(frame(12, false)).unwrap().is_none());
+        let expired = Instant::now() + VIDEO_REORDER_WINDOW * 2;
+        assert!(transport.take_reordered(expired).unwrap().is_none());
+        assert!(transport.deliver(frame(11, false)).unwrap().is_none());
+        assert!(transport.deliver(frame(13, true)).unwrap().is_some());
     }
     #[tokio::test]
     async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
