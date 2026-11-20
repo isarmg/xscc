@@ -482,6 +482,7 @@ pub struct DatagramReceiver {
     ranges: Vec<AckRange>,
     largest_at: Option<Instant>,
     last_report: Option<Instant>,
+    repeated_idle_report: bool,
     unreported: usize,
     prompt_report: bool,
 }
@@ -494,6 +495,7 @@ impl DatagramReceiver {
             ranges: Vec::new(),
             largest_at: None,
             last_report: None,
+            repeated_idle_report: false,
             unreported: 0,
             prompt_report: false,
         })
@@ -593,7 +595,10 @@ impl DatagramReceiver {
     pub fn next_report_at(&self) -> Option<Instant> {
         let largest_at = self.largest_at?;
         if self.unreported == 0 {
-            return None;
+            // The sender may be waiting on a lost report with no credit for fresh packets.
+            return self.last_report
+                .filter(|_| !self.repeated_idle_report)
+                .map(|sent| sent + REPORT_INTERVAL);
         }
         if self.unreported >= 32 {
             return Some(largest_at);
@@ -611,9 +616,14 @@ impl DatagramReceiver {
             return None;
         }
         let largest_at = self.largest_at?;
-        self.last_report = Some(now);
-        self.unreported = 0;
-        self.prompt_report = false;
+        if self.unreported == 0 {
+            self.repeated_idle_report = true;
+        } else {
+            self.last_report = Some(now);
+            self.unreported = 0;
+            self.prompt_report = false;
+            self.repeated_idle_report = false;
+        }
         Some(ReceiveReport {
             largest: self.ranges[0].last,
             ack_delay_us: now
@@ -622,6 +632,11 @@ impl DatagramReceiver {
                 .min(250_000) as u32,
             ranges: self.ranges.clone(),
         })
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn last_report_was_repeat(&self) -> bool {
+        self.repeated_idle_report
     }
 }
 
@@ -1791,7 +1806,6 @@ impl Pacer {
         if let Some(sample) = sample {
             self.srtt = (self.srtt * 7 + sample) / 8;
         }
-        self.last_feedback = now;
         let loss_age = self.feedback_timeout();
         // Allow a regular feedback interval for a reordered packet to fill the hole.
         let reorder_age = self.srtt.mul_f64(1.125).max(REPORT_INTERVAL);
@@ -1804,6 +1818,9 @@ impl Pacer {
             latest_loss = Some(sequence);
             self.inflight_bytes -= flight.bytes;
             on_loss(sequence);
+        }
+        if acknowledged > 0 || latest_loss.is_some() {
+            self.last_feedback = now;
         }
         if let Some(sequence) = latest_loss {
             // Delayed reports of the same flight must not halve the window again.
@@ -2210,7 +2227,7 @@ mod tests {
     }
 
     #[test]
-    fn keyframe_feedback_reopens_a_two_packet_window_before_the_next_periodic_report() {
+    fn keyframe_feedback_reopens_a_two_packet_window_even_after_one_lost_report() {
         let now = Instant::now();
         let sid = SessionId([6; 16]);
         let mut sender = DatagramSender::new(&[7; 32], sid, Direction::HostToController).unwrap();
@@ -2255,7 +2272,32 @@ mod tests {
             pacer.decide(remaining, deadline, feedback_at, false),
             SendDecision::Send,
         );
+        let echo_at = feedback_at + REPORT_INTERVAL;
+        assert_eq!(receiver.next_report_at(), Some(echo_at));
+        let echo = receiver.take_report(echo_at).unwrap();
+        assert_eq!(echo.largest, report.largest);
+        assert_eq!(echo.ranges, report.ranges);
         assert!(receiver.next_report_at().is_none());
+
+        let mut lost_feedback = Pacer::new(DEFAULT_MTU, 5_000_000, now).unwrap();
+        lost_feedback.on_probe_response(Duration::from_millis(4), now).unwrap();
+        lost_feedback.window = 2 * DEFAULT_MTU;
+        for sequence in 0..2 {
+            lost_feedback.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+        }
+        assert!(lost_feedback.congestion_window_blocks(remaining));
+        lost_feedback.on_report(&echo, echo_at).unwrap();
+        assert_eq!(lost_feedback.inflight_bytes(), 0);
+        assert_eq!(lost_feedback.decide(remaining, deadline, echo_at, false), SendDecision::Send);
+
+        for sequence in 2..4 {
+            lost_feedback.on_sent(sequence, DEFAULT_MTU, echo_at).unwrap();
+        }
+        lost_feedback.on_report(&report, echo_at + REPORT_INTERVAL * 2).unwrap();
+        assert_eq!(
+            lost_feedback.decide(remaining, deadline, echo_at + REPORT_INTERVAL * 4, false),
+            SendDecision::FeedbackRequired,
+        );
     }
 
     #[test]

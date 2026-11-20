@@ -2735,9 +2735,12 @@ async fn client_media(
                     _ => bail!("Invalid controller UDP media command"),
                 },
                 _ = tokio::time::sleep_until(report_at.unwrap_or(started).into()), if report_at.is_some() => {
-                    if let Some(report) = pending.receiver.take_report(Instant::now()) {
+                    let now = Instant::now();
+                    if let Some(report) = pending.receiver.take_report(now) {
                         let report = pending.sender.seal_report(&report)?;
                         pending.socket.send(&report.bytes).await.context("Send UDP receive report")?;
+                        #[cfg(debug_assertions)]
+                        video_metrics.feedback_sent(now, pending.receiver.last_report_was_repeat());
                     }
                 }
                 _ = timer.tick() => {
@@ -3174,13 +3177,16 @@ async fn host_media(
                 packet = session.next() => match packet.context("UDP host session closed")? {
                     AuthenticatedPacket::Report(report) => {
                         let now = Instant::now();
+                        let inflight_before_report = pacer.inflight_bytes();
                         #[cfg(debug_assertions)]
                         let previous_window = pacer.congestion_window();
                         delta_repairs.on_report(&mut pacer, &report, now)?;
                         #[cfg(debug_assertions)]
                         video_metrics.received_feedback(now, pacer.congestion_window() < previous_window);
-                        // Delayed probe responses must not reset newly acknowledged traffic.
-                        probe = None;
+                        // An idle report echo must not cancel a pending recovery probe.
+                        if pacer.inflight_bytes() < inflight_before_report {
+                            probe = None;
+                        }
                         let estimate = if video_fec {
                             media::video_fec_data_budget_bps(pacer.effective_bitrate())
                         } else {

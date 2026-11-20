@@ -7,6 +7,7 @@ pub(super) struct VideoReceiveMetrics {
     reported_at: Instant,
     highest_sequence: Option<u64>,
     last_video_fragment: Option<Instant>,
+    last_feedback_send: Option<Instant>,
     pub(super) window: VideoReceiveSample,
 }
 
@@ -27,6 +28,10 @@ pub(super) struct VideoReceiveSample {
     pub(super) expired_video_sent_notices: usize,
     pub(super) fec_recovered_fragments: usize,
     pub(super) received_video_parity_datagrams: u64,
+    feedback_reports_sent: u64,
+    repeated_feedback_reports: u64,
+    max_feedback_send_gap_ms: f64,
+    max_feedback_send_ms: f64,
     pub(super) sender_abandoned_video_messages: u64,
     pub(super) video_wrong_epoch_fragments: u64,
     pub(super) video_capacity_rejections: u64,
@@ -46,6 +51,7 @@ impl VideoReceiveMetrics {
             reported_at: now,
             highest_sequence,
             last_video_fragment: None,
+            last_feedback_send: None,
             window: VideoReceiveSample::default(),
         }
     }
@@ -69,6 +75,17 @@ impl VideoReceiveMetrics {
         }
     }
 
+    pub(super) fn feedback_sent(&mut self, started: Instant, repeated: bool) {
+        let send_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        self.window.feedback_reports_sent += 1;
+        self.window.repeated_feedback_reports += u64::from(repeated);
+        self.window.max_feedback_send_ms = self.window.max_feedback_send_ms.max(send_ms);
+        if let Some(previous) = self.last_feedback_send.replace(started) {
+            let gap_ms = started.saturating_duration_since(previous).as_secs_f64() * 1_000.0;
+            self.window.max_feedback_send_gap_ms = self.window.max_feedback_send_gap_ms.max(gap_ms);
+        }
+    }
+
     fn take_sample(&mut self, now: Instant) -> Option<VideoReceiveSample> {
         let elapsed = now.saturating_duration_since(self.reported_at);
         if elapsed < Duration::from_secs(1) {
@@ -77,6 +94,7 @@ impl VideoReceiveMetrics {
         self.reported_at = now;
         let mut sample = std::mem::take(&mut self.window);
         if sample.socket_datagrams == 0
+            && sample.feedback_reports_sent == 0
             && sample.expired_video_assemblies == 0
             && sample.expired_video_sent_notices == 0
             && sample.sender_abandoned_video_messages == 0

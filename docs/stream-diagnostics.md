@@ -42,6 +42,13 @@ and work on other traffic.
 The receiving sample includes the highest authenticated sequence and last
 reassembled video message. A sequence gap records a hole when it opens. The
 late-packet counter records subsequently accepted out-of-order arrivals.
+The receiving sample counts original and repeated feedback together in
+`feedback_reports_sent`. After receiving no fresh packets for one report
+interval, the receiver repeats the last report once. Compare
+`max_feedback_send_gap_ms` and `max_feedback_send_ms` with the Host's received
+feedback gaps to locate delays before or after the phone's socket send.
+`session_management_gate` records the reason when the app closes on a
+management availability or authorization check.
 
 Compatible peers negotiate video forward error correction at login. Video
 messages with enough data shards carry up to one interleaved XOR parity shard
