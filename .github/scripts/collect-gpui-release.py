@@ -46,7 +46,7 @@ def required_native_jobs(workflow):
             'Test encrypted management handshake and connection-close errors',
             'Test managed IPC peer authorization',
             'Test native codec probe parser and failure handling',
-            'Compile and test test-only IP role', 'Build standalone release executable',
+            'Compile and test test-only IP role', 'Build standalone executable',
             'Prepare and verify final application manifest',
             'Smoke test release CLI and bounded hardware codec probe',
             'Assemble unsigned packages and integrity manifest',
