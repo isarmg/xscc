@@ -82,6 +82,23 @@ foreach ($tool in @($infverif, $inf2cat)) {
     if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw ("Fixed WDK validation tool is missing: " + $tool) }
 }
 
+$sdkRoot = Join-Path $packages ('Microsoft.Windows.SDK.CPP.' + $kitVersion + '/c')
+$vsRoot = [IO.Path]::GetFullPath((Join-Path (Split-Path $msbuild -Parent) '../../../..'))
+$vcVersionFile = Join-Path $vsRoot 'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt'
+$vcVersion = (Get-Content -LiteralPath $vcVersionFile -Raw).Trim()
+$env:XSCC_DRIVER_WDK_INCLUDE = Join-Path $wdkRoot 'Include'
+$env:XSCC_DRIVER_SDK_INCLUDE = Join-Path $sdkRoot ("Include/" + $kitLayoutVersion)
+$env:XSCC_DRIVER_CRT_INCLUDE = Join-Path $vsRoot ("VC/Tools/MSVC/" + $vcVersion + "/include")
+$env:LIBCLANG_PATH = Join-Path $env:ProgramFiles 'LLVM/bin'
+foreach ($header in @(
+    (Join-Path $env:XSCC_DRIVER_WDK_INCLUDE 'wdf/umdf/2.25/wdf.h'),
+    (Join-Path $env:XSCC_DRIVER_SDK_INCLUDE 'um/Windows.h'),
+    (Join-Path $env:XSCC_DRIVER_CRT_INCLUDE 'vcruntime.h'),
+    (Join-Path $env:LIBCLANG_PATH 'libclang.dll')
+)) {
+    if (-not (Test-Path -LiteralPath $header -PathType Leaf)) { throw ("Required driver build input is missing: " + $header) }
+}
+
 $manifest = Join-Path $sourceRoot 'Cargo.toml'
 $targetDirectory = Join-Path $buildRoot 'rust'
 $target = 'x86_64-pc-windows-msvc'

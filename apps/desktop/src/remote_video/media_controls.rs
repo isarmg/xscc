@@ -4,6 +4,17 @@ use librustdesk::gpui_session::{
     BitrateMode, MediaControls, ResolutionMode, TargetFps, VirtualDisplayConfiguration,
     VirtualDisplayRequest, VirtualDisplayResult,
 };
+use std::time::Duration;
+
+pub(super) fn display_target_fps(
+    remote_hz: u32,
+    local_interval: Option<Duration>,
+) -> Option<TargetFps> {
+    TargetFps::new(
+        xscc_native_ui::presentation::stream_fps(remote_hz, local_interval)
+            .min(base::session_protocol::MAX_SESSION_FPS),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaRequest {
@@ -131,36 +142,15 @@ impl RemoteVideo {
             self.pending_media = None;
         }
         self.media_controls = controls;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.update_local_target_fps();
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        if let Some(target) = self.media_controls.current_resolution.and_then(|mode| {
-            TargetFps::new(
-                mode.refresh_rate
-                    .min(base::session_protocol::MAX_SESSION_FPS),
-            )
-        }) && target != self.target_fps
-            && self.connected
-            && let Some(session) = &self.session
-        {
-            match session.set_target_fps(target) {
-                Ok(()) => self.target_fps = target,
-                Err(error) => self.notice = error.to_string(),
-            }
-        }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) fn update_local_target_fps(&mut self) {
-        let Some(target) = self.media_controls.current_resolution.and_then(|mode| {
-            TargetFps::new(
-                xscc_native_ui::presentation::stream_fps(
-                    mode.refresh_rate,
-                    self.local_refresh_interval,
-                )
-                .min(base::session_protocol::MAX_SESSION_FPS),
-            )
-        }) else {
+        let Some(target) = self
+            .media_controls
+            .current_resolution
+            .and_then(|mode| display_target_fps(mode.refresh_rate, self.local_refresh_interval))
+        else {
             return;
         };
         if target != self.target_fps
@@ -383,8 +373,28 @@ impl RemoteVideo {
 
 #[cfg(test)]
 mod tests {
-    use super::{MediaRequest, PendingMedia};
-    use librustdesk::gpui_session::{BitrateMode, MediaControls, ResolutionMode};
+    use super::{MediaRequest, PendingMedia, display_target_fps};
+    use librustdesk::gpui_session::{BitrateMode, MediaControls, ResolutionMode, TargetFps};
+    use std::time::Duration;
+
+    #[test]
+    fn request_tracks_the_current_local_monitor_without_exceeding_the_host_rate() {
+        let interval = |hz| Some(Duration::from_secs_f64(1.0 / hz));
+        assert_eq!(
+            display_target_fps(144, interval(60.0)),
+            Some(TargetFps::FPS_60)
+        );
+        assert_eq!(
+            display_target_fps(144, interval(120.0)),
+            Some(TargetFps::FPS_120)
+        );
+        assert_eq!(
+            display_target_fps(60, interval(120.0)),
+            Some(TargetFps::FPS_60)
+        );
+        assert_eq!(display_target_fps(90, None), Some(TargetFps::FPS_90));
+        assert_eq!(display_target_fps(0, interval(120.0)), None);
+    }
 
     #[test]
     fn media_requests_wait_for_actual_settings_and_virtual_display_changes() {

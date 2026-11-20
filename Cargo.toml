@@ -137,6 +137,7 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_Console",
     "Win32_Storage_FileSystem",
     "Win32_System",
     "Win32_System_Com",
@@ -240,7 +241,6 @@ winres = "0.1"
 winapi = { version = "0.3", features = [ "winnt", "pdh", "synchapi" ] }
 
 [build-dependencies]
-cc = "1.0"
 hbb_common = { path = "libs/hbb_common" }
 
 [dev-dependencies]

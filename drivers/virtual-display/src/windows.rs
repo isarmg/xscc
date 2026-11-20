@@ -1,3 +1,8 @@
+mod driver;
+mod graphics;
+mod wdk;
+
+use self::wdk::abi;
 use crate::{
     profile::{Colour, Profile},
     swapchain::drain,
@@ -32,23 +37,9 @@ const WAIT_TIMEOUT: u32 = 258;
 
 static PROFILE: Mutex<Weak<Profile>> = Mutex::new(Weak::new());
 
-#[repr(C)]
-#[derive(Default)]
 struct Frame {
-    acquired_at: i64,
+    acquired_at: u64,
     number: u32,
-}
-
-unsafe extern "C" {
-    fn xscc_configuration_path(buffer: *mut u16, capacity: u32) -> u32;
-    fn xscc_initialize_adapter(device: Handle, count: u32) -> Status;
-    fn xscc_prefer_render_adapter(adapter: Handle, name: *const u16);
-    fn xscc_arrive_monitor(adapter: Handle, index: u32, edid: *const u8, length: u32) -> Status;
-    fn xscc_bind_swapchain(chain: Handle, luid: i64, device: *mut Handle) -> Status;
-    fn xscc_release_device(device: Handle);
-    fn xscc_acquire_frame(chain: Handle, frame: *mut Frame) -> Status;
-    fn xscc_finish_frame(chain: Handle, frame: *const Frame) -> Status;
-    fn xscc_delete_swapchain(chain: Handle);
 }
 
 unsafe extern "system" {
@@ -90,22 +81,7 @@ fn load_profile() -> io::Result<Arc<Profile>> {
         return Ok(profile);
     }
 
-    let mut buffer = [0u16; 32_768];
-    let length = unsafe { xscc_configuration_path(buffer.as_mut_ptr(), buffer.len() as u32) };
-    let directory = match length {
-        0 => PathBuf::from(r"C:\VirtualDisplayDriver"),
-        length if (length as usize) < buffer.len() => {
-            let path = PathBuf::from(OsString::from_wide(&buffer[..length as usize]));
-            if !path.is_absolute() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Relative VDDPATH",
-                ));
-            }
-            path
-        }
-        _ => return Err(io::Error::last_os_error()),
-    };
+    let directory = configuration_directory()?;
     let profile = Arc::new(Profile::load(&directory)?);
     let mut active = PROFILE
         .lock()
@@ -126,101 +102,117 @@ fn diagnostic(message: &str) {
     unsafe { OutputDebugStringW(text.as_ptr()) };
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_create_device_state(out: *mut Handle) -> Status {
-    match load_profile() {
-        Ok(profile) => {
-            let state = Box::new(Device {
-                profile,
-                initialized: AtomicBool::new(false),
-            });
-            unsafe { out.write(Box::into_raw(state).cast()) };
-            SUCCESS
-        }
-        Err(error) => {
-            diagnostic(&error.to_string());
-            DATA_ERROR
-        }
-    }
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain([0]).collect()
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_destroy_device_state(state: Handle) {
-    if !state.is_null() {
-        drop(unsafe { Box::from_raw(state.cast::<Device>()) });
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_start_device(state: Handle, device: Handle) -> Status {
-    let Some(state) = (unsafe { state.cast::<Device>().as_ref() }) else {
-        return INVALID_DEVICE_STATE;
+fn configuration_directory() -> io::Result<PathBuf> {
+    let mut buffer = [0_u16; 32_768];
+    let mut bytes = std::mem::size_of_val(&buffer) as u32;
+    // The Win32 predefined key is the sign-extended 32-bit constant 0x80000002.
+    let key = 0x8000_0002_u32 as i32 as isize as abi::HKEY;
+    let registry_path = wide(r"SOFTWARE\MikeTheTech\VirtualDisplayDriver");
+    let value = wide("VDDPATH");
+    let status = unsafe {
+        abi::RegGetValueW(
+            key,
+            registry_path.as_ptr(),
+            value.as_ptr(),
+            abi::RRF_RT_REG_SZ,
+            ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut bytes,
+        )
     };
-    if state.initialized.swap(true, Ordering::AcqRel) {
-        return SUCCESS;
+    let invalid = || io::Error::new(io::ErrorKind::InvalidData, "Invalid VDDPATH registry value");
+    match status as u32 {
+        abi::ERROR_FILE_NOT_FOUND | abi::ERROR_PATH_NOT_FOUND => {
+            return Ok(PathBuf::from(r"C:\VirtualDisplayDriver"));
+        }
+        0 => {}
+        _ => return Err(io::Error::from_raw_os_error(status)),
     }
-    let status = unsafe { xscc_initialize_adapter(device, state.profile.monitor_count) };
-    if status < 0 {
-        state.initialized.store(false, Ordering::Release);
+    let units = (bytes / 2) as usize;
+    if !bytes.is_multiple_of(2)
+        || units <= 1
+        || units > buffer.len()
+        || buffer[units - 1] != 0
+        || buffer[..units - 1].contains(&0)
+    {
+        return Err(invalid());
     }
-    status
+    let path = PathBuf::from(OsString::from_wide(&buffer[..units - 1]));
+    if !path.is_absolute() {
+        return Err(invalid());
+    }
+    Ok(path)
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_start_monitors(adapter: Handle) -> Status {
-    let Some(profile) = active_profile() else {
-        return INVALID_DEVICE_STATE;
-    };
-    let gpu = profile.render_adapter.as_deref().unwrap_or_default();
-    let name: Vec<_> = gpu.encode_utf16().chain([0]).collect();
-    unsafe { xscc_prefer_render_adapter(adapter, name.as_ptr()) };
+impl Device {
+    fn load() -> io::Result<Self> {
+        Ok(Self {
+            profile: load_profile()?,
+            initialized: AtomicBool::new(false),
+        })
+    }
 
-    for index in 0..profile.monitor_count {
-        let status = unsafe {
-            xscc_arrive_monitor(
-                adapter,
-                index,
-                profile.edid.as_ptr(),
-                profile.edid.len() as u32,
-            )
-        };
+    fn start(&self, device: abi::WDFDEVICE) -> Status {
+        if self.initialized.swap(true, Ordering::AcqRel) {
+            return SUCCESS;
+        }
+        let status = driver::initialize_adapter(device, self.profile.monitor_count);
         if status < 0 {
-            return status;
+            self.initialized.store(false, Ordering::Release);
+        }
+        status
+    }
+}
+
+impl Monitor {
+    fn new(profile: Arc<Profile>) -> Self {
+        Self {
+            profile,
+            worker: Mutex::default(),
         }
     }
-    SUCCESS
-}
 
-#[unsafe(no_mangle)]
-extern "C" fn xscc_create_monitor_state() -> Handle {
-    let Some(profile) = active_profile() else {
-        return ptr::null_mut();
-    };
-    Box::into_raw(Box::new(Monitor {
-        profile,
-        worker: Mutex::default(),
-    }))
-    .cast()
-}
+    fn assign(&self, chain: abi::IDDCX_SWAPCHAIN, ready: Handle, luid: abi::LUID) -> Status {
+        // IddCx assigns at most one chain per monitor and unassigns it after this callback.
+        self.unassign();
+        match Worker::start(chain, ready, luid) {
+            Ok(next) => {
+                *self
+                    .worker
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(next);
+                SUCCESS
+            }
+            Err(error) => {
+                diagnostic(&format!("cannot assign swapchain: {:#010x}", error as u32));
+                error
+            }
+        }
+    }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_destroy_monitor_state(state: Handle) {
-    if !state.is_null() {
-        drop(unsafe { Box::from_raw(state.cast::<Monitor>()) });
+    fn unassign(&self) {
+        let worker = self
+            .worker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(worker);
     }
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_advertise_modes(
-    state: Handle,
-    target: i32,
+unsafe fn advertise_modes<T>(
+    monitor: Option<&Monitor>,
+    target: bool,
     capacity: u32,
-    output: Handle,
+    output: *mut T,
     count: *mut u32,
-    native_write: unsafe extern "C" fn(Handle, u32, *const Signal, *const Colour),
+    make_mode: fn(&Signal, &Colour) -> T,
 ) -> Status {
-    let state = unsafe { state.cast::<Monitor>().as_ref() };
-    let profile = match state {
+    let profile = match monitor {
         Some(state) => Arc::clone(&state.profile),
         None => match active_profile() {
             Some(profile) => profile,
@@ -236,87 +228,17 @@ unsafe extern "C" fn xscc_advertise_modes(
         return BUFFER_TOO_SMALL;
     }
     for (index, mode) in profile.modes.iter().enumerate() {
-        let Some(signal) = mode.signal(target != 0) else {
+        let Some(signal) = mode.signal(target) else {
             return DATA_ERROR;
         };
-        unsafe { native_write(output, index as u32, &signal, &profile.colour) };
+        unsafe { output.add(index).write(make_mode(&signal, &profile.colour)) };
     }
-    SUCCESS
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_adapter_colour(out: *mut Colour) -> Status {
-    let Some(profile) = active_profile() else {
-        return INVALID_DEVICE_STATE;
-    };
-    let Colour {
-        format,
-        sdr_bits,
-        hdr_bits,
-    } = profile.colour;
-    unsafe {
-        out.write(Colour {
-            format,
-            sdr_bits,
-            hdr_bits,
-        })
-    };
-    SUCCESS
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_assign_swapchain(
-    state: Handle,
-    chain: Handle,
-    ready: Handle,
-    luid: i64,
-) -> Status {
-    let Some(monitor) = (unsafe { state.cast::<Monitor>().as_ref() }) else {
-        return INVALID_DEVICE_STATE;
-    };
-    // IddCx assigns at most one chain per monitor and unassigns it after this callback.
-    let previous = {
-        monitor
-            .worker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    };
-    drop(previous);
-    match Worker::start(chain, ready, luid) {
-        Ok(next) => {
-            *monitor
-                .worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(next);
-            SUCCESS
-        }
-        Err(error) => {
-            diagnostic(&format!("cannot assign swapchain: {:#010x}", error as u32));
-            error
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-unsafe extern "C" fn xscc_unassign_swapchain(state: Handle) -> Status {
-    let Some(monitor) = (unsafe { state.cast::<Monitor>().as_ref() }) else {
-        return INVALID_DEVICE_STATE;
-    };
-    let worker = {
-        monitor
-            .worker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    };
-    drop(worker);
     SUCCESS
 }
 
 struct Worker {
     stop: Handle,
-    device: Handle,
+    _device: graphics::Com<abi::IDXGIDevice>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -324,17 +246,13 @@ struct Worker {
 unsafe impl Send for Worker {}
 
 impl Worker {
-    fn start(chain: Handle, ready: Handle, luid: i64) -> Result<Self, Status> {
-        let mut device = ptr::null_mut();
-        let status = unsafe { xscc_bind_swapchain(chain, luid, &mut device) };
-        if status < 0 {
-            return Err(status);
-        }
+    fn start(chain: abi::IDDCX_SWAPCHAIN, ready: Handle, luid: abi::LUID) -> Result<Self, Status> {
+        let device = graphics::bind_swapchain(chain, luid)?;
 
         let stop = unsafe { CreateEventW(ptr::null_mut(), 1, 0, ptr::null()) };
         let mut worker = Self {
             stop,
-            device,
+            _device: device,
             thread: None,
         };
         if stop.is_null() {
@@ -344,7 +262,13 @@ impl Worker {
         worker.thread = Some(
             thread::Builder::new()
                 .name("virtual-display-swapchain".into())
-                .spawn(move || run(chain as Handle, stop as Handle, ready as Handle))
+                .spawn(move || {
+                    run(
+                        chain as abi::IDDCX_SWAPCHAIN,
+                        stop as Handle,
+                        ready as Handle,
+                    )
+                })
                 .map_err(|_| UNSUCCESSFUL)?,
         );
         Ok(worker)
@@ -362,11 +286,10 @@ impl Drop for Worker {
         if !self.stop.is_null() {
             unsafe { CloseHandle(self.stop) };
         }
-        unsafe { xscc_release_device(self.device) };
     }
 }
 
-fn run(chain: Handle, stop: Handle, ready: Handle) {
+fn run(chain: abi::IDDCX_SWAPCHAIN, stop: Handle, ready: Handle) {
     let mut task = [0; 13];
     for (unit, letter) in task.iter_mut().zip("Distribution".encode_utf16()) {
         *unit = letter;
@@ -375,25 +298,20 @@ fn run(chain: Handle, stop: Handle, ready: Handle) {
 
     drain(
         || unsafe { WaitForMultipleObjects(1, &stop, 0, 0) } != WAIT_TIMEOUT,
-        || {
-            let mut frame = Frame::default();
-            match unsafe { xscc_acquire_frame(chain, &mut frame) } {
-                IO_PENDING => {
-                    let events = [stop, ready];
-                    matches!(
-                        unsafe {
-                            WaitForMultipleObjects(events.len() as u32, events.as_ptr(), 0, 16)
-                        },
-                        WAIT_FRAME | WAIT_TIMEOUT
-                    )
-                }
-                SUCCESS => (unsafe { xscc_finish_frame(chain, &frame) }) >= 0,
-                _ => false,
+        || match graphics::acquire_frame(chain) {
+            Err(IO_PENDING) => {
+                let events = [stop, ready];
+                matches!(
+                    unsafe { WaitForMultipleObjects(events.len() as u32, events.as_ptr(), 0, 16) },
+                    WAIT_FRAME | WAIT_TIMEOUT
+                )
             }
+            Ok(frame) => graphics::finish_frame(chain, frame) >= 0,
+            _ => false,
         },
     );
 
-    unsafe { xscc_delete_swapchain(chain) };
+    unsafe { driver::delete_object(chain.cast()) };
     if !scheduler.is_null() {
         unsafe { AvRevertMmThreadCharacteristics(scheduler) };
     }

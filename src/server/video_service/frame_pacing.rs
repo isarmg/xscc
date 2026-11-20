@@ -1,6 +1,6 @@
-#[cfg(any(all(windows, any(feature = "vram", feature = "gpui-host")), test))]
+#[cfg(any(feature = "gpui-host", all(windows, feature = "vram"), test))]
 use std::time::Duration;
-#[cfg(any(all(windows, feature = "gpui-host"), test))]
+#[cfg(any(feature = "gpui-host", test))]
 use std::time::Instant;
 
 #[cfg(any(all(windows, feature = "vram"), test))]
@@ -8,13 +8,13 @@ pub(super) fn should_pace_capture(spf: Duration, texture: bool, would_block: boo
     !would_block || !texture || (!cfg!(feature = "gpui-host") && spf >= Duration::from_secs(1) / 60)
 }
 
-#[cfg(any(all(windows, feature = "gpui-host"), test))]
+#[cfg(any(feature = "gpui-host", test))]
 #[derive(Default)]
 struct CaptureCadence {
     last_deadline: Option<(Instant, Duration)>,
 }
 
-#[cfg(any(all(windows, feature = "gpui-host"), test))]
+#[cfg(any(feature = "gpui-host", test))]
 impl CaptureCadence {
     fn deadline(&mut self, start: Instant, interval: Duration) -> Instant {
         if interval >= Duration::from_secs(1) / 60 {
@@ -37,10 +37,28 @@ impl CaptureCadence {
     }
 }
 
-#[cfg(all(windows, feature = "gpui-host"))]
+#[cfg(feature = "gpui-host")]
 pub(super) struct FramePacer {
+    #[cfg(windows)]
     timer: Option<std::os::windows::io::OwnedHandle>,
     cadence: CaptureCadence,
+}
+
+#[cfg(all(not(windows), feature = "gpui-host"))]
+impl FramePacer {
+    pub(super) fn new() -> Self {
+        Self {
+            cadence: CaptureCadence::default(),
+        }
+    }
+
+    pub(super) fn wait_until(&mut self, start: Instant, frame: Duration) {
+        let deadline = self.cadence.deadline(start, frame);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining);
+        }
+    }
 }
 
 #[cfg(all(windows, feature = "gpui-host"))]
@@ -146,7 +164,7 @@ impl FramePacer {
 mod tests {
     use super::*;
 
-    #[cfg(all(windows, feature = "gpui-host"))]
+    #[cfg(feature = "gpui-host")]
     #[test]
     fn frame_timer_waits_for_the_remaining_budget() {
         let mut pacer = FramePacer::new();

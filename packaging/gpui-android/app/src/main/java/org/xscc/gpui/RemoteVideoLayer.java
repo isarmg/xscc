@@ -48,7 +48,7 @@ public final class RemoteVideoLayer {
         if (this.owner == owner && view != null) {
             if (frameRate != fps) {
                 frameRate = fps;
-                setFrameRate(view.getHolder().getSurface());
+                nativeSurfaceFrameRateChanged(owner, fps);
             }
             view.setLayoutParams(bounds);
             return;
@@ -67,9 +67,7 @@ public final class RemoteVideoLayer {
         view.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
             public void surfaceCreated(SurfaceHolder holder) {
-                Surface surface = holder.getSurface();
-                setFrameRate(surface);
-                nativeSurfaceChanged(owner, surface, displayLimit);
+                nativeSurfaceChanged(owner, holder.getSurface(), displayLimit, frameRate);
             }
 
             @Override
@@ -77,20 +75,10 @@ public final class RemoteVideoLayer {
 
             @Override
             public void surfaceDestroyed(SurfaceHolder holder) {
-                nativeSurfaceChanged(owner, null, 0);
+                nativeSurfaceChanged(owner, null, 0, 0);
             }
         });
         parent.addView(view, root.indexOfChild(overlay), bounds);
-    }
-
-    private void setFrameRate(Surface surface) {
-        if (!surface.isValid()) return;
-        try {
-            int rate = displayLimit > 0 ? Math.min(frameRate, displayLimit) : frameRate;
-            surface.setFrameRate(rate, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
-        } catch (IllegalArgumentException | IllegalStateException error) {
-            Log.w("GPUI", "Cannot set remote video Surface frame rate", error);
-        }
     }
 
     public void clear() {
@@ -103,5 +91,6 @@ public final class RemoteVideoLayer {
         owner = 0;
     }
 
-    private static native void nativeSurfaceChanged(long owner, Surface surface, int displayLimit);
+    private static native void nativeSurfaceChanged(long owner, Surface surface, int displayLimit, int fps);
+    private static native void nativeSurfaceFrameRateChanged(long owner, int fps);
 }

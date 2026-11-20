@@ -175,8 +175,9 @@ extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceChanged(
     owner: sys::jlong,
     surface: sys::jobject,
     display_limit: sys::jint,
+    fps: sys::jint,
 ) {
-    let (previous, wake) = {
+    let (previous, next, wake) = {
         let mut slot = SURFACE.lock().unwrap();
         let Some(entry) = slot.as_mut().filter(|entry| entry.owner == owner) else {
             return;
@@ -197,10 +198,31 @@ extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceChanged(
             }
             .map(Arc::new)
         };
-        (std::mem::replace(&mut entry.surface, next), wake)
+        (std::mem::replace(&mut entry.surface, next.clone()), next, wake)
     };
     if let Some(surface) = previous {
         surface.invalidate();
     }
+    if let Some(surface) = next {
+        surface.request_frame_rate(fps);
+    }
     wake.notify_one();
+}
+
+#[unsafe(no_mangle)]
+extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceFrameRateChanged(
+    _: *mut sys::JNIEnv,
+    _: sys::jclass,
+    owner: sys::jlong,
+    fps: sys::jint,
+) {
+    let surface = SURFACE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|entry| entry.owner == owner)
+        .and_then(|entry| entry.surface.clone());
+    if let Some(surface) = surface {
+        surface.request_frame_rate(fps);
+    }
 }

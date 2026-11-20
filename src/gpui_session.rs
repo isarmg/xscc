@@ -422,6 +422,17 @@ impl SessionHandle {
     pub fn updates(&self) -> SessionUpdates {
         SessionUpdates(self.session.ui_handler.0.clone())
     }
+
+    /// Whether the UI needs another display tick to drain decoded frames.
+    #[cfg(any(
+        test,
+        all(any(target_os = "android", target_os = "ios"), feature = "gpui-mobile-session")
+    ))]
+    pub fn has_pending_frame(&self) -> bool {
+        let mailbox = &self.session.ui_handler.0;
+        !mailbox.closed.load(Ordering::Acquire) && !mailbox.frame.is_empty()
+    }
+
     pub fn take_frame(&self) -> Option<Frame> {
         let mailbox = &self.session.ui_handler.0;
         if mailbox.closed.load(Ordering::Acquire) {
@@ -895,6 +906,7 @@ impl InvokeUiSession for Handler {
         if self.0.closed.load(Ordering::Acquire)
             || monitors.pending.is_some()
             || monitors.current != display
+            || !monitors.list.get(display).is_some_and(|monitor| monitor.available)
         {
             return None;
         }
@@ -1266,11 +1278,18 @@ mod tests {
             fmt: scrap::ImageFormat::ARGB,
             align: 1,
         };
+        assert!(!handle.has_pending_frame());
         handle.session.ui_handler.on_rgba(0, &mut image);
+        assert!(handle.has_pending_frame());
         assert!(handle.take_frame().is_some());
+        assert!(!handle.has_pending_frame());
+        image.raw = vec![3, 2, 1, 255];
         handle.session.ui_handler.on_rgba(0, &mut image);
+        assert!(handle.has_pending_frame());
         handle.disconnect();
+        assert!(!handle.has_pending_frame());
         assert!(handle.take_frame().is_none());
+        image.raw = vec![2, 3, 1, 255];
         handle.session.ui_handler.on_rgba(0, &mut image);
         assert!(handle.take_frame().is_none());
     }

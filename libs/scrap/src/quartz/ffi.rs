@@ -4,6 +4,7 @@ use block::RcBlock;
 use hbb_common::libc::c_void;
 
 pub type CGDisplayStreamRef = *mut c_void;
+pub type CGDisplayModeRef = *mut c_void;
 pub type CFDictionaryRef = *mut c_void;
 pub type CFBooleanRef = *mut c_void;
 pub type CFNumberRef = *mut c_void;
@@ -193,12 +194,17 @@ extern "C" {
     pub fn CGDisplayIsOnline(display: u32) -> i32;
 
     pub fn CGDisplayBounds(display: u32) -> CGRect;
-    pub fn BackingScaleFactor(display: u32) -> f32;
+    pub fn CGDisplayCopyDisplayMode(display: u32) -> CGDisplayModeRef;
+    pub fn CGDisplayModeGetWidth(mode: CGDisplayModeRef) -> usize;
+    pub fn CGDisplayModeGetPixelWidth(mode: CGDisplayModeRef) -> usize;
+    pub fn CGDisplayModeRelease(mode: CGDisplayModeRef);
 
     // IOSurface
 
     pub fn IOSurfaceGetAllocSize(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceGetBaseAddress(buffer: IOSurfaceRef) -> *mut c_void;
+    pub fn IOSurfaceGetBytesPerRow(buffer: IOSurfaceRef) -> usize;
+    pub fn IOSurfaceGetPlaneCount(buffer: IOSurfaceRef) -> usize;
     pub fn IOSurfaceIncrementUseCount(buffer: IOSurfaceRef);
     pub fn IOSurfaceDecrementUseCount(buffer: IOSurfaceRef);
     pub fn IOSurfaceLock(buffer: IOSurfaceRef, options: u32, seed: *mut u32) -> i32;

@@ -1,7 +1,7 @@
 mod media_controls;
 #[cfg(all(target_os = "macos", feature = "gpui-host"))]
 mod macos_virtual_display;
-use crate::session_transport::{MediaSender, SessionTransport};
+use crate::session_transport::{MediaSender, SessionTransport, SharedVideoFrame};
 
 use super::{input_service::*, *};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -361,10 +361,17 @@ impl ConnInner {
     }
 
     // Return whether the legacy TCP queue requires a handoff acknowledgement.
-    pub(super) fn send_video(&self, message: Arc<Message>) -> bool {
+    pub(super) fn send_video(
+        &self,
+        message: Arc<Message>,
+        shared: Option<&SharedVideoFrame<'_>>,
+    ) -> bool {
         let writer = self.video_writer.lock().unwrap();
         if let Some(writer) = writer.as_ref() {
-            let _ = writer.send_video(message);
+            let _ = match shared {
+                Some(frame) => writer.send_shared_video(frame),
+                None => writer.send_video(message),
+            };
             false
         } else {
             self.tx_video
@@ -392,7 +399,7 @@ impl Subscriber for ConnInner {
             _ => false,
         };
         if tx_by_video {
-            self.send_video(msg);
+            self.send_video(msg, None);
         } else if let Some(tx) = self.tx.as_ref() {
             allow_err!(tx.send((Instant::now(), msg)));
         }

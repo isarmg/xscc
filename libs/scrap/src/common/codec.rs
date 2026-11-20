@@ -12,9 +12,9 @@ use crate::mediacodec::{MediaCodecDecoder, H264_DECODER_SUPPORT, H265_DECODER_SU
 #[cfg(feature = "vram")]
 use crate::vram::*;
 use crate::{
-    aom::{self, AomDecoder, AomEncoder, AomEncoderConfig},
+    aom::{AomDecoder, AomEncoder, AomEncoderConfig},
     common::GoogleImage,
-    vpxcodec::{self, VpxDecoder, VpxDecoderConfig, VpxEncoder, VpxEncoderConfig, VpxVideoCodecId},
+    vpxcodec::{VpxDecoder, VpxDecoderConfig, VpxEncoder, VpxEncoderConfig, VpxVideoCodecId},
     CodecFormat, EncodeInput, EncodeYuvFormat, ImageRgb, ImageTexture,
 };
 
@@ -944,24 +944,12 @@ impl Decoder {
         rgb: &mut ImageRgb,
         chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
-        let mut last_frame = vpxcodec::Image::new();
-        for vpx in vpxs.frames.iter() {
-            for frame in decoder.decode(&vpx.data)? {
-                drop(last_frame);
-                last_frame = frame;
-            }
+        let mut updated = false;
+        for packet in vpxs.frames.iter() {
+            updated |=
+                Self::copy_latest_software_frame(decoder.decode(&packet.data)?.latest(), rgb, chroma);
         }
-        for frame in decoder.flush()? {
-            drop(last_frame);
-            last_frame = frame;
-        }
-        if last_frame.is_null() {
-            Ok(false)
-        } else {
-            *chroma = Some(last_frame.chroma());
-            last_frame.to(rgb);
-            Ok(true)
-        }
+        Ok(updated | Self::copy_latest_software_frame(decoder.flush()?.latest(), rgb, chroma))
     }
 
     // rgb [in/out] fmt and stride must be set in ImageRgb
@@ -971,24 +959,25 @@ impl Decoder {
         rgb: &mut ImageRgb,
         chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
-        let mut last_frame = aom::Image::new();
-        for av1 in av1s.frames.iter() {
-            for frame in decoder.decode(&av1.data)? {
-                drop(last_frame);
-                last_frame = frame;
-            }
+        let mut updated = false;
+        for packet in av1s.frames.iter() {
+            updated |=
+                Self::copy_latest_software_frame(decoder.decode(&packet.data)?.latest(), rgb, chroma);
         }
-        for frame in decoder.flush()? {
-            drop(last_frame);
-            last_frame = frame;
-        }
-        if last_frame.is_null() {
-            Ok(false)
-        } else {
-            *chroma = Some(last_frame.chroma());
-            last_frame.to(rgb);
-            Ok(true)
-        }
+        Ok(updated | Self::copy_latest_software_frame(decoder.flush()?.latest(), rgb, chroma))
+    }
+
+    fn copy_latest_software_frame(
+        frame: Option<impl GoogleImage>,
+        rgb: &mut ImageRgb,
+        chroma: &mut Option<Chroma>,
+    ) -> bool {
+        let Some(frame) = frame else {
+            return false;
+        };
+        *chroma = Some(frame.chroma());
+        frame.to(rgb);
+        true
     }
 
     // rgb [in/out] fmt and stride must be set in ImageRgb

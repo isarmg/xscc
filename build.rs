@@ -1,24 +1,6 @@
 #[path = "res/native-library-path.rs"]
 mod native_libraries;
 
-#[cfg(windows)]
-fn build_windows() {
-    let file = "src/platform/windows.cc";
-    let file2 = "src/platform/windows_delete_test_cert.cc";
-    cc::Build::new().file(file).file(file2).compile("windows");
-    println!("cargo:rustc-link-lib=WtsApi32");
-    println!("cargo:rerun-if-changed={}", file);
-    println!("cargo:rerun-if-changed={}", file2);
-}
-
-#[cfg(target_os = "macos")]
-fn build_mac() {
-    let file = "src/platform/macos.mm";
-    let mut b = cc::Build::new();
-    b.flag("-std=c++17").file(file).compile("macos");
-    println!("cargo:rerun-if-changed={}", file);
-}
-
 #[cfg(all(windows, feature = "inline"))]
 fn build_manifest() {
     use std::io::Write;
@@ -38,15 +20,6 @@ fn build_manifest() {
             Ok(_) => {}
         }
     }
-}
-
-// bionic only exports getifaddrs()/freeifaddrs() from API 24, while the jniLibs
-// are built against the API 21 sysroot (flutter/ndk_*.sh). webrtc-util calls
-// them, so without this the android link fails on undefined symbols.
-fn build_android_ifaddrs() {
-    let file = "src/platform/android_ifaddrs.c";
-    cc::Build::new().file(file).compile("android_ifaddrs");
-    println!("cargo:rerun-if-changed={}", file);
 }
 
 fn install_android_deps() {
@@ -70,16 +43,9 @@ fn main() {
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]
     build_manifest();
-    #[cfg(windows)]
-    build_windows();
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     if target_os == "macos" {
-        #[cfg(target_os = "macos")]
-        build_mac();
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
-    }
-    if target_os == "android" {
-        build_android_ifaddrs();
     }
     println!("cargo:rerun-if-changed=build.rs");
 }

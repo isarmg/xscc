@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_transport::SharedVideoFrame;
 use std::{
     collections::HashSet,
     ops::{Deref, DerefMut},
@@ -390,9 +391,10 @@ impl ServiceTmpl<ConnInner> {
 
     pub fn send_video_frame_shared(&self, msg: Arc<Message>) -> HashSet<i32> {
         let mut conn_ids = HashSet::new();
+        let shared = SharedVideoFrame::new(&msg);
         let lock = self.0.read().unwrap();
         for s in lock.subscribes.values() {
-            if s.send_video(msg.clone()) {
+            if s.send_video(msg.clone(), Some(&shared)) {
                 conn_ids.insert(s.id());
             }
         }

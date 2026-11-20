@@ -1,9 +1,6 @@
 use super::{PrivacyMode, PrivacyModeState};
-use hbb_common::{anyhow::anyhow, ResultType};
-
-extern "C" {
-    fn MacSetPrivacyMode(on: bool) -> bool;
-}
+use crate::platform::macos::privacy;
+use hbb_common::{log, ResultType};
 
 pub const PRIVACY_MODE_IMPL: &str = "privacy_mode_impl_macos";
 
@@ -31,8 +28,8 @@ impl PrivacyMode for PrivacyModeImpl {
     }
 
     fn clear(&mut self) {
-        unsafe {
-            MacSetPrivacyMode(false);
+        if let Err(error) = privacy::set_active(false) {
+            log::warn!("Could not clear macOS privacy mode: {error}");
         }
         self.conn_id = 0;
     }
@@ -41,30 +38,33 @@ impl PrivacyMode for PrivacyModeImpl {
         if self.check_on_conn_id(conn_id)? {
             return Ok(true);
         }
-        let success = unsafe { MacSetPrivacyMode(true) };
-        if !success {
-            return Err(anyhow!("Failed to turn on privacy mode"));
-        }
+        privacy::set_active(true)?;
         self.conn_id = conn_id;
         Ok(true)
     }
 
-    fn turn_off_privacy(&mut self, conn_id: i32, _state: Option<PrivacyModeState>) -> ResultType<()> {
+    fn turn_off_privacy(
+        &mut self,
+        conn_id: i32,
+        _state: Option<PrivacyModeState>,
+    ) -> ResultType<()> {
         // Note: The `_state` parameter is intentionally ignored on macOS.
         // On Windows, it's used to notify the connection manager about privacy mode state changes
         // (see win_topmost_window.rs). macOS currently has a simpler single-mode implementation
         // without the need for such cross-component state synchronization.
         self.check_off_conn_id(conn_id)?;
-        let success = unsafe { MacSetPrivacyMode(false) };
-        if !success {
-            return Err(anyhow!("Failed to turn off privacy mode"));
-        }
+        let result = privacy::set_active(false);
         self.conn_id = 0;
+        result?;
         Ok(())
     }
 
     fn pre_conn_id(&self) -> i32 {
-        self.conn_id
+        if privacy::is_active() {
+            self.conn_id
+        } else {
+            0
+        }
     }
 
     fn get_impl_key(&self) -> &str {

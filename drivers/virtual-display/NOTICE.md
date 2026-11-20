@@ -1,13 +1,15 @@
 # Virtual display driver
 
 This repository maintains the Windows indirect display driver source. Rust
-owns the XML profile, mode timing, monitor state and swapchain worker. The WDK
-bridge provides Windows driver callbacks and calls the inline UMDF, IddCx and
-Direct3D interfaces. The virtual driver consumes surfaces and reports dropped
-frames to IddCx. The host captures and sends video separately.
+owns the XML profile, mode timing, monitor state, swapchain worker, WDF entry
+point, IddCx callbacks and DXGI integration. Build-time bindings come from the
+pinned Windows SDK and WDK. The WDK project compiles one metadata translation
+unit for the stub version globals and links Microsoft’s driver stubs. The
+virtual driver consumes surfaces and reports dropped frames to IddCx. The host
+captures and sends video separately.
 
 The bundled EDID and INF originate from VirtualDrivers/Virtual-Display-Driver
-25.7.23, commit `d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77`. The WDK bridge
+25.7.23, commit `d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77`. The driver
 uses patterns from Microsoft's indirect display sample. Both components are
 covered by the accompanying MIT license and notices.
 

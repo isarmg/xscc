@@ -3,6 +3,7 @@ extern "C" {
 }
 
 #include "util.h"
+#include <exception>
 #include <limits>
 #include <map>
 #include <string.h>
@@ -34,7 +35,7 @@ void set_av_codec_ctx(AVCodecContext *c, const std::string &name, int kbs,
   /* put sample parameters */
   // https://github.com/FFmpeg/FFmpeg/blob/415f012359364a77e8394436f222b74a8641a3ee/libavcodec/encode.c#L581
   if (kbs > 0) {
-    c->bit_rate = kbs * 1000;
+    c->bit_rate = static_cast<int64_t>(kbs) * 1000;
     if (name.find("qsv") != std::string::npos) {
       c->rc_max_rate = c->bit_rate;
       c->bit_rate--; // cbr with vbr
@@ -300,7 +301,7 @@ bool set_others(void *priv_data, const std::string &name) {
 
 bool change_bit_rate(AVCodecContext *c, const std::string &name, int kbs) {
   if (kbs > 0) {
-    c->bit_rate = kbs * 1000;
+    c->bit_rate = static_cast<int64_t>(kbs) * 1000;
     if (name.find("qsv") != std::string::npos) {
       c->rc_max_rate = c->bit_rate;
     }
@@ -320,18 +321,27 @@ void vram_encode_test_callback(const uint8_t *data, int32_t len, int32_t key, co
 
 } // namespace util_encode
 
-namespace util_decode {
-
-static bool g_flag_could_not_find_ref_with_poc = false;
-
-bool has_flag_could_not_find_ref_with_poc() {
-  bool v = g_flag_could_not_find_ref_with_poc;
-  g_flag_could_not_find_ref_with_poc = false;
-  return v;
-}
-
-} // namespace util_decode
-
-extern "C" void hwcodec_set_flag_could_not_find_ref_with_poc() {
-  util_decode::g_flag_could_not_find_ref_with_poc = true;
+extern "C" bool hwcodec_configure_ram_encoder(
+    AVCodecContext *codec, const char *name, const char *media_codec,
+    int kbs, int gop, int fps, int rate_control, int quality, int gpu) {
+  try {
+    std::string encoder(name);
+    util_encode::set_av_codec_ctx(codec, encoder, kbs, gop, fps);
+    if (!util_encode::set_lantency_free(codec->priv_data, encoder))
+      return false;
+    util_encode::set_rate_control(codec, encoder, rate_control, quality);
+    util_encode::set_gpu(codec->priv_data, encoder, gpu);
+    util_encode::force_hw(codec->priv_data, encoder);
+    util_encode::set_others(codec->priv_data, encoder);
+    if (encoder.find("mediacodec") != std::string::npos && *media_codec) {
+      int result = av_opt_set(codec->priv_data, "codec_name", media_codec, 0);
+      if (result < 0)
+        LOG_ERROR(std::string("mediacodec codec_name failed, ret = ") +
+                  av_err2str(result));
+    }
+    return true;
+  } catch (const std::exception &error) {
+    LOG_ERROR(std::string("Configure RAM encoder: ") + error.what());
+    return false;
+  }
 }

@@ -1,5 +1,5 @@
 use super::{FrameMetadata, QueuedFrame, VIDEO_QUEUE, VIDEO_QUEUE_BYTES};
-use base::direct_transport::udp_media::MAX_VIDEO_FRAME;
+use base::direct_transport::udp_media::{MediaKind, MAX_VIDEO_FRAME};
 use hbb_common::tokio::sync::Notify;
 use std::{collections::VecDeque, sync::Mutex};
 
@@ -23,6 +23,24 @@ pub(super) fn supersedes(keyframe: FrameMetadata, prior: FrameMetadata) -> bool 
 }
 
 impl VideoSendQueue {
+    pub(super) fn discard_before_epoch(&self, display_id: u32, epoch: u64) {
+        let mut pending = self.pending.lock().unwrap();
+        let mut bytes = 0;
+        pending.frames.retain(|frame| {
+            let descriptor = frame.plan.descriptor();
+            let metadata = descriptor.metadata;
+            if metadata.kind == MediaKind::Video
+                && metadata.display_id == display_id
+                && metadata.epoch < epoch
+            {
+                return false;
+            }
+            bytes += descriptor.total_size as usize;
+            true
+        });
+        pending.bytes = bytes;
+    }
+
     pub(super) fn push(&self, frame: QueuedFrame) -> bool {
         let descriptor = frame.plan.descriptor();
         let metadata = descriptor.metadata;

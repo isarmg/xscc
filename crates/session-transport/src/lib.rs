@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::collections::VecDeque;
 use std::{
+    cell::OnceCell,
     collections::BTreeMap,
     io,
     sync::{
@@ -561,13 +562,50 @@ pub struct MediaSender {
     inner: Arc<Mutex<Outbound>>,
     failure: watch::Sender<Option<String>>,
 }
+
+/// One encoded message can feed several independently encrypted sessions.
+pub struct SharedVideoFrame<'a> {
+    message: &'a Message,
+    payload: OnceCell<Bytes>,
+}
+
+impl<'a> SharedVideoFrame<'a> {
+    pub fn new(message: &'a Message) -> Self {
+        Self {
+            message,
+            payload: OnceCell::new(),
+        }
+    }
+
+    fn encode(&self, normalized: &Message) -> ResultType<Bytes> {
+        if let Some(payload) = self.payload.get() {
+            return Ok(payload.clone());
+        }
+        let payload = Bytes::from(normalized.write_to_bytes()?);
+        let _ = self.payload.set(payload.clone());
+        Ok(payload)
+    }
+}
+
 impl MediaSender {
     pub fn send_video(&self, message: Arc<Message>) -> ResultType<()> {
+        self.send_video_message(&message, None)
+    }
+
+    pub fn send_shared_video(&self, frame: &SharedVideoFrame<'_>) -> ResultType<()> {
+        self.send_video_message(frame.message, Some(frame))
+    }
+
+    fn send_video_message(
+        &self,
+        message: &Message,
+        shared: Option<&SharedVideoFrame<'_>>,
+    ) -> ResultType<()> {
         let result = self
             .inner
             .lock()
             .unwrap()
-            .send(&message)
+            .send_with_payload(message, shared)
             .and_then(|handled| {
                 if !handled {
                     bail!("non-media message submitted by a video producer");
@@ -643,9 +681,20 @@ impl Outbound {
             udp_media_control::Union::Epoch(serde_json::to_vec(&epoch)?.into()),
             true,
         )?;
+        if kind == MediaKind::Video {
+            self.outgoing.discard_before_epoch(display, epoch.epoch);
+        }
         Ok(epoch.epoch)
     }
     fn send(&mut self, message: &Message) -> ResultType<bool> {
+        self.send_with_payload(message, None)
+    }
+
+    fn send_with_payload(
+        &mut self,
+        message: &Message,
+        shared: Option<&SharedVideoFrame<'_>>,
+    ) -> ResultType<bool> {
         if let Some(error) = self.failure.borrow().as_ref() {
             bail!("{error}");
         }
@@ -679,11 +728,11 @@ impl Outbound {
                 .next
                 .checked_add(1)
                 .context("UDP media frame sequence exhausted")?;
-            let plan = FramePlan::new(
-                metadata,
-                message.write_to_bytes()?.into(),
-                media::DEFAULT_MTU,
-            )?;
+            let payload = match shared {
+                Some(frame) => frame.encode(message)?,
+                None => message.write_to_bytes()?.into(),
+            };
+            let plan = FramePlan::new(metadata, payload, media::DEFAULT_MTU)?;
             let queued = QueuedFrame {
                 plan,
                 queued: Instant::now(),
@@ -2276,6 +2325,59 @@ mod tests {
         assert!(first.send_video(Arc::new(video(true, 64))).is_err());
         assert!(second.send_video(Arc::new(video(true, 64))).is_err());
     }
+
+    #[tokio::test]
+    async fn video_fanout_reuses_the_encoded_payload_across_sessions() {
+        let (_first_client, first_host) = backpressured_streams();
+        let (_second_client, second_host) = backpressured_streams();
+        let (first, first_channels) =
+            HybridTransport::new(first_host, SessionId([1; 16]), true).unwrap();
+        let (second, second_channels) =
+            HybridTransport::new(second_host, SessionId([2; 16]), true).unwrap();
+        first.ready.store(true, Ordering::Release);
+        second.ready.store(true, Ordering::Release);
+
+        let message = video(true, 64 * 1024);
+        let shared = SharedVideoFrame::new(&message);
+        first.outbound.send_shared_video(&shared).unwrap();
+        second.outbound.send_shared_video(&shared).unwrap();
+        let first = first_channels.frames.pop(None, None).unwrap().plan;
+        let second = second_channels.frames.pop(None, None).unwrap().plan;
+        assert_eq!(Message::parse_from_bytes(first.payload()).unwrap(), message);
+        assert_eq!(first.payload().as_ptr(), second.payload().as_ptr());
+    }
+
+    #[tokio::test]
+    async fn a_display_format_change_releases_obsolete_queued_video() {
+        let (_client, host) = backpressured_streams();
+        let (transport, channels) = HybridTransport::new(host, SessionId([9; 16]), true).unwrap();
+        transport.ready.store(true, Ordering::Release);
+        let producer = &transport.outbound;
+        let mut other_display = video(false, 64);
+        other_display.mut_video_frame().display = 1;
+        producer.send_video(Arc::new(other_display)).unwrap();
+        let delta = Arc::new(video(false, 64));
+        for _ in 1..VIDEO_QUEUE - 1 {
+            producer.send_video(delta.clone()).unwrap();
+        }
+
+        let mut misc = Misc::new();
+        misc.set_switch_display(base::message_proto::SwitchDisplay::new());
+        let mut format = Message::new();
+        format.set_misc(misc);
+        producer.send_video(Arc::new(format)).unwrap();
+        producer.send_video(delta).unwrap();
+
+        let other = channels.frames.pop(None, None).unwrap().plan.descriptor();
+        assert_eq!((other.metadata.display_id, other.metadata.epoch), (1, 1));
+        let changed = channels.frames.pop(None, None).unwrap().plan.descriptor();
+        assert_eq!(
+            (changed.metadata.display_id, changed.metadata.epoch),
+            (0, 2)
+        );
+        assert!(channels.frames.is_empty());
+    }
+
     #[tokio::test]
     async fn recovery_keyframe_skips_same_display_backlog_and_an_active_delta() {
         let (_client, host) = backpressured_streams();

@@ -13,6 +13,13 @@ use super::surface_pacing::Pacing;
 
 const INVALID: u64 = u64::MAX;
 const CODEC_CONFIG: u32 = 2;
+const FRAME_RATE_COMPATIBILITY_FIXED_SOURCE: i8 = 1;
+
+#[link(name = "nativewindow")]
+unsafe extern "C" {
+    // The Android API 30 entry point is newer than the NativeWindow wrapper.
+    fn ANativeWindow_setFrameRate(window: *mut c_void, frame_rate: f32, compatibility: i8) -> i32;
+}
 
 pub(super) enum SurfaceOutput {
     NoFrame,
@@ -48,6 +55,23 @@ impl VideoSurface {
 
     pub fn is_valid(&self) -> bool {
         self.size.load(Ordering::Acquire) != INVALID
+    }
+
+    pub fn request_frame_rate(&self, fps: i32) {
+        if fps <= 0 || !self.is_valid() {
+            return;
+        }
+        // The owned NativeWindow keeps this reference alive throughout the call.
+        let status = unsafe {
+            ANativeWindow_setFrameRate(
+                self.window.ptr().as_ptr().cast(),
+                fps.min(self.display_limit) as f32,
+                FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
+            )
+        };
+        if status != 0 {
+            log::trace!("Cannot request the Android video surface frame rate: {status}");
+        }
     }
 
     pub fn size(&self) -> Option<(u32, u32)> {

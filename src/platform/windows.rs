@@ -1,3 +1,6 @@
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("XSCC supports only x86_64 Windows builds.");
+
 use super::{validate_install_app_name, CursorData, ResultType};
 use crate::{
     ipc,
@@ -9,7 +12,6 @@ use hbb_common::{
     anyhow::anyhow,
     bail,
     config::{self, Config},
-    libc::{c_int, wchar_t},
     log, sleep,
     sysinfo::{Pid, System},
     timeout, tokio,
@@ -20,8 +22,10 @@ use std::{
     fs,
     io::{self, prelude::*},
     mem,
-    os::{
-        windows::{ffi::OsStringExt, process::CommandExt},
+    os::windows::{
+        ffi::OsStringExt,
+        io::{AsRawHandle, IntoRawHandle, OwnedHandle},
+        process::CommandExt,
     },
     path::*,
     ptr::null_mut,
@@ -87,15 +91,20 @@ use windows_service::{
 };
 use winreg::{enums::*, RegKey};
 
-pub(crate) mod display_modes;
 mod acl;
 #[cfg(feature = "gpui-host")]
 pub(crate) mod capture_thread;
+mod cursor_bitmap;
+mod desktop;
+pub(crate) mod display_modes;
 mod installer_handoff;
 mod installer_shell;
-mod verified_update;
+mod legacy_test_certificate;
 mod msi_registry;
+mod platform_version;
 mod portable_service_launch;
+mod sessions;
+mod verified_update;
 pub(crate) use acl::current_process_user_sid_string;
 pub use acl::{
     set_path_permission, set_path_permission_for_portable_service_shmem_dir,
@@ -194,9 +203,10 @@ pub fn reset_input_cache() {}
 
 pub fn get_cursor() -> ResultType<Option<u64>> {
     unsafe {
-        #[allow(invalid_value)]
-        let mut ci: CURSORINFO = mem::MaybeUninit::uninit().assume_init();
-        ci.cbSize = std::mem::size_of::<CURSORINFO>() as _;
+        let mut ci = CURSORINFO {
+            cbSize: mem::size_of::<CURSORINFO>() as u32,
+            ..mem::zeroed()
+        };
         if crate::portable_service::client::get_cursor_info(&mut ci) == FALSE {
             return Err(io::Error::last_os_error().into());
         }
@@ -213,12 +223,11 @@ struct IconInfo(ICONINFO);
 impl IconInfo {
     fn new(icon: HICON) -> ResultType<Self> {
         unsafe {
-            #[allow(invalid_value)]
-            let mut ii = mem::MaybeUninit::uninit().assume_init();
-            if GetIconInfo(icon, &mut ii) == FALSE {
+            let mut ii = mem::MaybeUninit::uninit();
+            if GetIconInfo(icon, ii.as_mut_ptr()) == FALSE {
                 Err(io::Error::last_os_error().into())
             } else {
-                let ii = Self(ii);
+                let ii = Self(ii.assume_init());
                 if ii.0.hbmMask.is_null() {
                     bail!("Cursor bitmap handle is NULL");
                 }
@@ -257,14 +266,32 @@ pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
         } else {
             bm_mask.bmHeight / 2
         };
-        let cbits_size = width * height * 4;
-        if cbits_size < 16 {
-            bail!("Invalid icon: too small"); // solve some crash
+        let columns = usize::try_from(width)?;
+        let rows = usize::try_from(height)?;
+        let stride = usize::try_from(bm_mask.bmWidthBytes)?;
+        let mask_rows = usize::try_from(bm_mask.bmHeight)?;
+        if columns == 0
+            || rows == 0
+            || stride < columns.div_ceil(8)
+            || (!ii.is_color() && mask_rows != rows * 2)
+        {
+            bail!("Invalid icon bitmap dimensions");
         }
-        let mut cbits: Vec<u8> = Vec::new();
-        cbits.resize(cbits_size as _, 0);
-        let mut mbits: Vec<u8> = Vec::new();
-        mbits.resize((bm_mask.bmWidthBytes * bm_mask.bmHeight) as _, 0);
+        let cbits_size = columns
+            .checked_mul(rows)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .filter(|size| (16..=i32::MAX as usize).contains(size))
+            .ok_or_else(|| io::Error::other("Invalid icon pixel buffer size"))?;
+        let mbits_size = stride
+            .checked_mul(mask_rows)
+            .filter(|size| *size <= i32::MAX as usize)
+            .ok_or_else(|| io::Error::other("Invalid icon mask buffer size"))?;
+        let mut cbits = Vec::new();
+        cbits.try_reserve_exact(cbits_size)?;
+        cbits.resize(cbits_size, 0);
+        let mut mbits = Vec::new();
+        mbits.try_reserve_exact(mbits_size)?;
+        mbits.resize(mbits_size, 0);
         let r = GetBitmapBits(ii.0.hbmMask, mbits.len() as _, mbits.as_mut_ptr() as _);
         if r == 0 {
             bail!("Failed to copy bitmap data");
@@ -287,26 +314,11 @@ pub fn get_cursor_data(hcursor: u64) -> ResultType<CursorData> {
                 bm_mask.bmWidthBytes as _,
             );
         } else {
-            do_outline = handleMask(
-                cbits.as_mut_ptr(),
-                mbits.as_ptr(),
-                width,
-                height,
-                bm_mask.bmWidthBytes,
-                bm_mask.bmHeight,
-            ) > 0;
+            do_outline =
+                cursor_bitmap::apply_monochrome_mask(&mut cbits, &mbits, columns, rows, stride);
         }
         if do_outline {
-            let mut outline = Vec::new();
-            outline.resize(((width + 2) * (height + 2) * 4) as _, 0);
-            drawOutline(
-                outline.as_mut_ptr(),
-                cbits.as_ptr(),
-                width,
-                height,
-                outline.len() as _,
-            );
-            cbits = outline;
+            cbits = cursor_bitmap::draw_outline(&cbits, columns, rows)?;
             width += 2;
             height += 2;
             ii.0.xHotspot += 1;
@@ -371,74 +383,15 @@ impl Drop for DC {
     }
 }
 
-struct CompatibleDC(HDC);
-
-impl CompatibleDC {
-    fn new(existing: HDC) -> ResultType<Self> {
-        unsafe {
-            let dc = CreateCompatibleDC(existing);
-            if dc.is_null() {
-                bail!("Failed to get a compatible drawing context");
-            }
-            Ok(Self(dc))
-        }
-    }
-}
-
-impl Drop for CompatibleDC {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.0.is_null() {
-                DeleteDC(self.0);
-            }
-        }
-    }
-}
-
-struct BitmapDC(CompatibleDC, HBITMAP);
-
-impl BitmapDC {
-    fn new(hdc: HDC, hbitmap: HBITMAP) -> ResultType<Self> {
-        unsafe {
-            let dc = CompatibleDC::new(hdc)?;
-            let oldbitmap = SelectObject(dc.0, hbitmap as _) as HBITMAP;
-            if oldbitmap.is_null() {
-                bail!("Failed to select CompatibleDC");
-            }
-            Ok(Self(dc, oldbitmap))
-        }
-    }
-
-    fn dc(&self) -> HDC {
-        (self.0).0
-    }
-}
-
-impl Drop for BitmapDC {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.1.is_null() {
-                SelectObject((self.0).0, self.1 as _);
-            }
-        }
-    }
-}
-
 #[inline]
 fn get_rich_cursor_data(
     hbm_color: HBITMAP,
     width: i32,
     height: i32,
-    out: &mut Vec<u8>,
+    out: &mut [u8],
 ) -> ResultType<()> {
-    unsafe {
-        let dc = DC::new()?;
-        let bitmap_dc = BitmapDC::new(dc.0, hbm_color)?;
-        if get_di_bits(out.as_mut_ptr(), bitmap_dc.dc(), hbm_color, width, height) > 0 {
-            bail!("Failed to get di bits: {}", io::Error::last_os_error());
-        }
-    }
-    Ok(())
+    let dc = DC::new()?;
+    cursor_bitmap::read_rgba(dc.0, hbm_color, width, height, out)
 }
 
 fn fix_cursor_mask(
@@ -551,55 +504,8 @@ pub fn start_os_service() {
 
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 
-extern "C" {
-    fn get_current_session(rdp: BOOL) -> DWORD;
-    fn LaunchProcessWin(
-        cmd: *const u16,
-        session_id: DWORD,
-        as_user: BOOL,
-        show: BOOL,
-        token_pid: &mut DWORD,
-    ) -> HANDLE;
-    fn GetSessionUserTokenWin(
-        lphUserToken: LPHANDLE,
-        dwSessionId: DWORD,
-        as_user: BOOL,
-        token_pid: &mut DWORD,
-    ) -> BOOL;
-    fn selectInputDesktop() -> BOOL;
-    fn inputDesktopSelected() -> BOOL;
-    fn is_supported_windows() -> BOOL;
-    #[cfg(feature = "gpui-session")]
-    fn get_windows_headless_platform(
-        major: &mut DWORD,
-        minor: &mut DWORD,
-        build: &mut DWORD,
-        product: &mut u8,
-        native_machine: &mut u16,
-    ) -> BOOL;
-    fn is_windows_server() -> BOOL;
-    fn handleMask(
-        out: *mut u8,
-        mask: *const u8,
-        width: i32,
-        height: i32,
-        bmWidthBytes: i32,
-        bmHeight: i32,
-    ) -> i32;
-    fn drawOutline(out: *mut u8, in_: *const u8, width: i32, height: i32, out_size: i32);
-    fn get_di_bits(out: *mut u8, dc: HDC, hbmColor: HBITMAP, width: i32, height: i32) -> i32;
-    fn blank_screen(v: BOOL);
-    fn win32_enable_lowlevel_keyboard(hwnd: HWND) -> i32;
-    fn win32_disable_lowlevel_keyboard(hwnd: HWND);
-    fn win_stop_system_key_propagate(v: BOOL);
-    fn is_win_down() -> BOOL;
-    fn is_local_system() -> BOOL;
-    fn alloc_console_and_redirect();
-    fn is_service_running_w(svc_name: *const u16) -> bool;
-}
-
 pub fn get_current_session_id(share_rdp: bool) -> DWORD {
-    unsafe { get_current_session(if share_rdp { TRUE } else { FALSE }) }
+    sessions::current_session(share_rdp)
 }
 
 #[inline]
@@ -611,8 +517,7 @@ fn resolve_expected_active_session_id_for_service(session_id: u32) -> Option<u32
     {
         return Some(session_id);
     }
-    let current_active_session =
-        unsafe { get_current_session(if share_rdp_enabled { TRUE } else { FALSE }) };
+    let current_active_session = get_current_session_id(share_rdp_enabled);
     if current_active_session == u32::MAX {
         None
     } else {
@@ -652,10 +557,6 @@ fn authorize_service_scoped_ipc_connection(
     true
 }
 
-extern "system" {
-    fn BlockInput(v: BOOL) -> BOOL;
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
@@ -692,9 +593,9 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     // Tell the system that the service is running now
     status_handle.set_service_status(next_status)?;
 
-    let mut session_id = unsafe { get_current_session(share_rdp()) };
+    let mut session_id = get_current_session_id(is_share_rdp());
     log::info!("session id {}", session_id);
-    let mut h_process = launch_server(session_id, true).await.unwrap_or(NULL);
+    let mut server_process = launch_server(session_id, true).await.ok();
     let mut incoming = ipc::new_listener(crate::POSTFIX_SERVICE).await?;
     let mut stored_usid = None;
     loop {
@@ -703,10 +604,10 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
             .map(|e| e.sid)
             .collect();
         if !sids.contains(&session_id) || !is_share_rdp() {
-            let current_active_session = unsafe { get_current_session(share_rdp()) };
+            let current_active_session = get_current_session_id(is_share_rdp());
             if session_id != current_active_session {
                 session_id = current_active_session;
-                h_process = launch_server(session_id, true).await.unwrap_or(NULL);
+                server_process = launch_server(session_id, true).await.ok();
             }
         }
         let res = timeout(super::SERVICE_INTERVAL, incoming.next()).await;
@@ -742,8 +643,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                                         );
                                         session_id = usid;
                                         stored_usid = Some(session_id);
-                                        h_process =
-                                            launch_server(session_id, true).await.unwrap_or(NULL);
+                                        server_process = launch_server(session_id, true).await.ok();
                                     }
                                 }
                             }
@@ -754,43 +654,38 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                 _ => {}
             },
             Err(_) => {
-                // timeout
-                unsafe {
-                    let tmp = get_current_session(share_rdp());
-                    if tmp == 0xFFFFFFFF {
-                        continue;
-                    }
-                    let mut close_sent = false;
-                    if tmp != session_id && stored_usid != Some(session_id) {
-                        log::info!("session changed from {} to {}", session_id, tmp);
-                        session_id = tmp;
-                        send_close_async("").await.ok();
-                        close_sent = true;
-                    }
+                let active_session = get_current_session_id(is_share_rdp());
+                if active_session == u32::MAX {
+                    continue;
+                }
+                let mut close_sent = false;
+                if active_session != session_id && stored_usid != Some(session_id) {
+                    log::info!("session changed from {} to {}", session_id, active_session);
+                    session_id = active_session;
+                    send_close_async("").await.ok();
+                    close_sent = true;
+                }
+                let needs_server = server_process.as_ref().is_none_or(|process| {
                     let mut exit_code: DWORD = 0;
-                    if h_process.is_null()
-                        || (GetExitCodeProcess(h_process, &mut exit_code) == TRUE
-                            && exit_code != STILL_ACTIVE
-                            && CloseHandle(h_process) == TRUE)
-                    {
-                        match launch_server(session_id, !close_sent).await {
-                            Ok(ptr) => {
-                                h_process = ptr;
-                            }
-                            Err(err) => {
-                                log::error!("Failed to launch server: {}", err);
-                            }
-                        }
+                    (unsafe { GetExitCodeProcess(process.as_raw_handle().cast(), &mut exit_code) }
+                        == TRUE)
+                        && exit_code != STILL_ACTIVE
+                });
+                if needs_server {
+                    drop(server_process.take());
+                    match launch_server(session_id, !close_sent).await {
+                        Ok(process) => server_process = Some(process),
+                        Err(error) => log::error!("Failed to launch server: {error}"),
                     }
                 }
             }
         }
     }
 
-    if !h_process.is_null() {
+    if server_process.is_some() {
         send_close_async("").await.ok();
-        unsafe { CloseHandle(h_process) };
     }
+    drop(server_process);
 
     status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
@@ -805,7 +700,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     Ok(())
 }
 
-async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<HANDLE> {
+async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<OwnedHandle> {
     if close_first {
         // in case started some elsewhere
         send_close_async("").await.ok();
@@ -814,28 +709,13 @@ async fn launch_server(session_id: DWORD, close_first: bool) -> ResultType<HANDL
         "\"{}\" --server",
         std::env::current_exe()?.to_str().unwrap_or("")
     );
-    launch_privileged_process(session_id, &cmd)
+    sessions::launch(session_id, &cmd, false, false)
 }
 
 pub fn launch_privileged_process(session_id: DWORD, cmd: &str) -> ResultType<HANDLE> {
-    use std::os::windows::ffi::OsStrExt;
-    let wstr: Vec<u16> = std::ffi::OsStr::new(&cmd)
-        .encode_wide()
-        .chain(Some(0).into_iter())
-        .collect();
-    let wstr = wstr.as_ptr();
-    let mut token_pid = 0;
-    let h = unsafe { LaunchProcessWin(wstr, session_id, FALSE, FALSE, &mut token_pid) };
-    if h.is_null() {
-        log::error!(
-            "Failed to launch privileged process: {}",
-            io::Error::last_os_error()
-        );
-        if token_pid == 0 {
-            log::error!("No process winlogon.exe");
-        }
-    }
-    Ok(h)
+    Ok(sessions::launch(session_id, cmd, false, false)?
+        .into_raw_handle()
+        .cast())
 }
 
 pub fn run_as_user(arg: Vec<&str>) -> ResultType<Option<std::process::Child>> {
@@ -881,39 +761,14 @@ pub fn run_exe_in_session(
     session_id: DWORD,
     show: bool,
 ) -> ResultType<Option<std::process::Child>> {
-    use std::os::windows::ffi::OsStrExt;
-    let cmd = format!("\"{}\" {}", exe, arg.join(" "),);
-    let wstr: Vec<u16> = std::ffi::OsStr::new(&cmd)
-        .encode_wide()
-        .chain(Some(0).into_iter())
-        .collect();
-    let wstr = wstr.as_ptr();
-    let mut token_pid = 0;
-    let h = unsafe {
-        LaunchProcessWin(
-            wstr,
-            session_id,
-            TRUE,
-            if show { TRUE } else { FALSE },
-            &mut token_pid,
-        )
-    };
-    if h.is_null() {
-        if token_pid == 0 {
-            bail!(
-                "Failed to launch {:?} with session id {}: no process {}",
-                arg,
-                session_id,
-                EXPLORER_EXE
-            );
-        }
-        bail!(
-            "Failed to launch {:?} with session id {}: {}",
+    let cmd = format!("\"{}\" {}", exe, arg.join(" "));
+    let _process = sessions::launch(session_id, &cmd, true, show).map_err(|error| {
+        anyhow!(
+            "Failed to launch {:?} in session {}: {error:#}",
             arg,
-            session_id,
-            io::Error::last_os_error()
-        );
-    }
+            session_id
+        )
+    })?;
     Ok(None)
 }
 
@@ -1022,38 +877,31 @@ lazy_static::lazy_static! {
 }
 
 pub fn desktop_changed() -> bool {
-    unsafe { inputDesktopSelected() == FALSE }
+    !desktop::is_input_selected()
 }
 
 pub fn try_change_desktop() -> bool {
-    unsafe {
-        if inputDesktopSelected() == FALSE {
-            let res = selectInputDesktop() == TRUE;
-            if !res {
-                let mut s = SUPPRESS.lock().unwrap();
-                if s.elapsed() > std::time::Duration::from_secs(3) {
-                    log::error!("Failed to switch desktop: {}", io::Error::last_os_error());
-                    *s = Instant::now();
-                }
-            } else {
-                log::info!("Desktop switched");
-            }
-            return res;
-        }
+    if desktop::is_input_selected() {
+        return false;
     }
-    return false;
-}
-
-fn share_rdp() -> BOOL {
-    if get_reg("share_rdp") != "false" {
-        TRUE
-    } else {
-        FALSE
+    match desktop::select_input() {
+        Ok(()) => {
+            log::info!("Desktop switched");
+            true
+        }
+        Err(error) => {
+            let mut last_log = SUPPRESS.lock().unwrap();
+            if last_log.elapsed() > Duration::from_secs(3) {
+                log::error!("Failed to switch desktop: {error}");
+                *last_log = Instant::now();
+            }
+            false
+        }
     }
 }
 
 pub fn is_share_rdp() -> bool {
-    share_rdp() == TRUE
+    get_reg("share_rdp") != "false"
 }
 
 pub fn set_share_rdp(enable: bool) {
@@ -1081,7 +929,7 @@ pub fn get_session_id_of_process(pid: DWORD) -> Option<u32> {
 
 pub fn is_physical_console_session() -> Option<bool> {
     if let Some(sid) = get_current_process_session_id() {
-        let physical_console_session_id = unsafe { get_current_session(FALSE) };
+        let physical_console_session_id = sessions::console_session();
         if physical_console_session_id == u32::MAX {
             return None;
         }
@@ -1099,21 +947,7 @@ pub fn get_active_username() -> String {
         return crate::username();
     }
 
-    extern "C" {
-        fn get_active_user(path: *mut u16, n: u32, rdp: BOOL) -> u32;
-    }
-    let buff_size = 256;
-    let mut buff: Vec<u16> = Vec::with_capacity(buff_size);
-    buff.resize(buff_size, 0);
-    let n = unsafe { get_active_user(buff.as_mut_ptr(), buff_size as _, share_rdp()) };
-    if n == 0 {
-        return "".to_owned();
-    }
-    let sl = unsafe { std::slice::from_raw_parts(buff.as_ptr(), n as _) };
-    String::from_utf16(sl)
-        .unwrap_or("??".to_owned())
-        .trim_end_matches('\0')
-        .to_owned()
+    get_session_username(get_current_session_id(is_share_rdp()))
 }
 
 fn get_current_session_username() -> Option<String> {
@@ -1125,80 +959,41 @@ fn get_current_session_username() -> Option<String> {
 }
 
 fn get_session_username(session_id: u32) -> String {
-    extern "C" {
-        fn get_session_user_info(path: *mut u16, n: u32, session_id: u32) -> u32;
-    }
-    let buff_size = 256;
-    let mut buff: Vec<u16> = Vec::with_capacity(buff_size);
-    buff.resize(buff_size, 0);
-    let n = unsafe { get_session_user_info(buff.as_mut_ptr(), buff_size as _, session_id) };
-    if n == 0 {
-        return "".to_owned();
-    }
-    let sl = unsafe { std::slice::from_raw_parts(buff.as_ptr(), n as _) };
-    String::from_utf16(sl)
-        .unwrap_or("".to_owned())
-        .trim_end_matches('\0')
-        .to_owned()
+    sessions::username(session_id).unwrap_or_default()
 }
 
 pub fn get_available_sessions(name: bool) -> Vec<WindowsSession> {
-    extern "C" {
-        fn get_available_session_ids(buf: *mut wchar_t, buf_size: c_int, include_rdp: bool);
-    }
-    const BUF_SIZE: c_int = 1024;
-    let mut buf: Vec<wchar_t> = vec![0; BUF_SIZE as usize];
-
-    let station_session_id_array = unsafe {
-        get_available_session_ids(buf.as_mut_ptr(), BUF_SIZE, true);
-        let session_ids = String::from_utf16_lossy(&buf);
-        session_ids.trim_matches(char::from(0)).trim().to_string()
-    };
-    let mut v: Vec<WindowsSession> = vec![];
-    // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-wtsgetactiveconsolesessionid
-    let physical_console_sid = unsafe { get_current_session(FALSE) };
-    if physical_console_sid != u32::MAX {
-        let physical_console_name = if name {
-            let physical_console_username = get_session_username(physical_console_sid);
-            if physical_console_username.is_empty() {
-                "Console".to_owned()
+    let mut v: Vec<WindowsSession> = Vec::new();
+    let physical_console_sid = sessions::console_session();
+    let active = (physical_console_sid != u32::MAX)
+        .then_some((physical_console_sid, "Console"))
+        .into_iter()
+        .chain(
+            sessions::active_sessions()
+                .into_iter()
+                .filter(|(id, _)| !matches!(id, 65536 | 655)),
+        );
+    for (sid, station) in active {
+        if v.iter().any(|session| session.sid == sid) {
+            continue;
+        }
+        let label = if name {
+            let username = get_session_username(sid);
+            if username.is_empty() {
+                station.to_owned()
             } else {
-                format!("Console: {physical_console_username}")
+                format!("{station}: {username}")
             }
         } else {
-            "".to_owned()
+            String::new()
         };
         v.push(WindowsSession {
-            sid: physical_console_sid,
-            name: physical_console_name,
+            sid,
+            name: label,
             ..Default::default()
         });
     }
-    // https://learn.microsoft.com/en-us/previous-versions//cc722458(v=technet.10)?redirectedfrom=MSDN
-    for type_session_id in station_session_id_array.split(",") {
-        let split: Vec<_> = type_session_id.split(":").collect();
-        if split.len() == 2 {
-            if let Ok(sid) = split[1].parse::<u32>() {
-                if !v.iter().any(|e| (*e).sid == sid) {
-                    let name = if name {
-                        let name = get_session_username(sid);
-                        if name.is_empty() {
-                            split[0].to_string()
-                        } else {
-                            format!("{}: {}", split[0], name)
-                        }
-                    } else {
-                        "".to_owned()
-                    };
-                    v.push(WindowsSession {
-                        sid,
-                        name,
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-    }
+
     if name {
         let mut name_count: HashMap<String, usize> = HashMap::new();
         for session in &v {
@@ -1283,42 +1078,18 @@ pub fn is_logon_screen() -> bool {
 }
 
 fn is_session_prelogin(session_id: u32) -> Option<bool> {
-    extern "C" {
-        fn get_session_user_info(path: *mut u16, n: u32, session_id: u32) -> u32;
-    }
-    let mut buff = [0u16; 256];
-    // The bytes copied include the terminating null, so 0 means the query failed.
-    let n = unsafe { get_session_user_info(buff.as_mut_ptr(), buff.len() as _, session_id) };
-    if n == 0 {
-        return None;
-    }
-    let username = String::from_utf16_lossy(&buff);
-    let username = username.trim_end_matches('\0');
-    Some(username.is_empty() || username == "SYSTEM")
+    sessions::username(session_id).map(|username| username.is_empty() || username == "SYSTEM")
 }
 
 fn is_session_locked_flag(session_id: u32) -> Option<bool> {
-    extern "C" {
-        fn get_session_flags(session_id: DWORD) -> DWORD;
-    }
-    const WTS_SESSIONSTATE_LOCK: DWORD = 0;
-    const WTS_SESSIONSTATE_UNLOCK: DWORD = 1;
-    match unsafe { get_session_flags(session_id) } {
-        WTS_SESSIONSTATE_LOCK => Some(true),
-        WTS_SESSIONSTATE_UNLOCK => Some(false),
-        _ => None,
-    }
+    sessions::is_locked(session_id)
 }
 
 pub fn is_root() -> bool {
-    // https://stackoverflow.com/questions/4023586/correct-way-to-find-out-if-a-service-is-running-as-the-system-user
-    unsafe { is_local_system() == TRUE }
+    is_process_running_as_system(unsafe { GetCurrentProcessId() }).unwrap_or(false)
 }
 
 pub fn lock_screen() {
-    extern "system" {
-        pub fn LockWorkStation() -> BOOL;
-    }
     unsafe {
         LockWorkStation();
     }
@@ -1853,9 +1624,13 @@ fn to_le(v: &mut [u16]) -> &[u8] {
 }
 
 pub fn toggle_blank_screen(v: bool) {
-    let v = if v { TRUE } else { FALSE };
     unsafe {
-        blank_screen(v);
+        SendMessageW(
+            HWND_BROADCAST,
+            WM_SYSCOMMAND,
+            SC_MONITORPOWER as WPARAM,
+            if v { 2 } else { -1 },
+        );
     }
 }
 
@@ -1871,17 +1646,10 @@ pub fn block_input(v: bool) -> (bool, String) {
 }
 
 pub fn add_recent_document(path: &str) {
-    extern "C" {
-        fn AddRecentDocument(path: *const u16);
-    }
-    use std::os::windows::ffi::OsStrExt;
-    let wstr: Vec<u16> = std::ffi::OsStr::new(path)
-        .encode_wide()
-        .chain(Some(0).into_iter())
-        .collect();
-    let wstr = wstr.as_ptr();
+    use windows::Win32::UI::Shell::{SHAddToRecentDocs, SHARD_PATHW};
+    let path = wide_string(path);
     unsafe {
-        AddRecentDocument(wstr);
+        SHAddToRecentDocs(SHARD_PATHW.0 as u32, Some(path.as_ptr().cast()));
     }
 }
 
@@ -2066,11 +1834,12 @@ pub fn prepare_custom_client_update() -> ResultType<bool> {
 
 #[inline]
 pub fn is_win_server() -> bool {
-    unsafe { is_windows_server() > 0 }
+    platform_version::os_version()
+        .is_some_and(|version| version.wProductType != winapi::um::winnt::VER_NT_WORKSTATION)
 }
 
 pub fn bootstrap() -> bool {
-    if unsafe { is_supported_windows() } == FALSE {
+    if !platform_version::supports_desktop() {
         eprintln!("RustDesk requires Windows 11 (build 22000 or newer) on x86_64.");
         return false;
     }
@@ -2105,17 +1874,18 @@ fn gpui_headless_platform_supported(
 /// The desktop bootstrap above deliberately retains the Windows 11 workstation policy.
 #[cfg(feature = "gpui-session")]
 pub(crate) fn bootstrap_native_headless() -> bool {
-    let (mut major, mut minor, mut build, mut product, mut native) = (0, 0, 0, 0, 0);
-    let valid = unsafe {
-        get_windows_headless_platform(
-            &mut major,
-            &mut minor,
-            &mut build,
-            &mut product,
-            &mut native,
-        )
-    } != FALSE;
-    if !valid || !gpui_headless_platform_supported(major, minor, build, product, native) {
+    let supported = platform_version::os_version()
+        .zip(platform_version::native_machine())
+        .is_some_and(|(version, native)| {
+            gpui_headless_platform_supported(
+                version.dwMajorVersion,
+                version.dwMinorVersion,
+                version.dwBuildNumber,
+                version.wProductType,
+                native,
+            )
+        });
+    if !supported {
         eprintln!("Native background commands require an x64 Windows NT 10.0 workstation or server, build 22000 or newer.");
         return false;
     }
@@ -2256,24 +2026,13 @@ oLink.Save
     Ok(())
 }
 
-pub fn enable_lowlevel_keyboard(hwnd: HWND) {
-    let ret = unsafe { win32_enable_lowlevel_keyboard(hwnd) };
-    if ret != 0 {
-        log::error!("Failure grabbing keyboard");
-        return;
-    }
-}
-
-pub fn disable_lowlevel_keyboard(hwnd: HWND) {
-    unsafe { win32_disable_lowlevel_keyboard(hwnd) };
-}
-
-pub fn stop_system_key_propagate(v: bool) {
-    unsafe { win_stop_system_key_propagate(if v { TRUE } else { FALSE }) };
+#[cfg(feature = "flutter")]
+pub fn stop_system_key_propagate(_stopped: bool) {
+    // The archived frontend used this switch with its retired desktop keyboard hook.
 }
 
 pub fn get_win_key_state() -> bool {
-    unsafe { is_win_down() == TRUE }
+    unsafe { GetAsyncKeyState(VK_LWIN) < 0 || GetAsyncKeyState(VK_RWIN) < 0 }
 }
 
 pub fn quit_gui() {
@@ -2282,22 +2041,9 @@ pub fn quit_gui() {
 }
 
 pub fn get_user_token(session_id: u32, as_user: bool) -> HANDLE {
-    let mut token = NULL as HANDLE;
-    unsafe {
-        let mut _token_pid = 0;
-        if FALSE
-            == GetSessionUserTokenWin(
-                &mut token as _,
-                session_id,
-                if as_user { TRUE } else { FALSE },
-                &mut _token_pid,
-            )
-        {
-            NULL as _
-        } else {
-            token
-        }
-    }
+    sessions::token(session_id, as_user)
+        .map(|token| token.into_raw_handle().cast())
+        .unwrap_or(null_mut())
 }
 
 pub fn run_background(exe: &str, arg: &str) -> ResultType<bool> {
@@ -2516,12 +2262,7 @@ unsafe fn read_token_user_buffer(token: WinHANDLE, subject: &str) -> ResultType<
     Ok(buffer)
 }
 
-/// Similar to `is_root()` / `is_local_system()` but for an arbitrary process.
-///
-/// Returns `true` if the target process is running as LocalSystem (SID: S-1-5-18).
-///
-/// TODO: After a few releases of real-world validation, consider replacing
-/// the legacy `is_local_system()` with this implementation.
+/// Returns whether the target process is running as LocalSystem (SID S-1-5-18).
 pub fn is_process_running_as_system(process_id: DWORD) -> ResultType<bool> {
     unsafe {
         let process = WinOpenProcess(WIN_PROCESS_QUERY_LIMITED_INFORMATION, false, process_id)
@@ -3067,21 +2808,7 @@ pub fn user_accessible_folder() -> ResultType<PathBuf> {
 
 #[inline]
 pub fn uninstall_cert() -> ResultType<()> {
-    cert::uninstall_cert()
-}
-
-mod cert {
-    use hbb_common::ResultType;
-
-    extern "C" {
-        fn DeleteRustDeskTestCertsW();
-    }
-    pub fn uninstall_cert() -> ResultType<()> {
-        unsafe {
-            DeleteRustDeskTestCertsW();
-        }
-        Ok(())
-    }
+    legacy_test_certificate::uninstall()
 }
 
 #[inline]
@@ -3970,8 +3697,9 @@ pub fn message_box(text: &str) {
 }
 
 pub fn alloc_console() {
+    // AllocConsole initializes missing standard handles and preserves inherited redirection.
     unsafe {
-        alloc_console_and_redirect();
+        let _ = windows::Win32::System::Console::AllocConsole();
     }
 }
 
@@ -4060,10 +3788,14 @@ pub fn is_self_service_running() -> bool {
 }
 
 pub fn is_service_running(service_name: &str) -> bool {
-    unsafe {
-        let service_name = wide_string(service_name);
-        is_service_running_w(service_name.as_ptr() as _)
-    }
+    use windows_service::{
+        service::ServiceAccess,
+        service_manager::{ServiceManager, ServiceManagerAccess},
+    };
+    ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+        .and_then(|manager| manager.open_service(service_name, ServiceAccess::QUERY_STATUS))
+        .and_then(|service| service.query_status())
+        .is_ok_and(|status| status.current_state == ServiceState::Running)
 }
 
 pub fn is_x64() -> bool {

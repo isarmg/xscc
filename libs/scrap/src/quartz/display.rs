@@ -65,18 +65,33 @@ impl Display {
     }
 
     pub fn scale(self) -> f64 {
-        let s = unsafe { BackingScaleFactor(self.0) as _ };
-        if s > 1. {
-            let enable_retina = super::ENABLE_RETINA.lock().unwrap().clone();
-            if enable_retina {
-                return s;
-            }
+        if !*super::ENABLE_RETINA.lock().unwrap() {
+            return 1.0;
         }
-        1.
+        unsafe {
+            let mode = CGDisplayCopyDisplayMode(self.0);
+            if mode.is_null() {
+                return 1.0;
+            }
+            let scale = backing_scale(
+                CGDisplayModeGetWidth(mode),
+                CGDisplayModeGetPixelWidth(mode),
+            );
+            CGDisplayModeRelease(mode);
+            scale
+        }
     }
 
     pub fn bounds(self) -> CGRect {
         unsafe { CGDisplayBounds(self.0) }
+    }
+}
+
+fn backing_scale(logical_width: usize, pixel_width: usize) -> f64 {
+    if logical_width == 0 || pixel_width <= logical_width {
+        1.0
+    } else {
+        pixel_width as f64 / logical_width as f64
     }
 }
 
@@ -117,5 +132,13 @@ mod tests {
             displays.into_iter().map(Display::id).collect::<Vec<_>>(),
             expected
         );
+    }
+
+    #[test]
+    fn retina_scale_uses_logical_and_backing_dimensions() {
+        assert_eq!(backing_scale(1512, 3024), 2.0);
+        assert_eq!(backing_scale(1920, 1920), 1.0);
+        assert_eq!(backing_scale(1920, 0), 1.0);
+        assert_eq!(backing_scale(0, 3024), 1.0);
     }
 }

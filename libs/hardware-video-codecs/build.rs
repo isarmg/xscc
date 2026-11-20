@@ -25,12 +25,11 @@ fn main() {
 
 fn build_common(builder: &mut Build) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let common_dir = manifest_dir.join("cpp").join("common");
     bindgen::builder()
         .header(common_dir.join("common.h").to_string_lossy().to_string())
         .header(common_dir.join("callback.h").to_string_lossy().to_string())
-        .rustified_enum("*")
+        .rustified_enum(".*")
         // Keep the FFI boundary, not unrelated libc records from stdint.h.
         .allowlist_type("(?:AdapterVendor|SurfaceFormat|DataFormat|Vendor|Quality|RateControl|HwcodecErrno|EncodeCallback|DecodeCallback)")
         .allowlist_var("(?:MAX_GOP|TEST_TIMEOUT_MS|ENCODE_TIMEOUT_MS|DECODE_TIMEOUT_MS)")
@@ -56,27 +55,6 @@ fn build_common(builder: &mut Build) {
         builder.include(&win_path);
         builder.file(win_path.join("win.cpp"));
     }
-    #[cfg(target_os = "linux")]
-    {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let externals_dir = manifest_dir.join("externals");
-        // ffnvcodec
-        let ffnvcodec_path = externals_dir
-            .join("nv-codec-headers_n12.1.14.0")
-            .join("include")
-            .join("ffnvcodec");
-        builder.include(ffnvcodec_path);
-
-        let linux_path = _platform_path.join("linux");
-        builder.include(&linux_path);
-        builder.file(linux_path.join("linux.cpp"));
-    }
-    if target_os == "macos" {
-        let macos_path = _platform_path.join("mac");
-        builder.include(&macos_path);
-        builder.file(macos_path.join("mac.mm"));
-    }
-
     // tool
     builder.files(["log.cpp", "util.cpp"].map(|f| common_dir.join(f)));
 }
@@ -84,13 +62,9 @@ fn build_common(builder: &mut Build) {
 #[derive(Debug)]
 struct CommonCallbacks;
 impl bindgen::callbacks::ParseCallbacks for CommonCallbacks {
-    fn add_derives(&self, name: &str) -> Vec<String> {
-        let names = vec!["DataFormat", "SurfaceFormat", "API"];
-        if names.contains(&name) {
-            vec!["Serialize", "Deserialize"]
-                .drain(..)
-                .map(|s| s.to_string())
-                .collect()
+    fn add_derives(&self, info: &bindgen::callbacks::DeriveInfo<'_>) -> Vec<String> {
+        if matches!(info.name, "DataFormat" | "SurfaceFormat" | "API") {
+            vec!["Serialize".into(), "Deserialize".into()]
         } else {
             vec![]
         }
@@ -105,19 +79,18 @@ mod ffmpeg {
 
     pub fn build_ffmpeg(builder: &mut Build) {
         ffmpeg_ffi();
-        link_vcpkg(builder);
+        let include = link_vcpkg(builder);
+        native_ffmpeg_ffi(&include);
         link_os();
-        build_ffmpeg_ram(builder);
         #[cfg(feature = "vram")]
         build_ffmpeg_vram(builder);
-        build_mux(builder);
         let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
         if target_os == "macos" || target_os == "ios" {
             builder.flag("-std=c++11");
         }
     }
 
-    fn link_vcpkg(builder: &mut Build) {
+    fn link_vcpkg(builder: &mut Build) -> PathBuf {
         let path = native_libraries::installed_target()
             .expect("Set VCPKG_ROOT or VCPKG_INSTALLED_ROOT for the hardware video codecs");
         let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
@@ -135,7 +108,8 @@ mod ffmpeg {
 
         let include = path.join("include");
         println!("cargo:include={}", include.display());
-        builder.include(include);
+        builder.include(&include);
+        include
     }
 
     fn link_os() {
@@ -181,34 +155,39 @@ mod ffmpeg {
             .to_string();
         bindgen::builder()
             .header(ffi_header)
-            .rustified_enum("*")
+            .rustified_enum(".*")
             .generate()
             .unwrap()
             .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("ffmpeg_ffi.rs"))
             .unwrap();
     }
 
-    fn build_ffmpeg_ram(builder: &mut Build) {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let ffmpeg_ram_dir = manifest_dir.join("cpp").join("ffmpeg_ram");
-        let ffi_header = ffmpeg_ram_dir
-            .join("ffmpeg_ram_ffi.h")
-            .to_string_lossy()
-            .to_string();
-        bindgen::builder()
-            .header(ffi_header)
-            .allowlist_function("ffmpeg_ram_.*")
-            .allowlist_type("(?:RamDecodeCallback|RamEncodeCallback)")
-            .allowlist_var("AV_NUM_DATA_POINTERS")
-            .rustified_enum("*")
-            .generate()
-            .unwrap()
-            .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("ffmpeg_ram_ffi.rs"))
-            .unwrap();
-
-        builder.files(
-            ["ffmpeg_ram_encode.cpp", "ffmpeg_ram_decode.cpp"].map(|f| ffmpeg_ram_dir.join(f)),
+    fn native_ffmpeg_ffi(include: &Path) {
+        println!(
+            "cargo:rerun-if-changed={}",
+            include.join("libavcodec").display()
         );
+        println!(
+            "cargo:rerun-if-changed={}",
+            include.join("libavutil").display()
+        );
+        bindgen::builder()
+            .header_contents(
+                "xscc_ffmpeg.h",
+                "#include <errno.h>\n#include <libavcodec/avcodec.h>\n#include <libavformat/avformat.h>\n#include <libavutil/hwcontext.h>\n#include <libavutil/opt.h>",
+            )
+            .clang_arg(format!("-I{}", include.display()))
+            .allowlist_function("avcodec_(?:find_(?:decoder|encoder)_by_name|alloc_context3|free_context|open2|send_(?:packet|frame)|receive_(?:frame|packet))")
+            .allowlist_function("av_(?:frame_(?:alloc|free|unref|get_plane_buffer|get_buffer|is_writable|make_writable|ref)|packet_(?:alloc|free|unref)|new_packet|buffer_unref|hwdevice_ctx_create|hwframe_(?:transfer_data|ctx_alloc|ctx_init|get_buffer)|opt_set)")
+            .allowlist_function("av(?:format_(?:alloc_output_context2|new_stream|write_header|free_context)|io_(?:open|closep)|_(?:packet_rescale_ts|write_frame|write_trailer))")
+            .allowlist_type("AVHWFramesContext")
+            .allowlist_var("(?:AV_CODEC_FLAG_LOW_DELAY|AV_FRAME_FLAG_KEY|AV_PKT_FLAG_KEY|FF_THREAD_SLICE|EAGAIN|EPIPE|ETIMEDOUT)")
+            .allowlist_var("(?:AVFMT_NOFILE|AVIO_FLAG_WRITE)")
+            .layout_tests(false)
+            .generate()
+            .expect("Generate native FFmpeg bindings")
+            .write_to_file(Path::new(&env::var_os("OUT_DIR").expect("Cargo output directory")).join("ffmpeg_native.rs"))
+            .expect("Write native FFmpeg bindings");
     }
 
     #[cfg(feature = "vram")]
@@ -224,7 +203,7 @@ mod ffmpeg {
             .to_string();
         bindgen::builder()
             .header(ffi_header)
-            .rustified_enum("*")
+            .rustified_enum(".*")
             .generate()
             .unwrap()
             .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("ffmpeg_vram_ffi.rs"))
@@ -233,22 +212,6 @@ mod ffmpeg {
         builder.files(
             ["ffmpeg_vram_decode.cpp", "ffmpeg_vram_encode.cpp"].map(|f| ffmpeg_ram_dir.join(f)),
         );
-    }
-
-    fn build_mux(builder: &mut Build) {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let mux_dir = manifest_dir.join("cpp").join("mux");
-        let mux_header = mux_dir.join("mux_ffi.h").to_string_lossy().to_string();
-        bindgen::builder()
-            .header(mux_header)
-            .allowlist_function("hwcodec_.*")
-            .rustified_enum("*")
-            .generate()
-            .unwrap()
-            .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("mux_ffi.rs"))
-            .unwrap();
-
-        builder.files(["mux.cpp"].map(|f| mux_dir.join(f)));
     }
 }
 
@@ -272,7 +235,7 @@ mod sdk {
         println!("cargo:rerun-if-changed={}", externals_dir.display());
         bindgen::builder()
             .header(&nv_dir.join("nv_ffi.h").to_string_lossy().to_string())
-            .rustified_enum("*")
+            .rustified_enum(".*")
             .generate()
             .unwrap()
             .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("nv_ffi.rs"))
@@ -337,7 +300,7 @@ mod sdk {
         println!("cargo:rerun-if-changed={}", externals_dir.display());
         bindgen::builder()
             .header(amf_dir.join("amf_ffi.h").to_string_lossy().to_string())
-            .rustified_enum("*")
+            .rustified_enum(".*")
             .generate()
             .unwrap()
             .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("amf_ffi.rs"))
@@ -380,7 +343,7 @@ mod sdk {
         println!("cargo:rerun-if-changed={}", externals_dir.display());
         bindgen::builder()
             .header(&mfx_dir.join("mfx_ffi.h").to_string_lossy().to_string())
-            .rustified_enum("*")
+            .rustified_enum(".*")
             .generate()
             .unwrap()
             .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("mfx_ffi.rs"))

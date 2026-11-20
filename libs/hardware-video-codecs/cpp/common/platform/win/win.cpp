@@ -2,8 +2,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <exception>
 #include <list>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -11,7 +14,15 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_d3d11va.h>
+#include <libavutil/opt.h>
+}
+
 #include "win.h"
+#include "gpu_retirement.h"
 
 #define LOG_MODULE "WIN"
 #include "log.h"
@@ -572,6 +583,63 @@ bool NativeDevice::support_decode(DataFormat format) {
   return false;
 }
 
+extern "C" bool hwcodec_d3d11_supports_ram_decode(const AVBufferRef *reference,
+                                                bool hevc) {
+  if (!reference || !reference->data)
+    return false;
+  auto context = reinterpret_cast<const AVHWDeviceContext *>(reference->data);
+  auto d3d = static_cast<const AVD3D11VADeviceContext *>(context->hwctx);
+  if (!d3d || !d3d->device)
+    return false;
+  try {
+    NativeDevice native;
+    return native.Init(0, d3d->device, 0) &&
+           native.support_decode(hevc ? H265 : H264);
+  } catch (const std::exception &) {
+    return false;
+  }
+}
+
+extern "C" int hwcodec_nvidia_adapter_index() {
+  return Adapters::GetFirstAdapterIndex(ADAPTER_VENDOR_NVIDIA);
+}
+
+namespace {
+struct RamEncoderRetirement {
+  bool drain_sent = false;
+  bool retired = false;
+  ComPtr<ID3D11DeviceContext> context;
+  ComPtr<ID3D11Query> event;
+};
+}
+
+extern "C" void hwcodec_free_ram_retirement(void *state) {
+  delete static_cast<RamEncoderRetirement *>(state);
+}
+
+extern "C" int hwcodec_retire_ram_encoder(AVCodecContext *codec, AVPacket *packet,
+                                          void **state, void *capture_device,
+                                          int timeout_ms) {
+  if (!*state)
+    *state = new (std::nothrow) RamEncoderRetirement();
+  if (!*state)
+    return AVERROR(ENOMEM);
+  auto &retirement = *static_cast<RamEncoderRetirement *>(*state);
+  if (retirement.retired)
+    return 0;
+  auto deadline = gpu_retirement_deadline(timeout_ms);
+  int result = drain_encoder_for_retirement(codec, packet, retirement.drain_sent,
+                                            deadline);
+  if (result < 0)
+    return result;
+  result = wait_capture_for_retirement(
+      static_cast<ID3D11Device *>(capture_device), retirement.context,
+      retirement.event, deadline);
+  if (result >= 0)
+    retirement.retired = true;
+  return result;
+}
+
 // https://github.com/moonlight-stream/moonlight-qt/blob/9117f6565e4b2a6ba5417282de6bf9360b681f1a/app/streaming/video/ffmpeg-renderers/dxutil.h#L8
 bool NativeDevice::isFormatHybridDecodedByHardware(DataFormat format,
                                                    unsigned int vendorId,
@@ -712,91 +780,10 @@ int Adapters::GetFirstAdapterIndex(AdapterVendor vendor) {
   return -1;
 }
 
-// https://asawicki.info/news_1773_how_to_programmatically_check_graphics_driver_version
-// https://github.com/citizenfx/fivem/issues/1121
-uint64_t GetHwcodecGpuSignature() {
-  uint64_t signature = 0;
-  ComPtr<IDXGIFactory1> factory1 = nullptr;
-  HRI(CreateDXGIFactory1(IID_IDXGIFactory1,
-                         (void **)factory1.ReleaseAndGetAddressOf()));
-
-  ComPtr<IDXGIAdapter1> tmpAdapter = nullptr;
-  UINT i = 0;
-  while (!FAILED(
-      factory1->EnumAdapters1(i, tmpAdapter.ReleaseAndGetAddressOf()))) {
-    i++;
-    DXGI_ADAPTER_DESC1 desc = {0};
-    if (SUCCEEDED(tmpAdapter->GetDesc1(&desc))) {
-      if (desc.VendorId == ADAPTER_VENDOR_NVIDIA ||
-          desc.VendorId == ADAPTER_VENDOR_AMD ||
-          desc.VendorId == ADAPTER_VENDOR_INTEL) {
-        // hardware
-        signature += desc.VendorId;
-        signature += desc.DeviceId;
-        signature += desc.SubSysId;
-        signature += desc.Revision;
-        // software
-        LARGE_INTEGER umd_version;
-        if SUCCEEDED (tmpAdapter->CheckInterfaceSupport(__uuidof(IDXGIDevice),
-                                                        &umd_version)) {
-          signature += umd_version.QuadPart;
-        }
-      }
-    }
-  }
-  return signature;
-}
-
 void hwcodec_get_d3d11_texture_width_height(ID3D11Texture2D *texture, int *w,
                                              int *h) {
   D3D11_TEXTURE2D_DESC desc;
   texture->GetDesc(&desc);
   *w = desc.Width;
   *h = desc.Height;
-}
-
-int32_t add_process_to_new_job(DWORD process_id) {
-  HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
-  if (job_handle == nullptr) {
-    LOG_ERROR(std::string("Failed to create job object"));
-    return -1;
-  }
-
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_info = {0};
-  job_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-
-  BOOL result = SetInformationJobObject(
-      job_handle,
-      JobObjectExtendedLimitInformation,
-      &job_info,
-      sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION)
-  );
-
-  if (result == FALSE) {
-    CloseHandle(job_handle);
-    LOG_ERROR(std::string("Failed to set job information"));
-    return -1;
-  }
-
-  // Open the existing process by ID
-  HANDLE process_handle = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, process_id);
-  if (process_handle == nullptr) {
-    CloseHandle(job_handle);
-    LOG_ERROR(std::string("Failed to open process with ID: ") + std::to_string(process_id));
-    return -1;
-  }
-
-  // Assign the child process to the Job object
-  BOOL assign_result = AssignProcessToJobObject(job_handle, process_handle);
-  if (assign_result == FALSE) {
-    CloseHandle(process_handle);
-    CloseHandle(job_handle);
-    LOG_ERROR(std::string("Failed to assign process to job"));
-    return -1;
-  }
-
-  // Close process handle (but keep job handle)
-  CloseHandle(process_handle);
-
-  return 0;
 }

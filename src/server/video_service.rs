@@ -27,7 +27,7 @@ pub(super) use capture_lifecycle::begin_connection;
 #[cfg(windows)]
 pub(crate) use capture_lifecycle::{wait_for_capture_idle, CaptureIdleGuard};
 
-#[cfg(any(all(windows, any(feature = "vram", feature = "gpui-host")), test))]
+#[cfg(any(feature = "gpui-host", all(windows, feature = "vram"), test))]
 mod frame_pacing;
 #[cfg(all(feature = "gpui-host", debug_assertions))]
 mod metrics;
@@ -818,11 +818,11 @@ fn run_encoder(
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "vram"))]
     let vram_failure = |error| handle_vram_runtime_failure(sp, &encoder_cfg, error);
-    #[cfg(all(windows, feature = "gpui-host"))]
+    #[cfg(feature = "gpui-host")]
     let mut frame_pacer = frame_pacing::FramePacer::new();
 
     while sp.ok() {
-        #[cfg(all(feature = "gpui-host", any(windows, debug_assertions)))]
+        #[cfg(feature = "gpui-host")]
         let iteration_started = Instant::now();
         #[cfg(windows)]
         if capture_lifecycle::change_pending() {
@@ -916,9 +916,9 @@ fn run_encoder(
         let now = time::Instant::now();
         #[cfg(all(feature = "gpui-host", debug_assertions))]
         stages.preflight(now.saturating_duration_since(iteration_started));
-        #[cfg(all(windows, feature = "gpui-host"))]
+        #[cfg(feature = "gpui-host")]
         let pacing_start = iteration_started;
-        #[cfg(not(all(windows, feature = "gpui-host")))]
+        #[cfg(not(feature = "gpui-host"))]
         let pacing_start = now;
         if vs.source.is_monitor() && last_check_displays.elapsed().as_millis() > 1000 {
             last_check_displays = now;
@@ -1216,9 +1216,9 @@ fn run_encoder(
         log::trace!("{:?} {:?}", time::Instant::now(), elapsed);
         #[cfg(all(feature = "gpui-host", debug_assertions))]
         let pacing_wait_started = Instant::now();
-        #[cfg(all(windows, feature = "gpui-host"))]
+        #[cfg(feature = "gpui-host")]
         frame_pacer.wait_until(pacing_start, spf);
-        #[cfg(not(all(windows, feature = "gpui-host")))]
+        #[cfg(not(feature = "gpui-host"))]
         if elapsed < spf {
             std::thread::sleep(spf - elapsed);
         }

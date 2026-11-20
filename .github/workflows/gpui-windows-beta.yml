@@ -222,15 +222,19 @@ jobs:
           $scrollExit = $LASTEXITCODE
           $scrollTests | Write-Output
           if ($scrollExit -ne 0 -or ($scrollTests | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Scroll position regression did not run' }
-      - name: Test FFmpeg decoded-plane reuse with native bindings
+      - name: Test FFmpeg RAM codec with native bindings
         if: matrix.role == 'controller' && !inputs.build_only
         run: |
-          $decodeTests = & cargo test --locked -p hardware-video-codecs --lib --target x86_64-pc-windows-msvc ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1
+          $decodeTests = & cargo test --locked -p hardware-video-codecs --lib --target x86_64-pc-windows-msvc ffmpeg_ram:: -- --nocapture 2>&1
           $decodeExit = $LASTEXITCODE
           $decodeTests | Write-Output
-          if ($decodeExit -ne 0 -or ($decodeTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
-            throw 'Native decoded-plane reuse regression tests failed or did not run all three tests'
+          if ($decodeExit -ne 0 -or ($decodeTests | Out-String) -notmatch '(?m)^test result: ok\. 7 passed; 0 failed;') {
+            throw 'Native RAM codec regression tests failed or did not run all seven tests'
           }
+          $muxTest = & cargo test --locked -p hardware-video-codecs --lib --target x86_64-pc-windows-msvc mux::tests::writes_and_finalizes_an_mp4_only_once 2>&1
+          $muxExit = $LASTEXITCODE
+          $muxTest | Write-Output
+          if ($muxExit -ne 0 -or ($muxTest | Out-String) -notmatch '(?m)^test result: ok\. 1 passed; 0 failed;') { throw 'Native MP4 mux test did not run' }
       - name: Test same-codec VRAM initialization fallback parameters
         if: matrix.role == 'host' && !inputs.build_only
         run: |
@@ -342,6 +346,7 @@ jobs:
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_"
           if ($LASTEXITCODE -ne 0) { throw 'Video regression tests failed' }
           ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "platform::windows::display_modes::tests"
+          ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "platform::windows::cursor_bitmap::tests"
       - name: Test high-refresh session FPS transport and adaptation
         if: matrix.role == 'controller' && !inputs.build_only
         run: |

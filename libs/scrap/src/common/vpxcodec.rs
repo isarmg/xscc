@@ -555,76 +555,44 @@ pub struct DecodeFrames<'a> {
     iter: vpx_codec_iter_t,
 }
 
-impl<'a> Iterator for DecodeFrames<'a> {
-    type Item = Image;
-    fn next(&mut self) -> Option<Self::Item> {
-        let img = unsafe { vpx_codec_get_frame(self.ctx, &mut self.iter) };
-        if img.is_null() {
-            return None;
-        } else {
-            return Some(Image(img));
+impl<'a> DecodeFrames<'a> {
+    pub fn latest(mut self) -> Option<Image<'a>> {
+        let mut latest: *mut vpx_image_t = ptr::null_mut();
+        loop {
+            let frame = unsafe { vpx_codec_get_frame(self.ctx, &mut self.iter) };
+            if frame.is_null() {
+                // The consumed iterator can no longer change the image descriptor.
+                // The decoder borrow prevents a new input from invalidating it.
+                return unsafe { latest.as_ref() }.map(Image);
+            }
+            latest = frame;
         }
     }
 }
 
-// https://chromium.googlesource.com/webm/libvpx/+/bali/vpx/src/vpx_image.c
-pub struct Image(*mut vpx_image_t);
-impl Image {
-    #[inline]
-    pub fn new() -> Self {
-        Self(std::ptr::null_mut())
-    }
+pub struct Image<'a>(&'a vpx_image_t);
 
-    #[inline]
-    pub fn is_null(&self) -> bool {
-        self.0.is_null()
-    }
-
-    #[inline]
-    pub fn format(&self) -> vpx_img_fmt_t {
-        // VPX_IMG_FMT_I420
-        self.inner().fmt
-    }
-
-    #[inline]
-    pub fn inner(&self) -> &vpx_image_t {
-        unsafe { &*self.0 }
-    }
-}
-
-impl GoogleImage for Image {
-    #[inline]
+impl GoogleImage for Image<'_> {
     fn width(&self) -> usize {
-        self.inner().d_w as _
+        self.0.d_w as _
     }
 
-    #[inline]
     fn height(&self) -> usize {
-        self.inner().d_h as _
+        self.0.d_h as _
     }
 
-    #[inline]
     fn stride(&self) -> Vec<i32> {
-        self.inner().stride.iter().map(|x| *x as i32).collect()
+        self.0.stride.to_vec()
     }
 
-    #[inline]
     fn planes(&self) -> Vec<*mut u8> {
-        self.inner().planes.iter().map(|p| *p as *mut u8).collect()
+        self.0.planes.to_vec()
     }
 
     fn chroma(&self) -> Chroma {
-        match self.inner().fmt {
+        match self.0.fmt {
             vpx_img_fmt::VPX_IMG_FMT_I444 => Chroma::I444,
             _ => Chroma::I420,
-        }
-    }
-}
-
-impl Drop for Image {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe { vpx_img_free(self.0) };
         }
     }
 }

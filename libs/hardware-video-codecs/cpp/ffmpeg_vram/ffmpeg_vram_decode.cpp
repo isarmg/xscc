@@ -337,20 +337,25 @@ extern "C" FFmpegVRamDecoder *ffmpeg_vram_new_decoder(void *device,
   return NULL;
 }
 
+extern "C" void hwcodec_watch_hevc_references(const void *context);
+extern "C" bool hwcodec_take_hevc_reference_error(const void *context);
+
 extern "C" int ffmpeg_vram_decode(FFmpegVRamDecoder *decoder,
                                   const uint8_t *data, int length,
                                   DecodeCallback callback, const void *obj) {
+  const bool hevc = decoder->dataFormat_ == DataFormat::H265;
+  if (hevc)
+    hwcodec_watch_hevc_references(decoder->c_);
+  int result = HWCODEC_ERR_COMMON;
   try {
-    int ret = decoder->decode(data, length, callback, obj);
-    if (DataFormat::H265 == decoder->dataFormat_ && util_decode::has_flag_could_not_find_ref_with_poc()) {
-      return HWCODEC_ERR_HEVC_COULD_NOT_FIND_POC;
-    } else {
-      return ret == 0 ? HWCODEC_SUCCESS : HWCODEC_ERR_COMMON;
-    }
+    if (decoder->decode(data, length, callback, obj) == 0)
+      result = HWCODEC_SUCCESS;
   } catch (const std::exception &e) {
-    LOG_ERROR(std::string("ffmpeg_ram_decode exception:") + e.what());
+    LOG_ERROR(std::string("ffmpeg_vram_decode exception:") + e.what());
   }
-  return HWCODEC_ERR_COMMON;
+  if (hevc && hwcodec_take_hevc_reference_error(decoder->c_))
+    return HWCODEC_ERR_HEVC_COULD_NOT_FIND_POC;
+  return result;
 }
 
 extern "C" int ffmpeg_vram_test_decode(int64_t *outLuids, int32_t *outVendors,

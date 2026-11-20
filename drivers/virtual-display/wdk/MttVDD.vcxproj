@@ -58,10 +58,10 @@
       <AdditionalOptions>/external:I"$(XsccPackagesRoot)Microsoft.Windows.WDK.x64.10.0.26100.6584\c\Include" /external:I"$(XsccPackagesRoot)Microsoft.Windows.SDK.CPP.10.0.26100.6584\c\Include" /external:templates- %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <WppEnabled>false</WppEnabled>
-      <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;UMDF_DRIVER;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_WIN64;_AMD64_;AMD64;UMDF_DRIVER;UMDF_MINIMUM_VERSION_REQUIRED=25;IDDCX_VERSION_MAJOR=1;IDDCX_VERSION_MINOR=10;IDDCX_MINIMUM_VERSION_REQUIRED=3;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>$(XsccRustLibrary);$(XsccRustNativeLibraries);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(XsccRustLibrary);$(XsccRustNativeLibraries);OneCoreUAP.lib;avrt.lib;d3d11.lib;dxgi.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)MttVDD.pdb</ProgramDatabaseFile>
     </Link>
@@ -70,7 +70,7 @@
     </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="iddcx_bridge.cpp" />
+    <ClCompile Include="wdk_metadata.cpp" />
     <Inf Include="MttVDD.inf" />
     <None Include="packages.config" />
     <FilesToPackage Include="$(TargetPath)" />

@@ -127,6 +127,11 @@ impl SessionView {
                     view.wake.notify_one();
                 }
             }),
+            cx.observe_window_visibility(window, |view: &mut Self, visibility, _, _| {
+                if visibility == gpui::WindowVisibility::Visible {
+                    view.wake.notify_one();
+                }
+            }),
         ];
         let mut focus_subscriptions = focus_subscriptions;
         focus_subscriptions.push(cx.observe_window_bounds(window, |view, _, cx| {
@@ -150,6 +155,7 @@ impl SessionView {
                 if view
                     .update_in(cx, |view: &mut Self, window, cx| {
                         view.consume(window, cx);
+                        view.schedule_frame(window, cx);
                         cx.notify();
                     })
                     .is_err()
@@ -796,6 +802,13 @@ impl SessionView {
                         if let Some(control) = &self.keyboard_control {
                             control.cancel();
                         }
+                        #[cfg(target_os = "android")]
+                        {
+                            self.video_layer.clear();
+                            if let Some(session) = &self.session {
+                                session.set_android_video_surface(None);
+                            }
+                        }
                         self.extent = (0, 0);
                         self.quality = SessionQuality::default();
                         self.presentation.invalidate();
@@ -901,11 +914,13 @@ impl SessionView {
         if changed || audio_changed {
             self.publish_chrome(cx);
         }
+    }
+
+    fn schedule_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.frame_scheduled && (self.session.is_some() || self.presentation.image().is_some())
         {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
-                // Native video surfaces also need the session pump between RGBA notifications.
                 view.frame_scheduled = false;
                 view.consume(window, cx);
                 if view.session.is_some() && window.visibility() != gpui::WindowVisibility::Visible
@@ -913,6 +928,15 @@ impl SessionView {
                     return;
                 }
                 view.prepare_frame(window, cx);
+                // Android can have one more decoded frame waiting after this tick.
+                // A new first frame will wake the UI through SessionUpdates.
+                if view
+                    .session
+                    .as_ref()
+                    .is_some_and(SessionHandle::has_pending_frame)
+                {
+                    view.schedule_frame(window, cx);
+                }
             });
         }
     }

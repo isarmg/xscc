@@ -1,7 +1,7 @@
 use crate::{quartz, Frame, Pixfmt};
+use std::io;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, TryLockError};
-use std::{io, mem};
 
 pub struct Capturer {
     inner: quartz::Capturer,
@@ -22,7 +22,9 @@ impl Capturer {
             Default::default(),
             move |inner| {
                 if let Ok(mut f) = f.lock() {
-                    *f = Some(inner);
+                    let previous = f.replace(inner);
+                    drop(f);
+                    drop(previous);
                 }
             },
         )
@@ -52,32 +54,24 @@ impl crate::TraitCapturer for Capturer {
                 "Quartz display stream stopped",
             ));
         }
-        match self.frame.try_lock() {
-            Ok(mut handle) => {
-                let mut frame = None;
-                mem::swap(&mut frame, &mut handle);
-
-                match frame {
-                    Some(frame) => {
-                        let mut frame = frame?;
-                        frame.surface_to_bgra(self.width(), self.height())?;
-                        crate::would_block_if_equal(&mut self.saved_raw_data, frame.inner())?;
-                        Ok(Frame::PixelBuffer(PixelBuffer {
-                            frame,
-                            data: PhantomData,
-                            width: self.width(),
-                            height: self.height(),
-                        }))
-                    }
-
-                    None => Err(io::ErrorKind::WouldBlock.into()),
-                }
+        let frame = match self.frame.try_lock() {
+            Ok(mut handle) => handle.take(),
+            Err(TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
+            Err(TryLockError::Poisoned(..)) => {
+                return Err(io::Error::other("Quartz frame lock was poisoned"))
             }
-
-            Err(TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
-
-            Err(TryLockError::Poisoned(..)) => Err(io::ErrorKind::Other.into()),
-        }
+        };
+        let frame = frame.ok_or(io::ErrorKind::WouldBlock)?;
+        let mut frame = frame?;
+        let (width, height) = (self.width(), self.height());
+        frame.surface_to_bgra(width, height)?;
+        crate::would_block_if_equal(&mut self.saved_raw_data, &frame)?;
+        Ok(Frame::PixelBuffer(PixelBuffer {
+            frame,
+            data: PhantomData,
+            width,
+            height,
+        }))
     }
 }
 

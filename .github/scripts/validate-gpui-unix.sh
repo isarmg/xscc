@@ -20,6 +20,9 @@ printf '%s\n' "$scroll_tests"
 grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$scroll_tests" || { echo 'Scroll position regression did not run' >&2; exit 1; }
 # Test the same native role feature set that ships. Keep every test enabled.
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
+    pipewire_tests=$(cargo test --locked -p scrap --lib --no-default-features --features wayland --target "$target" pixel_layout_tests:: 2>&1) || { printf '%s\n' "$pipewire_tests"; exit 1; }
+    printf '%s\n' "$pipewire_tests"
+    grep -Eq '^test result: ok\. 2 passed; 0 failed;' <<< "$pipewire_tests" || { echo 'PipeWire frame layout regressions did not both run' >&2; exit 1; }
     source_test=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" pulse_sources::tests::default_input_uses_the_recording_source 2>&1) || { printf '%s\n' "$source_test"; exit 1; }
     printf '%s\n' "$source_test"
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$source_test" || { echo 'Default audio input regression did not run' >&2; exit 1; }
@@ -48,16 +51,24 @@ fi
 modifier_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" server::input_service::modifier_keys::tests:: 2>&1) || { printf '%s\n' "$modifier_tests"; exit 1; }
 printf '%s\n' "$modifier_tests"
 grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$modifier_tests" || { echo 'Modifier ownership regressions did not run all three tests' >&2; exit 1; }
-decode_tests=$(cargo test --locked -p hardware-video-codecs --lib --target "$target" ffmpeg_ram::decode::decode_output_tests -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
+if [[ ,$core_features, == *,gpui-host,* ]]; then
+    pacing_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" server::video_service::frame_pacing::tests:: 2>&1) || { printf '%s\n' "$pacing_tests"; exit 1; }
+    printf '%s\n' "$pacing_tests"
+    grep -Eq '^test result: ok\. 4 passed; 0 failed;' <<< "$pacing_tests" || { echo 'Host capture pacing regressions did not all run' >&2; exit 1; }
+fi
+decode_tests=$(cargo test --locked -p hardware-video-codecs --lib --target "$target" ffmpeg_ram:: -- --nocapture 2>&1) || { printf '%s\n' "$decode_tests"; exit 1; }
 printf '%s\n' "$decode_tests"
-grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native decoded-plane tests did not run all three tests' >&2; exit 1; }
+grep -Eq '^test result: ok\. 7 passed; 0 failed;' <<< "$decode_tests" || { echo 'Native RAM codec tests did not run all seven tests' >&2; exit 1; }
+mux_test=$(cargo test --locked -p hardware-video-codecs --lib --target "$target" mux::tests::writes_and_finalizes_an_mp4_only_once 2>&1) || { printf '%s\n' "$mux_test"; exit 1; }
+printf '%s\n' "$mux_test"
+grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$mux_test" || { echo 'Native MP4 mux test did not run' >&2; exit 1; }
 if [[ $target == aarch64-apple-darwin ]]; then
     audio_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" client::audio_state_tests::playback_sessions_shrink_backlogs_independently 2>&1) || { printf '%s\n' "$audio_tests"; exit 1; }
     printf '%s\n' "$audio_tests"
     grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$audio_tests" || { echo 'Audio playback backlog regression did not run' >&2; exit 1; }
     quartz_tests=$(cargo test --locked -p scrap --lib --no-default-features --features capture --target "$target" quartz:: -- --nocapture 2>&1) || { printf '%s\n' "$quartz_tests"; exit 1; }
     printf '%s\n' "$quartz_tests"
-    grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz display and frame tests did not all run' >&2; exit 1; }
+    grep -Eq '^test result: ok\. 4 passed; 0 failed;' <<< "$quartz_tests" || { echo 'Quartz display and frame tests did not all run' >&2; exit 1; }
     if [[ ,$core_features, == *,gpui-host,* ]]; then
         virtual_display_tests=$(cargo test --locked --manifest-path Cargo.toml --lib --no-default-features --features "$core_features" --target "$target" virtual_display_manager::tests:: 2>&1) || { printf '%s\n' "$virtual_display_tests"; exit 1; }
         printf '%s\n' "$virtual_display_tests"
@@ -77,7 +88,7 @@ grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$limit_tests" || { echo '
 if [[ $target == x86_64-unknown-linux-gnu ]]; then
     plane_tests=$(cargo test --locked -p scrap --lib --features hwcodec --target "$target" nv12_conversion_tests:: 2>&1) || { printf '%s\n' "$plane_tests"; exit 1; }
     printf '%s\n' "$plane_tests"
-    grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$plane_tests" || { echo 'Linux decoded-plane conversion regression did not run' >&2; exit 1; }
+    grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$plane_tests" || { echo 'Linux RAM codec conversion regression did not run' >&2; exit 1; }
     compression_tests=$(cargo test --locked -p hbb_common --lib --target "$target" compress::tests:: 2>&1) || { printf '%s\n' "$compression_tests"; exit 1; }
     printf '%s\n' "$compression_tests"
     grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$compression_tests" || { echo 'Compression regressions did not pass all three tests' >&2; exit 1; }

@@ -24,10 +24,6 @@ void vram_encode_test_callback(const uint8_t *data, int32_t len, int32_t key, co
 
 } // namespace util
 
-namespace util_decode {
-    bool has_flag_could_not_find_ref_with_poc();
-}
-
 namespace util {
 
     inline std::chrono::steady_clock::time_point now() {

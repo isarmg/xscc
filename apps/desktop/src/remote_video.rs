@@ -56,7 +56,6 @@ pub struct RemoteVideo {
     connected: bool,
     keyboard_allowed: bool,
     target_fps: TargetFps,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
     local_refresh_interval: Option<std::time::Duration>,
     monitors: Vec<Monitor>,
     current_monitor: usize,
@@ -102,7 +101,6 @@ impl RemoteVideo {
                 }
             }),
         ];
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let subscriptions = {
             let mut subscriptions = subscriptions;
             let view = cx.entity().downgrade();
@@ -147,7 +145,6 @@ impl RemoteVideo {
             connected: false,
             keyboard_allowed: false,
             target_fps: TargetFps::FPS_60,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
             local_refresh_interval: window.refresh_interval(cx),
             monitors: Vec::new(),
             current_monitor: 0,
@@ -499,6 +496,9 @@ impl RemoteVideo {
         let Some(session) = &self.session else {
             return;
         };
+        let target =
+            media_controls::display_target_fps(target.value() as u32, self.local_refresh_interval)
+                .unwrap_or(target);
         match session.set_target_fps(target) {
             Ok(()) => {
                 self.target_fps = target;

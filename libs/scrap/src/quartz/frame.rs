@@ -59,8 +59,19 @@ impl Frame {
     }
 
     pub fn surface_to_bgra(&mut self, width: usize, height: usize) -> io::Result<()> {
-        let plane = unsafe { IOSurfaceGetBaseAddressOfPlane(self.surface, 0) } as usize;
-        let stride = unsafe { IOSurfaceGetBytesPerRowOfPlane(self.surface, 0) };
+        let (plane, stride) = unsafe {
+            if IOSurfaceGetPlaneCount(self.surface) == 0 {
+                (
+                    self.inner.as_ptr() as usize,
+                    IOSurfaceGetBytesPerRow(self.surface),
+                )
+            } else {
+                (
+                    IOSurfaceGetBaseAddressOfPlane(self.surface, 0) as usize,
+                    IOSurfaceGetBytesPerRowOfPlane(self.surface, 0),
+                )
+            }
+        };
         let range = bgra_range(self.inner, plane, stride, width, height)?;
         self.bgra = &self.inner[range];
         self.bgra_stride = stride;

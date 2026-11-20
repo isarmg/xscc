@@ -13,7 +13,7 @@ enum {
 };
 
 extern "C" void hwcodec_log(int level, const char *message);
-extern "C" void hwcodec_av_log_callback(int level, const char *message);
+extern "C" void hwcodec_av_log_callback(const void *context, int level, const char *message);
 
 void log_to_rust(int level, const std::string &message) {
   const char *cstr = message.c_str();
@@ -37,13 +37,12 @@ void trace(const std::string &message) {
 }
 
 void av_log_callback(void *ptr, int level, const char *fmt, va_list vl) {
-  (void)ptr;
   if (level > av_log_get_level()) {
     return;
   }
   char line[1024] = {0};
   vsnprintf(line, sizeof(line), fmt, vl);
-  hwcodec_av_log_callback(level, line);
+  hwcodec_av_log_callback(ptr, level, line);
 };
 
 } // namespace gol

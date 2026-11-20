@@ -2,6 +2,9 @@
 // https://github.com/servo/core-foundation-rs
 // https://github.com/rust-windowing/winit
 
+pub(super) mod display_modes;
+mod permissions;
+pub(crate) mod privacy;
 mod update_temp;
 mod verified_dmg;
 
@@ -16,13 +19,8 @@ use cocoa::{
     foundation::{NSDictionary, NSPoint, NSSize, NSString},
 };
 use core_foundation::{
-    array::{CFArrayGetCount, CFArrayGetValueAtIndex},
     dictionary::CFDictionaryRef,
     string::CFStringRef,
-};
-use core_graphics::{
-    display::{kCGNullWindowID, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo},
-    window::{kCGWindowName, kCGWindowOwnerPID},
 };
 use hbb_common::{
     anyhow::anyhow,
@@ -100,28 +98,12 @@ extern "C" {
     fn CGEventGetLocation(e: *const c_void) -> CGPoint;
     static kAXTrustedCheckOptionPrompt: CFStringRef;
     fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> BOOL;
-    fn InputMonitoringAuthStatus(_: BOOL) -> BOOL;
-    fn IsCanScreenRecording(_: BOOL) -> BOOL;
-    fn CanUseNewApiForScreenCaptureCheck() -> BOOL;
-    fn MacCheckAdminAuthorization() -> BOOL;
-    fn MacGetModeNum(display: u32, numModes: *mut u32) -> BOOL;
-    fn MacGetModes(
-        display: u32,
-        widths: *mut u32,
-        heights: *mut u32,
-        hidpis: *mut BOOL,
-        max: u32,
-        numModes: *mut u32,
-    ) -> BOOL;
-    fn majorVersion() -> u32;
-    fn MacGetMode(display: u32, width: *mut u32, height: *mut u32) -> BOOL;
-    fn MacSetMode(display: u32, width: u32, height: u32, tryHiDPI: bool) -> BOOL;
     fn CGWarpMouseCursorPosition(newCursorPosition: CGPoint) -> CGError;
     fn CGAssociateMouseAndMouseCursorPosition(connected: BooleanT) -> CGError;
 }
 
 pub fn major_version() -> u32 {
-    unsafe { majorVersion() }
+    permissions::major_version()
 }
 
 pub fn is_process_trusted(prompt: bool) -> bool {
@@ -142,77 +124,11 @@ fn unsafe_is_process_trusted(prompt: bool) -> bool {
 }
 
 pub fn is_can_input_monitoring(prompt: bool) -> bool {
-    unsafe {
-        let value = if prompt { YES } else { NO };
-        InputMonitoringAuthStatus(value) == YES
-    }
+    permissions::input_monitoring(prompt)
 }
 
 pub fn is_can_screen_recording(prompt: bool) -> bool {
-    autoreleasepool(|| unsafe_is_can_screen_recording(prompt))
-}
-
-// macOS >= 10.15
-// https://stackoverflow.com/questions/56597221/detecting-screen-recording-settings-on-macos-catalina/
-// remove just one app from all the permissions: tccutil reset All com.carriez.rustdesk
-fn unsafe_is_can_screen_recording(prompt: bool) -> bool {
-    // we got some report that we show no permission even after set it, so we try to use new api for screen recording check
-    // the new api is only available on macOS >= 10.15, but on stackoverflow, some people said it works on >= 10.16 (crash on 10.15),
-    // but also some said it has bug on 10.16, so we just use it on 11.0.
-    unsafe {
-        if CanUseNewApiForScreenCaptureCheck() == YES {
-            return IsCanScreenRecording(if prompt { YES } else { NO }) == YES;
-        }
-    }
-    let mut can_record_screen: bool = false;
-    unsafe {
-        let our_pid: i32 = std::process::id() as _;
-        let our_pid: id = msg_send![class!(NSNumber), numberWithInteger: our_pid];
-        let window_list =
-            CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
-        let n = CFArrayGetCount(window_list);
-        let dock = NSString::alloc(nil).init_str("Dock");
-        for i in 0..n {
-            let w: id = CFArrayGetValueAtIndex(window_list, i) as _;
-            let name: id = msg_send![w, valueForKey: kCGWindowName as id];
-            if name.is_null() {
-                continue;
-            }
-            let pid: id = msg_send![w, valueForKey: kCGWindowOwnerPID as id];
-            let is_me: BOOL = msg_send![pid, isEqual: our_pid];
-            if is_me == YES {
-                continue;
-            }
-            let pid: i32 = msg_send![pid, intValue];
-            let p: id = msg_send![
-                class!(NSRunningApplication),
-                runningApplicationWithProcessIdentifier: pid
-            ];
-            if p.is_null() {
-                // ignore processes we don't have access to, such as WindowServer, which manages the windows named "Menubar" and "Backstop Menubar"
-                continue;
-            }
-            let url: id = msg_send![p, executableURL];
-            let exe_name: id = msg_send![url, lastPathComponent];
-            if exe_name.is_null() {
-                continue;
-            }
-            let is_dock: BOOL = msg_send![exe_name, isEqual: dock];
-            if is_dock == YES {
-                // ignore the Dock, which provides the desktop picture
-                continue;
-            }
-            can_record_screen = true;
-            break;
-        }
-    }
-    if !can_record_screen && prompt {
-        use scrap::{Capturer, Display};
-        if let Ok(d) = Display::primary() {
-            Capturer::new(d).ok();
-        }
-    }
-    can_record_screen
+    permissions::screen_recording(prompt)
 }
 
 pub fn install_service() -> bool {
@@ -1905,98 +1821,40 @@ pub fn handle_application_should_open_untitled_file() {
     }
 }
 
-/// Get all resolutions of the display. The resolutions are:
-/// 1. Sorted by width and height in descending order, with duplicates removed.
-/// 2. Filtered out if the width is less than 800 (800x600) if there are too many (e.g., >15).
-/// 3. Contain HiDPI resolutions and the real resolutions.
-///
-/// We don't need to distinguish between HiDPI and real resolutions.
-/// When the controlling side changes the resolution, it will call `change_resolution_directly()`.
-/// `change_resolution_directly()` will try to use the HiDPI resolution first.
-/// This is how teamviewer does it for now.
-///
-/// If we need to distinguish HiDPI and real resolutions, we can add a flag to the `Resolution` struct.
 pub fn resolutions(name: &str) -> Vec<Resolution> {
-    let mut v = vec![];
-    if let Ok(display) = name.parse::<u32>() {
-        let mut num = 0;
-        unsafe {
-            if YES == MacGetModeNum(display, &mut num) {
-                let (mut widths, mut heights, mut _hidpis) =
-                    (vec![0; num as _], vec![0; num as _], vec![NO; num as _]);
-                let mut real_num = 0;
-                if YES
-                    == MacGetModes(
-                        display,
-                        widths.as_mut_ptr(),
-                        heights.as_mut_ptr(),
-                        _hidpis.as_mut_ptr(),
-                        num,
-                        &mut real_num,
-                    )
-                {
-                    if real_num <= num {
-                        v = (0..real_num)
-                            .map(|i| Resolution {
-                                width: widths[i as usize] as _,
-                                height: heights[i as usize] as _,
-                                ..Default::default()
-                            })
-                            .collect::<Vec<_>>();
-                        // Sort by (w, h), desc
-                        v.sort_by(|a, b| {
-                            if a.width == b.width {
-                                b.height.cmp(&a.height)
-                            } else {
-                                b.width.cmp(&a.width)
-                            }
-                        });
-                        // Remove duplicates
-                        v.dedup_by(|a, b| a.width == b.width && a.height == b.height);
-                        // Filter out the ones that are less than width 800 (800x600) if there are too many.
-                        // We can also do this filtering on the client side, but it is better not to change the client side to reduce the impact.
-                        if v.len() > 15 {
-                            // Most width > 800, so it's ok to remove the small ones.
-                            v.retain(|r| r.width >= 800);
-                        }
-                        if v.len() > 15 {
-                            // Ignore if the length is still too long.
-                        }
-                    }
-                }
-            }
+    let Ok(display) = name.parse::<u32>() else {
+        return Vec::new();
+    };
+    match display_modes::resolutions(display) {
+        Ok(sizes) => sizes.into_iter().filter_map(|(width, height)| Some(Resolution {
+            width: i32::try_from(width).ok()?,
+            height: i32::try_from(height).ok()?,
+            ..Default::default()
+        })).collect(),
+        Err(error) => {
+            hbb_common::throttled_log!(std::time::Duration::from_secs(5), debug,
+                "Could not list resolutions for display {display}: {error}"
+            );
+            Vec::new()
         }
     }
-    v
 }
 
 pub fn current_resolution(name: &str) -> ResultType<Resolution> {
-    let display = name.parse::<u32>().map_err(|e| anyhow!(e))?;
-    unsafe {
-        let (mut width, mut height) = (0, 0);
-        if NO == MacGetMode(display, &mut width, &mut height) {
-            bail!("MacGetMode failed");
-        }
-        Ok(Resolution {
-            width: width as _,
-            height: height as _,
-            ..Default::default()
-        })
-    }
+    let mode = display_modes::current_mode(name.parse()?)?;
+    Ok(Resolution {
+        width: i32::try_from(mode.width())?,
+        height: i32::try_from(mode.height())?,
+        ..Default::default()
+    })
 }
 
 pub fn change_resolution_directly(name: &str, width: usize, height: usize) -> ResultType<()> {
-    let display = name.parse::<u32>().map_err(|e| anyhow!(e))?;
-    unsafe {
-        if NO == MacSetMode(display, width as _, height as _, true) {
-            bail!("MacSetMode failed");
-        }
-    }
-    Ok(())
+    Ok(display_modes::set_resolution(name.parse()?, width, height)?)
 }
 
 pub fn check_super_user_permission() -> ResultType<bool> {
-    unsafe { Ok(MacCheckAdminAuthorization() == YES) }
+    Ok(permissions::authorize_admin()?)
 }
 
 pub fn elevate(args: Vec<&str>, prompt: &str) -> ResultType<bool> {

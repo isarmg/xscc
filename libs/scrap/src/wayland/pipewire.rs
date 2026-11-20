@@ -1,12 +1,15 @@
-use std::collections::HashMap;
-use std::error::Error;
-use std::os::unix::io::AsRawFd;
-use std::process::Command;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU8, Ordering},
-    Arc, Mutex,
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    error::Error,
+    os::unix::io::AsRawFd,
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
-use std::time::Duration;
 use tracing::{debug, error, trace, warn};
 
 use dbus::{
@@ -19,6 +22,7 @@ use dbus::{
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app::AppSink;
+use gstreamer_video::{VideoCropMeta, VideoFormat, VideoMeta};
 
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
@@ -238,37 +242,129 @@ impl Capturable for PipeWireCapturable {
 }
 
 fn get_res(capturable: PipeWireCapturable) -> Result<(usize, usize), Box<dyn Error>> {
-    let rec = PipeWireRecorder::new(capturable)?;
-    if let Some(sample) = rec
-        .appsink
-        .try_pull_sample(gst::ClockTime::from_mseconds(300))
-    {
-        let cap = sample
-            .get_caps()
-            .ok_or("Failed get caps")?
-            .get_structure(0)
-            .ok_or("Failed to get structure")?;
-        let w: i32 = cap.get_value("width")?.get_some()?;
-        let h: i32 = cap.get_value("height")?.get_some()?;
-        let w = w as usize;
-        let h = h as usize;
-        Ok((w, h))
-    } else {
-        Err(Box::new(GStreamerError(
+    let mut recorder = PipeWireRecorder::new(capturable)?;
+    match recorder.capture(300)?.size() {
+        (0, 0) => Err(Box::new(GStreamerError(
             "Error getting screen resolution".into(),
-        )))
+        ))),
+        size => Ok(size),
     }
 }
 
 pub struct PipeWireRecorder {
-    buffer: Option<gst::MappedBuffer<gst::buffer::Readable>>,
-    buffer_cropped: Vec<u8>,
-    pix_fmt: String,
-    is_cropped: bool,
+    previous: Option<CapturedFrame>,
+    packed: Vec<u8>,
     pipeline: gst::Pipeline,
     appsink: AppSink,
+}
+
+struct CapturedFrame {
+    buffer: gst::MappedBuffer<gst::buffer::Readable>,
+    layout: PixelLayout,
+    format: VideoFormat,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PixelLayout {
+    offset: usize,
+    stride: usize,
     width: usize,
     height: usize,
+}
+
+impl PixelLayout {
+    fn new(
+        size: (usize, usize),
+        crop: Option<(u32, u32, u32, u32)>,
+        plane: Option<(usize, i32)>,
+        len: usize,
+    ) -> Option<Self> {
+        let (source_width, source_height) = size;
+        let (x, y, width, height) = crop.map_or(
+            (0, 0, source_width, source_height),
+            |(x, y, width, height)| (x as usize, y as usize, width as usize, height as usize),
+        );
+        if width == 0
+            || height == 0
+            || x.checked_add(width)? > source_width
+            || y.checked_add(height)? > source_height
+        {
+            return None;
+        }
+        let source_row = source_width.checked_mul(4)?;
+        let (base, stride) = match plane {
+            Some((offset, stride)) => (offset, usize::try_from(stride).ok()?),
+            None if source_row.checked_mul(source_height)? == len => (0, source_row),
+            None => return None,
+        };
+        if stride < source_row {
+            return None;
+        }
+        let offset = base
+            .checked_add(y.checked_mul(stride)?)?
+            .checked_add(x.checked_mul(4)?)?;
+        let end = offset
+            .checked_add((height - 1).checked_mul(stride)?)?
+            .checked_add(width.checked_mul(4)?)?;
+        (end <= len).then_some(Self {
+            offset,
+            stride,
+            width,
+            height,
+        })
+    }
+
+    // A complete stride per row lets PixelBuffer infer the original stride.
+    fn borrow(self, data: &[u8]) -> Option<&[u8]> {
+        let end = self
+            .offset
+            .checked_add(self.height.checked_mul(self.stride)?)?;
+        data.get(self.offset..end)
+    }
+
+    fn rows(self, data: &[u8]) -> impl Iterator<Item = &[u8]> {
+        (0..self.height).map(move |row| {
+            let start = self.offset + row * self.stride;
+            &data[start..start + self.width * 4]
+        })
+    }
+
+    fn same_pixels(self, first: &[u8], second: &[u8]) -> bool {
+        if self.stride == self.width * 4 {
+            return self.borrow(first) == self.borrow(second);
+        }
+        self.rows(first).eq(self.rows(second))
+    }
+}
+
+#[cfg(test)]
+mod pixel_layout_tests {
+    use super::PixelLayout;
+
+    #[test]
+    fn padded_rows_are_borrowed_and_padding_changes_do_not_emit_a_frame() {
+        let first = [1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8, 0, 0, 0, 0];
+        let mut second = first;
+        second[4] = 99;
+        let layout = PixelLayout::new((1, 2), None, Some((0, 8)), first.len()).unwrap();
+        assert_eq!(layout.borrow(&first).unwrap().as_ptr(), first.as_ptr());
+        assert!(layout.same_pixels(&first, &second));
+        second[8] = 99;
+        assert!(!layout.same_pixels(&first, &second));
+    }
+
+    #[test]
+    fn crops_are_bounded_and_last_rows_without_padding_can_be_packed() {
+        let data = [0, 0, 0, 0, 1, 2, 3, 4, 0, 0, 0, 0, 5, 6, 7, 8];
+        let crop = PixelLayout::new((2, 2), Some((1, 0, 1, 2)), None, data.len()).unwrap();
+        assert!(crop.borrow(&data).is_none());
+        assert_eq!(
+            crop.rows(&data).flatten().copied().collect::<Vec<_>>(),
+            (1..=8).collect::<Vec<_>>()
+        );
+        assert!(PixelLayout::new((2, 2), Some((2, 0, 1, 2)), None, data.len()).is_none());
+        assert!(PixelLayout::new((2, 2), None, Some((0, 9)), data.len()).is_none());
+    }
 }
 
 // Element creation fails the same way for a plugin that is not installed as for one that is
@@ -307,6 +403,8 @@ impl PipeWireRecorder {
         let sink = gst_element("appsink")?;
         sink.set_property("drop", &true)?;
         sink.set_property("max-buffers", &1u32)?;
+        sink.set_property("enable-last-sample", &false)?;
+        sink.set_property("wait-on-eos", &false)?;
 
         pipeline.add_many(&[&src, &convert, &sink])?;
         src.link(&convert)?;
@@ -363,119 +461,90 @@ impl PipeWireRecorder {
         Ok(Self {
             pipeline,
             appsink,
-            buffer: None,
-            pix_fmt: "".into(),
-            width: 0,
-            height: 0,
-            buffer_cropped: vec![],
-            is_cropped: false,
+            previous: None,
+            packed: Vec::new(),
         })
     }
 }
 
 impl Recorder for PipeWireRecorder {
     fn capture(&mut self, timeout_ms: u64) -> Result<PixelProvider<'_>, Box<dyn Error>> {
-        if let Some(sample) = self
+        let Some(sample) = self
             .appsink
             .try_pull_sample(gst::ClockTime::from_mseconds(timeout_ms))
-        {
-            let cap = sample
-                .get_caps()
-                .ok_or("Failed get caps")?
-                .get_structure(0)
-                .ok_or("Failed to get structure")?;
-            let w: i32 = cap.get_value("width")?.get_some()?;
-            let h: i32 = cap.get_value("height")?.get_some()?;
-            let w = w as usize;
-            let h = h as usize;
-            let pix_fmt = cap
-                .get::<&str>("format")?
-                .ok_or("Failed to get pixel format")?;
-            if self.pix_fmt != pix_fmt {
-                self.pix_fmt = pix_fmt.to_string();
+        else {
+            if self.appsink.is_eos() {
+                return Err(GStreamerError(stage_err("streams", "ended", "")).into());
             }
+            return Ok(PixelProvider::NONE);
+        };
 
-            let buf = sample
-                .get_buffer_owned()
-                .ok_or_else(|| GStreamerError("Failed to get owned buffer.".into()))?;
-            let mut crop = buf
-                .get_meta::<gstreamer_video::VideoCropMeta>()
-                .map(|m| m.get_rect());
-            // only crop if necessary
-            if Some((0, 0, w as u32, h as u32)) == crop {
-                crop = None;
-            }
-            let buf = buf
-                .into_mapped_buffer_readable()
-                .map_err(|_| GStreamerError("Failed to map buffer.".into()))?;
-            // The previous mapped buffer is retained in `self.buffer`; comparing
-            // against it dedupes unchanged frames without copying the new frame.
-            if let Some(prev) = &self.buffer {
-                if prev.as_slice() == buf.as_slice() {
-                    return Ok(PixelProvider::NONE);
-                }
-            }
-            let buf_size = buf.get_size();
-            // BGRx is 4 bytes per pixel
-            if buf_size != (w * h * 4) {
-                // for some reason the width and height of the caps do not guarantee correct buffer
-                // size, so ignore those buffers, see:
-                // https://gitlab.freedesktop.org/pipewire/pipewire/-/issues/985
-                trace!(
-                    "Size of mapped buffer: {} does NOT match size of capturable {}x{}@BGRx, \
-                    dropping it!",
-                    buf_size,
-                    w,
-                    h
-                );
+        let caps = sample
+            .get_caps()
+            .and_then(|caps| caps.get_structure(0))
+            .ok_or("PipeWire sample has no video caps")?;
+        let width = usize::try_from(caps.get::<i32>("width")?.ok_or("Missing video width")?)?;
+        let height = usize::try_from(caps.get::<i32>("height")?.ok_or("Missing video height")?)?;
+        let format = match caps.get::<&str>("format")? {
+            Some("BGRx") => VideoFormat::Bgrx,
+            Some("RGBx") => VideoFormat::Rgbx,
+            _ => return Err(GStreamerError("Unexpected PipeWire pixel format".into()).into()),
+        };
+        let buffer = sample
+            .get_buffer_owned()
+            .ok_or("PipeWire sample has no video buffer")?;
+        let crop = buffer
+            .get_meta::<VideoCropMeta>()
+            .map(|meta| meta.get_rect());
+        let plane = if let Some(meta) = buffer.get_meta::<VideoMeta>() {
+            if meta.get_n_planes() != 1
+                || meta.get_format() != format
+                || meta.get_width() as usize != width
+                || meta.get_height() as usize != height
+            {
+                trace!("Video metadata disagrees with PipeWire caps");
                 return Ok(PixelProvider::NONE);
-            } else {
-                // Copy region specified by crop into self.buffer_cropped
-                // TODO: Figure out if ffmpeg provides a zero copy alternative
-                if let Some((x_off, y_off, w_crop, h_crop)) = crop {
-                    let x_off = x_off as usize;
-                    let y_off = y_off as usize;
-                    let w_crop = w_crop as usize;
-                    let h_crop = h_crop as usize;
-                    self.buffer_cropped.clear();
-                    let data = buf.as_slice();
-                    // BGRx is 4 bytes per pixel
-                    self.buffer_cropped.reserve(w_crop * h_crop * 4);
-                    for y in y_off..(y_off + h_crop) {
-                        let i = 4 * (w * y + x_off);
-                        self.buffer_cropped.extend(&data[i..i + 4 * w_crop]);
-                    }
-                    self.width = w_crop;
-                    self.height = h_crop;
-                } else {
-                    self.width = w;
-                    self.height = h;
-                }
-                self.is_cropped = crop.is_some();
-                self.buffer = Some(buf);
             }
+            Some((meta.get_offset()[0], meta.get_stride()[0]))
         } else {
+            None
+        };
+        let buffer = buffer
+            .into_mapped_buffer_readable()
+            .map_err(|_| GStreamerError("Failed to map PipeWire video buffer".into()))?;
+        let Some(layout) = PixelLayout::new((width, height), crop, plane, buffer.get_size()) else {
+            trace!("Invalid PipeWire video layout for {}x{}", width, height);
+            return Ok(PixelProvider::NONE);
+        };
+        if self.previous.as_ref().is_some_and(|previous| {
+            previous.format == format
+                && previous.layout == layout
+                && layout.same_pixels(previous.buffer.as_slice(), buffer.as_slice())
+        }) {
             return Ok(PixelProvider::NONE);
         }
-        if self.buffer.is_none() {
-            return Err(Box::new(GStreamerError("No buffer available!".into())));
-        }
-        let buf = if self.is_cropped {
-            self.buffer_cropped.as_slice()
+        let frame = self.previous.insert(CapturedFrame {
+            buffer,
+            layout,
+            format,
+        });
+        let data = frame.buffer.as_slice();
+        let pixels = if let Some(pixels) = layout.borrow(data) {
+            pixels
         } else {
-            self.buffer
-                .as_ref()
-                .ok_or("Failed to get buffer as ref")?
-                .as_slice()
+            // The final row can end before its full stride. Pack the cropped rows in that case.
+            self.packed.clear();
+            self.packed.reserve(layout.width * layout.height * 4);
+            for row in layout.rows(data) {
+                self.packed.extend_from_slice(row);
+            }
+            &self.packed
         };
-        match self.pix_fmt.as_str() {
-            "BGRx" => Ok(PixelProvider::BGR0(self.width, self.height, buf)),
-            "RGBx" => Ok(PixelProvider::RGB0(self.width, self.height, buf)),
-            _ => Err(Box::new(GStreamerError(format!(
-                "Unreachable! Unknown pix_fmt, {}",
-                &self.pix_fmt
-            )))),
-        }
+        Ok(if format == VideoFormat::Bgrx {
+            PixelProvider::BGR0(layout.width, layout.height, pixels)
+        } else {
+            PixelProvider::RGB0(layout.width, layout.height, pixels)
+        })
     }
 }
 
@@ -1712,7 +1781,7 @@ fn fill_multi_matched_positions_cursor(
                         && wd.height as usize == d.0.physical_size.1
                     {
                         mouse_move_to_(&mouse_move_to, get_cursor_pos, wd.x + 8, wd.y + 8);
-                        rec.buffer = None;
+                        rec.previous = None;
                         match rec.capture(CAPTURE_TIMEOUT_MS) {
                             Ok(PixelProvider::BGR0(_, _, data2)) if is_bgr => {
                                 if compare_left_up_corner(w, &first_buf, data2) {

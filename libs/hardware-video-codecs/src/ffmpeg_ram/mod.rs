@@ -4,13 +4,14 @@
 
 use crate::common::DataFormat::{self, *};
 use crate::ffmpeg::{
+    native,
     AVHWDeviceType::{self, *},
     AVPixelFormat,
 };
 use serde_derive::{Deserialize, Serialize};
-use std::ffi::c_int;
 
-include!(concat!(env!("OUT_DIR"), "/ffmpeg_ram_ffi.rs"));
+const AGAIN: i32 = -(native::EAGAIN as i32);
+const END_OF_STREAM: i32 = -i32::from_le_bytes(*b"EOF ");
 
 pub mod decode;
 pub mod encode;
@@ -160,26 +161,5 @@ pub fn ffmpeg_linesize_offset_length(
     height: usize,
     align: usize,
 ) -> Result<(Vec<i32>, Vec<i32>, i32), ()> {
-    let mut linesize = Vec::<c_int>::new();
-    linesize.resize(AV_NUM_DATA_POINTERS as _, 0);
-    let mut offset = Vec::<c_int>::new();
-    offset.resize(AV_NUM_DATA_POINTERS as _, 0);
-    let mut length = Vec::<c_int>::new();
-    length.resize(1, 0);
-    unsafe {
-        if ffmpeg_ram_get_linesize_offset_length(
-            pixfmt as _,
-            width as _,
-            height as _,
-            align as _,
-            linesize.as_mut_ptr(),
-            offset.as_mut_ptr(),
-            length.as_mut_ptr(),
-        ) == 0
-        {
-            return Ok((linesize, offset, length[0]));
-        }
-    }
-
-    Err(())
+    encode::image_layout(pixfmt, width, height, align)
 }

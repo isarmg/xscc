@@ -5,7 +5,17 @@
 
 include!(concat!(env!("OUT_DIR"), "/ffmpeg_ffi.rs"));
 
+#[allow(dead_code)]
+pub(crate) mod native {
+    include!(concat!(env!("OUT_DIR"), "/ffmpeg_native.rs"));
+}
+
 use serde_derive::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    ffi::{c_char, c_void, CStr},
+    sync::{LazyLock, Mutex, Once, PoisonError},
+};
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize)]
 pub enum AVHWDeviceType {
@@ -23,35 +33,66 @@ pub enum AVHWDeviceType {
     AV_HWDEVICE_TYPE_VULKAN,
 }
 
+static HEVC_DECODES: LazyLock<Mutex<HashMap<usize, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 #[no_mangle]
-pub extern "C" fn hwcodec_av_log_callback(level: i32, message: *const std::os::raw::c_char) {
-    let could_not_find_ref_with_poc = "Could not find ref with POC";
-    unsafe {
-        let c_str = std::ffi::CStr::from_ptr(message);
-        if let Ok(str_slice) = c_str.to_str() {
-            let string = String::from(str_slice);
-            if level == AV_LOG_ERROR as i32 {
-                log::error!("{}", string);
-                if string.contains(could_not_find_ref_with_poc) {
-                    hwcodec_set_flag_could_not_find_ref_with_poc();
-                }
-            } else if level == AV_LOG_PANIC as i32 || level == AV_LOG_FATAL as i32 {
-                log::error!("{}", string);
-            } else if level == AV_LOG_WARNING as i32 {
-                log::warn!("{}", string);
-            } else if level == AV_LOG_INFO as i32 {
-                log::info!("{}", string);
-            } else if level == AV_LOG_VERBOSE as i32 || level == AV_LOG_DEBUG as i32 {
-                log::debug!("{}", string);
-            } else if level == AV_LOG_TRACE as i32 {
-                log::trace!("{}", string);
-            }
+pub(crate) extern "C" fn hwcodec_watch_hevc_references(context: *const c_void) {
+    HEVC_DECODES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(context as usize, false);
+}
+
+#[no_mangle]
+pub(crate) extern "C" fn hwcodec_take_hevc_reference_error(context: *const c_void) -> bool {
+    HEVC_DECODES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&(context as usize))
+        .unwrap_or(false)
+}
+
+/// FFmpeg provides a NUL-terminated message for the duration of this callback.
+///
+/// # Safety
+/// A non-null message pointer must refer to a readable C string.
+#[no_mangle]
+pub unsafe extern "C" fn hwcodec_av_log_callback(
+    context: *const c_void,
+    level: i32,
+    message: *const c_char,
+) {
+    if message.is_null() {
+        return;
+    }
+    let Ok(message) = (unsafe { CStr::from_ptr(message) }).to_str() else {
+        return;
+    };
+    if level == AV_LOG_ERROR as i32 && message.contains("Could not find ref with POC") {
+        if let Some(missing) = HEVC_DECODES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(&(context as usize))
+        {
+            *missing = true;
         }
+        log::trace!("{message}");
+    } else if level <= AV_LOG_ERROR as i32 {
+        log::error!("{message}");
+    } else if level == AV_LOG_WARNING as i32 {
+        log::warn!("{message}");
+    } else if level == AV_LOG_INFO as i32 {
+        log::info!("{message}");
+    } else if level == AV_LOG_VERBOSE as i32 || level == AV_LOG_DEBUG as i32 {
+        log::debug!("{message}");
+    } else if level == AV_LOG_TRACE as i32 {
+        log::trace!("{message}");
     }
 }
 
 pub(crate) fn init_av_log() {
-    static INIT: std::sync::Once = std::sync::Once::new();
+    static INIT: Once = Once::new();
     INIT.call_once(|| unsafe {
         av_log_set_level(AV_LOG_ERROR as i32);
         hwcodec_set_av_log_callback();

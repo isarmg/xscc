@@ -19,6 +19,5 @@ enum AVPixelFormat {
 int av_log_get_level(void);
 void av_log_set_level(int level);
 void hwcodec_set_av_log_callback();
-void hwcodec_set_flag_could_not_find_ref_with_poc();
 
 #endif

@@ -4078,12 +4078,15 @@ dependencies = [
 name = "hardware-video-codecs"
 version = "0.7.1"
 dependencies = [
- "bindgen 0.59.2",
+ "bindgen 0.72.1",
  "cc",
+ "core-foundation 0.9.4",
+ "libc",
  "log",
  "serde",
  "serde_derive",
  "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -7986,7 +7989,6 @@ dependencies = [
  "block",
  "bytemuck",
  "bytes",
- "cc",
  "cfg-if 1.0.5",
  "chrono",
  "cidr-utils",

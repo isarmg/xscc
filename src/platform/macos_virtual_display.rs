@@ -1,12 +1,10 @@
-use core_foundation::{
-    array::{CFArray, CFArrayRef},
-    base::TCFType,
-    dictionary::CFDictionaryRef,
-};
+use super::macos::display_modes::copy_modes;
+use core_foundation::dictionary::CFDictionaryRef;
 use core_graphics::{
     display::{CGConfigureOption, CGDisplay},
     sys::CGDisplayModeRef,
 };
+use foreign_types::ForeignType;
 use objc2::{
     msg_send,
     rc::{autoreleasepool, Allocated, Retained},
@@ -17,7 +15,7 @@ use objc2_foundation::{
     NSArray, NSOperatingSystemVersion, NSPoint, NSProcessInfo, NSSize, NSString,
 };
 use std::{
-    ffi::{c_void, CStr},
+    ffi::CStr,
     io,
     num::NonZeroU32,
     ptr,
@@ -37,10 +35,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    fn CGDisplayCopyAllDisplayModes(display: u32, options: CFDictionaryRef) -> CFArrayRef;
-    fn CGDisplayModeGetPixelWidth(mode: CGDisplayModeRef) -> usize;
-    fn CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> usize;
-    fn CGDisplayModeGetRefreshRate(mode: CGDisplayModeRef) -> f64;
     fn CGDisplaySetDisplayMode(
         display: u32,
         mode: CGDisplayModeRef,
@@ -230,26 +224,11 @@ fn apply_mode(id: u32, serial: NonZeroU32, requested: Mode) -> io::Result<()> {
         ));
     }
 
-    let raw = unsafe { CGDisplayCopyAllDisplayModes(id, ptr::null()) };
-    if raw.is_null() {
-        return Err(io::Error::other(
-            "CoreGraphics did not return available display modes",
-        ));
-    }
-    // The copied array owns every borrowed mode, including during the call that installs it.
-    let modes = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(raw) };
-    let selected = modes
-        .iter()
-        .map(|mode| (*mode).cast_mut().cast())
-        .find(|&mode| {
-            let reported = unsafe {
-                observed_mode(
-                    CGDisplayModeGetPixelWidth(mode) as u64,
-                    CGDisplayModeGetPixelHeight(mode) as u64,
-                    CGDisplayModeGetRefreshRate(mode),
-                )
-            };
-            reported.is_ok_and(|mode| mode == requested)
+    let selected = copy_modes(id, false)?
+        .into_iter()
+        .find(|mode| {
+            observed_mode(mode.pixel_width(), mode.pixel_height(), mode.refresh_rate())
+                .is_ok_and(|mode| mode == requested)
         })
         .ok_or_else(|| {
             io::Error::new(
@@ -257,7 +236,7 @@ fn apply_mode(id: u32, serial: NonZeroU32, requested: Mode) -> io::Result<()> {
                 "CoreGraphics does not advertise the requested virtual display mode",
             )
         })?;
-    let status = unsafe { CGDisplaySetDisplayMode(id, selected, ptr::null()) };
+    let status = unsafe { CGDisplaySetDisplayMode(id, selected.as_ptr(), ptr::null()) };
     if status != 0 {
         return Err(cg_error("Set virtual display mode", status));
     }
