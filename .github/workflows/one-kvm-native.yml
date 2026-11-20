@@ -119,7 +119,7 @@ jobs:
       - name: Test and lint Windows host logic
         shell: pwsh
         run: |
-          cargo test --locked --offline --lib -p one-kvm -p pixel-conversion --target x86_64-pc-windows-msvc
+          cargo test --locked --offline --lib -p one-kvm -p pixel-conversion -p video-codec-backends --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "Windows host tests failed" }
           cargo clippy --locked --offline --all-targets --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw "Windows host lint failed" }

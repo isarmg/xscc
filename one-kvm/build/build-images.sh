@@ -48,7 +48,7 @@ build_arch() {
 # Main
 case "${1:-all}" in
     test)
-        cross test --manifest-path one-kvm/Cargo.toml --locked --offline --lib -p one-kvm -p pixel-conversion --target x86_64-unknown-linux-gnu
+        cross test --manifest-path one-kvm/Cargo.toml --locked --offline --lib -p one-kvm -p pixel-conversion -p video-codec-backends --target x86_64-unknown-linux-gnu
         exit
         ;;
     all)

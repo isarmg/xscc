@@ -5,26 +5,32 @@ pub mod ffmpeg;
 #[cfg(any(target_arch = "aarch64", target_arch = "arm", feature = "rkmpp"))]
 pub mod ffmpeg_hw;
 pub mod ffmpeg_ram;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "aarch64", target_arch = "arm", feature = "rkmpp")
 ))]
 pub mod rkmpp_dmabuf;
+#[cfg(windows)]
+mod windows_adapter;
 
 #[no_mangle]
-pub extern "C" fn hwcodec_log(level: i32, message: *const std::os::raw::c_char) {
-    unsafe {
-        let c_str = std::ffi::CStr::from_ptr(message);
-        if let Ok(str_slice) = c_str.to_str() {
-            let string = String::from(str_slice);
-            match level {
-                0 => log::error!("{}", string),
-                1 => log::warn!("{}", string),
-                2 => log::info!("{}", string),
-                3 => log::debug!("{}", string),
-                4 => log::trace!("{}", string),
-                _ => {}
-            }
-        }
+/// # Safety
+/// A non-null `message` must point to a readable NUL-terminated string.
+pub unsafe extern "C" fn hwcodec_log(level: i32, message: *const std::os::raw::c_char) {
+    if message.is_null() {
+        return;
+    }
+    let Ok(message) = (unsafe { std::ffi::CStr::from_ptr(message) }).to_str() else {
+        return;
+    };
+    match level {
+        0 => log::error!("{message}"),
+        1 => log::warn!("{message}"),
+        2 => log::info!("{message}"),
+        3 => log::debug!("{message}"),
+        4 => log::trace!("{message}"),
+        _ => {}
     }
 }

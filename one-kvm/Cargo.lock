@@ -6183,10 +6183,13 @@ dependencies = [
  "bindgen 0.72.1",
  "bytes",
  "cc",
+ "libloading",
+ "linux-video-device",
  "log",
  "serde",
  "serde_derive",
  "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]

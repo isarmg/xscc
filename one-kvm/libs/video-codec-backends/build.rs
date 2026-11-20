@@ -11,6 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed={}", cpp_dir.display());
     let mut builder = Build::new();
+    builder.cpp(true).cpp_link_stdlib(None);
 
     build_common(&mut builder);
     ffmpeg::build_ffmpeg(&mut builder);
@@ -33,30 +34,14 @@ fn build_common(builder: &mut Build) {
         .write_to_file(Path::new(&env::var_os("OUT_DIR").unwrap()).join("common_ffi.rs"))
         .unwrap();
 
-    // system
-    #[cfg(windows)]
-    {
+    if target_os == "windows" {
+        builder.flag_if_supported("/EHsc");
         for lib in ["d3d11", "dxgi"] {
             println!("cargo:rustc-link-lib={}", lib);
         }
     }
 
     builder.include(&common_dir);
-
-    // platform
-    let platform_path = common_dir.join("platform");
-    #[cfg(windows)]
-    {
-        let win_path = platform_path.join("win");
-        builder.include(&win_path);
-        builder.file(win_path.join("win.cpp"));
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let linux_path = platform_path.join("linux");
-        builder.include(&linux_path);
-        builder.file(linux_path.join("linux.cpp"));
-    }
 
     // Unsupported platforms
     if target_os != "windows" && target_os != "linux" {
@@ -93,17 +78,23 @@ mod ffmpeg {
         ffmpeg_ffi();
 
         // Try VCPKG first, fallback to system FFmpeg via pkg-config
+        let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
         if let Some(vcpkg_installed) = vcpkg_installed_root() {
-            link_vcpkg(builder, vcpkg_installed);
+            let include = link_vcpkg(builder, vcpkg_installed);
+            if windows {
+                generate_ffmpeg_capture_bindings(&include);
+            }
         } else {
-            // Use system FFmpeg via pkg-config
+            assert!(
+                !windows,
+                "DirectShow capture requires the repository vcpkg FFmpeg libraries"
+            );
             link_system_ffmpeg(builder);
         }
 
         link_os();
         build_ffmpeg_ram(builder);
         build_ffmpeg_hw(builder);
-        build_ffmpeg_capture(builder);
     }
 
     fn vcpkg_installed_root() -> Option<PathBuf> {
@@ -415,30 +406,26 @@ mod ffmpeg {
         }
     }
 
-    fn build_ffmpeg_capture(builder: &mut Build) {
-        let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-        if target_os != "windows" {
-            return;
-        }
-
-        let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
-        let capture_header = manifest_dir
-            .join("cpp")
-            .join("ffmpeg_capture_ffi.h")
-            .to_string_lossy()
-            .to_string();
+    fn generate_ffmpeg_capture_bindings(include: &Path) {
         bindgen::builder()
-            .header(capture_header)
-            .rustified_enum(".*")
+            .header_contents("ffmpeg_capture_bindings.h", r#"
+                #include <errno.h>
+                #include <libavdevice/avdevice.h>
+                #include <libavformat/avformat.h>
+                #include <libavutil/error.h>
+            "#)
+            .clang_arg(format!("-I{}", include.display()))
+            .allowlist_function("av(device_register_all|format_(alloc_context|open_input|find_stream_info|close_input|free_context)|_(find_input_format|read_frame|packet_(alloc|free|unref)|dict_(set|free)|strerror))")
+            .allowlist_var("AVFMT_FLAG_NONBLOCK|EAGAIN")
+            .prepend_enum_name(false)
+            .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
             .generate()
-            .unwrap()
+            .expect("generate bindings for the installed Windows FFmpeg headers")
             .write_to_file(
                 Path::new(&env::var_os("OUT_DIR").unwrap()).join("ffmpeg_capture_ffi.rs"),
             )
-            .unwrap();
+            .expect("write FFmpeg capture bindings");
 
-        builder.file(manifest_dir.join("cpp").join("ffmpeg_capture.cpp"));
-        println!("cargo:rustc-link-lib=strmiids");
         println!("cargo:rustc-link-lib=oleaut32");
         println!("cargo:rustc-link-lib=quartz");
     }

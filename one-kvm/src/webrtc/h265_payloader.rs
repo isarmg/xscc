@@ -140,44 +140,34 @@ impl H265Payloader {
     fn try_emit_aggregation_packet(&mut self, mtu: usize, payloads: &mut Vec<Bytes>) {
         // Check if we have all three parameter sets
         let (vps, sps, pps) = match (&self.vps_nalu, &self.sps_nalu, &self.pps_nalu) {
-            (Some(v), Some(s), Some(p)) => (v.clone(), s.clone(), p.clone()),
+            (Some(v), Some(s), Some(p)) => (v, s, p),
             _ => return,
         };
 
         // Calculate AP size: PayloadHdr(2) + 3x(NALU size(2) + NALU data)
         let ap_size = H265_NAL_HEADER_SIZE + 2 + vps.len() + 2 + sps.len() + 2 + pps.len();
 
-        // Only create AP if it fits in MTU
-        if ap_size > mtu {
-            // Fall back to sending separately (as single NAL unit packets)
-            payloads.push(vps);
-            payloads.push(sps);
-            payloads.push(pps);
-            self.vps_nalu = None;
-            self.sps_nalu = None;
-            self.pps_nalu = None;
-            return;
+        if ap_size <= mtu
+            && [vps, sps, pps]
+                .iter()
+                .all(|nalu| u16::try_from(nalu.len()).is_ok())
+        {
+            let mut ap = BytesMut::with_capacity(ap_size);
+            ap.extend_from_slice(&AP_PAYLOAD_HDR);
+            for nalu in [vps, sps, pps] {
+                ap.put_u16(nalu.len() as u16);
+                ap.extend_from_slice(nalu);
+            }
+            payloads.push(ap.freeze());
+        } else {
+            for nalu in [vps, sps, pps] {
+                if nalu.len() <= mtu {
+                    payloads.push(nalu.clone());
+                } else {
+                    self.emit_fragmented(nalu, mtu, payloads);
+                }
+            }
         }
-
-        // Create Aggregation Packet
-        let mut ap = BytesMut::with_capacity(ap_size);
-
-        // PayloadHdr for AP (Type=48)
-        ap.extend_from_slice(&AP_PAYLOAD_HDR);
-
-        // VPS: size (2 bytes big-endian) + data
-        ap.put_u16(vps.len() as u16);
-        ap.extend_from_slice(&vps);
-
-        // SPS: size (2 bytes big-endian) + data
-        ap.put_u16(sps.len() as u16);
-        ap.extend_from_slice(&sps);
-
-        // PPS: size (2 bytes big-endian) + data
-        ap.put_u16(pps.len() as u16);
-        ap.extend_from_slice(&pps);
-
-        payloads.push(ap.freeze());
 
         // Clear cached parameter sets
         self.vps_nalu = None;
@@ -196,7 +186,7 @@ impl H265Payloader {
 
         // Maximum payload size per FU packet
         // FU packet = NAL header (2) + FU header (1) + payload
-        let max_fragment_size = mtu - H265_NAL_HEADER_SIZE - H265_FU_HEADER_SIZE;
+        let max_fragment_size = mtu.saturating_sub(H265_NAL_HEADER_SIZE + H265_FU_HEADER_SIZE);
 
         if max_fragment_size == 0 {
             return;
@@ -314,6 +304,41 @@ mod tests {
         let result = payloader.payload(1200, &small_nal);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], small_nal);
+    }
+
+    #[test]
+    fn oversized_parameter_sets_are_fragmented_before_the_idr() {
+        let mut payloader = H265Payloader::new();
+        let mtu = 50;
+        let vps = Bytes::from_static(&[0x40, 0x01, 0xaa]);
+        let mut sps = vec![0x42, 0x01];
+        sps.extend([0xaa; 120]);
+        let sps = Bytes::from(sps);
+        let pps = Bytes::from_static(&[0x44, 0x01, 0xbb]);
+        let idr = Bytes::from_static(&[0x26, 0x01, 0xcc]);
+        for parameter_set in [&vps, &sps, &pps] {
+            assert!(payloader.payload(mtu, parameter_set).is_empty());
+        }
+
+        let packets = payloader.payload(mtu, &idr);
+        assert!(packets.iter().all(|packet| packet.len() <= mtu));
+        assert_eq!(packets.first(), Some(&vps));
+        assert_eq!(packets.last(), Some(&idr));
+        assert_eq!(packets.get(packets.len() - 2), Some(&pps));
+        assert_eq!(packets[1][2], 0x80 | H265_NAL_SPS);
+        assert_eq!(packets[packets.len() - 3][2], 0x40 | H265_NAL_SPS);
+        let rebuilt: Vec<_> = packets[1..packets.len() - 2]
+            .iter()
+            .flat_map(|packet| packet[3..].iter().copied())
+            .collect();
+        assert_eq!(rebuilt, sps[2..]);
+    }
+
+    #[test]
+    fn mtu_smaller_than_fragment_header_returns_no_packets() {
+        let mut payloader = H265Payloader::new();
+        let idr = Bytes::from_static(&[0x26, 0x01, 0xcc]);
+        assert!(payloader.payload(2, &idr).is_empty());
     }
 
     #[test]

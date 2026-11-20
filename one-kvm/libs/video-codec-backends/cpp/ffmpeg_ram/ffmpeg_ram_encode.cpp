@@ -20,7 +20,7 @@ extern "C" {
 #include <log.h>
 #include <util.h>
 #ifdef _WIN32
-#include "win.h"
+extern "C" int hwcodec_first_nvidia_adapter();
 #endif
 
 static thread_local std::string g_encoder_last_error;
@@ -208,8 +208,7 @@ public:
       std::string device = "";
 #ifdef _WIN32
       if (name_.find("nvenc") != std::string::npos) {
-        int index = Adapters::GetFirstAdapterIndex(
-            AdapterVendor::ADAPTER_VENDOR_NVIDIA);
+        int index = hwcodec_first_nvidia_adapter();
         if (index >= 0) {
           device = std::to_string(index);
         }

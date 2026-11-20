@@ -95,9 +95,7 @@ impl CaptureStream {
             timeout.as_millis().clamp(1, i32::MAX as u128) as i32,
         )
         .map_err(|e| AppError::VideoError(format!("Failed to open DirectShow capture: {}", e)))?;
-        let info = capture.info().map_err(|e| {
-            AppError::VideoError(format!("Failed to query DirectShow capture: {}", e))
-        })?;
+        let info = capture.info();
         let actual_format = map_capture_format(info.pixel_format)?;
         let actual_resolution =
             Resolution::new(info.width.max(1) as u32, info.height.max(1) as u32);
@@ -134,7 +132,7 @@ impl CaptureStream {
 
     pub fn source_fps(&self) -> Option<f64> {
         match &self.capture {
-            WindowsCapture::DirectShow(_) => None,
+            WindowsCapture::DirectShow(capture) => capture.info().frame_rate,
             WindowsCapture::Desktop(capture) => capture.monitor.refresh_hz.map(f64::from),
         }
     }
@@ -151,15 +149,11 @@ impl CaptureStream {
             WindowsCapture::Desktop(capture) => return capture.next_into(dst),
             WindowsCapture::DirectShow(capture) => capture,
         };
-        match capture.read_packet() {
-            Ok((packet, sequence)) => {
-                dst.clear();
-                dst.extend_from_slice(&packet);
-                Ok(CaptureMeta {
-                    bytes_used: packet.len(),
-                    sequence,
-                })
-            }
+        match capture.read_packet_into(dst) {
+            Ok((bytes_used, sequence)) => Ok(CaptureMeta {
+                bytes_used,
+                sequence,
+            }),
             Err(err) => {
                 let kind = if err.code == -110 {
                     io::ErrorKind::TimedOut

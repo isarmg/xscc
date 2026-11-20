@@ -21,16 +21,15 @@ use std::{
     slice,
 };
 
-#[cfg(any(windows, target_os = "linux"))]
-use crate::common::Driver;
-
 /// Timeout for encoder test in milliseconds
 const TEST_TIMEOUT_MS: u64 = 3000;
 const PRIORITY_NVENC: i32 = 0;
 const PRIORITY_QSV: i32 = 1;
 const PRIORITY_AMF: i32 = 2;
+#[cfg(target_os = "linux")]
 const PRIORITY_RKMPP: i32 = 3;
 const PRIORITY_VAAPI: i32 = 4;
+#[cfg(target_os = "linux")]
 const PRIORITY_V4L2M2M: i32 = 5;
 
 #[derive(Clone, Copy)]
@@ -70,53 +69,20 @@ fn linux_support_vaapi() -> bool {
     false
 }
 
-#[cfg(target_os = "linux")]
-fn linux_support_rkmpp() -> bool {
-    extern "C" {
-        fn linux_support_rkmpp() -> c_int;
-    }
-
-    unsafe { linux_support_rkmpp() == 0 }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_support_rkmpp() -> bool {
-    false
-}
-
-#[cfg(target_os = "linux")]
-fn linux_support_v4l2m2m() -> bool {
-    extern "C" {
-        fn linux_support_v4l2m2m() -> c_int;
-    }
-
-    unsafe { linux_support_v4l2m2m() == 0 }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_support_v4l2m2m() -> bool {
-    false
-}
-
 #[cfg(any(windows, target_os = "linux"))]
 fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
     use log::debug;
 
     let mut codecs = Vec::new();
 
-    let contains = |_vendor: Driver, _format: DataFormat| {
-        // Without VRAM feature, we can't check SDK availability.
-        // Keep the prefilter coarse and let FFmpeg validation do the real check.
-        true
-    };
-    let (nv, amf, intel) = crate::common::supported_gpu(true);
+    let (nv, amf, intel) = crate::common::supported_gpu();
 
     debug!(
         "GPU support detected - NV: {}, AMF: {}, Intel: {}",
         nv, amf, intel
     );
 
-    if nv && contains(Driver::NV, H264) {
+    if nv {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -126,7 +92,7 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if nv && contains(Driver::NV, H265) {
+    if nv {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -136,7 +102,7 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if intel && contains(Driver::MFX, H264) {
+    if intel {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -146,7 +112,7 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if intel && contains(Driver::MFX, H265) {
+    if intel {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -156,7 +122,7 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if amf && contains(Driver::AMF, H264) {
+    if amf {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -166,7 +132,7 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if amf && contains(Driver::AMF, H265) {
+    if amf {
         push_candidate(
             &mut codecs,
             CandidateCodecSpec {
@@ -176,7 +142,8 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if linux_support_rkmpp() {
+    #[cfg(target_os = "linux")]
+    if crate::linux::supports_rkmpp() {
         debug!("RKMPP hardware detected, adding Rockchip encoders");
         push_candidate(
             &mut codecs,
@@ -229,24 +196,23 @@ fn enumerate_candidate_codecs(ctx: &EncodeContext) -> Vec<CodecInfo> {
             },
         );
     }
-    if linux_support_v4l2m2m() {
-        debug!("V4L2 M2M hardware detected, adding V4L2 encoders");
-        push_candidate(
-            &mut codecs,
-            CandidateCodecSpec {
-                name: "h264_v4l2m2m",
-                format: H264,
-                priority: PRIORITY_V4L2M2M,
-            },
-        );
-        push_candidate(
-            &mut codecs,
-            CandidateCodecSpec {
-                name: "hevc_v4l2m2m",
-                format: H265,
-                priority: PRIORITY_V4L2M2M,
-            },
-        );
+    #[cfg(target_os = "linux")]
+    {
+        let (h264, hevc) = crate::linux::v4l2_encoders();
+        for (supported, name, format) in
+            [(h264, "h264_v4l2m2m", H264), (hevc, "hevc_v4l2m2m", H265)]
+        {
+            if supported {
+                push_candidate(
+                    &mut codecs,
+                    CandidateCodecSpec {
+                        name,
+                        format,
+                        priority: PRIORITY_V4L2M2M,
+                    },
+                );
+            }
+        }
     }
 
     codecs.retain(|codec| {

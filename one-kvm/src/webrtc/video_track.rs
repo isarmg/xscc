@@ -21,6 +21,7 @@ use crate::video::codec::h264_bitstream;
 use crate::video::types::Resolution;
 
 const RTP_MTU: usize = 1200;
+const RTP_HEADER_SIZE: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VideoCodec {
@@ -153,18 +154,26 @@ enum TrackType {
 struct H265RtpState {
     payloader: H265Payloader,
     sequence_number: u16,
-    timestamp: u32,
-    timestamp_increment: u32,
+    clock: VideoRtpClock,
 }
 
-struct H264RtpClock {
+struct VideoRtpClock {
     timestamp: u32,
     last_pts_ms: Option<i64>,
     increment: u32,
     started: bool,
 }
 
-impl H264RtpClock {
+impl VideoRtpClock {
+    fn new(fps: u32) -> Self {
+        Self {
+            timestamp: rand::random(),
+            last_pts_ms: None,
+            increment: 90_000 / fps.max(1),
+            started: false,
+        }
+    }
+
     fn next(&mut self, pts_ms: Option<i64>) -> u32 {
         if self.started {
             let ticks = match (self.last_pts_ms, pts_ms) {
@@ -188,7 +197,7 @@ impl H264RtpClock {
 struct H264TrackState {
     payloader: H264Payloader,
     sequence_number: u16,
-    clock: H264RtpClock,
+    clock: VideoRtpClock,
     sps: Option<Vec<u8>>,
     pps: Option<Vec<u8>>,
 }
@@ -224,8 +233,7 @@ impl UniversalVideoTrack {
             let h265_state = H265RtpState {
                 payloader: H265Payloader::new(),
                 sequence_number: rand::random::<u16>(),
-                timestamp: rand::random::<u32>(),
-                timestamp_increment: 90000 / config.fps.max(1),
+                clock: VideoRtpClock::new(config.fps),
             };
 
             (
@@ -247,12 +255,7 @@ impl UniversalVideoTrack {
             pps: None,
             payloader: H264Payloader::default(),
             sequence_number: rand::random(),
-            clock: H264RtpClock {
-                timestamp: rand::random(),
-                last_pts_ms: None,
-                increment: 90000 / config.fps.max(1),
-                started: false,
-            },
+            clock: VideoRtpClock::new(config.fps),
         };
         Self {
             track,
@@ -282,7 +285,7 @@ impl UniversalVideoTrack {
         self.write_frame_bytes_at(data, is_keyframe, None).await
     }
 
-    /// Use the encoder's monotonic presentation time for H.264. Counting frames
+    /// Use the encoder's monotonic presentation time for H.264 and H.265. Counting frames
     /// compresses the RTP timeline whenever capture/encoding misses a frame.
     pub async fn write_frame_bytes_at(
         &self,
@@ -296,7 +299,7 @@ impl UniversalVideoTrack {
 
         match self.codec {
             VideoCodec::H264 => self.write_h264_frame(data, pts_ms).await,
-            VideoCodec::H265 => self.write_h265_frame(data, is_keyframe).await,
+            VideoCodec::H265 => self.send_h265_rtp(data, pts_ms).await,
             VideoCodec::VP8 => self.write_vp8_frame(data, is_keyframe).await,
             VideoCodec::VP9 => self.write_vp9_frame(data, is_keyframe).await,
         }
@@ -343,7 +346,7 @@ impl UniversalVideoTrack {
         };
         let payloads = state
             .payloader
-            .payload(RTP_MTU - 12, &data)
+            .payload(RTP_MTU - RTP_HEADER_SIZE, &data)
             .map_err(|e| AppError::WebRtcError(format!("H264 packetization failed: {e}")))?;
         if payloads.is_empty() {
             return Ok(());
@@ -370,10 +373,6 @@ impl UniversalVideoTrack {
                 .map_err(|e| AppError::WebRtcError(format!("H264 RTP write failed: {e}")))?;
         }
         Ok(())
-    }
-
-    async fn write_h265_frame(&self, data: Bytes, is_keyframe: bool) -> Result<()> {
-        self.send_h265_rtp(data, is_keyframe).await
     }
 
     async fn write_vp8_frame(&self, data: Bytes, _is_keyframe: bool) -> Result<()> {
@@ -428,7 +427,7 @@ impl UniversalVideoTrack {
         Ok(())
     }
 
-    async fn send_h265_rtp(&self, payload: Bytes, _is_keyframe: bool) -> Result<()> {
+    async fn send_h265_rtp(&self, payload: Bytes, pts_ms: Option<i64>) -> Result<()> {
         let rtp_track = match &self.track {
             TrackType::Rtp(t) => t,
             TrackType::Sample(_) => {
@@ -449,18 +448,17 @@ impl UniversalVideoTrack {
         let (payloads, timestamp, seq_start, num_payloads) = {
             let mut state = h265_state.lock().await;
 
-            let payloads = state.payloader.payload(RTP_MTU, &payload);
+            let payloads = state.payloader.payload(RTP_MTU - RTP_HEADER_SIZE, &payload);
 
             if payloads.is_empty() {
                 return Ok(());
             }
 
-            let timestamp = state.timestamp;
+            let timestamp = state.clock.next(pts_ms);
             let num_payloads = payloads.len();
             let seq_start = state.sequence_number;
 
             state.sequence_number = state.sequence_number.wrapping_add(num_payloads as u16);
-            state.timestamp = state.timestamp.wrapping_add(state.timestamp_increment);
 
             (payloads, timestamp, seq_start, num_payloads)
         };
@@ -475,13 +473,12 @@ impl UniversalVideoTrack {
                     padding: false,
                     extension: false,
                     marker: is_last,
-                    payload_type: 49,
                     sequence_number: seq,
                     timestamp,
                     ssrc: 0,
                     ..Default::default()
                 },
-                payload: payload_data.clone(),
+                payload: payload_data,
             };
 
             if let Err(e) = rtp_track.write_rtp(&packet).await {
@@ -501,8 +498,8 @@ impl UniversalVideoTrack {
 mod tests {
     use super::*;
 
-    fn test_clock(timestamp: u32) -> H264RtpClock {
-        H264RtpClock {
+    fn test_clock(timestamp: u32) -> VideoRtpClock {
+        VideoRtpClock {
             timestamp,
             last_pts_ms: None,
             increment: 3000,
@@ -511,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn h264_timestamps_preserve_variable_frame_intervals() {
+    fn rtp_timestamps_preserve_variable_frame_intervals() {
         let mut clock = test_clock(1000);
         assert_eq!(clock.next(Some(100)), 1000);
         assert_eq!(clock.next(Some(133)), 3970);
@@ -555,8 +552,12 @@ mod tests {
             let mut previous_payloader = H264Payloader::default();
             let mut current_payloader = H264Payloader::default();
             assert_eq!(
-                previous_payloader.payload(RTP_MTU - 12, &previous).unwrap(),
-                current_payloader.payload(RTP_MTU - 12, &current).unwrap(),
+                previous_payloader
+                    .payload(RTP_MTU - RTP_HEADER_SIZE, &previous)
+                    .unwrap(),
+                current_payloader
+                    .payload(RTP_MTU - RTP_HEADER_SIZE, &current)
+                    .unwrap(),
             );
         }
     }
@@ -574,8 +575,12 @@ mod tests {
             let current = h264_bitstream::normalize_annex_b(input.clone());
             assert_eq!(current.as_ptr(), input.as_ptr());
             assert_eq!(
-                previous_payloader.payload(RTP_MTU - 12, &previous).unwrap(),
-                current_payloader.payload(RTP_MTU - 12, &current).unwrap(),
+                previous_payloader
+                    .payload(RTP_MTU - RTP_HEADER_SIZE, &previous)
+                    .unwrap(),
+                current_payloader
+                    .payload(RTP_MTU - RTP_HEADER_SIZE, &current)
+                    .unwrap(),
             );
         }
     }
