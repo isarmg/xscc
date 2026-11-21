@@ -95,7 +95,8 @@ public static extern uint WTSGetActiveConsoleSessionId();
         do {
             $desktopServer = Get-CimInstance Win32_Process -Filter "Name='xscc-host.exe' AND SessionId=$console" |
                 Where-Object { $_.ParentProcessId -eq $service.ProcessId -and
-                    $_.ExecutablePath -ieq $exe -and $_.CommandLine -match '\s--server$' }
+                    ([string]$_.ExecutablePath).Replace('\\?\', '') -ieq $exe -and
+                    $_.CommandLine -match '\s--server$' }
             if ($desktopServer) { break }
             Start-Sleep -Milliseconds 400
         } while ((Get-Date) -lt $deadline)
