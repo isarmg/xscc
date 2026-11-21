@@ -198,7 +198,11 @@ extern "system" fn Java_org_xscc_gpui_RemoteVideoLayer_nativeSurfaceChanged(
             }
             .map(Arc::new)
         };
-        (std::mem::replace(&mut entry.surface, next.clone()), next, wake)
+        (
+            std::mem::replace(&mut entry.surface, next.clone()),
+            next,
+            wake,
+        )
     };
     if let Some(surface) = previous {
         surface.invalidate();

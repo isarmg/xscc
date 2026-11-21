@@ -305,17 +305,15 @@ impl Render for Panel {
             let root = div().size_full().font_family(theme::FONT_FAMILY);
             #[cfg(not(target_os = "android"))]
             let root = root.bg(rgb(0x000000));
-            return root
-                .text_color(rgb(palette.text))
-                .child(
-                    div()
-                        .absolute()
-                        .left(visible.origin.x)
-                        .top(visible.origin.y)
-                        .w(visible.size.width)
-                        .h(visible.size.height)
-                        .child(self.session.clone()),
-                );
+            return root.text_color(rgb(palette.text)).child(
+                div()
+                    .absolute()
+                    .left(visible.origin.x)
+                    .top(visible.origin.y)
+                    .w(visible.size.width)
+                    .h(visible.size.height)
+                    .child(self.session.clone()),
+            );
         }
         let enabled = self.enabled();
         let configured = self.status.as_ref().is_some_and(|status| status.configured);

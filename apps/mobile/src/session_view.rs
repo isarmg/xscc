@@ -147,7 +147,10 @@ impl SessionView {
         let (sender, receiver) = mpsc::channel();
         let wake = Arc::new(tokio::sync::Notify::new());
         #[cfg(target_os = "android")]
-        let video_layer = Layer::new(cx.try_global::<VideoApp>().map(|app| app.0.clone()), wake.clone());
+        let video_layer = Layer::new(
+            cx.try_global::<VideoApp>().map(|app| app.0.clone()),
+            wake.clone(),
+        );
         let refresh_wake = wake.clone();
         let refresh = cx.spawn_in(window, async move |view, cx| {
             loop {
@@ -1034,17 +1037,31 @@ impl SessionView {
     fn place_video_layer(&mut self, layout: SessionLayout, window: &Window) -> bool {
         use gpui::WindowBackgroundAppearance::{Opaque, Transparent};
 
-        let placement = self.current_monitor.zip(self.target_fps).and_then(|(display, fps)| {
-            (self.connected
-                && self.authorized()
-                && self.pending_monitor.is_none()
-                && fps.value() > 60
-                && matches!(self.quality.codec.as_deref(), Some("H264" | "H265")))
-                .then(|| Placement::new(layout.video, self.extent, window.scale_factor(), fps.value()))
+        let placement = self
+            .current_monitor
+            .zip(self.target_fps)
+            .and_then(|(display, fps)| {
+                (self.connected
+                    && self.authorized()
+                    && self.pending_monitor.is_none()
+                    && fps.value() > 60
+                    && matches!(self.quality.codec.as_deref(), Some("H264" | "H265")))
+                .then(|| {
+                    Placement::new(
+                        layout.video,
+                        self.extent,
+                        window.scale_factor(),
+                        fps.value(),
+                    )
+                })
                 .flatten()
                 .map(|placement| (display, placement))
+            });
+        window.set_background_appearance(if placement.is_some() {
+            Transparent
+        } else {
+            Opaque
         });
-        window.set_background_appearance(if placement.is_some() { Transparent } else { Opaque });
         match placement.filter(|_| matches!(window.background_appearance(), Transparent)) {
             Some((display, placement)) => self.video_layer.place(display, placement),
             None => self.video_layer.clear(),
@@ -1658,12 +1675,21 @@ impl Render for SessionView {
             .h(visible.height)
             .overflow_hidden()
             .track_focus(&self.focus)
-            .bg(gpui::rgba(if direct_video { 0x00000000 } else { 0x000000ff }))
+            .bg(gpui::rgba(if direct_video {
+                0x00000000
+            } else {
+                0x000000ff
+            }))
             .child(
                 at(layout.video).overflow_hidden().children(
                     self.presentation
                         .image()
-                        .filter(|_| !direct_video && self.connected && self.extent.0 > 0 && self.extent.1 > 0)
+                        .filter(|_| {
+                            !direct_video
+                                && self.connected
+                                && self.extent.0 > 0
+                                && self.extent.1 > 0
+                        })
                         .map(|image| remote_image(image.clone())),
                 ),
             )
