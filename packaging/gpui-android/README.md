@@ -97,9 +97,8 @@ The dependency gate rejects Flutter, host/capture and hardware-codec features.
 Smoke continues to build without these codec dependencies or Internet access.
 
 All flavors share the IME bridge, source privacy patch and all final DEX,
-JNI, signature and 16 KB gates. The management and TEST IP direct flavors use
-`INTERNET` for the stream and `WAKE_LOCK` for low-latency Wi-Fi during remote
-sessions. Each flavor may use its exact application-ID-scoped AndroidX
+JNI, signature and 16 KB gates. Smoke has no Internet permission; management and TEST IP direct
+add only Internet. Each may use its exact application-ID-scoped AndroidX
 signature permission for non-exported receivers. Backup remains disabled.
 There are no recording, storage or accessibility permissions, and no credential migration from other applications. Each package uses its own Android private application
 storage. These remain preview APKs; management has a stable preview signer,

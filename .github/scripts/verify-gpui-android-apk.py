@@ -70,10 +70,9 @@ def check_manifest(badging, tree, package="org.xscc.gpui.smoke", mode="smoke"):
     internal = package + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
     allowed = {internal}
     if mode == "management":
-        required = {"android.permission.INTERNET", "android.permission.WAKE_LOCK"}
-        allowed.update(required)
-        if required - permissions:
-            raise ValueError("Remote session permissions missing: " + repr(sorted(required - permissions)))
+        allowed.add("android.permission.INTERNET")
+        if "android.permission.INTERNET" not in permissions:
+            raise ValueError("Management preview lacks INTERNET")
     elif mode != "smoke":
         raise ValueError("Unknown permission mode")
     if permissions - allowed:
