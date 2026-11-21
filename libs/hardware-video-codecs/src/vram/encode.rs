@@ -84,7 +84,7 @@ impl Encoder {
         }
     }
 
-    pub fn poll(&mut self) -> Result<&mut Vec<EncodeFrame>, i32> {
+    pub fn poll(&mut self, output_only: bool) -> Result<&mut Vec<EncodeFrame>, i32> {
         unsafe {
             (&mut *self.frames).clear();
             if self.ctx.f.driver == FFMPEG {
@@ -92,6 +92,7 @@ impl Encoder {
                     self.codec,
                     Some(Self::callback),
                     self.frames as *mut c_void,
+                    output_only,
                 );
                 if result != 0 {
                     return Err(result);
