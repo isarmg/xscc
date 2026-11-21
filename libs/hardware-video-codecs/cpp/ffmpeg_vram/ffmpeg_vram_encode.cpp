@@ -24,6 +24,7 @@ extern "C" {
 #include "system.h"
 #include "amf_keyframe_request.h"
 #include "amf_input_queue.h"
+#include "amf_worker.h"
 #include "gpu_retirement.h"
 
 #define LOG_MODULE "FFMPEG_VRAM_ENC"
@@ -84,7 +85,7 @@ public:
   int32_t gop_;
   bool amf_pipeline_ = false;
   AmfKeyframeRequest keyframe_request_;
-  bool retiring_ = false;
+  std::atomic<bool> retiring_{false};
   bool retired_ = false;
   bool drain_sent_ = false;
   ComPtr<ID3D11Query> retirement_capture_event_, retirement_encode_event_,
@@ -95,8 +96,9 @@ public:
 #ifdef XSCC_STREAM_DEBUG
   std::chrono::steady_clock::time_point amf_next_slow_log_{};
   int64_t amf_logged_slow_ms_ = 0;
+  std::mutex amf_slow_log_lock_;
 #endif
-  int amf_error_ = 0;
+  std::atomic<int> amf_error_{0};
   std::unique_ptr<NativeDevice> amf_device_;
   struct CaptureSlot {
     ComPtr<ID3D11Texture2D> capture, encoder;
@@ -106,6 +108,8 @@ public:
   };
   std::array<CaptureSlot, AmfInputQueue::capacity> amf_inputs_;
   AmfInputQueue amf_input_queue_;
+  std::unique_ptr<AmfWorker> amf_worker_;
+  int64_t amf_last_submitted_pts_ = -1;
   struct PreparedInput { int64_t pts; bool replay; };
   PreparedInput amf_prepared_{};
   bool amf_input_prepared_ = false;
@@ -280,6 +284,15 @@ public:
       encode_texture_ = (ID3D11Texture2D *)frame_->data[0];
     }
 
+    if (amf_pipeline_ && amf_high_rate_hevc(framerate_, dataFormat_ == H265)) {
+      amf_worker_ = std::make_unique<AmfWorker>();
+      try {
+        if (!amf_worker_->start([this] { run_amf_worker(); }))
+          amf_worker_.reset();
+      } catch (const std::system_error &) {
+        amf_worker_.reset();
+      }
+    }
     return true;
   }
 
@@ -290,7 +303,7 @@ public:
       if (amf_error_ < 0) return amf_error_;
       int ret = queue_amf_capture(static_cast<ID3D11Texture2D *>(texture), ms);
       // A full input queue still has output to drain. The new texture was never encoded.
-      if (ret >= 0 || ret == AVERROR(EAGAIN)) ret = pump_amf(callback, obj);
+      if (ret >= 0 || ret == AVERROR(EAGAIN)) return poll(callback, obj);
       if (ret < 0) amf_error_ = ret;
       return ret;
     }
@@ -303,6 +316,10 @@ public:
 
   int poll(EncodeCallback callback, void *obj) {
     if (!amf_pipeline_) return 0;
+    if (amf_worker_) {
+      amf_worker_->collect_packets(callback, obj);
+      return amf_error_.load();
+    }
     const int ret = pump_amf(callback, obj);
     if (ret < 0) amf_error_ = ret;
     return ret;
@@ -314,8 +331,10 @@ public:
     if (amf_error_ < 0) return amf_error_;
     // A queued slot stays owned until conversion releases it. At high refresh
     // check FIFO space here and acquire a keyed slot only for the actual copy.
-    if (framerate_ > 60)
-      return amf_input_queue_.available([](std::size_t) { return true; }) >= 0 ? 1 : 0;
+    if (framerate_ > 60) {
+      const auto lock = lock_amf_inputs();
+      return amf_input_queue_.reservable_capture() >= 0 ? 1 : 0;
+    }
     int failure = 0;
     const auto slot = amf_input_queue_.available([&](std::size_t index) {
       auto &input = amf_inputs_[index];
@@ -334,26 +353,25 @@ public:
   }
 
   int request_keyframe() {
-    // Only this path owns a replayable BGRA copy and has patched AMF IDR support.
-    return keyframe_request_.request(amf_pipeline_ && !retiring_) ? 1 : 0;
+    if (!amf_pipeline_ || retiring_) return 0;
+    if (amf_worker_) {
+      amf_worker_->keyframe.store(true);
+      amf_worker_->notify();
+      return 1;
+    }
+    return keyframe_request_.request(true) ? 1 : 0;
   }
 
   int replay_keyframe(EncodeCallback callback, void *obj, int64_t ms) {
-    if (!amf_pipeline_ || !keyframe_request_.pending()) return 0;
-    int ret = pump_amf(callback, obj);
-    if (ret < 0 || !keyframe_request_.pending() || amf_input_prepared_
-        || amf_input_queue_.front()
-        || pending_frames_ >= amf_pending_frame_limit(framerate_, dataFormat_ == H265))
-      return ret;
-    const auto latest = amf_input_queue_.latest();
-    if (latest < 0) return 0;
-    ret = prepare_amf_input(latest, 0);
-    if (ret < 0) { amf_error_ = ret; return ret; }
-    if (ret == 0) return 0;
-    amf_prepared_ = PreparedInput{ms, true};
-    amf_input_prepared_ = true;
-    amf_prepared_at_ = util::now();
-    return pump_amf(callback, obj);
+    if (!amf_pipeline_) return 0;
+    if (amf_worker_) {
+      amf_worker_->replay_pts.store(ms);
+      amf_worker_->notify();
+      return poll(callback, obj);
+    }
+    const int ret = process_amf_replay(callback, obj, ms);
+    if (ret < 0) amf_error_ = ret;
+    return ret;
   }
 
   int retire(void *capture_device, int timeout_ms) {
@@ -361,6 +379,8 @@ public:
     if (retired_)
       return 0;
     auto deadline = gpu_retirement_deadline(timeout_ms);
+    if (amf_worker_ && !amf_worker_->stop(deadline))
+      return retirement_error("encoder_worker", AVERROR(ETIMEDOUT));
     int ret = drain_encoder_for_retirement(c_, pkt_, drain_sent_, deadline);
     if (ret < 0)
       return retirement_error("codec_drain", ret);
@@ -387,6 +407,10 @@ public:
   }
 
   void destroy() {
+    if (amf_worker_) {
+      amf_worker_->join();
+      amf_worker_.reset();
+    }
     if (pkt_)
       av_packet_free(&pkt_);
     if (frame_)
@@ -407,6 +431,9 @@ public:
   }
 
   int set_bitrate(int kbs) {
+    std::unique_lock<std::mutex> lock;
+    if (amf_worker_)
+      lock = std::unique_lock<std::mutex>(amf_worker_->codec_control);
     const bool changed = util_encode::change_bit_rate(c_, encoder_->name_, kbs);
     if (changed && amf_pipeline_)
       c_->rc_max_rate = c_->bit_rate;
@@ -419,6 +446,69 @@ public:
   }
 
 private:
+  std::unique_lock<std::mutex> lock_amf_inputs() {
+    if (amf_worker_) return std::unique_lock<std::mutex>(amf_worker_->mailbox);
+    return {};
+  }
+
+  void run_amf_worker() noexcept {
+    try {
+      while (!amf_worker_->stopping() && !retiring_ && amf_error_ >= 0) {
+        int result;
+        {
+          std::lock_guard<std::mutex> lock(amf_worker_->codec_control);
+          if (amf_worker_->keyframe.exchange(false))
+            keyframe_request_.request(true);
+          result = pump_amf(nullptr, nullptr);
+          const int64_t pts = amf_worker_->replay_pts.exchange(-1);
+          if (result >= 0 && pts >= 0)
+            result = process_amf_replay(nullptr, nullptr, pts);
+        }
+        if (retiring_ || amf_worker_->stopping()) return;
+        if (result < 0) {
+          amf_error_ = result;
+          return;
+        }
+        bool pending = pending_frames_ > 0 || amf_input_prepared_;
+        {
+          const auto lock = lock_amf_inputs();
+          pending = pending || amf_input_queue_.front() != nullptr;
+        }
+        if (!amf_worker_->wait(pending && amf_worker_->packet_space())) {
+          amf_error_ = AVERROR_EXTERNAL;
+          return;
+        }
+      }
+    } catch (...) {
+      amf_error_ = AVERROR_EXTERNAL;
+    }
+  }
+
+  int process_amf_replay(EncodeCallback callback, void *obj, int64_t ms) {
+    if (!keyframe_request_.pending()) return 0;
+    int ret = pump_amf(callback, obj);
+    if (ret < 0 || !keyframe_request_.pending() || amf_input_prepared_
+        || pending_frames_ >= amf_pending_frame_limit(framerate_, dataFormat_ == H265)
+        || (amf_worker_ && ms <= amf_last_submitted_pts_))
+      return ret;
+    int latest;
+    {
+      const auto lock = lock_amf_inputs();
+      latest = amf_input_queue_.begin_replay();
+    }
+    if (latest < 0) return 0;
+    ret = prepare_amf_input(latest, 0);
+    {
+      const auto lock = lock_amf_inputs();
+      amf_input_queue_.end_replay();
+    }
+    if (ret <= 0) return ret;
+    amf_prepared_ = PreparedInput{ms, true};
+    amf_input_prepared_ = true;
+    amf_prepared_at_ = util::now();
+    return pump_amf(callback, obj);
+  }
+
   int retirement_error(const char *phase, int error) const {
     LOG_ERROR(std::string("video_gpu_retirement phase=") + phase +
               " encoder=" + encoder_->name_ + " code=" + std::to_string(error));
@@ -432,12 +522,15 @@ private:
     const auto now = util::now();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started);
     if (elapsed.count() < 16) return;
-    if (now >= amf_next_slow_log_) {
-      amf_next_slow_log_ = now + std::chrono::seconds(1);
-      amf_logged_slow_ms_ = 0;
+    {
+      std::lock_guard<std::mutex> lock(amf_slow_log_lock_);
+      if (now >= amf_next_slow_log_) {
+        amf_next_slow_log_ = now + std::chrono::seconds(1);
+        amf_logged_slow_ms_ = 0;
+      }
+      if (elapsed.count() < amf_logged_slow_ms_ * 2) return;
+      amf_logged_slow_ms_ = elapsed.count();
     }
-    if (elapsed.count() < amf_logged_slow_ms_ * 2) return;
-    amf_logged_slow_ms_ = elapsed.count();
     auto message = std::string("host_amf_slow phase=") + phase +
                    " elapsed_ms=" + std::to_string(elapsed.count());
     for (const auto &stage : stages) {
@@ -459,13 +552,11 @@ private:
 
   int queue_amf_capture(ID3D11Texture2D *input, int64_t pts) {
     if (!input) return AVERROR(EINVAL);
-#ifdef XSCC_STREAM_DEBUG
-    const auto started = util::now();
-#endif
     D3D11_TEXTURE2D_DESC desc{};
     input->GetDesc(&desc);
     if (desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1)
       return AVERROR(EINVAL);
+    if (amf_worker_) return queue_worker_capture(input, desc, pts);
     int failure = 0;
     const auto index = amf_input_queue_.available([&](std::size_t i) {
       if (failure) return false;
@@ -477,7 +568,44 @@ private:
     });
     if (failure) return failure;
     if (index < 0) return AVERROR(EAGAIN);
-    auto &slot = amf_inputs_[index];
+    const auto copied = write_amf_capture(amf_inputs_[index], input, desc);
+    if (copied < 0) return copied;
+    return amf_input_queue_.publish(index, pts) ? 0 : AVERROR_BUG;
+  }
+
+  int queue_worker_capture(ID3D11Texture2D *input, D3D11_TEXTURE2D_DESC desc, int64_t pts) {
+    int index;
+    {
+      const auto lock = lock_amf_inputs();
+      index = amf_input_queue_.reserve_capture();
+    }
+    if (index < 0) return AVERROR(EAGAIN);
+
+    int copied;
+    try {
+      auto &slot = amf_inputs_[index];
+      const int acquired = slot.capture_mutex ? acquire_amf_capture(slot) : 1;
+      copied = acquired > 0 ? write_amf_capture(slot, input, desc)
+                           : acquired < 0 ? acquired : AVERROR(EAGAIN);
+    } catch (...) {
+      const auto lock = lock_amf_inputs();
+      amf_input_queue_.release_capture();
+      throw;
+    }
+    {
+      const auto lock = lock_amf_inputs();
+      const auto slot = amf_input_queue_.release_capture();
+      if (copied >= 0 && !amf_input_queue_.publish(slot, pts))
+        copied = AVERROR_BUG;
+    }
+    if (copied >= 0) amf_worker_->notify();
+    return copied;
+  }
+
+  int write_amf_capture(CaptureSlot &slot, ID3D11Texture2D *input, D3D11_TEXTURE2D_DESC desc) {
+#ifdef XSCC_STREAM_DEBUG
+    const auto started = util::now();
+#endif
     if (!slot.capture) {
       desc.Usage = D3D11_USAGE_DEFAULT;
       desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
@@ -513,7 +641,7 @@ private:
     log_slow_amf("keyed_release", releasing);
     log_slow_amf("capture_copy", started);
 #endif
-    return amf_input_queue_.publish(index, pts) ? 0 : AVERROR_BUG;
+    return 0;
   }
 
   int prepare_amf_input(std::size_t index, UINT64 key) {
@@ -587,11 +715,16 @@ private:
     const auto pending_limit = amf_pending_frame_limit(framerate_, dataFormat_ == H265);
     while (pending_frames_ < pending_limit) {
       if (!amf_input_prepared_) {
-        const auto input = amf_input_queue_.front();
-        if (!input) break;
-        ret = prepare_amf_input(input->slot, 1);
+        AmfInputQueue::Frame input{};
+        {
+          const auto lock = lock_amf_inputs();
+          const auto queued = amf_input_queue_.front();
+          if (!queued) break;
+          input = *queued;
+        }
+        ret = prepare_amf_input(input.slot, 1);
         if (ret <= 0) return ret;
-        amf_prepared_ = PreparedInput{input->pts, false};
+        amf_prepared_ = PreparedInput{input.pts, false};
         amf_input_prepared_ = true;
         amf_prepared_at_ = util::now();
       }
@@ -609,7 +742,11 @@ private:
       if (ret == AVERROR(EAGAIN))
         return util::elapsed_ms(amf_prepared_at_) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
       if (ret < 0) return ret;
-      if (!amf_prepared_.replay) amf_input_queue_.consumed();
+      if (!amf_prepared_.replay) {
+        const auto lock = lock_amf_inputs();
+        amf_input_queue_.consumed();
+      }
+      if (amf_worker_) amf_last_submitted_pts_ = amf_prepared_.pts;
       amf_input_prepared_ = false;
       if (pending_frames_++ == 0) amf_progress_at_ = util::now();
       ret = receive_pending(callback, obj);
@@ -669,6 +806,7 @@ private:
   }
   int receive_pending(EncodeCallback callback, const void *obj) {
     while (pending_frames_ > 0) {
+      if (amf_worker_ && !amf_worker_->packet_space()) return 0;
 #ifdef XSCC_STREAM_DEBUG
       const auto started = util::now();
 #endif
@@ -686,8 +824,14 @@ private:
         av_packet_unref(pkt_);
         return AVERROR_INVALIDDATA;
       }
-      if (callback)
+      if (amf_worker_) {
+        if (!amf_worker_->publish_packet(pkt_)) {
+          av_packet_unref(pkt_);
+          return AVERROR(ENOMEM);
+        }
+      } else if (callback) {
         callback(pkt_->data, pkt_->size, pkt_->flags & AV_PKT_FLAG_KEY, obj, pkt_->pts);
+      }
       av_packet_unref(pkt_);
     }
     return 0;
@@ -829,7 +973,11 @@ FFmpegVRamEncoder *ffmpeg_vram_new_encoder(void *handle, int64_t luid,
     if (encoder) {
       if (encoder->init()) {
 #ifdef XSCC_STREAM_DEBUG
-        if (encoder->amf_pipeline_) LOG_INFO("host_amf_transfer=keyed");
+        if (encoder->amf_pipeline_) {
+          const char *transfer = encoder->amf_worker_ ? "host_amf_transfer=keyed threaded=true"
+                                                       : "host_amf_transfer=keyed threaded=false";
+          LOG_INFO(transfer);
+        }
 #endif
         return encoder;
       }

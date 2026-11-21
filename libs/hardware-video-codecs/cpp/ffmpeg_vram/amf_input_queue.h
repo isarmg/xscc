@@ -47,10 +47,33 @@ public:
     if (count_) { head_ = (head_ + 1) % capacity; --count_; }
   }
   int latest() const { return latest_; }
+
+  int reservable_capture() const {
+    if (capture_slot_ >= 0) return -1;
+    return available([&](std::size_t slot) { return static_cast<int>(slot) != replay_slot_; });
+  }
+  int reserve_capture() {
+    const int slot = reservable_capture();
+    if (slot >= 0) capture_slot_ = slot;
+    return slot;
+  }
+  int release_capture() {
+    const int slot = capture_slot_;
+    capture_slot_ = -1;
+    return slot;
+  }
+  int begin_replay() {
+    if (front() || latest_ < 0 || latest_ == capture_slot_ || replay_slot_ >= 0) return -1;
+    replay_slot_ = latest_;
+    return replay_slot_;
+  }
+  void end_replay() { replay_slot_ = -1; }
 private:
   std::array<Frame, capacity> frames_{};
   std::size_t head_ = 0, count_ = 0, next_ = 0;
   int latest_ = -1;
+  int capture_slot_ = -1;
+  int replay_slot_ = -1;
 };
 
 #endif

@@ -250,7 +250,26 @@ int main(void) {
         queue.consumed();
         assert(!queue.front() && queue.latest() == slot);
     }
-    puts("1 AMF bounded input/GPU readiness/FIFO retry/static-tail regression passed");
+    AmfInputQueue parallel;
+    const int saved = parallel.reserve_capture();
+    assert(saved >= 0 && parallel.reserve_capture() < 0);
+    assert(parallel.release_capture() == saved && parallel.publish(saved, 50));
+    assert(parallel.begin_replay() < 0);
+    parallel.consumed();
+
+    assert(parallel.begin_replay() == saved);
+    const int next = parallel.reserve_capture();
+    assert(next >= 0 && next != saved);
+    assert(parallel.release_capture() == next && parallel.publish(next, 60));
+    assert(parallel.reserve_capture() < 0);
+    parallel.end_replay();
+    assert(parallel.reserve_capture() == saved);
+    assert(parallel.release_capture() == saved && parallel.front()->pts == 60);
+    parallel.consumed();
+    assert(parallel.begin_replay() == next);
+    parallel.end_replay();
+
+    puts("AMF bounded input, FIFO, and capture/replay ownership regressions passed");
 }
 """
 
