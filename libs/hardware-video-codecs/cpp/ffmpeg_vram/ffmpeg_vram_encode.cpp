@@ -441,9 +441,11 @@ private:
     amf_logged_slow_ms_ = elapsed.count();
     auto message = std::string("host_amf_slow phase=") + phase +
                    " elapsed_ms=" + std::to_string(elapsed.count());
-    for (const auto &[name, duration] : stages) {
-      message += " " + std::string(name) + "=" +
-                 std::to_string(std::chrono::duration<double, std::milli>(duration).count());
+    for (const auto &stage : stages) {
+      message += ' ';
+      message += stage.first;
+      message += '=';
+      message += std::to_string(std::chrono::duration<double, std::milli>(stage.second).count());
     }
     LOG_WARN(message);
   }
