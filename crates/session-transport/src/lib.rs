@@ -3110,7 +3110,6 @@ struct Transmission {
     initial: bool,
     #[cfg(debug_assertions)]
     queued: Instant,
-    #[cfg(debug_assertions)]
     selected: Instant,
     #[cfg(debug_assertions)]
     first_fragment: Option<Instant>,
@@ -3301,7 +3300,6 @@ fn transmission(
         initial,
         #[cfg(debug_assertions)]
         queued,
-        #[cfg(debug_assertions)]
         selected,
         #[cfg(debug_assertions)]
         first_fragment: None,
@@ -3647,7 +3645,8 @@ async fn host_media(
                                 continue;
                             }
                             if frame.initial && metadata.kind == MediaKind::Video && !metadata.keyframe {
-                                delta_repairs.track(packet.sequence, frame, index, sent);
+                                let deadline = (frame.selected + VIDEO_DELTA_REPAIR_AGE).min(frame.deadline);
+                                delta_repairs.track(packet.sequence, &frame.plan, index, deadline, sent);
                             }
                             #[cfg(debug_assertions)]
                             if metadata.kind == MediaKind::Video {

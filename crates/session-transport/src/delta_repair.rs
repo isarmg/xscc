@@ -1,4 +1,3 @@
-use crate::Transmission;
 use base::direct_transport::udp_media::{
     FrameMetadata, FramePlan, MediaError, Pacer, ReceiveReport,
 };
@@ -27,14 +26,11 @@ impl DeltaRepairs {
     pub(super) fn track(
         &mut self,
         sequence: u64,
-        frame: &Transmission,
+        plan: &FramePlan,
         index: u16,
+        deadline: Instant,
         now: Instant,
     ) {
-        // Feedback can return after the receiver's keyframe request budget.
-        // Repair is still useful until the original transmission expires.
-        let deadline = frame.deadline;
-        let plan = &frame.plan;
         if deadline <= now || plan.descriptor().total_size > MAX_REPAIR_FRAME_SIZE {
             return;
         }
@@ -106,7 +102,7 @@ impl DeltaRepairs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transmission;
+    use crate::VIDEO_DELTA_REPAIR_AGE;
     use base::direct_transport::udp_media::{
         AuthenticatedPacket, DatagramReceiver, DatagramSender, Direction, MediaKind, Reassembler,
         SessionId, DEFAULT_MTU,
@@ -143,13 +139,18 @@ mod tests {
             .unwrap();
         let mut repairs = DeltaRepairs::default();
         for original in [&plan, &later] {
-            let frame = transmission(original.clone(), true, vec![], 8_000_000, now);
             for index in 0..original.fragment_count() {
                 let packet = sender.seal_fragment(original, index).unwrap();
                 pacer
                     .on_sent(packet.sequence, packet.bytes.len(), now)
                     .unwrap();
-                repairs.track(packet.sequence, &frame, index, now);
+                repairs.track(
+                    packet.sequence,
+                    original,
+                    index,
+                    now + VIDEO_DELTA_REPAIR_AGE,
+                    now,
+                );
                 if packet.sequence == 0 {
                     continue;
                 }
@@ -162,7 +163,7 @@ mod tests {
                 assembler.push(fragment, arrived).unwrap();
             }
         }
-        let feedback_at = now + Duration::from_millis(70);
+        let feedback_at = now + Duration::from_millis(25);
         let report = receiver.take_report(feedback_at).unwrap();
         repairs.on_report(&mut pacer, &report, feedback_at).unwrap();
         let retry = repairs
