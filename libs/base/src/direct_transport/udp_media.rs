@@ -1666,6 +1666,7 @@ pub struct Pacer {
     flights: BTreeMap<u64, Flight>,
     highest_sent: Option<u64>,
     srtt: Duration,
+    latest_rtt: Duration,
     last_feedback: Instant,
     last_activity: Instant,
     recovery_through: Option<u64>,
@@ -1679,6 +1680,7 @@ impl Pacer {
         {
             return Err(MediaError::InvalidFeedback);
         }
+        let initial_rtt = Duration::from_millis(100);
         Ok(Self {
             mtu,
             limit_bps,
@@ -1687,7 +1689,8 @@ impl Pacer {
             inflight_bytes: 0,
             flights: BTreeMap::new(),
             highest_sent: None,
-            srtt: Duration::from_millis(100),
+            srtt: initial_rtt,
+            latest_rtt: initial_rtt,
             last_feedback: now,
             last_activity: now,
             recovery_through: None,
@@ -1825,10 +1828,12 @@ impl Pacer {
         }
         if let Some(sample) = sample {
             self.srtt = (self.srtt * 7 + sample) / 8;
+            self.latest_rtt = sample;
         }
         let loss_age = self.feedback_timeout();
-        // Allow a regular feedback interval for a reordered packet to fill the hole.
-        let reorder_age = self.srtt.mul_f64(1.125).max(REPORT_INTERVAL);
+        // A delayed report can arrive before the smoothed RTT catches up. Keep
+        // its latest measurement across repeated reports with no new RTT sample.
+        let reorder_age = self.srtt.max(self.latest_rtt).mul_f64(1.125).max(REPORT_INTERVAL);
         let mut latest_loss = None;
         // Send times follow sequence order, so loss candidates form a prefix.
         while let Some(entry) = self.flights.first_entry() {
@@ -1872,6 +1877,7 @@ impl Pacer {
             return Err(MediaError::InvalidFeedback);
         }
         self.srtt = rtt;
+        self.latest_rtt = rtt;
         self.window = self.window.min(10 * self.mtu).max(2 * self.mtu);
         self.flights.clear();
         self.inflight_bytes = 0;
@@ -2807,7 +2813,8 @@ mod tests {
         let now = Instant::now();
         let mut pacer = Pacer::new(DEFAULT_MTU, 8_000_000, now).unwrap();
         for sequence in 0..8 {
-            pacer.on_sent(sequence, DEFAULT_MTU, now).unwrap();
+            let sent = now + Duration::from_millis(sequence * 15);
+            pacer.on_sent(sequence, DEFAULT_MTU, sent).unwrap();
         }
         let report = |largest| ReceiveReport {
             largest,
@@ -2889,6 +2896,36 @@ mod tests {
             ..early
         };
         pacer.on_report(&filled, now + Duration::from_millis(14)).unwrap();
+        assert_eq!(pacer.inflight_bytes(), 0);
+        assert!(pacer.congestion_window() >= initial_window);
+    }
+
+    #[test]
+    fn delayed_feedback_keeps_reordered_packets_in_flight() {
+        let sent = Instant::now();
+        let mut pacer = Pacer::new(DEFAULT_MTU, 8_000_000, sent).unwrap();
+        pacer.on_probe_response(Duration::from_millis(4), sent).unwrap();
+        for sequence in 0..8 {
+            pacer.on_sent(sequence, DEFAULT_MTU, sent).unwrap();
+        }
+        let initial_window = pacer.congestion_window();
+        let report = ReceiveReport {
+            largest: 7,
+            ack_delay_us: 3_000,
+            ranges: vec![AckRange { first: 3, last: 7 }],
+        };
+
+        // A delayed batch reaches the receiver out of order after a fast path slows down.
+        for millis in [40, 41] {
+            pacer.on_report(&report, sent + Duration::from_millis(millis)).unwrap();
+            assert_eq!(pacer.inflight_bytes(), 3 * DEFAULT_MTU);
+            assert!(pacer.congestion_window() >= initial_window);
+        }
+        let filled = ReceiveReport {
+            ranges: vec![AckRange { first: 0, last: 7 }],
+            ..report
+        };
+        pacer.on_report(&filled, sent + Duration::from_millis(44)).unwrap();
         assert_eq!(pacer.inflight_bytes(), 0);
         assert!(pacer.congestion_window() >= initial_window);
     }
