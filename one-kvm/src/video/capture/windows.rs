@@ -57,8 +57,6 @@ enum WindowsCapture {
     Desktop(DesktopCapture),
 }
 
-unsafe impl Send for CaptureStream {}
-
 impl CaptureStream {
     pub fn open(
         device_path: impl AsRef<Path>,

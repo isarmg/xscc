@@ -252,25 +252,21 @@ impl EncoderRegistry {
                 continue;
             }
 
-            let codec_name = match format {
-                VideoEncoderType::H264 => "libx264",
-                VideoEncoderType::H265 => "libx265",
-                VideoEncoderType::VP8 => "libvpx_vp8",
-                VideoEncoderType::VP9 => "libvpx_vp9",
+            let Some(codec) = CodecInfo::software(format.to_data_format()) else {
+                continue;
             };
 
+            debug!(
+                "Registered software encoder: {} for {} (priority: {})",
+                codec.name, format, 100
+            );
             encoders.push(AvailableEncoder {
                 format,
-                codec_name: codec_name.to_string(),
+                codec_name: codec.name,
                 backend: EncoderBackend::Software,
                 priority: 100,
                 is_hardware: false,
             });
-
-            debug!(
-                "Registered software encoder: {} for {} (priority: {})",
-                codec_name, format, 100
-            );
         }
     }
 
@@ -510,6 +506,22 @@ impl Default for EncoderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vp_software_fallbacks_use_ffmpeg_encoder_names() {
+        let mut registry = EncoderRegistry::new();
+        registry.register_software_fallbacks();
+        for (codec, name) in [
+            (VideoEncoderType::VP8, "libvpx"),
+            (VideoEncoderType::VP9, "libvpx-vp9"),
+        ] {
+            let encoder = registry.encoder_with_backend(codec, EncoderBackend::Software);
+            assert_eq!(
+                encoder.map(|encoder| encoder.codec_name.as_str()),
+                Some(name)
+            );
+        }
+    }
 
     #[test]
     fn test_video_encoder_type_display() {

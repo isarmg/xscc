@@ -1,17 +1,16 @@
-//! Send H.26x as RTP and VP8/VP9 through sample tracks.
+//! Packetize encoded video with presentation timestamps.
 
 use bytes::Bytes;
-use rtp::codecs::h264::H264Payloader;
-use rtp::packetizer::Payloader;
+use rtp::{codecs::h264::H264Payloader, packetizer::Payloader};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::Mutex;
-use tracing::{debug, trace, warn};
-use webrtc::media::Sample;
-use webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability;
-use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
-use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
+use tracing::{trace, warn};
+use webrtc::{
+    rtp_transceiver::rtp_codec::RTCRtpCodecCapability,
+    track::track_local::{
+        track_local_static_rtp::TrackLocalStaticRTP, TrackLocal, TrackLocalWriter,
+    },
+};
 
 // rtp `HevcPayloader` mishandles AP+IDR and NAL 20 (`IDR_N_LP`).
 use super::h265_payloader::H265Payloader;
@@ -146,9 +145,10 @@ impl UniversalVideoTrackConfig {
     }
 }
 
-enum TrackType {
-    Sample(Arc<TrackLocalStaticSample>),
-    Rtp(Arc<TrackLocalStaticRTP>),
+struct VpRtpState {
+    payloader: Box<dyn Payloader + Send + Sync>,
+    sequence_number: u16,
+    clock: VideoRtpClock,
 }
 
 struct H265RtpState {
@@ -203,11 +203,12 @@ struct H264TrackState {
 }
 
 pub struct UniversalVideoTrack {
-    track: TrackType,
+    track: Arc<TrackLocalStaticRTP>,
     codec: VideoCodec,
     config: UniversalVideoTrackConfig,
     h265_state: Option<Mutex<H265RtpState>>,
     h264_state: Mutex<H264TrackState>,
+    vp_state: Option<Mutex<VpRtpState>>,
 }
 
 impl UniversalVideoTrack {
@@ -223,32 +224,27 @@ impl UniversalVideoTrack {
             rtcp_feedback: vec![],
         };
 
-        let (track, h265_state) = if matches!(config.codec, VideoCodec::H264 | VideoCodec::H265) {
-            let rtp_track = Arc::new(TrackLocalStaticRTP::new(
-                codec_capability,
-                config.track_id.clone(),
-                config.stream_id.clone(),
-            ));
-
-            let h265_state = H265RtpState {
+        let h265_state = (config.codec == VideoCodec::H265).then(|| {
+            Mutex::new(H265RtpState {
                 payloader: H265Payloader::new(),
-                sequence_number: rand::random::<u16>(),
+                sequence_number: rand::random(),
                 clock: VideoRtpClock::new(config.fps),
-            };
-
-            (
-                TrackType::Rtp(rtp_track),
-                (config.codec == VideoCodec::H265).then(|| Mutex::new(h265_state)),
-            )
-        } else {
-            let sample_track = Arc::new(TrackLocalStaticSample::new(
-                codec_capability,
-                config.track_id.clone(),
-                config.stream_id.clone(),
-            ));
-
-            (TrackType::Sample(sample_track), None)
-        };
+            })
+        });
+        let vp_state = matches!(config.codec, VideoCodec::VP8 | VideoCodec::VP9).then(|| {
+            Mutex::new(VpRtpState {
+                payloader: codec_capability
+                    .payloader_for_codec()
+                    .expect("invariant: WebRTC provides VP8 and VP9 payloaders"),
+                sequence_number: rand::random(),
+                clock: VideoRtpClock::new(config.fps),
+            })
+        });
+        let track = Arc::new(TrackLocalStaticRTP::new(
+            codec_capability,
+            config.track_id.clone(),
+            config.stream_id.clone(),
+        ));
 
         let h264_state = H264TrackState {
             sps: None,
@@ -263,14 +259,12 @@ impl UniversalVideoTrack {
             config,
             h265_state,
             h264_state: Mutex::new(h264_state),
+            vp_state,
         }
     }
 
     pub fn as_track_local(&self) -> Arc<dyn TrackLocal + Send + Sync> {
-        match &self.track {
-            TrackType::Sample(t) => t.clone(),
-            TrackType::Rtp(t) => t.clone(),
-        }
+        self.track.clone()
     }
 
     pub fn codec(&self) -> VideoCodec {
@@ -285,12 +279,11 @@ impl UniversalVideoTrack {
         self.write_frame_bytes_at(data, is_keyframe, None).await
     }
 
-    /// Use the encoder's monotonic presentation time for H.264 and H.265. Counting frames
-    /// compresses the RTP timeline whenever capture/encoding misses a frame.
+    /// Derive RTP timestamps from presentation time so dropped frames leave a gap in media time.
     pub async fn write_frame_bytes_at(
         &self,
         data: Bytes,
-        is_keyframe: bool,
+        _is_keyframe: bool,
         pts_ms: Option<i64>,
     ) -> Result<()> {
         if data.is_empty() {
@@ -300,8 +293,7 @@ impl UniversalVideoTrack {
         match self.codec {
             VideoCodec::H264 => self.write_h264_frame(data, pts_ms).await,
             VideoCodec::H265 => self.send_h265_rtp(data, pts_ms).await,
-            VideoCodec::VP8 => self.write_vp8_frame(data, is_keyframe).await,
-            VideoCodec::VP9 => self.write_vp9_frame(data, is_keyframe).await,
+            VideoCodec::VP8 | VideoCodec::VP9 => self.write_vp_frame(data, pts_ms).await,
         }
     }
 
@@ -341,9 +333,6 @@ impl UniversalVideoTrack {
             }
         }
 
-        let TrackType::Rtp(track) = &self.track else {
-            return Err(AppError::WebRtcError("H264 RTP track missing".to_owned()));
-        };
         let payloads = state
             .payloader
             .payload(RTP_MTU - RTP_HEADER_SIZE, &data)
@@ -352,90 +341,60 @@ impl UniversalVideoTrack {
             return Ok(());
         }
         let timestamp = state.clock.next(pts_ms);
+        self.write_rtp_payloads(payloads, &mut state.sequence_number, timestamp)
+            .await
+    }
+
+    async fn write_vp_frame(&self, data: Bytes, pts_ms: Option<i64>) -> Result<()> {
+        let state = self
+            .vp_state
+            .as_ref()
+            .ok_or_else(|| AppError::WebRtcError("VP8/VP9 RTP state missing".to_owned()))?;
+        let mut state = state.lock().await;
+        if self.track.all_binding_paused().await {
+            return Ok(());
+        }
+        let payloads = state
+            .payloader
+            .payload(RTP_MTU - RTP_HEADER_SIZE, &data)
+            .map_err(|e| {
+                AppError::WebRtcError(format!("{} packetization failed: {e}", self.codec))
+            })?;
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let timestamp = state.clock.next(pts_ms);
+        self.write_rtp_payloads(payloads, &mut state.sequence_number, timestamp)
+            .await
+    }
+
+    async fn write_rtp_payloads(
+        &self,
+        payloads: Vec<Bytes>,
+        sequence_number: &mut u16,
+        timestamp: u32,
+    ) -> Result<()> {
         let count = payloads.len();
-        // Serialize complete access units, including their sequence allocation.
         for (index, payload) in payloads.into_iter().enumerate() {
-            let sequence_number = state.sequence_number;
-            state.sequence_number = state.sequence_number.wrapping_add(1);
             let packet = rtp::packet::Packet {
                 header: rtp::header::Header {
                     version: 2,
                     marker: index + 1 == count,
-                    sequence_number,
+                    sequence_number: *sequence_number,
                     timestamp,
                     ..Default::default()
                 },
                 payload,
             };
-            track
-                .write_rtp(&packet)
-                .await
-                .map_err(|e| AppError::WebRtcError(format!("H264 RTP write failed: {e}")))?;
+            *sequence_number = sequence_number.wrapping_add(1);
+            self.track.write_rtp(&packet).await.map_err(|e| {
+                AppError::WebRtcError(format!("{} RTP write failed: {e}", self.codec))
+            })?;
         }
-        Ok(())
-    }
-
-    async fn write_vp8_frame(&self, data: Bytes, _is_keyframe: bool) -> Result<()> {
-        let frame_duration = Duration::from_micros(1_000_000 / self.config.fps.max(1) as u64);
-        let sample = Sample {
-            data,
-            duration: frame_duration,
-            ..Default::default()
-        };
-
-        match &self.track {
-            TrackType::Sample(track) => {
-                if let Err(e) = track.write_sample(&sample).await {
-                    debug!("VP8 write_sample failed: {}", e);
-                    return Err(AppError::WebRtcError(format!(
-                        "VP8 write_sample failed: {}",
-                        e
-                    )));
-                }
-            }
-            TrackType::Rtp(_) => {
-                warn!("VP8 should not use RTP track");
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn write_vp9_frame(&self, data: Bytes, _is_keyframe: bool) -> Result<()> {
-        let frame_duration = Duration::from_micros(1_000_000 / self.config.fps.max(1) as u64);
-        let sample = Sample {
-            data,
-            duration: frame_duration,
-            ..Default::default()
-        };
-
-        match &self.track {
-            TrackType::Sample(track) => {
-                if let Err(e) = track.write_sample(&sample).await {
-                    debug!("VP9 write_sample failed: {}", e);
-                    return Err(AppError::WebRtcError(format!(
-                        "VP9 write_sample failed: {}",
-                        e
-                    )));
-                }
-            }
-            TrackType::Rtp(_) => {
-                warn!("VP9 should not use RTP track");
-            }
-        }
-
         Ok(())
     }
 
     async fn send_h265_rtp(&self, payload: Bytes, pts_ms: Option<i64>) -> Result<()> {
-        let rtp_track = match &self.track {
-            TrackType::Rtp(t) => t,
-            TrackType::Sample(_) => {
-                warn!("send_h265_rtp called but track is Sample type");
-                return Ok(());
-            }
-        };
-
         let h265_state = match &self.h265_state {
             Some(s) => s,
             None => {
@@ -481,7 +440,7 @@ impl UniversalVideoTrack {
                 payload: payload_data,
             };
 
-            if let Err(e) = rtp_track.write_rtp(&packet).await {
+            if let Err(e) = self.track.write_rtp(&packet).await {
                 trace!("H265 write_rtp failed: {}", e);
                 return Err(AppError::WebRtcError(format!(
                     "H265 write_rtp failed: {}",

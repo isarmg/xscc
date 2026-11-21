@@ -173,7 +173,9 @@ impl VideoEncoderTrait for VP8EncoderWrapper {
         self.0.codec_name()
     }
 
-    fn request_keyframe(&mut self) {}
+    fn request_keyframe(&mut self) {
+        self.0.request_keyframe()
+    }
 }
 
 struct VP9EncoderWrapper(VP9Encoder);
@@ -199,7 +201,9 @@ impl VideoEncoderTrait for VP9EncoderWrapper {
         self.0.codec_name()
     }
 
-    fn request_keyframe(&mut self) {}
+    fn request_keyframe(&mut self) {
+        self.0.request_keyframe()
+    }
 }
 
 pub(super) enum MjpegDecoderKind {

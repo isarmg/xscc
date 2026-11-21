@@ -20,7 +20,7 @@ use bytes::Bytes;
 use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock as ParkingRwLock;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -277,7 +277,7 @@ use video_codec_backends::ffmpeg_hw::last_error_message as ffmpeg_hw_last_error;
 pub struct EncodedVideoFrame {
     /// Encoded data (Annex B for H264/H265, raw for VP8/VP9)
     pub data: Bytes,
-    /// Presentation timestamp in milliseconds
+    /// Presentation timestamp in milliseconds on the process-wide monotonic clock.
     pub pts_ms: i64,
     /// Whether this frame can initialize a decoder without earlier frames.
     ///
@@ -562,9 +562,6 @@ pub struct SharedVideoPipeline {
     parameter_sets: ParkingMutex<CachedH26xParameterSets>,
     /// Most recent random-access frame with all decoder parameter sets.
     bootstrap_frame: ParkingRwLock<Option<Arc<EncodedVideoFrame>>>,
-    /// Pipeline start time for monotonic PTS calculation (microseconds from process start).
-    /// Uses AtomicI64 instead of Mutex for lock-free access.
-    pipeline_start_time_us: AtomicI64,
     pending_sync_geometry: ParkingMutex<Option<(Resolution, PixelFormat)>>,
     device_lost_reason: ParkingMutex<Option<String>>,
     state_notifier: ParkingRwLock<Option<Arc<dyn Fn(PipelineStateNotification) + Send + Sync>>>,
@@ -620,7 +617,6 @@ impl SharedVideoPipeline {
             keyframe_requested: AtomicBool::new(false),
             parameter_sets: ParkingMutex::new(CachedH26xParameterSets::default()),
             bootstrap_frame: ParkingRwLock::new(None),
-            pipeline_start_time_us: AtomicI64::new(0),
             pending_sync_geometry: ParkingMutex::new(None),
             device_lost_reason: ParkingMutex::new(None),
             state_notifier: ParkingRwLock::new(None),
@@ -1097,27 +1093,65 @@ impl SharedVideoPipeline {
             *last = None;
         }
 
-        // Pre-open for DV negotiation; align encoder to probed size.
         let bridge_ctx_probe = BridgeContext::from_parts(
             subdev_path.clone(),
             parse_bridge_kind(bridge_kind.as_deref()),
         );
+        let probe = {
+            let config = config.clone();
+            let device_path = device_path.clone();
+            move || match open_capture_stream(
+                &device_path,
+                config.resolution,
+                config.input_format,
+                config.fps,
+                buffer_count.max(1),
+                Duration::from_secs(2),
+                bridge_ctx_probe,
+                config.control_mode,
+            ) {
+                Ok(stream) => {
+                    let mode = (stream.resolution(), stream.format(), stream.source_fps());
+                    (Some(stream), Ok(mode))
+                }
+                Err(error) => (None, Err(error)),
+            }
+        };
+
+        #[cfg(not(windows))]
         #[allow(unused_mut)]
-        let mut preopened: Option<CaptureStream> = match open_capture_stream(
-            &device_path,
-            config.resolution,
-            config.input_format,
-            config.fps,
-            buffer_count.max(1),
-            Duration::from_secs(2),
-            bridge_ctx_probe,
-            config.control_mode,
-        ) {
-            Ok(s) => {
-                let negotiated_res = s.resolution();
-                let negotiated_fmt = s.format();
+        let (mut preopened, negotiated) = probe();
+
+        // DirectShow and GDI must open, read, and release capture on the same thread.
+        #[cfg(windows)]
+        let (capture_start, capture_released, negotiated) = {
+            type CaptureLoop = Box<dyn FnOnce(Option<CaptureStream>) + Send>;
+            let (start_tx, start_rx) = std::sync::mpsc::channel::<CaptureLoop>();
+            let (probe_tx, probe_rx) = tokio::sync::oneshot::channel();
+            let (released_tx, released_rx) = tokio::sync::oneshot::channel::<()>();
+            spawn_video_worker("video-capture", move || {
+                let _release_after_stream = released_tx;
+                let (stream, negotiated) = probe();
+                if probe_tx.send(negotiated).is_err() {
+                    return;
+                }
+                if let Ok(run) = start_rx.recv() {
+                    run(stream);
+                }
+            })
+            .map_err(|error| {
+                AppError::VideoError(format!("Failed to start capture worker: {error}"))
+            })?;
+            let negotiated = probe_rx.await.map_err(|error| {
+                AppError::VideoError(format!("Capture worker exited during startup: {error}"))
+            })?;
+            (start_tx, released_rx, negotiated)
+        };
+
+        match negotiated {
+            Ok((negotiated_res, negotiated_fmt, source_fps)) => {
                 let previous = (config.resolution, config.input_format, config.fps);
-                config.align_source_fps(s.source_fps());
+                config.align_source_fps(source_fps);
                 config.resolution = negotiated_res;
                 config.input_format = negotiated_fmt;
                 if previous != (config.resolution, config.input_format, config.fps) {
@@ -1134,7 +1168,6 @@ impl SharedVideoPipeline {
                         );
                 }
                 *self.config.write().await = config.clone();
-                Some(s)
             }
             Err(AppError::CaptureNoSignal { kind }) => {
                 debug!(
@@ -1149,10 +1182,9 @@ impl SharedVideoPipeline {
                             .as_millis() as u64,
                     ),
                 ));
-                None
             }
             Err(e) => return Err(e),
-        };
+        }
 
         #[cfg(all(target_os = "linux", any(target_arch = "aarch64", target_arch = "arm")))]
         if dmabuf::eligible(&config) {
@@ -1187,7 +1219,17 @@ impl SharedVideoPipeline {
             info!("Using parallel libyuv MJPEG decode with hardware encoding");
             info!("MJPEG admission policy: {:?}", admission_policy);
         }
+        #[cfg(not(windows))]
         let mut encoder_state = build_encoder_state(&encoder_config)?;
+        #[cfg(windows)]
+        let mut encoder_state = match build_encoder_state(&encoder_config) {
+            Ok(state) => state,
+            Err(error) => {
+                drop(capture_start);
+                let _ = capture_released.await;
+                return Err(error);
+            }
+        };
         let frame_mailbox = Arc::new(VideoFrameMailbox::new());
         *self.frame_mailbox.lock() = Some(frame_mailbox.clone());
         self.mjpeg_decoded_frames.store(0, Ordering::Relaxed);
@@ -1319,6 +1361,11 @@ impl SharedVideoPipeline {
             });
             if let Err(error) = encoder_worker {
                 self.stop();
+                #[cfg(windows)]
+                {
+                    drop(capture_start);
+                    let _ = capture_released.await;
+                }
                 let _ = self.running.send(false);
                 let _ = self.encoder_done.send(true);
                 return Err(AppError::VideoError(format!(
@@ -1334,7 +1381,7 @@ impl SharedVideoPipeline {
             let buffer_pool = buffer_pool.clone();
             let bridge_ctx =
                 BridgeContext::from_parts(subdev_path, parse_bridge_kind(bridge_kind.as_deref()));
-            let capture_worker = spawn_video_worker("video-capture", move || {
+            let capture = move |preopened: Option<CaptureStream>| {
                 let mut stream: Option<CaptureStream> = None;
                 let mut initial_geometry: Option<(Resolution, PixelFormat)> = None;
                 let mut resolution = config.resolution;
@@ -1791,6 +1838,13 @@ impl SharedVideoPipeline {
                 frame_mailbox.close();
                 let _ = pipeline.running.send(false);
                 info!("Video pipeline stopped and capture device released");
+            };
+            #[cfg(not(windows))]
+            let capture_worker =
+                spawn_video_worker("video-capture", move || capture(preopened)).map(|_| ());
+            #[cfg(windows)]
+            let capture_worker = capture_start.send(Box::new(capture)).map_err(|_| {
+                std::io::Error::other("Capture worker exited before capture could start")
             });
             if let Err(error) = capture_worker {
                 self.stop();
@@ -1955,25 +2009,11 @@ impl SharedVideoPipeline {
     }
 
     fn pts_ms(&self) -> i64 {
-        let current_ts_us = PROCESS_START
+        // RTP tracks can outlive this pipeline.
+        PROCESS_START
             .get_or_init(Instant::now)
             .elapsed()
-            .as_micros() as i64;
-        let start_ts_us = self.pipeline_start_time_us.load(Ordering::Acquire);
-        let start_ts_us = if start_ts_us == 0 {
-            match self.pipeline_start_time_us.compare_exchange(
-                0,
-                current_ts_us,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => current_ts_us,
-                Err(existing) => existing,
-            }
-        } else {
-            start_ts_us
-        };
-        current_ts_us.saturating_sub(start_ts_us) / 1000
+            .as_millis() as i64
     }
 
     /// Stop the pipeline (non-blocking, does not wait for capture thread to exit)
@@ -2545,6 +2585,49 @@ mod tests {
         let encoded = pipeline.encode_frame_sync(&mut state, &frame).unwrap();
         assert_eq!(encoded.len(), 1);
         assert_eq!(encoded[0].pts_ms, 321);
+    }
+
+    #[test]
+    fn replacement_pipeline_keeps_presentation_clock() {
+        let config = SharedVideoPipelineConfig::default();
+        let original = SharedVideoPipeline::new(config.clone()).unwrap();
+        let _ = original.pts_ms();
+        std::thread::sleep(Duration::from_millis(2));
+        let last_pts = original.pts_ms();
+        let replacement = SharedVideoPipeline::new(config).unwrap();
+        assert!(replacement.pts_ms() >= last_pts);
+    }
+
+    #[tokio::test]
+    async fn software_vpx_honors_keyframe_requests() {
+        for codec in [VideoEncoderType::VP8, VideoEncoderType::VP9] {
+            let resolution = Resolution::new(64, 64);
+            let config = SharedVideoPipelineConfig {
+                resolution,
+                input_format: PixelFormat::Yuv420,
+                output_codec: codec,
+                encoder_backend: Some(EncoderBackend::Software),
+                ..Default::default()
+            };
+            let pipeline = SharedVideoPipeline::new(config.clone()).unwrap();
+            let mut state = build_encoder_state(&config).unwrap();
+            let frame = VideoFrame::from_vec(
+                vec![128; 64 * 64 * 3 / 2],
+                resolution,
+                PixelFormat::Yuv420,
+                64,
+                1,
+            );
+            assert!(pipeline.encode_frame_sync(&mut state, &frame).unwrap()[0].is_keyframe);
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            assert!(!pipeline.encode_frame_sync(&mut state, &frame).unwrap()[0].is_keyframe);
+            pipeline.request_keyframe().await;
+            tokio::time::sleep(Duration::from_millis(2)).await;
+            assert!(
+                pipeline.encode_frame_sync(&mut state, &frame).unwrap()[0].is_keyframe,
+                "{codec}"
+            );
+        }
     }
 
     #[test]

@@ -52,11 +52,9 @@ impl FrameBufferPool {
     }
 
     pub fn take(&self, min_capacity: usize) -> Vec<u8> {
-        let mut pool = self.pool.lock();
-        if let Some(mut buf) = pool.pop() {
-            if buf.capacity() < min_capacity {
-                buf.reserve(min_capacity - buf.capacity());
-            }
+        let recycled = self.pool.lock().pop();
+        if let Some(mut buf) = recycled {
+            buf.reserve(min_capacity);
             buf
         } else {
             Vec::with_capacity(min_capacity)
@@ -321,6 +319,15 @@ impl From<&VideoFrame> for FrameMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recycled_buffer_satisfies_the_requested_capacity() {
+        let pool = FrameBufferPool::new(1);
+        let buffer = Vec::with_capacity(64);
+        let required = buffer.capacity() + 1;
+        pool.put(buffer);
+        assert!(pool.take(required).capacity() >= required);
+    }
 
     #[test]
     fn owned_pooled_bytes_preserve_pointer_and_return_buffer_after_last_reference() {

@@ -42,10 +42,10 @@ pub struct CaptureMeta {
     pub sequence: u64,
 }
 
-fn append_capture_plane(dst: &mut Vec<u8>, mapping: &[u8], offset: usize, bytes: usize) {
-    let start = offset.min(mapping.len());
-    let end = offset.saturating_add(bytes).min(mapping.len());
-    dst.extend_from_slice(&mapping[start..end]);
+fn capture_plane_payload(mapping: &[u8], data_offset: usize, bytes_used: usize) -> &[u8] {
+    // V4L2 counts data_offset in bytesused for multi-planar buffers.
+    let end = bytes_used.min(mapping.len());
+    &mapping[data_offset.min(end)..end]
 }
 
 /// When set, DV ioctls use the subdev (rkcif: video node has no DV ioctls).
@@ -627,29 +627,22 @@ impl CaptureStream {
         let index = dqbuf.as_v4l2_buffer().index as usize;
         let sequence = dqbuf.as_v4l2_buffer().sequence as u64;
 
-        let mut total = 0usize;
-        for (plane_idx, plane) in dqbuf.planes_iter().enumerate() {
-            let bytes_used = *plane.bytesused as usize;
-            let data_offset = plane.data_offset.copied().unwrap_or(0) as usize;
-            if bytes_used == 0 {
-                continue;
-            }
-            let mapping = &self.mappings[index][plane_idx];
-            let start = data_offset.min(mapping.len());
-            let end = data_offset.saturating_add(bytes_used).min(mapping.len());
-            total += end.saturating_sub(start);
-        }
+        let mappings = &self.mappings[index];
+        let planes = || {
+            dqbuf.planes_iter().enumerate().map(|(plane_idx, plane)| {
+                capture_plane_payload(
+                    &mappings[plane_idx],
+                    plane.data_offset.copied().unwrap_or(0) as usize,
+                    *plane.bytesused as usize,
+                )
+            })
+        };
+        let total = planes().map(<[u8]>::len).sum();
 
         dst.clear();
         dst.reserve(total);
-        for (plane_idx, plane) in dqbuf.planes_iter().enumerate() {
-            let bytes_used = *plane.bytesused as usize;
-            let data_offset = plane.data_offset.copied().unwrap_or(0) as usize;
-            if bytes_used == 0 {
-                continue;
-            }
-            let mapping = &self.mappings[index][plane_idx];
-            append_capture_plane(dst, mapping, data_offset, bytes_used);
+        for payload in planes() {
+            dst.extend_from_slice(payload);
         }
 
         self.queue_buffer(index as u32)
@@ -1153,21 +1146,17 @@ fn set_fps(fd: &File, queue: QueueType, fps: u32) -> std::result::Result<(), ioc
 
 #[cfg(test)]
 mod tests {
-    use super::{append_capture_plane, open_capture_device, DvTimingsSignature, NativeHdmirxState};
+    use super::{
+        capture_plane_payload, open_capture_device, DvTimingsSignature, NativeHdmirxState,
+    };
     use crate::video::format::PixelFormat;
 
     #[test]
-    fn capture_planes_append_without_stale_bytes_or_reallocation() {
-        let mut data = vec![99; 64];
-        let pointer = data.as_ptr();
-        data.clear();
-        append_capture_plane(&mut data, &[1, 2, 3, 4], 1, 2);
-        append_capture_plane(&mut data, &[5, 6, 7], 0, 10);
-        assert_eq!(data, [2, 3, 5, 6, 7]);
-        assert_eq!(data.as_ptr(), pointer);
-        append_capture_plane(&mut data, &[8], usize::MAX, usize::MAX);
-        append_capture_plane(&mut data, &[8], 0, 0);
-        assert_eq!(data, [2, 3, 5, 6, 7]);
+    fn capture_plane_bytes_used_includes_the_data_offset() {
+        let mapping = [1, 2, 3, 4];
+        assert_eq!(capture_plane_payload(&mapping, 1, 3), [2, 3]);
+        assert_eq!(capture_plane_payload(&mapping, 0, 10), mapping);
+        assert!(capture_plane_payload(&mapping, 2, 1).is_empty());
     }
 
     fn timing() -> DvTimingsSignature {

@@ -326,6 +326,10 @@ impl VP8Encoder {
         &self.codec_name
     }
 
+    pub(crate) fn request_keyframe(&mut self) {
+        self.inner.request_keyframe();
+    }
+
     /// Update bitrate dynamically
     pub fn set_bitrate(&mut self, bitrate_kbps: u32) -> Result<()> {
         self.inner
