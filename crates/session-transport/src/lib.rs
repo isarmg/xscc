@@ -512,7 +512,7 @@ struct SendStream {
 #[derive(Default)]
 struct ReceiveStream {
     epoch: u64,
-    last: Option<u64>,
+    last: Option<(u64, Instant)>,
     needs_keyframe: bool,
     held: BTreeMap<u64, (CompletedFrame, Instant)>,
     recovery_requested: bool,
@@ -520,7 +520,7 @@ struct ReceiveStream {
 
 impl ReceiveStream {
     fn expected(&self) -> Option<u64> {
-        self.last.and_then(|last| last.checked_add(1))
+        self.last.and_then(|(id, _)| id.checked_add(1))
     }
 
     fn expected_is_held(&self) -> bool {
@@ -537,12 +537,14 @@ impl ReceiveStream {
             return Some(now);
         }
         let started = self.gap_started()?;
-        let wait = if self.recovery_requested {
-            media::DELTA_TTL
-        } else {
-            VIDEO_DELTA_REPAIR_AGE
-        };
-        Some(started + wait)
+        if self.recovery_requested {
+            return Some(started + media::DELTA_TTL);
+        }
+        // A receive stall may have already spent the repair budget before the
+        // first following frame revealed the gap. Still allow one feedback interval.
+        let last_delivery = self.last.map_or(started, |(_, delivered)| delivered);
+        let repair_deadline = last_delivery.min(started) + VIDEO_DELTA_REPAIR_AGE;
+        Some(repair_deadline.max(started + media::REPORT_INTERVAL))
     }
 }
 struct QueuedFrame {
@@ -1166,11 +1168,12 @@ impl HybridTransport {
             return Ok(None);
         }
         let metadata = frame.metadata;
+        let now = Instant::now();
         let key = (metadata.kind, metadata.display_id);
         let Some(state) = self.receiving.get(&key) else {
             return Ok(None);
         };
-        if metadata.epoch != state.epoch || state.last.is_some_and(|last| metadata.frame_id <= last)
+        if metadata.epoch != state.epoch || state.last.is_some_and(|(id, _)| metadata.frame_id <= id)
         {
             #[cfg(debug_assertions)]
             if metadata.kind == MediaKind::Video {
@@ -1178,7 +1181,7 @@ impl HybridTransport {
                     Duration::from_secs(1),
                     info,
                     "client_udp_video_stale display={} epoch={} current_epoch={} frame={} last_delivered={:?}",
-                    metadata.display_id, metadata.epoch, state.epoch, metadata.frame_id, state.last
+                    metadata.display_id, metadata.epoch, state.epoch, metadata.frame_id, state.last.map(|(id, _)| id)
                 );
             }
             return Ok(None);
@@ -1199,7 +1202,7 @@ impl HybridTransport {
         let hold = gap && self.has_reorder_space(frame.payload.len());
         let state = self.receiving.get_mut(&key).expect("invariant: receiving stream");
         if hold {
-            state.held.insert(metadata.frame_id, (frame, Instant::now()));
+            state.held.insert(metadata.frame_id, (frame, now));
             return Ok(None);
         }
         if metadata.kind == MediaKind::Video {
@@ -1227,7 +1230,7 @@ impl HybridTransport {
                 state.needs_keyframe = false;
             }
             if state.needs_keyframe {
-                self.request_gap_recovery(metadata, Instant::now())?;
+                self.request_gap_recovery(metadata, now)?;
                 return Ok(None);
             }
             #[cfg(debug_assertions)]
@@ -1242,7 +1245,7 @@ impl HybridTransport {
             state.recovery_requested = false;
             state.held.retain(|id, _| *id > metadata.frame_id);
         }
-        state.last = Some(metadata.frame_id);
+        state.last = Some((metadata.frame_id, now));
         self.video_recovery
             .lock()
             .unwrap()
@@ -1293,13 +1296,21 @@ impl HybridTransport {
             .expect("invariant: reordered frame due");
         let first = frame.metadata;
         if now < started + media::DELTA_TTL {
-            // Give fragment repair its send budget before a replacement keyframe
-            // can supersede it. Keep the chain while an in-flight repair can finish.
+            // Keep the chain while an in-flight repair can finish.
             stream.recovery_requested = true;
             let missing = FrameMetadata {
                 frame_id: stream.expected().expect("invariant: delta gap has a reference"),
                 ..first
             };
+            #[cfg(debug_assertions)]
+            hbb_common::throttled_log!(
+                Duration::from_secs(1),
+                info,
+                "client_udp_video_gap_recovery display={} epoch={} expected={} held={} waiting_ms={:.1} since_delivery_ms={:.1}",
+                missing.display_id, missing.epoch, missing.frame_id, stream.held.len(),
+                now.saturating_duration_since(started).as_secs_f64() * 1000.0,
+                now.saturating_duration_since(stream.last.map_or(started, |(_, delivered)| delivered)).as_secs_f64() * 1000.0
+            );
             self.request_gap_recovery(missing, now)?;
             return Ok(None);
         }
@@ -2018,7 +2029,7 @@ mod tests {
 
     #[tokio::test]
     async fn gpui_delta_gap_preserves_late_keyframes_and_reuses_payload() {
-        let (client, _host, _listener) = streams().await;
+        let (client, mut host, _listener) = streams().await;
         let (mut transport, channels) =
             HybridTransport::new(client, SessionId([9; 16]), false).unwrap();
         transport.ready.store(true, Ordering::Release);
@@ -2101,6 +2112,30 @@ mod tests {
         for _ in 25..=33 {
             assert!(transport.take_reordered(repaired_at).unwrap().is_some());
         }
+
+        // After a receive stall, a proven gap can already be past the repair budget.
+        transport
+            .video_recovery
+            .lock()
+            .unwrap()
+            .set_epoch(0, 1, Instant::now() - Duration::from_secs(1))
+            .unwrap();
+        assert!(transport.deliver(frame(34, true)).unwrap().is_some());
+        tokio::time::sleep(VIDEO_DELTA_REPAIR_AGE).await;
+        assert!(transport.deliver(frame(36, false)).unwrap().is_none());
+        let after_report = Instant::now() + media::REPORT_INTERVAL;
+        assert!(transport.take_reordered(after_report).unwrap().is_none());
+        let request = timeout(Duration::from_millis(250), host.next())
+            .await
+            .expect("gap recovery request after the receive stall")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            Message::parse_from_bytes(&request).unwrap().misc().union,
+            Some(misc::Union::RefreshVideoDisplay(0)),
+        ));
+        assert!(transport.deliver(frame(35, false)).unwrap().is_some());
+        assert!(transport.take_reordered(after_report).unwrap().is_some());
     }
     #[tokio::test]
     async fn blocked_reliable_writer_does_not_stop_udp_delta_frames() {
