@@ -418,7 +418,7 @@ impl Topology {
         ids: &[String],
         preferred: Option<VirtualDisplayMode>,
         requested: Option<VirtualDisplayMode>,
-    ) -> ResultType<()> {
+    ) -> ResultType<BTreeSet<String>> {
         let all = Self::query(true)?.paths;
         // PnP can restore a cached primary screen before CCD configuration runs.
         // Start with the pre-operation layout, not that already changed desktop.
@@ -592,7 +592,8 @@ impl Topology {
                 path.flags &= !DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE;
             }
         }
-        topology.apply()
+        topology.apply()?;
+        Ok(present)
     }
 }
 

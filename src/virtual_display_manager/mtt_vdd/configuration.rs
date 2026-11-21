@@ -4,6 +4,40 @@ use base::session_protocol::virtual_display::{
     VirtualDisplayConfiguration, VirtualDisplayMode, VirtualDisplayState, PROTOCOL_VERSION,
 };
 
+fn preferred_new_mode(
+    state: &VirtualDisplayState,
+    requested: Option<VirtualDisplayMode>,
+) -> Option<VirtualDisplayMode> {
+    requested
+        .or_else(|| {
+            // A small Windows compatibility mode should not become the next screen's default.
+            state
+                .displays
+                .iter()
+                .find(|screen| {
+                    screen.active
+                        && screen.width.min(screen.height) >= 600
+                        && screen.width.max(screen.height) >= 800
+                        && screen.refresh_rate_units > 0
+                })
+                .map(|screen| VirtualDisplayMode {
+                    width: screen.width,
+                    height: screen.height,
+                    refresh_rate_units: screen.refresh_rate_units,
+                })
+        })
+        .or_else(|| {
+            state.modes.iter().copied().min_by_key(|mode| {
+                (
+                    u64::from(mode.width.abs_diff(1920)) + u64::from(mode.height.abs_diff(1080)),
+                    mode.width < mode.height,
+                    mode.refresh_rate_units > 1_200_000,
+                    mode.refresh_rate_units.abs_diff(1_200_000),
+                )
+            })
+        })
+}
+
 fn policy(folder: &Path) -> ResultType<Option<VirtualDisplayConfiguration>> {
     let path = folder.join("configuration.json");
     if !path.exists() {
@@ -290,27 +324,8 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
         if config.count > 0 {
             let ccd_started = Instant::now();
             let ids = topology::monitor_ids()?;
-            let preferred = config
-                .modes
-                .first()
-                .copied()
-                .or_else(|| {
-                    before
-                        .displays
-                        .iter()
-                        .find(|screen| {
-                            screen.active
-                                && screen.width > 0
-                                && screen.height > 0
-                                && screen.refresh_rate_units > 0
-                        })
-                        .map(|screen| VirtualDisplayMode {
-                            width: screen.width,
-                            height: screen.height,
-                            refresh_rate_units: screen.refresh_rate_units,
-                        })
-                })
-                .or_else(|| before.modes.first().copied());
+            let requested = config.modes.first().copied();
+            let preferred = preferred_new_mode(&before, requested);
             hbb_common::throttled_log!(
                 Duration::from_secs(1),
                 info,
@@ -321,9 +336,9 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
             // PnP, CCD, and capture enumerate on different Windows notifications.
             // Wait only inside this explicit operation; real topology rejections fail immediately.
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                match snapshot.configure(&ids, preferred, config.modes.first().copied()) {
-                    Ok(()) => break,
+            let retained = loop {
+                match snapshot.configure(&ids, preferred, requested) {
+                    Ok(retained) => break retained,
                     Err(error)
                         if error
                             .downcast_ref::<topology::MonitorPathPending>()
@@ -334,37 +349,35 @@ pub(crate) fn configure(config: &VirtualDisplayConfiguration) -> ResultType<Virt
                     }
                     Err(error) => return Err(error),
                 }
-            }
+            };
             loop {
                 let actual = Topology::query(false)?.screens(&ids)?;
                 let capturable = actual.len() == config.count as usize
                     && actual
                         .iter()
                         .all(|display| display.active && display.index.is_some());
-                let mode_matches = config.modes.first().is_none_or(|mode| {
-                    actual.iter().all(|display| {
-                        display.width == mode.width
-                            && display.height == mode.height
-                            && display.refresh_rate_units.abs_diff(mode.refresh_rate_units) <= 1
+                let mismatched = actual.iter().find(|display| {
+                    let expected = requested.or_else(|| {
+                        if retained.contains(&display.id) {
+                            None
+                        } else {
+                            preferred
+                        }
+                    });
+                    expected.is_some_and(|mode| {
+                        display.width != mode.width
+                            || display.height != mode.height
+                            || display.refresh_rate_units.abs_diff(mode.refresh_rate_units) > 1
                     })
                 });
-                if capturable && mode_matches {
+                if capturable && mismatched.is_none() {
                     break;
                 }
                 if std::time::Instant::now() >= deadline {
                     if !capturable {
                         bail!("Windows 尚未提供所请求数量的可捕获虚拟显示器");
                     }
-                    let display = actual
-                        .iter()
-                        .find(|display| {
-                            config.modes.first().is_some_and(|mode| {
-                                display.width != mode.width
-                                    || display.height != mode.height
-                                    || display.refresh_rate_units.abs_diff(mode.refresh_rate_units)
-                                        > 1
-                            })
-                        })
+                    let display = mismatched
                         .ok_or_else(|| anyhow::anyhow!("Windows 尚未确认请求的虚拟显示模式"))?;
                     bail!(
                         "Windows 实际应用 {}×{} @{}Hz，与请求模式不同",
@@ -514,6 +527,52 @@ fn restart_required() -> ResultType<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpui_new_virtual_display_prefers_a_1080p_desktop_mode() {
+        let tiny = VirtualDisplayMode {
+            width: 480,
+            height: 640,
+            refresh_rate_units: 600_000,
+        };
+        let desktop = VirtualDisplayMode {
+            width: 1920,
+            height: 1080,
+            refresh_rate_units: 1_200_000,
+        };
+        let desktop_60 = VirtualDisplayMode {
+            refresh_rate_units: 600_000,
+            ..desktop
+        };
+        let mut state = VirtualDisplayState {
+            modes: vec![tiny, desktop_60],
+            ..Default::default()
+        };
+        assert_eq!(preferred_new_mode(&state, None), Some(desktop_60));
+        state.modes.push(desktop);
+        assert_eq!(preferred_new_mode(&state, None), Some(desktop));
+
+        state.displays.push(
+            base::session_protocol::virtual_display::VirtualDisplayScreen {
+                active: true,
+                width: tiny.width,
+                height: tiny.height,
+                refresh_rate_units: tiny.refresh_rate_units,
+                ..Default::default()
+            },
+        );
+        assert_eq!(preferred_new_mode(&state, None), Some(desktop));
+        assert_eq!(preferred_new_mode(&state, Some(tiny)), Some(tiny));
+
+        let high_refresh = VirtualDisplayMode {
+            refresh_rate_units: 2_440_000,
+            ..desktop
+        };
+        state.displays[0].width = high_refresh.width;
+        state.displays[0].height = high_refresh.height;
+        state.displays[0].refresh_rate_units = high_refresh.refresh_rate_units;
+        assert_eq!(preferred_new_mode(&state, None), Some(high_refresh));
+    }
 
     #[test]
     fn temporary_displays_need_exit_cleanup_without_primary_preference() {
