@@ -32,8 +32,6 @@ extern "C" {
 
 namespace {
 
-constexpr unsigned int AMF_MAX_PENDING_FRAMES = 2;
-
 void lockContext(void *lock_ctx);
 void unlockContext(void *lock_ctx);
 
@@ -344,7 +342,8 @@ public:
     if (!amf_pipeline_ || !keyframe_request_.pending()) return 0;
     int ret = pump_amf(callback, obj);
     if (ret < 0 || !keyframe_request_.pending() || amf_input_prepared_
-        || amf_input_queue_.front() || pending_frames_ >= AMF_MAX_PENDING_FRAMES)
+        || amf_input_queue_.front()
+        || pending_frames_ >= amf_pending_frame_limit(framerate_, dataFormat_ == H265))
       return ret;
     const auto latest = amf_input_queue_.latest();
     if (latest < 0) return 0;
@@ -580,7 +579,10 @@ private:
     if (amf_error_ < 0) return amf_error_;
     int ret = receive_pending(callback, obj);
     if (ret < 0) return ret;
-    while (pending_frames_ < AMF_MAX_PENDING_FRAMES) {
+    // At 240 fps an AMF HEVC frame can still be running two capture periods
+    // later. Bound codec work separately from the two captured BGRA slots.
+    const auto pending_limit = amf_pending_frame_limit(framerate_, dataFormat_ == H265);
+    while (pending_frames_ < pending_limit) {
       if (!amf_input_prepared_) {
         const auto input = amf_input_queue_.front();
         if (!input) break;

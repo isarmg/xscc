@@ -214,6 +214,10 @@ INPUT_TEST = r"""
 #include "amf_input_queue.h"
 
 int main(void) {
+    assert(amf_pending_frame_limit(120, true) == 2);
+    assert(amf_pending_frame_limit(239, true) == 2);
+    assert(amf_pending_frame_limit(240, true) == 3);
+    assert(amf_pending_frame_limit(244, false) == 2);
     AmfInputQueue queue;
     bool ready[2] = {true, true};
     const auto available = [&] { return queue.available([&](std::size_t slot) { return ready[slot]; }); };
