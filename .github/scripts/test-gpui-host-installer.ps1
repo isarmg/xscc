@@ -85,6 +85,24 @@ try {
     if ($command -ine ('"' + $exe + '" --service')) { throw 'Service executable path/arguments differ from the installed host' }
     $owner = Invoke-CimMethod -InputObject (Get-CimInstance Win32_Process -Filter "ProcessId=$($service.ProcessId)") -MethodName GetOwnerSid
     if ($owner.ReturnValue -ne 0 -or $owner.Sid -ne 'S-1-5-18') { throw 'SCM process is not owned by SYSTEM' }
+    Add-Type -Namespace Xscc -Name HostInstallerSession -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint WTSGetActiveConsoleSessionId();
+'@
+    $console = [Xscc.HostInstallerSession]::WTSGetActiveConsoleSessionId()
+    if ($console -ne [uint32]::MaxValue -and $console -ne 0) {
+        $deadline = (Get-Date).AddSeconds(20)
+        do {
+            $desktopServer = Get-CimInstance Win32_Process -Filter "Name='xscc-host.exe' AND SessionId=$console" |
+                Where-Object { $_.ParentProcessId -eq $service.ProcessId -and
+                    $_.ExecutablePath -ieq $exe -and $_.CommandLine -match '\s--server$' }
+            if ($desktopServer) { break }
+            Start-Sleep -Milliseconds 400
+        } while ((Get-Date) -lt $deadline)
+        if (-not $desktopServer) { throw "Host did not start its --server process in desktop session $console" }
+    } else {
+        Write-Warning 'Desktop process check skipped because the disposable runner has no active console session'
+    }
     $added = @(Get-CimInstance Win32_Service | Where-Object Name -notin $servicesBefore | Select-Object -ExpandProperty Name)
     if ($added.Count -ne 1 -or $added[0] -ne 'XSCC Host') { throw 'Unexpected service registrations were observed' }
     if (@(Get-CimInstance Win32_SystemDriver | Where-Object Name -notin $driversBefore).Count -gt 0) { throw 'Unexpected driver registration was observed' }

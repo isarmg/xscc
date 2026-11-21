@@ -675,7 +675,11 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
                     drop(server_process.take());
                     match launch_server(session_id, !close_sent).await {
                         Ok(process) => server_process = Some(process),
-                        Err(error) => log::error!("Failed to launch server: {error}"),
+                        Err(error) => hbb_common::throttled_log!(
+                            Duration::from_secs(5),
+                            error,
+                            "Failed to launch server: {error:#}"
+                        ),
                     }
                 }
             }

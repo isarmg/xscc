@@ -11,8 +11,8 @@ use windows::{
         Foundation::HANDLE,
         Security::{
             DuplicateTokenEx, SecurityImpersonation, SetTokenInformation, TokenPrimary,
-            TokenSessionId, TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-            TOKEN_QUERY,
+            TokenSessionId, TOKEN_ADJUST_DEFAULT, TOKEN_ADJUST_SESSIONID, TOKEN_ASSIGN_PRIMARY,
+            TOKEN_DUPLICATE, TOKEN_QUERY,
         },
         System::{
             Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock},
@@ -175,13 +175,15 @@ pub(super) fn token(session_id: u32, as_user: bool) -> ResultType<OwnedHandle> {
             GetCurrentProcess(),
             TOKEN_DUPLICATE | TOKEN_QUERY,
             &mut process_token,
-        )?;
+        )
+        .context("Could not open the current Windows process token")?;
     }
     let process_token = owned(process_token)?;
     let mut token = HANDLE::default();
     let mut desired = TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY;
     if !as_user {
-        desired |= TOKEN_ADJUST_SESSIONID;
+        // SetTokenInformation(TokenSessionId) checks both access rights on the duplicate.
+        desired |= TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
     }
     unsafe {
         DuplicateTokenEx(
@@ -191,7 +193,8 @@ pub(super) fn token(session_id: u32, as_user: bool) -> ResultType<OwnedHandle> {
             SecurityImpersonation,
             TokenPrimary,
             &mut token,
-        )?;
+        )
+        .context("Could not duplicate the Windows primary token")?;
     }
     let token = owned(token)?;
     if !as_user && super::get_current_process_session_id() != Some(session_id) {
@@ -201,7 +204,10 @@ pub(super) fn token(session_id: u32, as_user: bool) -> ResultType<OwnedHandle> {
                 TokenSessionId,
                 (&session_id as *const u32).cast(),
                 mem::size_of_val(&session_id) as u32,
-            )?;
+            )
+            .with_context(|| {
+                format!("Could not assign the Windows token to session {session_id}")
+            })?;
         }
     }
     Ok(token)
@@ -268,7 +274,8 @@ pub(super) fn launch(
             PCWSTR::null(),
             &startup,
             &mut process,
-        )?;
+        )
+        .with_context(|| format!("Could not create a process in Windows session {session_id}"))?;
     }
     let process_handle = owned(process.hProcess);
     let _thread = owned(process.hThread)?;
