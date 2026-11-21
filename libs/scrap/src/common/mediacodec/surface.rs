@@ -99,6 +99,12 @@ impl VideoSurface {
             return Ok(SurfaceOutput::NoFrame);
         }
         if !self.is_valid() {
+            #[cfg(debug_assertions)]
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(1),
+                info,
+                "android_video_surface_drop reason=invalid_surface"
+            );
             codec.release_output_buffer(buffer, false)?;
             return Ok(SurfaceOutput::Dropped);
         }
@@ -114,6 +120,13 @@ impl VideoSurface {
         }
         let now = now.tv_sec * 1_000_000_000 + now.tv_nsec;
         let Some(deadline) = pacing.deadline(now, fps, self.display_limit) else {
+            #[cfg(debug_assertions)]
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(1),
+                info,
+                "android_video_surface_drop reason=presentation_horizon source_fps={fps} display_limit_fps={}",
+                self.display_limit
+            );
             codec.release_output_buffer(buffer, false)?;
             return Ok(SurfaceOutput::Dropped);
         };

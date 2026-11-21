@@ -66,7 +66,6 @@ const VIDEO_RECEIVE_QUEUE_GRACE: Duration = Duration::from_millis(4);
 const VIDEO_QUEUE: usize = 64;
 const VIDEO_QUEUE_BYTES: usize = 2 * media::MAX_VIDEO_FRAME;
 const VIDEO_QUEUE_AGE: Duration = Duration::from_millis(600);
-const VIDEO_REORDER_WINDOW: Duration = Duration::from_millis(24);
 const VIDEO_REORDER_FRAMES: usize = 16;
 const CONTROL_LIMIT: usize = 128 * 1024;
 const MAX_STREAMS: usize = 65;
@@ -528,20 +527,21 @@ impl ReceiveStream {
             .is_some_and(|id| self.held.contains_key(&id))
     }
 
-    fn gap_deadline(&self) -> Option<Instant> {
-        self.held.values().map(|(_, deadline)| *deadline).min()
+    fn gap_started(&self) -> Option<Instant> {
+        self.held.values().map(|(_, received)| *received).min()
     }
 
     fn reorder_due(&self, now: Instant) -> Option<Instant> {
         if self.expected_is_held() {
             return Some(now);
         }
-        let deadline = self.gap_deadline()?;
-        Some(if self.recovery_requested {
-            deadline + VIDEO_REORDER_WINDOW
+        let started = self.gap_started()?;
+        let wait = if self.recovery_requested {
+            media::DELTA_TTL
         } else {
-            deadline
-        })
+            delta_repair::REPAIR_AGE
+        };
+        Some(started + wait)
     }
 }
 struct QueuedFrame {
@@ -1198,10 +1198,7 @@ impl HybridTransport {
         let hold = gap && self.has_reorder_space(frame.payload.len());
         let state = self.receiving.get_mut(&key).expect("invariant: receiving stream");
         if hold {
-            state.held.insert(
-                metadata.frame_id,
-                (frame, Instant::now() + VIDEO_REORDER_WINDOW),
-            );
+            state.held.insert(metadata.frame_id, (frame, Instant::now()));
             return Ok(None);
         }
         if metadata.kind == MediaKind::Video {
@@ -1288,14 +1285,15 @@ impl HybridTransport {
         }) else {
             return Ok(None);
         };
-        let deadline = stream.gap_deadline().expect("invariant: reordered frame due");
+        let started = stream.gap_started().expect("invariant: reordered frame due");
         let (_, (frame, _)) = stream
             .held
             .first_key_value()
             .expect("invariant: reordered frame due");
         let first = frame.metadata;
-        if now < deadline + VIDEO_REORDER_WINDOW {
-            // Start recovery on time while a late missing frame can still repair the chain.
+        if now < started + media::DELTA_TTL {
+            // Give fragment repair its send budget before a replacement keyframe
+            // can supersede it. Keep the chain while an in-flight repair can finish.
             stream.recovery_requested = true;
             let missing = FrameMetadata {
                 frame_id: stream.expected().expect("invariant: delta gap has a reference"),
@@ -2065,19 +2063,19 @@ mod tests {
         assert!(transport.deliver(frame(6, false)).unwrap().is_some());
 
         assert!(transport.deliver(frame(8, false)).unwrap().is_none());
-        let repair_started = Instant::now() + VIDEO_REORDER_WINDOW;
+        let repair_started = Instant::now() + delta_repair::REPAIR_AGE;
         assert!(transport.take_reordered(repair_started).unwrap().is_none());
         assert!(transport.deliver(frame(7, false)).unwrap().is_some());
         assert!(transport.take_reordered(repair_started).unwrap().is_some());
 
         assert!(transport.deliver(frame(10, false)).unwrap().is_none());
         channels.completed.try_send(frame(9, false)).unwrap();
-        let expired = Instant::now() + VIDEO_REORDER_WINDOW * 2;
+        let expired = Instant::now() + media::DELTA_TTL;
         assert!(transport.take_reordered(expired).unwrap().is_some());
         assert!(transport.take_reordered(expired).unwrap().is_some());
 
         assert!(transport.deliver(frame(12, false)).unwrap().is_none());
-        let expired = Instant::now() + VIDEO_REORDER_WINDOW * 2;
+        let expired = Instant::now() + media::DELTA_TTL;
         assert!(transport.take_reordered(expired).unwrap().is_none());
         assert!(transport.deliver(frame(11, false)).unwrap().is_none());
         assert!(transport.deliver(frame(13, true)).unwrap().is_some());
@@ -2089,6 +2087,18 @@ mod tests {
         assert!(transport.deliver(frame(14, false)).unwrap().is_some());
         for _ in 15..=23 {
             assert!(transport.take_reordered(Instant::now()).unwrap().is_some());
+        }
+
+        // A repaired delta can arrive after the short reordering delay while its
+        // receive assembly and the following frames are still usable.
+        for id in 25..=33 {
+            assert!(transport.deliver(frame(id, false)).unwrap().is_none());
+        }
+        let repaired_at = Instant::now() + Duration::from_millis(80);
+        assert!(transport.take_reordered(repaired_at).unwrap().is_none());
+        assert!(transport.deliver(frame(24, false)).unwrap().is_some());
+        for _ in 25..=33 {
+            assert!(transport.take_reordered(repaired_at).unwrap().is_some());
         }
     }
     #[tokio::test]
