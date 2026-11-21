@@ -507,6 +507,7 @@ struct SendStream {
     epoch: u64,
     next: u64,
     codec: Option<u8>,
+    acknowledged: bool,
 }
 #[derive(Default)]
 struct ReceiveStream {
@@ -660,12 +661,14 @@ impl Outbound {
             epoch: 0,
             next: 0,
             codec: None,
+            acknowledged: false,
         });
         stream.epoch = stream
             .epoch
             .checked_add(1)
             .context("UDP media epoch exhausted")?;
         stream.codec = codec;
+        stream.acknowledged = false;
         let epoch = Epoch {
             kind,
             display,
@@ -738,8 +741,13 @@ impl Outbound {
                 queued: Instant::now(),
             };
             if kind == MediaKind::Video {
-                if !self.outgoing.push(queued) {
-                    self.notice(FrameNotice::Abandoned(metadata))?;
+                let abandoned = self.outgoing.push(queued, |metadata| {
+                    self.sending
+                        .get(&(metadata.kind, metadata.display_id))
+                        .is_some_and(|stream| stream.epoch == metadata.epoch && stream.acknowledged)
+                });
+                for dropped in abandoned {
+                    self.notice(FrameNotice::Abandoned(dropped))?;
                 }
                 return Ok(true);
             }
@@ -1003,6 +1011,17 @@ impl HybridTransport {
                 if self.host {
                     if !epoch.ack || epoch.format.is_some() {
                         bail!("Expected UDP media epoch acknowledgement");
+                    }
+                    if let Some(stream) = self
+                        .outbound
+                        .inner
+                        .lock()
+                        .unwrap()
+                        .sending
+                        .get_mut(&(epoch.kind, epoch.display))
+                        .filter(|stream| stream.epoch == epoch.epoch)
+                    {
+                        stream.acknowledged = true;
                     }
                     permit.send(Command::Epoch(epoch));
                 } else {
@@ -1409,7 +1428,11 @@ mod tests {
                 Err(error)
                     if error
                         .downcast_ref::<io::Error>()
-                        .is_some_and(|error| error.kind() == io::ErrorKind::AddrInUse) => {}
+                        .is_some_and(|error| {
+                            error.kind() == io::ErrorKind::AddrInUse
+                                // Windows may exclude a port for UDP alone and report WSAEACCES.
+                                || (cfg!(windows) && error.raw_os_error() == Some(10013))
+                        }) => {}
                 Err(error) => panic!("cannot reserve TCP/UDP test endpoints: {error:#}"),
             }
         }
@@ -1636,7 +1659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unacknowledged_video_epoch_does_not_block_another_display() {
+    async fn a_full_unacknowledged_video_epoch_does_not_block_another_display() {
         let (client, host, _listener, udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(udp.registration()));
         let offer = host.offer_host().await.unwrap().unwrap();
@@ -1662,18 +1685,31 @@ mod tests {
 
         let mut second_display = video(true, 128);
         second_display.mut_video_frame().display = 1;
-        producer.send_video(Arc::new(second_display)).unwrap();
-        let next = video(true, 96);
+        producer.send_video(Arc::new(second_display.clone())).unwrap();
+        let mut second_delta = video(false, 64);
+        second_delta.mut_video_frame().display = 1;
+        let second_delta = Arc::new(second_delta);
+        for _ in 1..VIDEO_QUEUE - 1 {
+            producer.send_video(second_delta.clone()).unwrap();
+        }
+
+        let next = video(false, 96);
         producer.send_video(Arc::new(next.clone())).unwrap();
-        let SessionTransport::Hybrid(client) = &mut client else {
+        let SessionTransport::Hybrid(hybrid) = &mut client else {
             unreachable!();
         };
         // Leave the new display's TCP epoch unacknowledged while UDP continues.
-        let completed = timeout(Duration::from_millis(500), client.media.recv())
+        let completed = timeout(Duration::from_millis(500), hybrid.media.recv())
             .await
             .unwrap()
             .unwrap();
         assert_eq!(Message::parse_from_bytes(&completed.payload).unwrap(), next);
+        let resumed = timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(Message::parse_from_bytes(&resumed).unwrap(), second_display);
         serving.abort();
         let _ = serving.await;
     }

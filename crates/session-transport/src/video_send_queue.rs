@@ -1,4 +1,4 @@
-use super::{FrameMetadata, QueuedFrame, VIDEO_QUEUE, VIDEO_QUEUE_BYTES};
+use super::{FrameMetadata, QueuedFrame, VIDEO_QUEUE, VIDEO_QUEUE_AGE, VIDEO_QUEUE_BYTES};
 use base::direct_transport::udp_media::{MediaKind, MAX_VIDEO_FRAME};
 use hbb_common::tokio::sync::Notify;
 use std::{collections::VecDeque, sync::Mutex};
@@ -7,6 +7,17 @@ use std::{collections::VecDeque, sync::Mutex};
 struct Pending {
     frames: VecDeque<QueuedFrame>,
     bytes: usize,
+}
+
+impl Pending {
+    fn usage_excluding(&self, discard: impl Fn(&QueuedFrame) -> bool) -> (usize, usize) {
+        self.frames
+            .iter()
+            .filter(|frame| !discard(frame))
+            .fold((0, 0), |(count, bytes), frame| {
+                (count + 1, bytes + frame.plan.descriptor().total_size as usize)
+            })
+    }
 }
 
 #[derive(Default)]
@@ -41,47 +52,95 @@ impl VideoSendQueue {
         pending.bytes = bytes;
     }
 
-    pub(super) fn push(&self, frame: QueuedFrame) -> bool {
+    /// Returns frames that need an abandonment notice.
+    pub(super) fn push(
+        &self,
+        frame: QueuedFrame,
+        acknowledged: impl Fn(FrameMetadata) -> bool,
+    ) -> Vec<FrameMetadata> {
         let descriptor = frame.plan.descriptor();
         let metadata = descriptor.metadata;
         let size = descriptor.total_size as usize;
         let mut pending = self.pending.lock().unwrap();
+        let (count_limit, byte_limit) = if metadata.keyframe {
+            (VIDEO_QUEUE, VIDEO_QUEUE_BYTES)
+        } else {
+            (VIDEO_QUEUE - 1, VIDEO_QUEUE_BYTES - MAX_VIDEO_FRAME)
+        };
+        let fits = |(count, bytes): (usize, usize)| count < count_limit && bytes + size <= byte_limit;
+        let superseded = |item: &QueuedFrame| supersedes(metadata, item.plan.descriptor().metadata);
+        let mut usage = if metadata.keyframe {
+            pending.usage_excluding(&superseded)
+        } else {
+            (pending.frames.len(), pending.bytes)
+        };
+        let mut abandoned = Vec::new();
+
+        if !fits(usage) {
+            let ready = acknowledged(metadata);
+            let mut candidates = Vec::new();
+            for (position, item) in pending.frames.iter().enumerate().rev() {
+                if superseded(item) {
+                    continue;
+                }
+                let prior = item.plan.descriptor().metadata;
+                let expired = !prior.keyframe
+                    && frame.queued.saturating_duration_since(item.queued) >= VIDEO_QUEUE_AGE;
+                if expired {
+                    candidates.push((0, position));
+                } else if ready && !acknowledged(prior) {
+                    // Keep the waiting stream's decodable prefix when reclaiming space.
+                    let priority = if prior.keyframe { 2 } else { 1 };
+                    candidates.push((priority, position));
+                }
+            }
+            candidates.sort_by_key(|(priority, _)| *priority);
+            let mut count = 0;
+            for &(_, position) in &candidates {
+                usage.0 -= 1;
+                usage.1 -= pending.frames[position].plan.descriptor().total_size as usize;
+                count += 1;
+                if fits(usage) {
+                    break;
+                }
+            }
+            if !fits(usage) {
+                return vec![metadata];
+            }
+            candidates.truncate(count);
+            candidates.sort_unstable_by_key(|(_, position)| *position);
+            let mut victims = candidates
+                .into_iter()
+                .map(|(_, position)| position)
+                .peekable();
+            let mut position = 0;
+            pending.frames.retain(|item| {
+                let dropped = victims.next_if_eq(&position).is_some();
+                position += 1;
+                if dropped {
+                    abandoned.push(item.plan.descriptor().metadata);
+                }
+                !dropped && !superseded(item)
+            });
+        } else if metadata.keyframe {
+            pending.frames.retain(|item| !superseded(item));
+        }
 
         if metadata.keyframe {
-            let (count, bytes) = pending.frames.iter().fold((0, 0), |(count, bytes), item| {
-                let prior = item.plan.descriptor();
-                if supersedes(metadata, prior.metadata) {
-                    (count, bytes)
-                } else {
-                    (count + 1, bytes + prior.total_size as usize)
-                }
-            });
-            if count >= VIDEO_QUEUE || bytes + size > VIDEO_QUEUE_BYTES {
-                return false;
-            }
-            pending
-                .frames
-                .retain(|item| !supersedes(metadata, item.plan.descriptor().metadata));
             let position = pending
                 .frames
                 .iter()
                 .position(|item| !item.plan.descriptor().metadata.keyframe)
                 .unwrap_or(pending.frames.len());
             pending.frames.insert(position, frame);
-            pending.bytes = bytes + size;
         } else {
-            if pending.frames.len() >= VIDEO_QUEUE - 1
-                || pending.bytes + size > VIDEO_QUEUE_BYTES - MAX_VIDEO_FRAME
-            {
-                return false;
-            }
             pending.frames.push_back(frame);
-            pending.bytes += size;
         }
+        pending.bytes = usage.1 + size;
 
         drop(pending);
         self.available.notify_one();
-        true
+        abandoned
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
