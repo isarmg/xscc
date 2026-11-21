@@ -1150,6 +1150,8 @@ pub struct LoginConfigHandler {
     pub save_ab_password_to_recent: bool, // true: connected with ab password
     pub custom_fps: Arc<Mutex<Option<usize>>>,
     pub last_auto_fps: Option<usize>,
+    #[cfg(feature = "gpui-session")]
+    session_streaming_fps: Option<i32>,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
     pub selected_windows_session_id: Option<u32>,
@@ -1191,6 +1193,10 @@ impl LoginConfigHandler {
         let config = self.load_config();
         self.remember = !config.password.is_empty();
         self.config = config;
+        #[cfg(feature = "gpui-session")]
+        {
+            self.session_streaming_fps = None;
+        }
 
         let conn_token = conn_token
             .map(|x| serde_json::from_str::<ConnToken>(&x).ok())
@@ -1759,17 +1765,21 @@ impl LoginConfigHandler {
     #[cfg(feature = "gpui-session")]
     pub(crate) fn set_session_streaming_fps(&mut self, fps: i32) -> Message {
         let streaming = fps > 30;
-        self.config.options.insert(keys::OPTION_STREAMING_MODE.into(),
-            if streaming { "Y" } else { "" }.into());
-        self.config.options.insert(keys::OPTION_STREAMING_FPS.into(), fps.to_string());
+        self.session_streaming_fps = Some(fps);
+        #[cfg(debug_assertions)]
+        log::info!("session_streaming_target_fps fps={fps}");
         let mut message = self.set_custom_fps(fps, false);
         message.mut_misc().mut_option().streaming_mode =
             if streaming { BoolOption::Yes } else { BoolOption::No }.into();
         message
     }
 
-    /// Update the cap and streaming mode together. Unrelated cap messages leave mode unset.
+    /// Apply explicitly saved streaming settings to the active session.
     pub fn streaming_option_message(&mut self) -> Message {
+        #[cfg(feature = "gpui-session")]
+        {
+            self.session_streaming_fps = None;
+        }
         let mut message = self.set_custom_fps(self.streaming_target_fps(), false);
         message.mut_misc().mut_option().streaming_mode = if self.streaming_enabled() {
             BoolOption::Yes
@@ -1781,11 +1791,23 @@ impl LoginConfigHandler {
     }
 
     pub fn streaming_enabled(&self) -> bool {
-        self.conn_type == ConnType::DEFAULT_CONN
-            && self.get_option(keys::OPTION_STREAMING_MODE) == "Y"
+        if self.conn_type != ConnType::DEFAULT_CONN {
+            return false;
+        }
+        #[cfg(feature = "gpui-session")]
+        if let Some(fps) = self.session_streaming_fps {
+            return fps > 30;
+        }
+        self.get_option(keys::OPTION_STREAMING_MODE) == "Y"
     }
 
     pub fn streaming_target_fps(&self) -> i32 {
+        #[cfg(feature = "gpui-session")]
+        if self.conn_type == ConnType::DEFAULT_CONN {
+            if let Some(fps) = self.session_streaming_fps {
+                return fps;
+            }
+        }
         streaming::target_fps(
             self.streaming_enabled(),
             &self.get_option(keys::OPTION_STREAMING_FPS),
@@ -3402,6 +3424,29 @@ mod retry_tests {
 #[cfg(test)]
 mod fps_tests {
     use super::*;
+
+    #[cfg(feature = "gpui-session")]
+    #[test]
+    fn gpui_display_mode_save_preserves_the_session_frame_rate() {
+        let id = format!("xscc-display-fps-test-{}", uuid::Uuid::new_v4());
+        let mut handler = LoginConfigHandler {
+            id: id.clone(),
+            conn_type: ConnType::DEFAULT_CONN,
+            ..Default::default()
+        };
+        let request = handler.set_session_streaming_fps(120);
+        // A faster remote display may still have the same 120 fps mobile target.
+        handler.set_custom_resolution(1, Some((1920, 1080)));
+        let saved = PeerConfig::load(&id);
+        PeerConfig::remove(&id);
+
+        assert_eq!(request.misc().option().custom_fps, 120);
+        assert_eq!(handler.get_custom_resolution(1), Some((1920, 1080)));
+        assert!(handler.streaming_enabled());
+        assert_eq!(handler.streaming_target_fps(), 120);
+        assert!(!saved.options.contains_key(keys::OPTION_STREAMING_MODE));
+        assert!(!saved.options.contains_key(keys::OPTION_STREAMING_FPS));
+    }
 
     #[test]
     fn streaming_options_explicitly_enable_disable_and_do_not_affect_incremental_caps() {
