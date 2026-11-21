@@ -1,5 +1,8 @@
 #![cfg(target_os = "android")]
 
+#[cfg(all(feature = "test-uncapped-stream", not(debug_assertions)))]
+compile_error!("The uncapped Android stream test requires a Debug build");
+
 #[cfg(feature = "mobile-session")]
 mod android_display;
 #[cfg(feature = "mobile-session")]
@@ -76,6 +79,8 @@ fn run(app: gpui::AndroidApp) -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(feature = "mobile-session")]
     let display_limit = android_display::DisplayLimit::query(&app);
+    #[cfg(all(feature = "test-uncapped-stream", debug_assertions))]
+    log::info!("Android uncapped stream test enabled");
     #[cfg(feature = "mobile-session")]
     let video_app = android_video::VideoApp(app.clone());
     let application = gpui::android(app)?;

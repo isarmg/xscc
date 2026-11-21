@@ -40,10 +40,14 @@ on:
         description: 'Build an optimized Debug APK with stream diagnostics'
         default: false
         type: boolean
+      test_uncapped_stream:
+        description: 'Request the remote refresh rate in the Debug management APK'
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
-  group: gpui-android-smoke-${{ github.ref }}-${{ inputs.stream_debug && 'debug' || 'release' }}
+  group: gpui-android-smoke-${{ github.ref }}-${{ inputs.stream_debug && 'debug' || 'release' }}${{ inputs.test_uncapped_stream && '-uncapped-stream' || '' }}
   cancel-in-progress: false
 env:
   RUST_VERSION: '1.99.0'
@@ -55,6 +59,7 @@ env:
   GRADLE_SHA256: dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
   PACKAGE_VERSION: ${{ inputs.package_version || '4.0.0-beta.27' }}
   XSCC_RUST_PROFILE: ${{ inputs.stream_debug && 'stream-debug' || 'release' }}
+  XSCC_TEST_UNCAPPED_STREAM: ${{ inputs.test_uncapped_stream && 'true' || 'false' }}
 jobs:
   android:
     runs-on: ubuntu-24.04
@@ -153,6 +158,15 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android
 
+      - name: Test the uncapped Android stream request
+        if: inputs.test_uncapped_stream
+        run: |
+          test "$XSCC_RUST_PROFILE" = stream-debug
+          rustc --edition 2024 --test --cfg 'feature="test-uncapped-stream"' apps/mobile/src/display_state.rs -o "$RUNNER_TEMP/uncapped-stream-tests"
+          output=$("$RUNNER_TEMP/uncapped-stream-tests" --exact display_tests::uncapped_debug_stream_requests_the_remote_rate_on_a_120hz_phone)
+          printf '%s\n' "$output"
+          grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$output"
+
       - name: Test GPUI Android geometry on the host
         if: ${{ !inputs.build_only }}
         run: |
@@ -246,6 +260,7 @@ jobs:
           if [ "$FLAVOR" != smoke ]; then
             FEATURES=(--no-default-features --features mobile-management,mobile-session)
             if [ "$FLAVOR" = landirect ]; then FEATURES=(--no-default-features --features mobile-management,mobile-session,test-lan-direct); fi
+            if [ "$XSCC_TEST_UNCAPPED_STREAM" = true ]; then FEATURES+=(--features test-uncapped-stream); fi
             cargo tree --locked --target aarch64-linux-android "${FEATURES[@]}" --edges normal --prefix none --format '{p}|{f}' > "$RUNNER_TEMP/management-dependencies.txt"
             python3 - "$RUNNER_TEMP/management-dependencies.txt" <<'PY'
           import os, sys
@@ -411,7 +426,7 @@ jobs:
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: xscc-gpui-android-${{ matrix.flavor }}-${{ github.sha }}${{ inputs.stream_debug && '-debug' || '' }}
+          name: xscc-gpui-android-${{ matrix.flavor }}-${{ github.sha }}${{ inputs.stream_debug && '-debug' || '' }}${{ inputs.test_uncapped_stream && matrix.flavor == 'management' && '-uncapped-stream' || '' }}
           path: dist/gpui-android/*
           if-no-files-found: error
           retention-days: 14
