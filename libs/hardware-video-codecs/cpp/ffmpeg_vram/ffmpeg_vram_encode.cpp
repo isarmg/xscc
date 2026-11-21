@@ -303,11 +303,9 @@ public:
     return do_encode(callback, obj, ms);
   }
 
-  int poll(EncodeCallback callback, void *obj, bool output_only) {
+  int poll(EncodeCallback callback, void *obj) {
     if (!amf_pipeline_) return 0;
-    if (retiring_) return AVERROR(EPIPE);
-    if (amf_error_ < 0) return amf_error_;
-    const int ret = output_only ? receive_pending(callback, obj) : pump_amf(callback, obj);
+    const int ret = pump_amf(callback, obj);
     if (ret < 0) amf_error_ = ret;
     return ret;
   }
@@ -870,11 +868,11 @@ int ffmpeg_vram_input_ready(FFmpegVRamEncoder *encoder) {
   catch (const std::exception &) { return AVERROR_EXTERNAL; }
 }
 
-int ffmpeg_vram_poll(FFmpegVRamEncoder *encoder, EncodeCallback callback, void *obj, bool output_only) {
+int ffmpeg_vram_poll(FFmpegVRamEncoder *encoder, EncodeCallback callback, void *obj) {
   if (!encoder)
     return AVERROR(EINVAL);
   try {
-    return encoder->poll(callback, obj, output_only);
+    return encoder->poll(callback, obj);
   } catch (const std::exception &) {
     return AVERROR_EXTERNAL;
   }
@@ -971,7 +969,7 @@ int ffmpeg_vram_test_encode(int64_t *outLuids, int32_t *outVendors, int32_t maxD
           bool succ = ffmpeg_vram_encode(e, e->native_->GetCurrentTexture(), util_encode::vram_encode_test_callback,
                                  &key_obj, 0) == 0;
           while (succ && e->amf_pipeline_ && key_obj == 0 && util::elapsed_ms(start) < TEST_TIMEOUT_MS) {
-            succ = e->poll(util_encode::vram_encode_test_callback, &key_obj, false) == 0;
+            succ = e->poll(util_encode::vram_encode_test_callback, &key_obj) == 0;
             av_usleep(1000);
           }
           succ = succ && key_obj == 1;

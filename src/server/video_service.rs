@@ -196,9 +196,9 @@ impl VideoFrameController {
         self.send_conn_ids.clear();
     }
 
-    fn record_send(&mut self, tm: Instant, conn_ids: HashSet<i32>) {
+    fn set_send(&mut self, tm: Instant, conn_ids: HashSet<i32>) {
         self.cur = tm;
-        self.send_conn_ids.extend(conn_ids);
+        self.send_conn_ids = conn_ids;
         let mut displays = DISPLAY_CONN_IDS.lock().unwrap();
         if self.send_conn_ids.is_empty() {
             displays.remove(&self.display_idx);
@@ -915,23 +915,6 @@ fn run_encoder(
 
         frame_controller.reset();
 
-        #[cfg(all(windows, feature = "gpui-host", feature = "vram"))]
-        if encoder.frame_rate().is_some_and(|fps| fps > 60) {
-            // An already encoded frame should reach the transport before the next
-            // DXGI acquisition or AMF texture handoff can block this thread.
-            if let Some(frame) = encoder.poll_video_frame(true).map_err(vram_failure)? {
-                let ids = send_polled_video(
-                    display_idx,
-                    sp,
-                    frame,
-                    #[cfg(debug_assertions)]
-                    &mut stages,
-                );
-                frame_controller.record_send(now, ids);
-                encoder_warmed_up = true;
-            }
-        }
-
         let time = now - start;
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
         let res = if replay_cached {
@@ -952,7 +935,7 @@ fn run_encoder(
             )?;
             #[cfg(all(feature = "gpui-host", debug_assertions))]
             stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Replay);
-            frame_controller.record_send(now, ids);
+            frame_controller.set_send(now, ids);
             send_counter += 1;
             Ok(())
         } else {
@@ -1063,7 +1046,7 @@ fn run_encoder(
                         )?;
                         #[cfg(all(feature = "gpui-host", debug_assertions))]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Fresh);
-                        frame_controller.record_send(now, send_conn_ids);
+                        frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
                     }
                     #[cfg(windows)]
@@ -1088,18 +1071,21 @@ fn run_encoder(
                 #[cfg(all(windows, feature = "vram"))]
                 let pending_frame = match encoder.replay_keyframe(ms).map_err(vram_failure)? {
                     Some(frame) => Some(frame),
-                    None => encoder.poll_video_frame(false).map_err(vram_failure)?,
+                    None => encoder.poll_video_frame().map_err(vram_failure)?,
                 };
                 #[cfg(all(windows, feature = "vram"))]
-                if let Some(frame) = pending_frame {
-                    let ids = send_polled_video(
-                        display_idx,
-                        sp,
-                        frame,
-                        #[cfg(all(feature = "gpui-host", debug_assertions))]
-                        &mut stages,
-                    );
-                    frame_controller.record_send(now, ids);
+                if let Some(mut frame) = pending_frame {
+                    frame.display = display_idx as _;
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
+                    let encoded_frames = crate::common::video_frame_count(&frame);
+                    let mut message = Message::new();
+                    message.set_video_frame(frame);
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
+                    let enqueue_started = Instant::now();
+                    let ids = sp.send_video_frame(message);
+                    #[cfg(all(feature = "gpui-host", debug_assertions))]
+                    stages.enqueue_time(enqueue_started.elapsed(), encoded_frames);
+                    frame_controller.set_send(now, ids);
                     encoder_warmed_up = true;
                     send_counter += 1;
                 }
@@ -1142,7 +1128,7 @@ fn run_encoder(
                         )?;
                         #[cfg(all(feature = "gpui-host", debug_assertions))]
                         stages.encoded(encode_started.elapsed(), metrics::EncodeKind::Repeat);
-                        frame_controller.record_send(now, send_conn_ids);
+                        frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
                     }
                 }
@@ -1504,26 +1490,6 @@ fn check_privacy_mode_changed(
 fn refresh_allowed(unfed: bool, warmed_up: bool, latency_free: bool) -> bool {
     // Only VideoToolbox has been seen to need this; other platforms keep refreshing as before.
     !cfg!(target_os = "macos") || unfed || warmed_up || latency_free
-}
-
-#[cfg(all(windows, feature = "vram"))]
-fn send_polled_video(
-    display: usize,
-    sp: &GenericService,
-    mut frame: VideoFrame,
-    #[cfg(all(feature = "gpui-host", debug_assertions))] stages: &mut metrics::Metrics,
-) -> HashSet<i32> {
-    frame.display = display as _;
-    #[cfg(all(feature = "gpui-host", debug_assertions))]
-    let encoded_frames = crate::common::video_frame_count(&frame);
-    let mut message = Message::new();
-    message.set_video_frame(frame);
-    #[cfg(all(feature = "gpui-host", debug_assertions))]
-    let enqueue_started = Instant::now();
-    let ids = sp.send_video_frame(message);
-    #[cfg(all(feature = "gpui-host", debug_assertions))]
-    stages.enqueue_time(enqueue_started.elapsed(), encoded_frames);
-    ids
 }
 
 #[inline]
@@ -2089,38 +2055,13 @@ mod tests {
     fn removing_the_last_legacy_viewer_removes_the_frame_barrier() {
         let idx = usize::MAX - 2;
         let mut controller = VideoFrameController::new(idx);
-        controller.record_send(Instant::now(), HashSet::from([7]));
-        controller.reset();
-        controller.record_send(Instant::now(), HashSet::new());
+        controller.set_send(Instant::now(), HashSet::from([7]));
+        controller.set_send(Instant::now(), HashSet::new());
         assert!(controller.send_conn_ids.is_empty());
         assert!(!super::DISPLAY_CONN_IDS.lock().unwrap().contains_key(&idx));
         let mut fetched = HashSet::new();
         controller.try_wait_next(&mut fetched, 3_000);
         assert!(fetched.is_empty());
-    }
-
-    #[test]
-    fn gpui_later_send_keeps_the_viewers_of_an_early_encoded_frame() {
-        let idx = usize::MAX - 3;
-        let early_viewer = i32::MAX;
-        let later_viewer = i32::MAX - 1;
-        let (tx, rx) = mpsc::channel();
-        FRAME_FETCHED_NOTIFIERS
-            .lock()
-            .unwrap()
-            .insert(idx, (tx, Arc::new(Mutex::new(rx))));
-        let mut controller = VideoFrameController::new(idx);
-        let now = Instant::now();
-        controller.record_send(now, HashSet::from([early_viewer]));
-        controller.record_send(now, HashSet::new());
-        controller.record_send(now, HashSet::from([later_viewer]));
-        super::notify_video_frame_fetched_by_conn_id(early_viewer, None);
-        super::notify_video_frame_fetched_by_conn_id(later_viewer, None);
-        let mut fetched = HashSet::new();
-        controller.try_wait_next(&mut fetched, 0);
-        FRAME_FETCHED_NOTIFIERS.lock().unwrap().remove(&idx);
-        super::DISPLAY_CONN_IDS.lock().unwrap().remove(&idx);
-        assert_eq!(fetched, HashSet::from([early_viewer, later_viewer]));
     }
 
     #[test]

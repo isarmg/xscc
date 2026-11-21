@@ -173,14 +173,14 @@ impl EncoderApi for VRamEncoder {
     }
 
     #[cfg(windows)]
-    fn poll_video_frame(&mut self, output_only: bool) -> ResultType<Option<VideoFrame>> {
+    fn poll_video_frame(&mut self) -> ResultType<Option<VideoFrame>> {
         if !self.amf_pipeline() {
             return Ok(None);
         }
         let format = self.format;
         let frames = self
             .encoder
-            .poll(output_only)
+            .poll()
             .map_err(|error| anyhow!("Poll AMD encoded output failed: {error}"))?;
         Self::polled_video_frame(format, frames)
     }

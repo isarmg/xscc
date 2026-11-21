@@ -20,7 +20,7 @@ void *ffmpeg_vram_new_encoder(void *handle, int64_t luid,
 int ffmpeg_vram_encode(void *encoder, void *tex, EncodeCallback callback,
                        void *obj, int64_t ms);
 int ffmpeg_vram_destroy_encoder(void *encoder);
-int ffmpeg_vram_poll(void *encoder, EncodeCallback callback, void *obj, bool output_only);
+int ffmpeg_vram_poll(void *encoder, EncodeCallback callback, void *obj);
 int ffmpeg_vram_input_ready(void *encoder);
 int ffmpeg_vram_retire(void *encoder, void *capture_device, int timeout_ms);
 int ffmpeg_vram_retire_capture(void *device, int timeout_ms);
