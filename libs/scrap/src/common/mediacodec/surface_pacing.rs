@@ -14,9 +14,13 @@ impl Pacing {
             Some((last, _)) if last >= now => (last + interval).max(now + 2 * interval),
             _ => now + 2 * interval,
         };
-        // Real transports can deliver four or more outputs together. Keep extra
-        // room for a burst without changing the regular two-refresh lead.
-        let horizon = 3 * interval + (2 * interval).min(16_666_668);
+        // Recovered frames can arrive together. Give high-refresh streams more
+        // presentation slots within a bounded time, keeping the usual lead.
+        let horizon = if fps > 60 {
+            (8 * interval).min(67_000_000)
+        } else {
+            3 * interval + (2 * interval).min(16_666_668)
+        };
         if deadline > now + horizon {
             return None;
         }
@@ -42,6 +46,15 @@ mod tests {
         }
         assert_eq!(deadlines.len(), 240);
         assert!(deadlines.windows(2).all(|pair| pair[1] - pair[0] == period));
+
+        // Frames already decoded after a short delivery stall can arrive together.
+        let resumed = 245 * period;
+        for frame in 2..=7 {
+            assert_eq!(
+                pacing.deadline(resumed, 120, 120),
+                Some(resumed + frame * period)
+            );
+        }
     }
 
     #[test]
@@ -51,6 +64,9 @@ mod tests {
         assert_eq!(pacing.deadline(0, 120, 120), Some(25_000_002));
         assert_eq!(pacing.deadline(0, 120, 120), Some(33_333_336));
         assert_eq!(pacing.deadline(0, 120, 120), Some(41_666_670));
+        assert_eq!(pacing.deadline(0, 120, 120), Some(50_000_004));
+        assert_eq!(pacing.deadline(0, 120, 120), Some(58_333_338));
+        assert_eq!(pacing.deadline(0, 120, 120), Some(66_666_672));
         assert_eq!(pacing.deadline(0, 120, 120), None);
         assert_eq!(
             pacing.deadline(1_000_000_000, 120, 120),
