@@ -11,7 +11,9 @@ extern "C" {
 #include <libavutil/hwcontext_d3d11va.h>
 #endif
 
+#include <initializer_list>
 #include <memory>
+#include <utility>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -425,7 +427,9 @@ private:
   }
 
 #ifdef XSCC_STREAM_DEBUG
-  void log_slow_amf(const char *phase, std::chrono::steady_clock::time_point started) {
+  void log_slow_amf(
+      const char *phase, std::chrono::steady_clock::time_point started,
+      std::initializer_list<std::pair<const char *, std::chrono::steady_clock::duration>> stages = {}) {
     const auto now = util::now();
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started);
     if (elapsed.count() < 16) return;
@@ -435,8 +439,13 @@ private:
     }
     if (elapsed.count() < amf_logged_slow_ms_ * 2) return;
     amf_logged_slow_ms_ = elapsed.count();
-    LOG_WARN(std::string("host_amf_slow phase=") + phase +
-             " elapsed_ms=" + std::to_string(elapsed.count()));
+    auto message = std::string("host_amf_slow phase=") + phase +
+                   " elapsed_ms=" + std::to_string(elapsed.count());
+    for (const auto &[name, duration] : stages) {
+      message += " " + std::string(name) + "=" +
+                 std::to_string(std::chrono::duration<double, std::milli>(duration).count());
+    }
+    LOG_WARN(message);
   }
 #endif
 
@@ -515,6 +524,9 @@ private:
     if (locked == static_cast<HRESULT>(WAIT_TIMEOUT))
       return util::elapsed_ms(slot.submitted) >= ENCODE_TIMEOUT_MS ? AVERROR(ETIMEDOUT) : 0;
     if (locked != S_OK) return AVERROR_EXTERNAL;
+#ifdef XSCC_STREAM_DEBUG
+    const auto acquired = util::now();
+#endif
     int ret = 0;
     if (!av_frame_is_writable(frame_)) {
       av_frame_unref(frame_);
@@ -529,6 +541,9 @@ private:
       ret = av_hwframe_get_buffer(c_->hw_frames_ctx, frame_, 0);
       if (ret >= 0) encode_texture_ = reinterpret_cast<ID3D11Texture2D *>(frame_->data[0]);
     }
+#ifdef XSCC_STREAM_DEBUG
+    const auto converting = util::now();
+#endif
     if (ret >= 0) {
       const auto color_in = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
       const auto color_out = bt709_
@@ -540,12 +555,20 @@ private:
                                   high_refresh ? &slot.conversion_views : nullptr))
         ret = AVERROR_EXTERNAL;
     }
+#ifdef XSCC_STREAM_DEBUG
+    const auto flushing = util::now();
+#endif
     amf_device_->context_->Flush();
     slot.submitted = util::now();
     const HRESULT released = slot.encoder_mutex->ReleaseSync(0);
     if (released != S_OK) return AVERROR_EXTERNAL;
 #ifdef XSCC_STREAM_DEBUG
-    log_slow_amf("convert", started);
+    log_slow_amf("convert", started,
+                 {{"acquire_ms", acquired - started},
+                  {"buffer_ms", converting - acquired},
+                  {"blt_ms", flushing - converting},
+                  {"flush_ms", slot.submitted - flushing},
+                  {"release_ms", util::now() - slot.submitted}});
 #endif
     return ret < 0 ? ret : 1;
   }
