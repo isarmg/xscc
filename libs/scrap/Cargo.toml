@@ -42,6 +42,13 @@ features = ["dxgi", "dxgi1_2", "dxgi1_5", "dxgi1_6", "d3d11", "winuser", "winerr
 [target.'cfg(target_os = "macos")'.dependencies]
 block = { version = "0.1", optional = true }
 
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["std", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-media = { version = "=0.3.2", default-features = false, features = ["std", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMTime"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "objc2-io-surface"] }
+objc2-io-surface = { version = "=0.3.2", default-features = false, features = ["objc2-core-foundation"] }
+objc2-video-toolbox = { version = "=0.3.2", default-features = false, features = ["std", "bitflags", "VTBase", "VTDecompressionSession", "VTDecompressionProperties", "VTErrors", "VTSession", "objc2-core-media", "objc2-core-video"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.13"
 jni = "0.21"

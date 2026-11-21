@@ -1342,6 +1342,8 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn on_video_received(&self, _display: usize, _frames: usize) {}
     #[cfg(feature = "gpui-session")]
     fn on_video_decoded(&self, _display: usize, _elapsed: std::time::Duration) {}
+    #[cfg(all(target_os = "ios", feature = "gpui-session"))]
+    fn on_ios_surface(&self, _display: usize, _surface: scrap::video_toolbox::Surface) {}
     #[cfg(all(
         target_os = "android",
         feature = "mediacodec",

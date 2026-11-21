@@ -41,6 +41,8 @@ pub use self::pixelbuffer::PixelBuffer;
 
 pub mod codec;
 pub mod convert;
+#[cfg(any(target_os = "ios", test))]
+mod annex_b;
 #[cfg(feature = "hwcodec")]
 pub mod hwcodec;
 #[cfg(feature = "mediacodec")]
@@ -52,6 +54,8 @@ pub mod mediacodec;
 ))]
 mod nv12;
 pub mod vpxcodec;
+#[cfg(target_os = "ios")]
+pub mod video_toolbox;
 #[cfg(feature = "vram")]
 pub mod vram;
 pub use self::convert::*;

@@ -41,6 +41,33 @@ impl SessionLayout {
             ..self.stage
         }
     }
+
+    #[cfg(any(test, target_os = "ios"))]
+    pub fn overlay_controls(&mut self, height: f32, safe: (f32, f32, f32), ime: f32) {
+        self.stage.height = height;
+        self.viewport = self.stage;
+        self.video = self.stage;
+        if let Some(keyboard) = &mut self.keyboard {
+            let (safe_left, safe_right, safe_bottom) = safe;
+            let width = self.stage.width;
+            let docked_right = if self.rail.height == height && self.rail.x > 0. {
+                width - self.rail.x
+            } else {
+                0.
+            };
+            let docked_bottom = if self.rail.width == width {
+                height - self.rail.y
+            } else {
+                0.
+            };
+            let margin = safe_left.max(safe_right).max(docked_right).min(width / 2.);
+            let bottom = (height - ime.max(safe_bottom).max(docked_bottom)).max(0.);
+            keyboard.x = margin;
+            keyboard.width = width - 2. * margin;
+            keyboard.height = keyboard.height.min(bottom);
+            keyboard.y = bottom - keyboard.height;
+        }
+    }
 }
 
 pub fn place_rail(
@@ -55,6 +82,7 @@ pub fn place_rail(
     }
 }
 
+#[cfg(any(test, not(target_os = "ios")))]
 pub fn keyboard_overlay(layout: &mut SessionLayout, height: f32, ime: f32) {
     let bottom = (height - ime).max(0.);
     if let Some(keyboard) = &mut layout.keyboard {
@@ -408,6 +436,31 @@ mod tests {
                             assert!(!overlaps(panel, layout.rail));
                         }
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ios_overlays_preserve_video_and_center_the_keyboard_in_the_safe_area() {
+        for (width, height, safe) in [(844., 390., (59., 0., 21.)), (390., 844., (0., 0., 34.))] {
+            let baseline = layout(width, height, false, Panel::None, false, 0.).video;
+            for panel in [
+                Panel::None,
+                Panel::Operations,
+                Panel::Display,
+                Panel::Keyboard,
+            ] {
+                let mut expanded = layout(width, height, true, panel, true, 96.);
+                expanded.overlay_controls(height, safe, 180.);
+                assert_eq!(expanded.video, baseline);
+                assert_eq!(expanded.viewport, baseline);
+                assert!(overlaps(expanded.rail, expanded.video));
+                if let Some(keyboard) = expanded.keyboard {
+                    assert_eq!(keyboard.x + keyboard.width / 2., width / 2.);
+                    assert_eq!(keyboard.y + keyboard.height, height - 180.);
+                    assert!(keyboard.x >= safe.0 && width - keyboard.x - keyboard.width >= safe.1);
+                    assert!(!overlaps(expanded.rail, keyboard));
                 }
             }
         }

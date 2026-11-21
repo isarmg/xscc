@@ -6,12 +6,43 @@ use xscc_session_model::FrameBuffer;
 #[derive(Default)]
 pub struct VideoPresentation {
     image: Option<Arc<RenderImage>>,
+    #[cfg(target_os = "ios")]
+    surface: Option<gpui::SurfaceSource>,
     invalidated: bool,
 }
 
 impl VideoPresentation {
     pub fn image(&self) -> Option<&Arc<RenderImage>> {
         self.image.as_ref()
+    }
+
+    pub fn has_frame(&self) -> bool {
+        #[cfg(target_os = "ios")]
+        if self.surface.is_some() {
+            return true;
+        }
+        self.image.is_some()
+    }
+
+    #[cfg(target_os = "ios")]
+    pub fn surface(&self) -> Option<&gpui::SurfaceSource> {
+        self.surface.as_ref()
+    }
+
+    #[cfg(target_os = "ios")]
+    pub fn update_surface(
+        &mut self,
+        surface: gpui::SurfaceSource,
+        window: &mut Window,
+    ) -> Result<(), String> {
+        self.invalidated = false;
+        if let Some(image) = self.image.take() {
+            window
+                .drop_image(image)
+                .map_err(|error| error.to_string())?;
+        }
+        self.surface = Some(surface);
+        Ok(())
     }
 
     pub fn invalidate(&mut self) {
@@ -25,6 +56,10 @@ impl VideoPresentation {
     ) -> Result<Option<(u32, u32)>, String> {
         if self.invalidated {
             self.invalidated = false;
+            #[cfg(target_os = "ios")]
+            {
+                self.surface = None;
+            }
             if let Some(image) = self.image.take() {
                 window
                     .drop_image(image)
@@ -32,6 +67,10 @@ impl VideoPresentation {
             }
         }
         let Some(frame) = frame else { return Ok(None) };
+        #[cfg(target_os = "ios")]
+        {
+            self.surface = None;
+        }
         let (width, height) = frame.extent();
         #[cfg(any(target_os = "android", target_os = "linux"))]
         let nv12 = frame.is_nv12();

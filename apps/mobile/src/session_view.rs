@@ -159,7 +159,6 @@ impl SessionView {
                     .update_in(cx, |view: &mut Self, window, cx| {
                         view.consume(window, cx);
                         view.schedule_frame(window, cx);
-                        cx.notify();
                     })
                     .is_err()
                 {
@@ -920,12 +919,12 @@ impl SessionView {
         });
         if changed || audio_changed {
             self.publish_chrome(cx);
+            cx.notify();
         }
     }
 
     fn schedule_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.frame_scheduled && (self.session.is_some() || self.presentation.image().is_some())
-        {
+        if !self.frame_scheduled && (self.session.is_some() || self.presentation.has_frame()) {
             self.frame_scheduled = true;
             cx.on_next_frame(window, |view, window, cx| {
                 view.frame_scheduled = false;
@@ -935,7 +934,7 @@ impl SessionView {
                     return;
                 }
                 view.prepare_frame(window, cx);
-                // Android can have one more decoded frame waiting after this tick.
+                // Mobile can have one more decoded frame waiting after this tick.
                 // A new first frame will wake the UI through SessionUpdates.
                 if view
                     .session
@@ -949,7 +948,7 @@ impl SessionView {
     }
 
     fn prepare_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let had_frame = self.presentation.image().is_some();
+        let had_frame = self.presentation.has_frame();
         let mut first_image = !had_frame || self.extent.0 == 0 || self.extent.1 == 0;
         let mut changed = false;
         let frame = self
@@ -988,7 +987,28 @@ impl SessionView {
                     .is_some_and(SessionHandle::common_shortcuts_supported),
             );
         }
-        match self.presentation.update(frame, window) {
+        #[cfg(target_os = "ios")]
+        let result = {
+            let mut frame = frame;
+            let surface = frame.as_mut().and_then(|frame| {
+                frame
+                    .take_ios_surface()
+                    .map(|surface| (surface, frame.submission()))
+            });
+            if let Some((surface, submitted)) = surface {
+                self.presentation
+                    .update_surface(surface.into_pixel_buffer().into(), window)
+                    .map(|()| {
+                        submitted();
+                        Some(self.extent)
+                    })
+            } else {
+                self.presentation.update(frame, window)
+            }
+        };
+        #[cfg(target_os = "android")]
+        let result = self.presentation.update(frame, window);
+        match result {
             Ok(Some(_)) => {
                 cx.notify();
                 if first_image {
@@ -1014,11 +1034,13 @@ impl SessionView {
                 }
             }
         }
-        self.prepare_cursor(window);
+        let cursor_changed = self.prepare_cursor(window);
         self.publish_pointer_chrome(cx);
-        changed |= had_frame != self.presentation.image().is_some();
+        changed |= had_frame != self.presentation.has_frame();
         if changed {
             self.publish_chrome(cx);
+        }
+        if changed || cursor_changed {
             cx.notify();
         }
     }
@@ -1115,12 +1137,12 @@ impl SessionView {
         }
     }
 
-    fn prepare_cursor(&mut self, window: &mut Window) {
+    fn prepare_cursor(&mut self, window: &mut Window) -> bool {
         let mut snapshot = self.session.as_ref().map(SessionHandle::cursor_snapshot);
         if !self.connected
             || !self.authorized()
             || self.pending_monitor.is_some()
-            || self.presentation.image().is_none()
+            || !self.presentation.has_frame()
             || self.extent.0 == 0
             || self.extent.1 == 0
         {
@@ -1142,17 +1164,19 @@ impl SessionView {
             }
             None
         };
-        self.prepared_cursor =
-            match self
-                .cursor_presentation
-                .prepare(snapshot.as_ref(), local, window)
-            {
-                Ok(cursor) => cursor,
-                Err(error) => {
-                    gpui_session::log_cursor_render_failure(&error);
-                    PreparedCursor::default()
-                }
-            };
+        let cursor = match self
+            .cursor_presentation
+            .prepare(snapshot.as_ref(), local, window)
+        {
+            Ok(cursor) => cursor,
+            Err(error) => {
+                gpui_session::log_cursor_render_failure(&error);
+                PreparedCursor::default()
+            }
+        };
+        let changed = !self.prepared_cursor.same_visual(&cursor);
+        self.prepared_cursor = cursor;
+        changed
     }
 
     fn publish_chrome(&self, cx: &mut Context<Self>) {
@@ -1164,6 +1188,14 @@ impl SessionView {
             .map(SessionHandle::media_controls)
             .unwrap_or_default();
         let (submission, submitted_fps) = ("UI提交", self.quality.submitted_fps);
+        #[cfg(target_os = "ios")]
+        let decoder = if self.presentation.surface().is_some() {
+            " · VideoToolbox"
+        } else {
+            ""
+        };
+        #[cfg(target_os = "android")]
+        let decoder = "";
         #[cfg(target_os = "android")]
         let (submission, submitted_fps) = if self.video_surface_size().is_some() {
             ("Surface提交", self.quality.surface_submitted_fps)
@@ -1177,7 +1209,7 @@ impl SessionView {
             has_frame: self.connected
                 && self.extent.0 > 0
                 && self.extent.1 > 0
-                && self.presentation.image().is_some(),
+                && self.presentation.has_frame(),
             notice: self.notice.clone(),
             pointer_mode: self.input.mode() == InputMode::Pointer,
             view_only: self.view_only,
@@ -1232,8 +1264,10 @@ impl SessionView {
                 })
                 .collect(),
             quality: format!(
-                "{} · 接收 {} / 解码 {} / {submission} {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}",
+                "{} · {}×{} · 接收 {} / 解码 {} / {submission} {} FPS · 解码p95 {} ms · 排队p95 {} ms · {} · RTT {} ms · 编码目标 {} kbps · {}{decoder}",
                 self.transport.as_deref().unwrap_or("—"),
+                self.extent.0,
+                self.extent.1,
                 self.quality
                     .received_fps
                     .map(|v| v.to_string())
@@ -1331,7 +1365,7 @@ impl SessionView {
         let pointer = self.input.snapshot();
         if !self.rail_expanded
             || self.panel != Panel::None
-            || self.presentation.image().is_none()
+            || !self.presentation.has_frame()
             || self.input.active()
             || pointer.left_down
             || pointer.middle_down
@@ -1616,7 +1650,18 @@ impl Render for SessionView {
             self.input.mode() == InputMode::Pointer && self.mouse_buttons && self.input_allowed(),
             keyboard_height,
         );
+        #[cfg(target_os = "ios")]
+        layout.overlay_controls(
+            visible.height.into(),
+            (
+                insets.safe_area.left.into(),
+                insets.safe_area.right.into(),
+                insets.safe_area.bottom.into(),
+            ),
+            ime,
+        );
         if self.panel == Panel::Keyboard {
+            #[cfg(not(target_os = "ios"))]
             session_layout::keyboard_overlay(&mut layout, visible.height.into(), ime);
             let body = layout
                 .keyboard
@@ -1669,6 +1714,18 @@ impl Render for SessionView {
                 view.touch_event(&event.0, event.1, event.2, generation, window, cx);
             },
         );
+        let mut video = at(layout.video).overflow_hidden();
+        if !direct_video && self.connected && extent.0 > 0 && extent.1 > 0 {
+            video = video.children(
+                self.presentation
+                    .image()
+                    .map(|image| remote_image(image.clone())),
+            );
+            #[cfg(target_os = "ios")]
+            if let Some(surface) = self.presentation.surface() {
+                video = video.child(gpui::surface(surface.clone()).size_full());
+            }
+        }
         let mut root = div()
             .relative()
             .w(visible.width)
@@ -1680,19 +1737,7 @@ impl Render for SessionView {
             } else {
                 0x000000ff
             }))
-            .child(
-                at(layout.video).overflow_hidden().children(
-                    self.presentation
-                        .image()
-                        .filter(|_| {
-                            !direct_video
-                                && self.connected
-                                && self.extent.0 > 0
-                                && self.extent.1 > 0
-                        })
-                        .map(|image| remote_image(image.clone())),
-                ),
-            )
+            .child(video)
             .child(
                 canvas(
                     |bounds, _, _| bounds,
@@ -1777,6 +1822,31 @@ impl Render for SessionView {
                         .child(label)
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.keyboard_page(page, window, cx)
+                        })),
+                );
+            }
+            #[cfg(target_os = "ios")]
+            if self.keyboard_page == KeyboardPage::Input && enabled {
+                header = header.child(
+                    div()
+                        .id("session-keyboard-paste")
+                        .h(px(key_height))
+                        .px_2()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .text_size(px(13.))
+                        .text_color(rgb(0x4d88fa))
+                        .child("粘贴")
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            if view.input_allowed()
+                                && let Some(keyboard) = &view.keyboard
+                            {
+                                keyboard.update(cx, |keyboard, cx| {
+                                    keyboard.paste_from_clipboard(window, cx)
+                                });
+                            }
+                            cx.stop_propagation();
                         })),
                 );
             }

@@ -46,6 +46,46 @@ fn resolution_mode(
     }
 }
 
+fn controller_mode(
+    current: Option<(i32, i32, u32)>,
+    supported: &[(i32, i32, u32)],
+    (width, height): (i32, i32),
+) -> Option<(i32, i32, u32)> {
+    let current = current?;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let (long, short) = (width.max(height), width.min(height));
+    let size_error = |(w, h, _): (i32, i32, u32)| {
+        let long_error = (f64::from(w.max(h)) / f64::from(long)).ln();
+        let short_error = (f64::from(w.min(h)) / f64::from(short)).ln();
+        long_error.max(short_error).abs() + (long_error - short_error).abs()
+    };
+    supported
+        .iter()
+        .copied()
+        .filter(|&(w, h, _)| w > 0 && h > 0)
+        .min_by(|a, b| {
+            size_error(*a)
+                .total_cmp(&size_error(*b))
+                .then_with(|| {
+                    ((a.0 < a.1) != (current.0 < current.1))
+                        .cmp(&((b.0 < b.1) != (current.0 < current.1)))
+                })
+                .then_with(|| (a.2 != current.2).cmp(&(b.2 != current.2)))
+                .then_with(|| a.2.abs_diff(current.2).cmp(&b.2.abs_diff(current.2)))
+                .then_with(|| b.2.cmp(&a.2))
+        })
+}
+
+fn mode_label((width, height, hz): (i32, i32, u32)) -> String {
+    if hz == 0 {
+        format!("{width}×{height}")
+    } else {
+        format!("{width}×{height} · {hz} Hz")
+    }
+}
+
 impl SessionChrome {
     pub(super) fn resolution_enabled(&self) -> bool {
         self.model.connected
@@ -64,14 +104,22 @@ impl SessionChrome {
             width,
             height,
         ) {
-            Ok(mode) => {
-                self.resolution.error = None;
-                self.media_menu = None;
-                if self.model.current_resolution != Some(mode) {
-                    cx.emit(ChromeAction::Resolution(mode.0, mode.1, mode.2));
-                }
+            Ok(mode) => self.apply_resolution_mode(mode, cx),
+            Err(error) => {
+                self.resolution.error = Some(error);
+                cx.notify();
             }
-            Err(error) => self.resolution.error = Some(error),
+        }
+    }
+
+    fn apply_resolution_mode(&mut self, mode: (i32, i32, u32), cx: &mut Context<Self>) {
+        if !self.resolution_enabled() {
+            return;
+        }
+        self.resolution.error = None;
+        self.media_menu = None;
+        if self.model.current_resolution != Some(mode) {
+            cx.emit(ChromeAction::Resolution(mode.0, mode.1, mode.2));
         }
         cx.notify();
     }
@@ -212,37 +260,49 @@ impl SessionChrome {
                     }),
             );
         }
-        let controller = window.display(cx).map(|display| {
-            let size = display.bounds().size;
-            let scale = window.scale_factor();
+        let visible = window.viewport_size();
+        let scale = window.scale_factor();
+        let controller = controller_mode(
+            self.model.current_resolution,
+            &self.model.resolutions,
             (
-                (f32::from(size.width) * scale).round() as i32,
-                (f32::from(size.height) * scale).round() as i32,
-            )
-        });
+                (f32::from(visible.width) * scale).round() as i32,
+                (f32::from(visible.height) * scale).round() as i32,
+            ),
+        );
+        let controller_label = match controller {
+            Some(mode) if Some(mode) == self.model.current_resolution => {
+                format!("当前模式 · {}", mode_label(mode))
+            }
+            Some(mode) => mode_label(mode),
+            None => "主机未公布显示模式".into(),
+        };
         body = body
             .child(
                 div()
                     .id("session-resolution-option-controller")
                     .min_h(px(48.))
                     .px_3()
+                    .py_2()
                     .rounded(px(14.))
                     .bg(rgb(super::RAISED))
                     .flex()
-                    .items_center()
+                    .flex_col()
+                    .justify_center()
                     .opacity(if enabled && controller.is_some() {
                         1.
                     } else {
                         0.42
                     })
-                    .child("控制端分辨率")
+                    .child("适配控制端屏幕")
+                    .child(div().text_size(px(12.)).child(controller_label))
                     .when(enabled && controller.is_some(), |button| {
                         button
                             .cursor_pointer()
                             .on_click(cx.listener(move |view, _, _, cx| {
-                                if let Some((width, height)) = controller {
+                                if let Some(mode) = controller {
                                     view.resolution.custom = false;
-                                    view.apply_resolution(width, height, cx);
+                                    view.apply_resolution_mode(mode, cx);
                                 }
                                 cx.stop_propagation();
                             }))
@@ -323,7 +383,7 @@ impl SessionChrome {
 
 #[cfg(test)]
 mod tests {
-    use super::resolution_mode;
+    use super::{controller_mode, resolution_mode};
 
     #[test]
     fn resolution_selection_preserves_current_refresh_and_rejects_unsupported_modes() {
@@ -335,5 +395,30 @@ mod tests {
         assert!(resolution_mode(Some((1920, 1080, 60)), &modes, 3840, 2160).is_err());
         assert!(resolution_mode(Some((1920, 1080, 60)), &modes, 2222, 1111).is_err());
         assert!(resolution_mode(None, &modes, 1920, 1080).is_err());
+    }
+
+    #[test]
+    fn controller_uses_the_closest_advertised_size_and_retains_its_current_rate() {
+        let modes = [
+            (480, 640, 60),
+            (1280, 720, 120),
+            (1920, 1080, 60),
+            (1920, 1080, 120),
+            (2560, 1440, 60),
+        ];
+        let current = Some((1280, 720, 120));
+        assert_eq!(
+            controller_mode(current, &modes, (2556, 1179)),
+            Some((1920, 1080, 120))
+        );
+        assert_eq!(
+            controller_mode(current, &modes, (1080, 2400)),
+            Some((1920, 1080, 120))
+        );
+        assert_eq!(
+            controller_mode(current, &modes, (2560, 1440)),
+            Some((2560, 1440, 60))
+        );
+        assert_eq!(controller_mode(current, &[], (1080, 2400)), None);
     }
 }

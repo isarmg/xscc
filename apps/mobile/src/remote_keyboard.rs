@@ -171,6 +171,18 @@ impl RemoteKeyboard {
         self.changed(window, cx);
     }
 
+    #[cfg(target_os = "ios")]
+    pub fn paste_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accepts_text_input(window, cx) {
+            if let Some(item) = cx.read_from_clipboard() {
+                self.paste(item, window, cx);
+            } else {
+                self.notice = "剪贴板中没有可粘贴的文本。".into();
+                self.changed(window, cx);
+            }
+        }
+    }
+
     fn ime_requested(&self, epoch: u64, window: &Window) -> bool {
         self.page == KeyboardPage::Input
             && self.control.enabled.get()
@@ -350,8 +362,20 @@ impl EntityInputHandler for RemoteKeyboard {
             .unmark(epoch, self.control.unicode.get());
         self.publish(result, window, cx);
     }
-    fn paste(&mut self, _: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
-        self.notice = "此预览不支持剪贴板粘贴。".into();
+    fn paste(&mut self, item: ClipboardItem, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "ios")]
+        if let Some(text) = item.text().filter(|text| !text.is_empty()) {
+            self.replace_text_in_range(None, &text, window, cx);
+            return;
+        }
+        #[cfg(target_os = "ios")]
+        let notice = "剪贴板中没有可粘贴的文本。";
+        #[cfg(not(target_os = "ios"))]
+        let notice = {
+            let _ = item;
+            "此预览不支持剪贴板粘贴。"
+        };
+        self.notice = notice.into();
         self.changed(window, cx);
     }
     fn bounds_for_range(
@@ -369,6 +393,11 @@ impl EntityInputHandler for RemoteKeyboard {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
+        // The real caret is on the host. A fabricated index would let UIKit
+        // start a local text gesture anywhere over the remote touch canvas.
+        #[cfg(target_os = "ios")]
+        return None;
+        #[cfg(not(target_os = "ios"))]
         Some(self.control.state.borrow().selection().end)
     }
 }

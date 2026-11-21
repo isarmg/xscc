@@ -40,6 +40,8 @@ pub struct Frame {
     pub stride: usize,
     /// Decoder-owned pixels (BGRA8 or NV12), returned to the bounded pool on drop.
     pub bgra: Vec<u8>,
+    #[cfg(target_os = "ios")]
+    ios_surface: Option<scrap::video_toolbox::Surface>,
     #[cfg(any(target_os = "android", target_os = "linux"))]
     nv12: bool,
     ready_at: Instant,
@@ -49,6 +51,11 @@ pub struct Frame {
 }
 
 impl Frame {
+    #[cfg(target_os = "ios")]
+    pub fn take_ios_surface(&mut self) -> Option<scrap::video_toolbox::Surface> {
+        self.ios_surface.take()
+    }
+
     /// Receipt to invoke once the UI accepts this frame, excluding GPU completion/scanout.
     pub fn submission(&self) -> impl FnOnce() + 'static {
         let metrics = self.metrics.clone();
@@ -85,7 +92,7 @@ impl xscc_session_model::FrameBuffer for Frame {
 impl Drop for Frame {
     fn drop(&mut self) {
         // Bound both the number and size of allocations retained after resolution changes.
-        if self.bgra.capacity() <= 64 * 1024 * 1024 {
+        if self.bgra.capacity() > 0 && self.bgra.capacity() <= 64 * 1024 * 1024 {
             let _ = self.recycle.push(std::mem::take(&mut self.bgra));
         }
     }
@@ -317,9 +324,9 @@ impl Default for Mailbox {
         Self {
             #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
             platform: RwLock::new(String::new()),
-            // Android hardware output can arrive in pairs between two UI vsyncs.
+            // Hardware decoder output can arrive in pairs between two UI vsyncs.
             // Keep one spare frame; stale backlog is skipped at the UI boundary.
-            frame: ArrayQueue::new(if cfg!(target_os = "android") { 2 } else { 1 }),
+            frame: ArrayQueue::new(if cfg!(any(target_os = "android", target_os = "ios")) { 2 } else { 1 }),
             recycle: Arc::new(ArrayQueue::new(3)),
             metrics: Arc::new(Mutex::new(metrics::Metrics::default())),
             events: ArrayQueue::new(64),
@@ -374,6 +381,27 @@ impl Handler {
             self.0.events.force_push(event);
         }
         self.0.updates.notify_one();
+    }
+
+    fn publish_frame(&self, frame: Frame) {
+        let monitors = self.0.monitors.read().unwrap();
+        if !monitors.accepts_frame(frame.display) || self.0.closed.load(Ordering::Acquire) {
+            return;
+        }
+        // An unread frame already scheduled a UI wake.
+        let replaced = {
+            let mut metrics = self.0.metrics.lock().unwrap();
+            let replaced = self.0.frame.force_push(frame).is_some();
+            #[cfg(debug_assertions)]
+            metrics.published();
+            if replaced {
+                metrics.dropped();
+            }
+            replaced
+        };
+        if !replaced && monitors.pending.is_none() {
+            self.0.updates.notify_one();
+        }
     }
 }
 
@@ -452,11 +480,11 @@ impl SessionHandle {
             mailbox.clear_frames();
             return None;
         }
-        #[cfg(target_os = "android")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         let budget = Duration::from_secs_f64(
             2.0 / self.session.lc.read().unwrap().streaming_target_fps().max(1) as f64,
         );
-        #[cfg(not(target_os = "android"))]
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let budget = Duration::MAX;
         let monitors = mailbox.monitors.read().unwrap();
         if monitors.pending.is_some() || monitors.current != display {
@@ -898,6 +926,23 @@ impl InvokeUiSession for Handler {
             self.0.metrics.lock().unwrap().decoded(elapsed);
         }
     }
+    #[cfg(target_os = "ios")]
+    fn on_ios_surface(&self, display: usize, surface: scrap::video_toolbox::Surface) {
+        let (width, height) = surface.extent();
+        let metrics_epoch = self.0.metrics.lock().unwrap().epoch();
+        self.publish_frame(Frame {
+            display,
+            width,
+            height,
+            stride: 0,
+            bgra: Vec::new(),
+            ios_surface: Some(surface),
+            ready_at: Instant::now(),
+            metrics_epoch,
+            recycle: self.0.recycle.clone(),
+            metrics: self.0.metrics.clone(),
+        });
+    }
     #[cfg(all(target_os = "android", feature = "mediacodec"))]
     fn on_mediacodec_decoded(
         &self,
@@ -944,28 +989,7 @@ impl InvokeUiSession for Handler {
         #[cfg(debug_assertions)]
         self.0.metrics.lock().unwrap().callback();
         if let Some(frame) = take_frame(display, image, &self.0) {
-            let monitors = self.0.monitors.read().unwrap();
-            if !monitors.accepts_frame(display) {
-                return;
-            }
-            if self.0.closed.load(Ordering::Acquire) {
-                return;
-            }
-            // Replacing an unread frame needs no second UI wake: the pending
-            // render will take the newest frame from the same mailbox.
-            let replaced = {
-                let mut metrics = self.0.metrics.lock().unwrap();
-                let replaced = self.0.frame.force_push(frame).is_some();
-                #[cfg(debug_assertions)]
-                metrics.published();
-                if replaced {
-                    metrics.dropped();
-                }
-                replaced
-            };
-            if !replaced && monitors.pending.is_none() {
-                self.0.updates.notify_one();
-            }
+            self.publish_frame(frame);
         }
     }
     fn set_display(&self, x: i32, y: i32, width: i32, height: i32, _: bool, _: f64) {
@@ -1252,6 +1276,8 @@ fn take_frame(display: usize, image: &mut scrap::ImageRgb, mailbox: &Mailbox) ->
         height: image.h as u32,
         stride: layout.row,
         bgra,
+        #[cfg(target_os = "ios")]
+        ios_surface: None,
         #[cfg(any(target_os = "android", target_os = "linux"))]
         nv12: false,
         ready_at: Instant::now(),

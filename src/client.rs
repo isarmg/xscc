@@ -993,9 +993,9 @@ impl VideoHandler {
         _format: CodecFormat,
         res: ResultType<bool>,
     ) -> ResultType<bool> {
-        #[cfg(feature = "mediacodec")]
+        #[cfg(any(feature = "mediacodec", target_os = "ios"))]
         if matches!(_format, CodecFormat::H264 | CodecFormat::H265) && matches!(&res, Ok(false)) {
-            // MediaCodec may consume input before an output frame is available.
+            // Parameter sets or asynchronous decoder input need not produce an image.
             return res;
         }
         if res.as_ref().is_ok_and(|x| *x) {
@@ -2342,12 +2342,23 @@ fn start_video_thread<F, T>(
                                         )
                                     });
                                     if present && !output_published {
-                                        video_callback(
-                                            display,
-                                            &mut handler.rgb,
-                                            handler.texture.texture,
-                                            pixelbuffer,
-                                        );
+                                        #[cfg(all(target_os = "ios", feature = "gpui-session"))]
+                                        let surface = handler.decoder.take_ios_surface();
+                                        #[cfg(all(target_os = "ios", feature = "gpui-session"))]
+                                        let output_published = if let Some(surface) = surface {
+                                            session.ui_handler.on_ios_surface(display, surface);
+                                            true
+                                        } else {
+                                            false
+                                        };
+                                        if !output_published {
+                                            video_callback(
+                                                display,
+                                                &mut handler.rgb,
+                                                handler.texture.texture,
+                                                pixelbuffer,
+                                            );
+                                        }
                                         last_presented = Some(std::time::Instant::now());
                                     }
 

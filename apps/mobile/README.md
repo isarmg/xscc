@@ -1,7 +1,7 @@
 # XSCC GPUI mobile management preview
 
 This is an **iOS 26 / iPadOS 26 / Android 15+ (API 35+) ARM64 preview**. The default build remains
-management-only. The explicit `mobile-session` build adds the software-decoded screen and direct-touch
+management-only. The explicit `mobile-session` build adds remote video and direct-touch
 session slice; device connection and first-frame acceptance are still required. It is a separate application with bundle identifier
 `org.sarmg.xscc.gpui.preview`. This workspace is the GPUI mobile product entry; its historical directory name and preview identifiers are retained.
 The unsigned IPA must be signed by the user with their own valid Apple identity
@@ -35,13 +35,15 @@ identity; media sessions use this same manager, its grants and session checks.
 The `mobile-session` feature adds a real “view screen” action to online authorized
 controlled devices. It attaches the existing `Arc<NativeManager>` to the native
 session adapter, reuses its target/proof/periodic authorization checks and existing
-TCP application login/decoder, and uploads owned BGRA frames through GPUI. There
+application login and media transport. On iOS, H.264 and HEVC use VideoToolbox when
+the device and host support those codecs. GPUI's Metal renderer reads the decoded
+buffers directly. Software codecs use owned BGRA frames on iOS. There
 is one manager and one application-owned Tokio runtime. GPUI calls the Rust core directly; desktop IPC, host listener, capture, additional binding store and QUIC remain disabled.
 
 The UI defaults to direct touch: tap to left-click, move one finger beyond the
 threshold to drag, and move two fingers to scroll. A second finger releases an
 active drag; cancellation or a third finger cancels the gesture. There is no
-full hardware-keyboard integration, inertial scrolling or clipboard integration.
+full hardware-keyboard integration, inertial scrolling or clipboard synchronization.
 An explicit one-shot right-click button arms the next valid single-finger tap.
 Black bars, dragging, multiple fingers and cancellation produce no right-click;
 focus loss, background, permission loss and display changes clear the armed state.
@@ -62,7 +64,8 @@ position-isolated synthetic anchor for empty-document Backspace. This is not a
 copy of the remote document. Pointer/control-key navigation, focus loss, background,
 mode changes and revocation cancel that context. Edits outside the known suffix
 are rejected rather than guessing remote selection. Failed sends clear context.
-There is no text logging or clipboard fallback. macOS and Windows targets use native
+The iOS input toolbar can send text from the local clipboard when the user taps
+Paste. This uses the same permission and text checks as typed input. macOS and Windows targets use native
 Unicode text injection; Linux targets accept printable ASCII only. Return, Tab and
 the control-key bar use separate single-press protocol commands. Hardware keyboard
 support and native Wayland Unicode remain separate unfinished work. Unmodified,
@@ -88,8 +91,8 @@ Android uses the same Panel and NativeManager through the Android-only cdylib
 entry; the existing iOS binary entry is unchanged. Both platforms enable screen
 and pointer input only with `mobile-session`. The separate
 [Android backend smoke slice](../../packaging/gpui-android/README.md) remains an
-offline regression baseline. Software decode is the initial mobile media path; no hardware
-decoding, zero-copy performance or successful device first frame is claimed here.
+offline regression baseline. Verify the active decoder and playback performance on
+the physical device with the session statistics.
 
 ## Build and verification
 
@@ -131,7 +134,7 @@ unsupported app platform rather than opening a production binding store.
    permission while dragging. Exercise software-keyboard composition/commit/cancel,
    emoji deletion, empty Backspace, navigation, and view-only rejection. Verify
    Linux non-ASCII is explicitly rejected without altering the clipboard.
-   Full hardware-keyboard integration and clipboard remain disabled.
+   On iOS, check local text paste and the keyboard toolbar in both orientations.
 7. Enable remote sound, test mute and system volume, then interrupt audio focus,
    unplug headphones, background, disconnect and reconnect. Old audio must not
    replay; interruptions require explicitly enabling sound again.
@@ -187,8 +190,10 @@ again. If the host does not respond, disconnect and reconnect.
 The 30/60 FPS controls request the existing host stream target. They do not promise
 that frame rate. The status shows reported decoder-output FPS, receive rate, RTT
 and codec for the current display; missing values remain unknown, and these are
-not physical presentation or end-to-end latency measurements. No new protocol,
-freeform resolution or hardware-decoder support is introduced. Physical-device
+not physical presentation or end-to-end latency measurements. The iOS status also
+shows the received frame dimensions and marks VideoToolbox output. The controller
+screen preset selects an advertised host mode and shows its size and refresh rate.
+Physical-device
 multi-monitor, pointer alignment and constrained-network acceptance remains open.
 
 

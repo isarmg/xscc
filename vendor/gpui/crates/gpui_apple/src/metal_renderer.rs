@@ -17,7 +17,7 @@ use metal::{
 };
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::{
-    CVMetalTexture, CVMetalTextureCache, CVMetalTextureGetTexture, CVPixelBufferGetHeight,
+    CVMetalTexture, CVMetalTextureCache, CVMetalTextureGetTexture, CVPixelBuffer, CVPixelBufferGetHeight,
     CVPixelBufferGetHeightOfPlane, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
     CVPixelBufferGetWidthOfPlane, kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, kCVReturnSuccess,
 };
@@ -747,6 +747,7 @@ impl MetalRenderer {
             viewport_size,
             Some(metal::MTLClearColor::new(0., 0., 0., alpha)),
         );
+        let mut surface_textures = Vec::new();
 
         for batch in scene.batches() {
             match batch {
@@ -811,12 +812,23 @@ impl MetalRenderer {
                     instance_bindings,
                     viewport_size,
                     command_encoder,
+                    &mut surface_textures,
                 ),
                 PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
             }
         }
 
         command_encoder.end_encoding();
+
+        if !surface_textures.is_empty() {
+            // The CoreVideo pool can reuse an IOSurface as soon as the frame is
+            // released. Keep the pixel buffers and texture wrappers until GPU completion.
+            let retained_surfaces = Cell::new(Some(surface_textures));
+            let block = RcBlock::new(move |_: ptr::NonNull<AnyObject>| {
+                drop(retained_surfaces.take());
+            });
+            unsafe { command_buffer.add_completed_handler(&*RcBlock::as_ptr(&block).cast()) };
+        }
 
         Ok(command_buffer.to_owned())
     }
@@ -1207,6 +1219,7 @@ impl MetalRenderer {
         instance_bindings: &InstanceBindings,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
+        surface_textures: &mut Vec<SurfaceTextures>,
     ) {
         if surfaces.is_empty() {
             return;
@@ -1236,10 +1249,9 @@ impl MetalRenderer {
                 DevicePixels::from(CVPixelBufferGetHeight(image_buffer) as i32),
             );
 
-            assert_eq!(
-                CVPixelBufferGetPixelFormatType(image_buffer),
-                kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            );
+            if CVPixelBufferGetPixelFormatType(image_buffer) != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange {
+                continue;
+            }
 
             let plane_texture = |plane, format| unsafe {
                 let mut texture = ptr::null_mut();
@@ -1254,16 +1266,18 @@ impl MetalRenderer {
                     plane,
                     ptr::NonNull::from(&mut texture),
                 );
-                assert_eq!(
-                    status, kCVReturnSuccess,
-                    "failed to create CoreVideo Metal texture"
-                );
-                CFRetained::<CVMetalTexture>::from_raw(
-                    ptr::NonNull::new(texture).expect("CoreVideo returned a null texture"),
-                )
+                if status != kCVReturnSuccess {
+                    log::trace!("Could not import a CoreVideo texture (status {status})");
+                    return None;
+                }
+                ptr::NonNull::new(texture).map(|texture| CFRetained::<CVMetalTexture>::from_raw(texture))
             };
-            let y_texture = plane_texture(0, objc2_metal::MTLPixelFormat::R8Unorm);
-            let cb_cr_texture = plane_texture(1, objc2_metal::MTLPixelFormat::RG8Unorm);
+            let Some(y_texture) = plane_texture(0, objc2_metal::MTLPixelFormat::R8Unorm) else { continue };
+            let Some(cb_cr_texture) = plane_texture(1, objc2_metal::MTLPixelFormat::RG8Unorm) else { continue };
+            let (Some(y_metal), Some(cb_cr_metal)) = (
+                CVMetalTextureGetTexture(&y_texture),
+                CVMetalTextureGetTexture(&cb_cr_texture),
+            ) else { continue };
 
             command_encoder.set_vertex_bytes(
                 SurfaceInputIndex::TextureSize as u64,
@@ -1271,17 +1285,13 @@ impl MetalRenderer {
                 &texture_size as *const Size<DevicePixels> as *const _,
             );
             command_encoder.set_fragment_texture(SurfaceInputIndex::YTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(&y_texture)
-                    .expect("CoreVideo returned no Metal texture");
                 Some(metal::TextureRef::from_ptr(
-                    objc2::rc::Retained::as_ptr(&texture) as *mut _,
+                    objc2::rc::Retained::as_ptr(&y_metal) as *mut _,
                 ))
             });
             command_encoder.set_fragment_texture(SurfaceInputIndex::CbCrTexture as u64, unsafe {
-                let texture = CVMetalTextureGetTexture(&cb_cr_texture)
-                    .expect("CoreVideo returned no Metal texture");
                 Some(metal::TextureRef::from_ptr(
-                    objc2::rc::Retained::as_ptr(&texture) as *mut _,
+                    objc2::rc::Retained::as_ptr(&cb_cr_metal) as *mut _,
                 ))
             });
 
@@ -1292,8 +1302,19 @@ impl MetalRenderer {
                 1,
                 (first_surface + index) as u64,
             );
+            surface_textures.push(SurfaceTextures {
+                _pixel_buffer: image_buffer.clone(),
+                _y: y_texture,
+                _cb_cr: cb_cr_texture,
+            });
         }
     }
+}
+
+struct SurfaceTextures {
+    _pixel_buffer: CFRetained<CVPixelBuffer>,
+    _y: CFRetained<CVMetalTexture>,
+    _cb_cr: CFRetained<CVMetalTexture>,
 }
 
 fn new_command_encoder_for_texture<'a>(

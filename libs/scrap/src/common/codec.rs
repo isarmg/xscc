@@ -195,6 +195,8 @@ pub struct Decoder {
     vp8: Option<VpxDecoder>,
     vp9: Option<VpxDecoder>,
     av1: Option<AomDecoder>,
+    #[cfg(target_os = "ios")]
+    video_toolbox: Option<crate::video_toolbox::Decoder>,
     #[cfg(feature = "hwcodec")]
     h264_ram: Option<HwRamDecoder>,
     #[cfg(feature = "hwcodec")]
@@ -569,6 +571,11 @@ impl Decoder {
             prefer_chroma: prefer_chroma.into(),
             ..Default::default()
         };
+        #[cfg(target_os = "ios")]
+        {
+            decoding.ability_h264 = i32::from(crate::video_toolbox::supported(CodecFormat::H264));
+            decoding.ability_h265 = i32::from(crate::video_toolbox::supported(CodecFormat::H265));
+        }
         #[cfg(feature = "hwcodec")]
         {
             decoding.ability_h264 |= if HwRamDecoder::try_get(CodecFormat::H264).is_some() {
@@ -626,6 +633,8 @@ impl Decoder {
     pub fn new(format: CodecFormat, _luid: Option<i64>) -> Decoder {
         log::info!("try create new decoder, format: {format:?}, _luid: {_luid:?}");
         let (mut vp8, mut vp9, mut av1) = (None, None, None);
+        #[cfg(target_os = "ios")]
+        let video_toolbox = crate::video_toolbox::Decoder::new(format);
         #[cfg(feature = "hwcodec")]
         let (mut h264_ram, mut h265_ram) = (None, None);
         #[cfg(feature = "vram")]
@@ -661,6 +670,8 @@ impl Decoder {
                 valid = av1.is_some();
             }
             CodecFormat::H264 => {
+                #[cfg(target_os = "ios")]
+                { valid = video_toolbox.is_some(); }
                 #[cfg(feature = "vram")]
                 if !valid && enable_vram_option(false) && _luid.clone().unwrap_or_default() != 0 {
                     match VRamDecoder::new(format, _luid) {
@@ -687,6 +698,8 @@ impl Decoder {
                 }
             }
             CodecFormat::H265 => {
+                #[cfg(target_os = "ios")]
+                { valid = video_toolbox.is_some(); }
                 #[cfg(feature = "vram")]
                 if !valid && enable_vram_option(false) && _luid.clone().unwrap_or_default() != 0 {
                     match VRamDecoder::new(format, _luid) {
@@ -725,6 +738,8 @@ impl Decoder {
             vp8,
             vp9,
             av1,
+            #[cfg(target_os = "ios")]
+            video_toolbox,
             #[cfg(feature = "hwcodec")]
             h264_ram,
             #[cfg(feature = "hwcodec")]
@@ -856,6 +871,11 @@ impl Decoder {
         self.valid
     }
 
+    #[cfg(target_os = "ios")]
+    pub fn take_ios_surface(&mut self) -> Option<crate::video_toolbox::Surface> {
+        self.video_toolbox.as_mut()?.take_surface()
+    }
+
     // rgb [in/out] fmt and stride must be set in ImageRgb
     pub fn handle_video_frame(
         &mut self,
@@ -865,6 +885,12 @@ impl Decoder {
         _pixelbuffer: &mut bool,
         chroma: &mut Option<Chroma>,
     ) -> ResultType<bool> {
+        #[cfg(target_os = "ios")]
+        if let video_frame::Union::H264s(frames) | video_frame::Union::H265s(frames) = frame {
+            *chroma = Some(Chroma::I420);
+            let decoder = self.video_toolbox.as_mut().ok_or_else(|| anyhow!("Hardware VideoToolbox decoder is unavailable"))?;
+            return decoder.decode(frames);
+        }
         match frame {
             video_frame::Union::Vp8s(vp8s) => {
                 if let Some(vp8) = &mut self.vp8 {

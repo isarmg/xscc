@@ -179,7 +179,7 @@ jobs:
             cat dist-gpui-ios/TEST-ONLY.txt >> "$GITHUB_STEP_SUMMARY"
           fi
           cp apps/mobile/README.md dist-gpui-ios/README.md
-          echo 'Native GPUI interactive playback preview: management, software video, direct control or view-only, software-keyboard text and control keys. Foreground audio playback is opt-in per session and initially off; microphone and clipboard are disabled; only limited hardware Enter/Tab is supported, and Wayland non-ASCII is rejected. Unsigned IPA requires your own signing and provisioning. Physical-device launch, authorized connection first-frame rendering and real-device touch gestures and software-keyboard input, audio playback, interruptions and route changes remain unverified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Native GPUI preview with VideoToolbox for supported H.264 and HEVC streams, software video fallback, and direct control or view-only. The input toolbar supports user-initiated local text paste. Foreground audio is opt-in, and clipboard synchronization and microphone are disabled. Unsigned IPA requires your own signing and provisioning. Physical-device playback, performance, keyboard and touch input, and audio remain to be verified.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: xscc-gpui-${{ matrix.mode }}-ios26-arm64-unsigned-${{ github.sha }}

@@ -171,6 +171,17 @@ mod native {
     }
 
     impl PreparedCursor {
+        pub fn same_visual(&self, other: &Self) -> bool {
+            self.visible == other.visible
+                && self.local_pointer == other.local_pointer
+                && self.remote_pointer == other.remote_pointer
+                && match (&self.image, &other.image) {
+                    (Some((_, a)), Some((_, b))) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+
         pub fn paint(
             &self,
             bounds: Bounds<Pixels>,
