@@ -92,6 +92,22 @@ pub enum TargetAvailability {
     Denied,
     Offline,
 }
+
+fn peer_availability(
+    peers: &[protocol::AccessPeer],
+    id: uuid::Uuid,
+    require_address: bool,
+) -> TargetAvailability {
+    let mut availability = TargetAvailability::Denied;
+    for peer in peers.iter().filter(|peer| peer.binding.device_id == id) {
+        if peer.online && (!require_address || !peer.addresses.is_empty()) {
+            return TargetAvailability::Available;
+        }
+        availability = TargetAvailability::Offline;
+    }
+    availability
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
@@ -261,6 +277,13 @@ impl NativeManager {
         self.target_availability(id) == TargetAvailability::Available
     }
     pub fn target_availability(&self, id: uuid::Uuid) -> TargetAvailability {
+        self.availability(id, true)
+    }
+    /// Check peer reachability within the current policy for an in-progress session.
+    pub fn session_availability(&self, id: uuid::Uuid) -> TargetAvailability {
+        self.availability(id, false)
+    }
+    fn availability(&self, id: uuid::Uuid, require_address: bool) -> TargetAvailability {
         let access = self.access.read().unwrap();
         let Some(receiver) = access.as_ref() else {
             return TargetAvailability::ManagementUnavailable;
@@ -272,14 +295,7 @@ impl NativeManager {
         if policy.role != self.identity.role || policy.role != InstanceRole::Controller {
             return TargetAvailability::Denied;
         }
-        let mut availability = TargetAvailability::Denied;
-        for peer in policy.peers.iter().filter(|peer| peer.binding.device_id == id) {
-            if peer.online && !peer.addresses.is_empty() {
-                return TargetAvailability::Available;
-            }
-            availability = TargetAvailability::Offline;
-        }
-        availability
+        peer_availability(&policy.peers, id, require_address)
     }
     pub fn target(&self, id: uuid::Uuid) -> Result<Target> {
         let access = self.access.read().unwrap();
@@ -674,6 +690,38 @@ mod tests {
         async fn addresses(&self, _: &[HostAddress]) -> Vec<HostAddress> {
             Vec::new()
         }
+    }
+
+    #[test]
+    fn a_withdrawn_address_only_blocks_a_new_connection() {
+        let id = uuid::Uuid::new_v4();
+        let mut peers = [protocol::AccessPeer {
+            binding: Binding {
+                manager_id: uuid::Uuid::new_v4(),
+                device_id: id,
+                installation_id: uuid::Uuid::new_v4(),
+            },
+            name: "Controlled peer".into(),
+            role: InstanceRole::Controlled,
+            online: true,
+            addresses: vec![],
+            session_key: SessionKey::from_bytes([7; 32]),
+        }];
+        assert_eq!(
+            peer_availability(&peers, id, true),
+            TargetAvailability::Offline
+        );
+        assert_eq!(
+            peer_availability(&peers, id, false),
+            TargetAvailability::Available
+        );
+
+        peers[0].online = false;
+        assert_eq!(
+            peer_availability(&peers, id, false),
+            TargetAvailability::Offline
+        );
+        assert_eq!(peer_availability(&[], id, false), TargetAvailability::Denied);
     }
 
     #[test]

@@ -333,7 +333,7 @@ impl SessionView {
     pub fn connect(&mut self, device_id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.stop();
         self.selected = Some(device_id.clone());
-        if let Some(reason) = self.authorization_blocker() {
+        if let Some(reason) = self.authorization_blocker(true) {
             self.selected = None;
             self.notice = reason.into();
             cx.notify();
@@ -362,19 +362,23 @@ impl SessionView {
     }
 
     fn authorized(&self) -> bool {
-        self.authorization_blocker().is_none()
+        self.authorization_blocker(false).is_none()
     }
 
-    fn authorization_blocker(&self) -> Option<&'static str> {
+    fn authorization_blocker(&self, require_address: bool) -> Option<&'static str> {
         let Some(id) = self.selected.as_ref() else {
             return Some("未选择被控端。");
         };
         let Some(manager) = self.manager.as_ref() else {
             return Some("管理连接暂时不可用，请在恢复后重连。");
         };
-        let availability = id
-            .parse()
-            .map_or(TargetAvailability::Denied, |id| manager.target_availability(id));
+        let availability = id.parse().map_or(TargetAvailability::Denied, |id| {
+            if require_address {
+                manager.target_availability(id)
+            } else {
+                manager.session_availability(id)
+            }
+        });
         match availability {
             TargetAvailability::Available => None,
             TargetAvailability::ManagementUnavailable => {
@@ -387,7 +391,7 @@ impl SessionView {
 
     pub fn check_authorization(&mut self, cx: &mut Context<Self>) {
         if self.selected.is_some()
-            && let Some(reason) = self.authorization_blocker()
+            && let Some(reason) = self.authorization_blocker(false)
         {
             self.stop_for_authorization(reason);
             self.publish_chrome(cx);
@@ -734,7 +738,7 @@ impl SessionView {
             drop(self.connecting.take());
             match result {
                 Ok(session) => {
-                    if let Some(reason) = self.authorization_blocker() {
+                    if let Some(reason) = self.authorization_blocker(false) {
                         self.stop_for_authorization(reason);
                         continue;
                     }
@@ -768,7 +772,7 @@ impl SessionView {
             }
         }
         if self.selected.is_some()
-            && let Some(reason) = self.authorization_blocker()
+            && let Some(reason) = self.authorization_blocker(false)
         {
             self.stop_for_authorization(reason);
             changed = true;
