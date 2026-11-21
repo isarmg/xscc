@@ -448,9 +448,15 @@ impl Capturer {
     }
 
     pub fn set_gdi(&mut self) -> bool {
+        if self.is_gdi() {
+            return true;
+        }
+        let Some(gdi_capturer) = self.display.create_gdi() else {
+            return false;
+        };
         self.pending_readback.clear();
-        self.gdi_capturer = self.display.create_gdi();
-        self.is_gdi()
+        self.gdi_capturer = Some(gdi_capturer);
+        true
     }
 
     pub fn cancel_gdi(&mut self) {

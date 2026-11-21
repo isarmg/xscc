@@ -1,5 +1,10 @@
-use super::*;
-use crate::audio_resampler::allocation_tests::assert_no_allocations;
+use super::{super::create_format_msg, *};
+use crate::{
+    audio_resampler::allocation_tests::assert_no_allocations,
+    server::{ConnInner, Service},
+};
+use base::message_proto::{message, misc};
+use hbb_common::tokio;
 use std::{sync::mpsc, time::Duration};
 
 const PACKET_SAMPLES: usize = 4;
@@ -87,4 +92,45 @@ fn assert_pool_restored(receiver: &CapturePcmReceiver, capacity: usize) {
 #[test]
 fn callback_finishes_while_worker_releases_a_ready_packet() {
     assert_callback_progress();
+}
+
+#[tokio::test]
+async fn capture_replacement_sends_format_before_new_audio() {
+    let service = GenericService::new("audio".into(), true);
+    let (first, mut existing) = tokio::sync::mpsc::unbounded_channel();
+    service.on_subscribe(ConnInner::new(1, Some(first), None));
+    service.publish_audio_format(&Arc::new(create_format_msg(48_000, 2)), true);
+    existing.try_recv().unwrap();
+
+    let config = CaptureEncoderConfig {
+        sample_rate: 24_000,
+        encode_channel: Channels::Mono,
+        max_packet_samples: 240,
+    };
+    let (mut sender, mut worker) = start_capture_encoder(config, service.clone()).unwrap();
+    sender.submit(&[0.25; 240]);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), existing.recv())
+            .await
+            .is_err()
+    );
+
+    let (later, mut joining) = tokio::sync::mpsc::unbounded_channel();
+    service.on_subscribe(ConnInner::new(2, Some(later), None));
+    service.publish_audio_format(&Arc::new(create_format_msg(24_000, 1)), true);
+    worker.start();
+
+    for peer in [&mut existing, &mut joining] {
+        let (_, format) = peer.try_recv().unwrap();
+        assert!(matches!(&format.union,
+            Some(message::Union::Misc(misc)) if matches!(&misc.union,
+                Some(misc::Union::AudioFormat(format)) if format.channels == 1 && format.sample_rate == 24_000)));
+        let (_, packet) = tokio::time::timeout(TEST_TIMEOUT, peer.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(&packet.union, Some(message::Union::AudioFrame(frame)) if !frame.data.is_empty())
+        );
+    }
 }

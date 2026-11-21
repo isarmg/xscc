@@ -11,9 +11,7 @@ use std::{
 const MAX_FRAMES: usize = 64;
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 const MAX_QUEUED_BYTES: usize = 256 * 1024;
-// Local residence/capacity budgets, not a network or end-to-end latency estimate.
-const PCM_BUDGET_MS: usize = 150;
-const QUEUE_AGE_BUDGET: Duration = Duration::from_millis(PCM_BUDGET_MS as u64);
+const QUEUE_AGE_BUDGET: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AudioStatus {
@@ -149,32 +147,6 @@ mod runtime {
             handler.start_audio(format)?;
             Ok(handler)
         }
-
-        fn mobile_discontinuity(&mut self, format: &AudioFormat) -> ResultType<()> {
-            use crate::client::create_audio_resampler;
-            use ringbuf::{ring_buffer::RbBase, Rb};
-            if let Some((decoder, _)) = self.audio_decoder.as_mut() {
-                decoder.reset_state()?;
-            }
-            self.audio_resampler =
-                create_audio_resampler(format.sample_rate, self.sample_rate.1, self.channels)?;
-            let mut buffer = self.audio_buffer.0.lock().unwrap();
-            let occupied = buffer.occupied_len();
-            buffer.skip(occupied);
-            self.audio_buffer.signal_discontinuity();
-            Ok(())
-        }
-
-        pub(in crate::client) fn resize_mobile_audio_buffer(
-            &mut self,
-            sample_rate: u32,
-            channels: u16,
-        ) {
-            self.audio_buffer.0 = Arc::new(Mutex::new(ringbuf::HeapRb::new(
-                sample_rate as usize * channels as usize * PCM_BUDGET_MS / 1000,
-            )));
-            self.audio_buffer.1 = sample_rate as usize * channels as usize;
-        }
     }
 
     struct Shared {
@@ -259,7 +231,6 @@ mod runtime {
         session: audio::PlaybackSession,
         gate: Arc<AtomicBool>,
         failed: Arc<AtomicBool>,
-        format: AudioFormat,
     }
 
     enum Work {
@@ -283,13 +254,12 @@ mod runtime {
     fn open(format: AudioFormat, gate: Arc<AtomicBool>) -> ResultType<Output> {
         let session = audio::activate(gate.clone())?;
         let failed = Arc::new(AtomicBool::new(false));
-        let handler = AudioHandler::mobile_output(format.clone(), gate.clone(), failed.clone())?;
+        let handler = AudioHandler::mobile_output(format, gate.clone(), failed.clone())?;
         Ok(Output {
             handler,
             session,
             gate,
             failed,
-            format,
         })
     }
 
@@ -355,9 +325,7 @@ mod runtime {
                     if let Some(output) = output.as_mut() {
                         if output.gate.load(Ordering::Acquire) {
                             if discontinuity {
-                                if let Err(error) =
-                                    output.handler.mobile_discontinuity(&output.format)
-                                {
+                                if let Err(error) = output.handler.reset_audio_after_gap() {
                                     output.gate.store(false, Ordering::Release);
                                     fail(
                                         &shared,

@@ -310,14 +310,15 @@ impl HwRamEncoder {
     }
 
     pub fn encode(&mut self, yuv: &[u8], ms: i64) -> ResultType<Vec<EncodeFrame>> {
-        match self.encoder.encode(yuv, ms) {
-            Ok(v) => {
-                let mut data = Vec::<EncodeFrame>::new();
-                data.append(v);
-                Ok(data)
-            }
-            Err(_) => Ok(Vec::<EncodeFrame>::new()),
-        }
+        self.encoder
+            .encode(yuv, ms)
+            .map(std::mem::take)
+            .map_err(|code| {
+                anyhow!(
+                    "{} encoder failed with FFmpeg error {code}",
+                    self.config.name
+                )
+            })
     }
 
     fn rate_control(_config: &HwRamEncoderConfig) -> RateControl {

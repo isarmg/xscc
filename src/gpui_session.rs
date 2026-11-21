@@ -255,6 +255,16 @@ struct Monitors {
     pending: Option<usize>,
 }
 
+impl Monitors {
+    fn accepts_frame(&self, display: usize) -> bool {
+        self.pending.unwrap_or(self.current) == display
+            && self
+                .list
+                .get(display)
+                .is_some_and(|monitor| monitor.available)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     Connecting,
@@ -430,10 +440,13 @@ impl SessionHandle {
     ))]
     pub fn has_pending_frame(&self) -> bool {
         let mailbox = &self.session.ui_handler.0;
-        !mailbox.closed.load(Ordering::Acquire) && !mailbox.frame.is_empty()
+        !mailbox.closed.load(Ordering::Acquire)
+            && mailbox.monitors.read().unwrap().pending.is_none()
+            && !mailbox.frame.is_empty()
     }
 
-    pub fn take_frame(&self) -> Option<Frame> {
+    /// Take a frame for the display whose metadata the UI has already applied.
+    pub fn take_frame(&self, display: usize) -> Option<Frame> {
         let mailbox = &self.session.ui_handler.0;
         if mailbox.closed.load(Ordering::Acquire) {
             mailbox.clear_frames();
@@ -446,9 +459,12 @@ impl SessionHandle {
         #[cfg(not(target_os = "android"))]
         let budget = Duration::MAX;
         let monitors = mailbox.monitors.read().unwrap();
+        if monitors.pending.is_some() || monitors.current != display {
+            return None;
+        }
         mailbox
             .take_fresh_frame(Instant::now(), budget)
-            .filter(|frame| monitors.pending.is_none() && frame.display == monitors.current)
+            .filter(|frame| frame.display == display)
     }
     pub fn cursor_snapshot(&self) -> CursorSnapshot {
         let mailbox = &self.session.ui_handler.0;
@@ -921,10 +937,7 @@ impl InvokeUiSession for Handler {
         }
         {
             let monitors = self.0.monitors.read().unwrap();
-            if monitors.pending.is_some()
-                || monitors.current != display
-                || !monitors.list.get(display).is_some_and(|monitor| monitor.available)
-            {
+            if !monitors.accepts_frame(display) {
                 return;
             }
         }
@@ -932,10 +945,7 @@ impl InvokeUiSession for Handler {
         self.0.metrics.lock().unwrap().callback();
         if let Some(frame) = take_frame(display, image, &self.0) {
             let monitors = self.0.monitors.read().unwrap();
-            if monitors.pending.is_some()
-                || monitors.current != display
-                || !monitors.list.get(display).is_some_and(|monitor| monitor.available)
-            {
+            if !monitors.accepts_frame(display) {
                 return;
             }
             if self.0.closed.load(Ordering::Acquire) {
@@ -953,7 +963,7 @@ impl InvokeUiSession for Handler {
                 }
                 replaced
             };
-            if !replaced {
+            if !replaced && monitors.pending.is_none() {
                 self.0.updates.notify_one();
             }
         }
@@ -974,14 +984,29 @@ impl InvokeUiSession for Handler {
         if display.display < 0 || display.width <= 0 || display.height <= 0 {
             return;
         }
-        self.0.controls.write().unwrap().resolutions(&display.resolutions);
+        let index = display.display as usize;
+        let extent = (display.width as u32, display.height as u32);
         {
             let mut monitors = self.0.monitors.write().unwrap();
-            monitors.current = display.display as usize;
+            if monitors.pending.is_some_and(|pending| pending != index) {
+                return;
+            }
+            monitors.current = index;
             monitors.pending = None;
-            self.0.clear_frames();
-            self.0.metrics.lock().unwrap().reset();
+            let mut metrics = self.0.metrics.lock().unwrap();
+            metrics.reset();
+            // The keyframe can arrive before its display metadata.
+            for _ in 0..self.0.frame.len() {
+                let Some(mut frame) = self.0.frame.pop() else {
+                    break;
+                };
+                if frame.display == index && (frame.width, frame.height) == extent {
+                    frame.metrics_epoch = metrics.epoch();
+                    let _ = self.0.frame.push(frame);
+                }
+            }
         }
+        self.0.controls.write().unwrap().resolutions(&display.resolutions);
         self.set_display(
             display.x,
             display.y,
@@ -1097,9 +1122,12 @@ impl InvokeUiSession for Handler {
                     .any(|monitor| monitor.index == pending && monitor.available)
             });
             monitors.list = list.clone();
-            if !monitors.list.iter().any(|monitor| {
-                monitor.index == monitors.current && monitor.available
-            }) {
+            let frame_display = monitors.pending.unwrap_or(monitors.current);
+            if !monitors
+                .list
+                .get(frame_display)
+                .is_some_and(|monitor| monitor.available)
+            {
                 self.0.clear_frames();
             }
             pending_unavailable
@@ -1281,17 +1309,17 @@ mod tests {
         assert!(!handle.has_pending_frame());
         handle.session.ui_handler.on_rgba(0, &mut image);
         assert!(handle.has_pending_frame());
-        assert!(handle.take_frame().is_some());
+        assert!(handle.take_frame(0).is_some());
         assert!(!handle.has_pending_frame());
         image.raw = vec![3, 2, 1, 255];
         handle.session.ui_handler.on_rgba(0, &mut image);
         assert!(handle.has_pending_frame());
         handle.disconnect();
         assert!(!handle.has_pending_frame());
-        assert!(handle.take_frame().is_none());
+        assert!(handle.take_frame(0).is_none());
         image.raw = vec![2, 3, 1, 255];
         handle.session.ui_handler.on_rgba(0, &mut image);
-        assert!(handle.take_frame().is_none());
+        assert!(handle.take_frame(0).is_none());
     }
 
     #[test]
@@ -1563,6 +1591,7 @@ mod tests {
             displays: vec![online.clone(), online],
             ..Default::default()
         });
+        handle.drain_events();
         let mut image = scrap::ImageRgb {
             raw: vec![1, 2, 3, 255],
             w: 1,
@@ -1572,10 +1601,21 @@ mod tests {
         };
         handler.on_rgba(0, &mut image);
         handle.switch_monitor(1).unwrap();
-        assert!(handle.take_frame().is_none());
+        assert!(handle.take_frame(0).is_none());
         handler.on_rgba(0, &mut image);
         handler.on_rgba(1, &mut image);
-        assert!(handle.take_frame().is_none());
+        assert!(handle.take_frame(1).is_none());
+        handler.switch_display(&SwitchDisplay {
+            display: 0,
+            width: 1,
+            height: 1,
+            ..Default::default()
+        });
+        assert!(handle.take_frame(1).is_none());
+        assert!(!handle
+            .drain_events()
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Display { .. })));
         handler.switch_display(&SwitchDisplay {
             display: 1,
             x: -1920,
@@ -1584,9 +1624,8 @@ mod tests {
             height: 1,
             ..Default::default()
         });
-        handler.on_rgba(1, &mut image);
         handler.on_rgba(0, &mut image);
-        assert_eq!(handle.take_frame().unwrap().display, 1);
+        assert!(handle.take_frame(0).is_none());
         assert!(handle.drain_events().iter().any(|event| matches!(
             event,
             SessionEvent::Display {
@@ -1596,6 +1635,44 @@ mod tests {
                 ..
             }
         )));
+        assert_eq!(handle.take_frame(1).unwrap().display, 1);
+    }
+
+    #[test]
+    fn refresh_metadata_keeps_the_last_decoded_frame_at_the_same_size() {
+        let handle = SessionHandle {
+            session: Session::default(),
+        };
+        let handler = &handle.session.ui_handler;
+        handler.set_peer_info(&PeerInfo {
+            displays: vec![DisplayInfo {
+                width: 1,
+                height: 1,
+                online: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let mut image = scrap::ImageRgb {
+            raw: vec![1, 2, 3, 255],
+            w: 1,
+            h: 1,
+            fmt: scrap::ImageFormat::ARGB,
+            align: 1,
+        };
+        for width in [1, 2] {
+            image.raw[0] = 42;
+            handler.on_rgba(0, &mut image);
+            handler.switch_display(&SwitchDisplay {
+                width,
+                height: 1,
+                ..Default::default()
+            });
+            assert_eq!(
+                handle.take_frame(0).map(|frame| frame.bgra[0]),
+                (width == 1).then_some(42)
+            );
+        }
     }
 
     #[tokio::test]
@@ -1635,8 +1712,8 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(handle.take_frame().unwrap().bgra[2], 10);
-        assert!(handle.take_frame().is_none());
+        assert_eq!(handle.take_frame(0).unwrap().bgra[2], 10);
+        assert!(handle.take_frame(0).is_none());
         image.raw[0] = 11;
         handler.on_rgba(0, &mut image);
         assert!(
@@ -1644,7 +1721,7 @@ mod tests {
                 .await
                 .unwrap()
         );
-        assert_eq!(handle.take_frame().unwrap().bgra[2], 11);
+        assert_eq!(handle.take_frame(0).unwrap().bgra[2], 11);
     }
     #[test]
     fn mobile_keyboard_gates_unicode_controls_and_view_only() {
@@ -1710,9 +1787,9 @@ mod tests {
             handler.on_rgba(0, &mut image);
             let displays = if remove_all { vec![] } else { vec![DisplayInfo::default(), online.clone()] };
             handler.set_displays(&displays);
-            assert!(handle.take_frame().is_none());
+            assert!(handle.take_frame(0).is_none());
             handler.on_rgba(0, &mut image);
-            assert!(handle.take_frame().is_none());
+            assert!(handle.take_frame(0).is_none());
             handler.on_rgba(0, &mut image);
             for event in [
                 KeyEvent { down: true, ..Default::default() },
@@ -1742,12 +1819,12 @@ mod tests {
             assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if message.mouse_event().mask & 7 == MOUSE_TYPE_UP));
             assert!(receiver.try_recv().is_err());
             handler.set_displays(&vec![online.clone(), online]);
-            assert!(handle.take_frame().is_none());
+            assert!(handle.take_frame(0).is_none());
             handle.send_input(InputCommand::Key(KeyEvent { down: true, ..Default::default() })).unwrap();
             assert!(matches!(receiver.try_recv(), Ok(Data::Message(message)) if message.key_event().down));
             image.raw = vec![5, 6, 7, 255];
             handler.on_rgba(0, &mut image);
-            assert_eq!(handle.take_frame().unwrap().display, 0);
+            assert_eq!(handle.take_frame(0).unwrap().display, 0);
             if !remove_all {
                 handler.set_displays(&displays);
                 handle.switch_monitor(1).unwrap();
@@ -1756,7 +1833,7 @@ mod tests {
                 handle.send_input(InputCommand::Key(KeyEvent { down: true, ..Default::default() })).unwrap();
                 image.raw = vec![5, 6, 7, 255];
                 handler.on_rgba(1, &mut image);
-                assert_eq!(handle.take_frame().unwrap().display, 1);
+                assert_eq!(handle.take_frame(1).unwrap().display, 1);
             }
         }
     }
@@ -1901,7 +1978,7 @@ mod tests {
             align: 1,
         };
         handle.session.ui_handler.on_rgba(0, &mut image);
-        assert!(handle.take_frame().is_none());
+        assert!(handle.take_frame(0).is_none());
     }
     #[test]
     fn mobile_pc_keyboard_accepts_one_shot_keys_and_chords_with_permission() {

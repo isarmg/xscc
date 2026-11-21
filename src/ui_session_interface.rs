@@ -383,7 +383,6 @@ impl<T: InvokeUiSession> Session<T> {
             && !self.lc.read().unwrap().view_only.v
     }
 
-    #[cfg(feature = "flutter")]
     pub fn refresh_video(&self, display: i32) {
         if crate::common::is_support_multi_ui_session_num(self.lc.read().unwrap().version) {
             self.send(Data::Message(LoginConfigHandler::refresh_display(
@@ -404,11 +403,6 @@ impl<T: InvokeUiSession> Session<T> {
         let mut msg_out = Message::new();
         msg_out.set_misc(misc);
         self.send(Data::Message(msg_out));
-    }
-
-    #[cfg(not(feature = "flutter"))]
-    pub fn refresh_video(&self, _display: i32) {
-        self.send(Data::Message(LoginConfigHandler::refresh()));
     }
 
     pub fn is_screenshot_supported(&self) -> bool {

@@ -1392,6 +1392,73 @@ mod streaming_tests {
     use super::*;
 
     #[test]
+    fn vp9_emits_each_frame_without_flushing() {
+        let mut encoder = VpxEncoder::new_streaming(
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: 128,
+                height: 64,
+                quality: BR_BALANCED,
+                codec: VpxVideoCodecId::VP9,
+                keyframe_interval: None,
+            }),
+            false,
+            60,
+        )
+        .unwrap();
+        let fmt = encoder.yuvfmt();
+        let mut yuv = vec![128; fmt.v + fmt.stride[2] * fmt.h / 2];
+        for pts in [1000, 1017, 1033] {
+            yuv[..fmt.u].fill((pts - 900) as u8);
+            let mut packets = encoder.encode(pts, &yuv, crate::STRIDE_ALIGN).unwrap();
+            assert_eq!(packets.next().unwrap().pts, pts);
+            assert!(packets.next().is_none());
+        }
+        assert!(encoder.flush().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn vp9_odd_i420_keeps_separate_chroma_planes_and_visible_dimensions() {
+        use crate::GoogleImage;
+
+        let (width, height) = (65usize, 33usize);
+        let codec = VpxVideoCodecId::VP9;
+        let mut encoder = VpxEncoder::new(
+            EncoderCfg::VPX(VpxEncoderConfig {
+                width: width as _,
+                height: height as _,
+                quality: BR_BALANCED,
+                codec,
+                keyframe_interval: None,
+            }),
+            false,
+        )
+        .unwrap();
+        let fmt = encoder.yuvfmt();
+        let chroma_len = fmt.stride[1] * height.div_ceil(2);
+        assert_eq!(fmt.v, fmt.u + chroma_len);
+        let mut yuv = vec![128; fmt.v + chroma_len];
+        yuv[fmt.u..fmt.v].fill(64);
+        yuv[fmt.v..].fill(192);
+        assert!(encoder
+            .encode(0, &yuv[..yuv.len() - 1], crate::STRIDE_ALIGN)
+            .is_err());
+        let mut packets = encoder.encode(0, &yuv, crate::STRIDE_ALIGN).unwrap();
+        let mut decoder = VpxDecoder::new(VpxDecoderConfig { codec }).unwrap();
+        let decoded = decoder
+            .decode(packets.next().unwrap().data)
+            .unwrap()
+            .latest()
+            .unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        let planes = decoded.planes();
+        let stride = decoded.stride();
+        unsafe {
+            assert!(*planes[1].add((height / 2) * stride[1] as usize) < 96);
+            assert!(*planes[2].add((height / 2) * stride[2] as usize) > 160);
+        }
+    }
+
+    #[test]
     fn software_encoders_apply_streaming_rate_and_keep_millisecond_pts() {
         let configs = [
             EncoderCfg::VPX(VpxEncoderConfig {

@@ -771,6 +771,7 @@ mod tests {
         };
         assert!(refresh.misc().refresh_video());
         assert!(receiver.try_recv().is_err());
+        handle.session.lc.write().unwrap().version = hbb_common::get_version_number("1.2.4");
         assert!(handle
             .set_resolution(ResolutionMode {
                 width: 1,
@@ -782,13 +783,18 @@ mod tests {
         let Data::Message(resolution) = receiver.try_recv().unwrap() else {
             panic!("expected resolution request")
         };
-        assert_eq!(resolution.misc().change_resolution().width, mode.width);
-        assert_eq!(resolution.misc().change_resolution().height, mode.height);
-        assert_eq!(resolution.misc().change_resolution().refresh_rate, 120);
+        let change = resolution.misc().change_display_resolution();
+        assert_eq!(change.display, 0);
+        assert_eq!(change.resolution.width, mode.width);
+        assert_eq!(change.resolution.height, mode.height);
+        assert_eq!(change.resolution.refresh_rate, 120);
         let Data::Message(refresh) = receiver.try_recv().unwrap() else {
             panic!("expected refresh after resolution request")
         };
-        assert!(refresh.misc().refresh_video());
+        assert!(matches!(
+            refresh.misc().union,
+            Some(misc::Union::RefreshVideoDisplay(0))
+        ));
         assert!(receiver.try_recv().is_err());
         assert!(!handle.media_controls().can_change_resolution);
         handler.set_permission("keyboard", false);

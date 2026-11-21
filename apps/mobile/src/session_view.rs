@@ -948,10 +948,8 @@ impl SessionView {
         let frame = self
             .session
             .as_ref()
-            .and_then(|session| session.take_frame())
-            .filter(|frame| {
-                accepts_display_update(self.current_monitor, self.pending_monitor, frame.display)
-            });
+            .filter(|_| self.pending_monitor.is_none())
+            .and_then(|session| session.take_frame(self.current_monitor?));
         let extent = frame.as_ref().map(|frame| (frame.width, frame.height));
         #[cfg(target_os = "android")]
         let extent = self.video_surface_size().or(extent);

@@ -82,7 +82,7 @@ fn unconfirmed_start_retries_without_callback_or_error() {
 #[test]
 fn pending_output_keeps_playing_and_transfers_decoder_history_on_commit() {
     let (mut handler, old_dropped) = recovery_handler();
-    let old_buffer = handler.audio_buffer.0.clone();
+    let old_buffer = handler.audio_buffer.pcm.clone();
     let (_, status, _) = begin_pending(&mut handler);
     let frame = audio_frame();
     let (mut reference, mut expected) = decoder(INPUT_RATE);
@@ -90,7 +90,7 @@ fn pending_output_keeps_playing_and_transfers_decoder_history_on_commit() {
         .decode_float(&frame.data, &mut expected, false)
         .unwrap();
     handler.handle_frame(frame.clone());
-    assert!(Arc::ptr_eq(&old_buffer, &handler.audio_buffer.0));
+    assert!(Arc::ptr_eq(&old_buffer, &handler.audio_buffer.pcm));
     assert!(!drain_audio(&handler).is_empty());
     status.ready.store(true, Ordering::Release);
     handler.recover_playback_with(Instant::now(), |_, _| panic!("Candidate already exists"));

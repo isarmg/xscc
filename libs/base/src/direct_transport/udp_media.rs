@@ -1197,8 +1197,10 @@ impl Reassembler {
         if self.pending.contains_key(&key) {
             return Ok(());
         }
-        let kind = descriptor.metadata.kind;
-        let (count, reserved) = self
+        let metadata = descriptor.metadata;
+        let kind = metadata.kind;
+        let size = descriptor.total_size as usize;
+        let (mut count, mut reserved) = self
             .pending
             .values()
             .filter(|frame| frame.descriptor.metadata.kind == kind)
@@ -1209,7 +1211,22 @@ impl Reassembler {
             MediaKind::Video => (8, 16 * 1024 * 1024),
             MediaKind::Audio => (4, 256 * 1024),
         };
-        if count >= max_count || reserved + descriptor.total_size as usize > max_bytes {
+        if metadata.keyframe && (count >= max_count || reserved + size > max_bytes) {
+            self.pending.retain(|_, frame| {
+                let prior = frame.descriptor.metadata;
+                if !prior.keyframe
+                    && stream_key(prior) == stream_key(metadata)
+                    && prior.epoch == metadata.epoch
+                    && prior.frame_id < metadata.frame_id
+                {
+                    count -= 1;
+                    reserved -= frame.descriptor.total_size as usize;
+                    return false;
+                }
+                true
+            });
+        }
+        if count >= max_count || reserved + size > max_bytes {
             return Err(MediaError::Capacity);
         }
         let ttl = match (kind, descriptor.metadata.keyframe) {
@@ -1751,6 +1768,9 @@ impl Pacer {
     }
     /// Call only after a successful socket send of an ACK-eliciting fragment.
     pub fn on_sent(&mut self, sequence: u64, bytes: usize, now: Instant) -> Result<(), MediaError> {
+        if now < self.last_activity {
+            return Err(MediaError::InvalidFeedback);
+        }
         self.refill(now);
         if bytes == 0
             || bytes > self.mtu
@@ -1810,13 +1830,16 @@ impl Pacer {
         // Allow a regular feedback interval for a reordered packet to fill the hole.
         let reorder_age = self.srtt.mul_f64(1.125).max(REPORT_INTERVAL);
         let mut latest_loss = None;
-        for (sequence, flight) in self.flights.extract_if(.., |&sequence, flight| {
-            let age = now.saturating_duration_since(flight.sent);
-            age >= loss_age
-                || (sequence.saturating_add(3) <= report.largest && age >= reorder_age)
-        }) {
+        // Send times follow sequence order, so loss candidates form a prefix.
+        while let Some(entry) = self.flights.first_entry() {
+            let sequence = *entry.key();
+            let age = now.saturating_duration_since(entry.get().sent);
+            if age < loss_age && (sequence.saturating_add(3) > report.largest || age < reorder_age)
+            {
+                break;
+            }
             latest_loss = Some(sequence);
-            self.inflight_bytes -= flight.bytes;
+            self.inflight_bytes -= entry.remove().bytes;
             on_loss(sequence);
         }
         if acknowledged > 0 || latest_loss.is_some() {
@@ -2700,6 +2723,55 @@ mod tests {
             [Recovery::RefreshVideo(metadata(20, true))]
         );
         quota.note_notice(next, now).unwrap();
+    }
+
+    #[test]
+    fn replacement_keyframe_can_complete_with_a_full_delta_backlog() {
+        let start = Instant::now();
+        let mut assembler = Reassembler::default();
+        let fragment = |metadata, index, size| Fragment {
+            descriptor: FrameDescriptor {
+                metadata,
+                total_size: DEFAULT_MTU as u32,
+                fragment_count: 2,
+            },
+            index,
+            payload: vec![7; size].into(),
+        };
+        let other_display = FrameMetadata {
+            display_id: 1,
+            ..metadata(0, false)
+        };
+        let shard = DEFAULT_MTU - FRAGMENT_OVERHEAD;
+        for id in 0..8 {
+            let metadata = if id == 0 {
+                other_display
+            } else {
+                metadata(id, false)
+            };
+            let at = start + Duration::from_micros(id * 8_333);
+            assert!(assembler
+                .push(fragment(metadata, 0, shard), at)
+                .unwrap()
+                .frame
+                .is_none());
+        }
+
+        let at = start + Duration::from_micros(8 * 8_333);
+        let keyframe = metadata(8, true);
+        let first = fragment(keyframe, 0, shard);
+        assembler
+            .note_notice(FrameNotice::Sent(first.descriptor), at)
+            .unwrap();
+        assembler.push(first, at).unwrap();
+        for expected in [keyframe, other_display] {
+            let outcome = assembler
+                .push(fragment(expected, 1, DEFAULT_MTU - shard), at)
+                .unwrap();
+            let completed = outcome.frame.expect("the frame should complete");
+            assert_eq!(completed.metadata, expected);
+            assert_eq!(completed.payload.as_ref(), &[7; DEFAULT_MTU]);
+        }
     }
 
     #[test]

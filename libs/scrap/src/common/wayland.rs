@@ -37,6 +37,10 @@ impl Capturer {
     pub fn height(&self) -> usize {
         self.0.height()
     }
+
+    pub(super) fn reset_frame_history(&mut self) {
+        self.1.reset_frame_history();
+    }
 }
 
 impl TraitCapturer for Capturer {

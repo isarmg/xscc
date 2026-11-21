@@ -23,8 +23,10 @@ impl<'a> PixelProvider<'a> {
     }
 }
 
-pub trait Recorder {
+pub trait Recorder: Send {
     fn capture(&mut self, timeout_ms: u64) -> Result<PixelProvider<'_>, Box<dyn Error>>;
+
+    fn reset_frame_history(&mut self) {}
 }
 
 pub trait BoxCloneCapturable {

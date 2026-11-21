@@ -429,22 +429,17 @@ impl Connection {
                 (state, Some(format!("{error:#}")))
             }
         };
-        // Native display handles must be dropped before the async transport send.
-        let snapshot = {
+        let snapshot = if input && self.media_authority_valid(true) {
+            // Publish the topology with a mutation result. Queries use the existing snapshot.
             match display_service::try_get_displays() {
                 Ok(displays) => {
                     let displays = display_service::update_sync_displays(&displays);
-                    for screen in &mut state.displays {
-                        screen.index = displays.iter().position(|display| {
-                            display
-                                .name
-                                .trim_end_matches('\0')
-                                .eq_ignore_ascii_case(screen.name.trim_end_matches('\0'))
-                                && display.online
-                        });
-                    }
+                    align_virtual_display_indices(&mut state, &displays);
                     let mut snapshot = Message::new();
+                    #[cfg(windows)]
                     let mut additions = virtual_display_manager::get_platform_additions();
+                    #[cfg(target_os = "macos")]
+                    let mut additions = serde_json::Map::new();
                     additions.insert(
                         "virtual_display_configuration".into(),
                         serde_json::to_value(&state)
@@ -456,7 +451,7 @@ impl Connection {
                     let topology_change = self.synchronize_macos_display_topology(&displays);
                     let current_display = displays
                         .get(self.display_idx)
-                        .filter(|display| input && display.online)
+                        .filter(|display| is_capturable_display(display))
                         .and_then(|display| {
                             video_service::make_display_changed_msg(
                                 self.display_idx,
@@ -485,11 +480,18 @@ impl Connection {
                     None
                 }
             }
+        } else {
+            if !state.displays.is_empty() {
+                align_virtual_display_indices(&mut state, &display_service::get_sync_displays());
+            }
+            None
         };
         if let Some((snapshot, current_display)) = snapshot {
             self.send(snapshot).await;
             if let Some(current_display) = current_display {
                 self.send(current_display).await;
+                #[cfg(feature = "gpui-host")]
+                self.refresh_video_display(Some(self.display_idx));
             }
         }
         let result = VirtualDisplayResult {
@@ -517,5 +519,68 @@ impl Connection {
                 .await
             }
         }
+    }
+}
+
+#[cfg(any(windows, all(target_os = "macos", feature = "gpui-host"), test))]
+fn align_virtual_display_indices(
+    state: &mut base::session_protocol::virtual_display::VirtualDisplayState,
+    displays: &[DisplayInfo],
+) {
+    for screen in &mut state.displays {
+        screen.index = displays.iter().position(|display| {
+            is_capturable_display(display)
+                && display
+                    .name
+                    .trim_end_matches('\0')
+                    .eq_ignore_ascii_case(screen.name.trim_end_matches('\0'))
+        });
+    }
+}
+
+#[cfg(test)]
+mod display_query_tests {
+    use super::*;
+    use base::session_protocol::virtual_display::{VirtualDisplayScreen, VirtualDisplayState};
+
+    #[test]
+    fn virtual_screen_indices_follow_the_advertised_capturable_displays() {
+        let mut state = VirtualDisplayState {
+            displays: vec![
+                VirtualDisplayScreen {
+                    name: "Display 1\0".into(),
+                    index: Some(0),
+                    ..Default::default()
+                },
+                VirtualDisplayScreen {
+                    name: "Display 2".into(),
+                    index: Some(1),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut displays = vec![
+            DisplayInfo {
+                name: "Display 2".into(),
+                width: 1920,
+                height: 1080,
+                ..Default::default()
+            },
+            DisplayInfo {
+                name: "DISPLAY 1".into(),
+                width: 1920,
+                height: 1080,
+                online: true,
+                ..Default::default()
+            },
+        ];
+        align_virtual_display_indices(&mut state, &displays);
+        assert_eq!(state.displays[0].index, Some(1));
+        assert_eq!(state.displays[1].index, None);
+        displays[0].online = true;
+        displays[0].width = 0;
+        align_virtual_display_indices(&mut state, &displays);
+        assert_eq!(state.displays[1].index, None);
     }
 }

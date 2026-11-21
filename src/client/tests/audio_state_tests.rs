@@ -102,7 +102,7 @@ fn identical_format_failure_preserves_playback_and_resampler_history() {
     retained_decoder.handle_frame(audio_frame());
     handler.handle_frame(audio_frame());
     reference.handle_frame(audio_frame());
-    let buffer = handler.audio_buffer.0.clone();
+    let buffer = handler.audio_buffer.pcm.clone();
     let status = handler.playback_status.clone();
 
     handler.handle_format_with_start(format(INPUT_RATE, CHANNELS), failed_output);
@@ -111,7 +111,7 @@ fn identical_format_failure_preserves_playback_and_resampler_history() {
     reference.handle_frame(audio_frame());
 
     assert!(!dropped.load(Ordering::SeqCst));
-    assert!(Arc::ptr_eq(&buffer, &handler.audio_buffer.0));
+    assert!(Arc::ptr_eq(&buffer, &handler.audio_buffer.pcm));
     assert!(Arc::ptr_eq(&status, &handler.playback_status));
     assert_eq!(handler.sample_rate, (INPUT_RATE, OUTPUT_RATE));
     assert_eq!(handler.device_channel, CHANNELS);
@@ -124,28 +124,21 @@ fn identical_format_failure_preserves_playback_and_resampler_history() {
 }
 
 fn drain_audio(handler: &AudioHandler) -> Vec<f32> {
-    handler.audio_buffer.0.lock().unwrap().pop_iter().collect()
+    handler.audio_buffer.pcm.lock().unwrap().pop_iter().collect()
 }
 
 #[test]
 fn playback_sessions_shrink_backlogs_independently() {
-    let mut first = super::AudioBuffer::default();
-    let mut second = super::AudioBuffer::default();
-    let queued = vec![SAMPLE_VALUE; OUTPUT_RATE as usize * CHANNELS as usize];
-    first.append_pcm(&queued);
-    second.append_pcm(&queued);
-    std::thread::sleep(std::time::Duration::from_secs(12));
+    let first = super::AudioBuffer::default();
+    let second = super::AudioBuffer::default();
+    let samples_in_150_ms = OUTPUT_RATE as usize * CHANNELS as usize * 150 / 1000;
+    for (buffer, sample) in [(&first, SAMPLE_VALUE), (&second, -SAMPLE_VALUE)] {
+        buffer.append_pcm(&vec![0.0; samples_in_150_ms]);
+        buffer.append_pcm(&vec![sample; samples_in_150_ms]);
+    }
 
-    first.append_pcm(&[]);
-    second.append_pcm(&[]);
-
-    for buffer in [&first, &second] {
-        let remaining: Vec<_> = buffer.0.lock().unwrap().pop_iter().collect();
-        assert!(!remaining.is_empty());
-        assert!(
-            remaining.len() < queued.len(),
-            "another session deferred backlog removal"
-        );
-        assert!(remaining.iter().all(|sample| *sample == SAMPLE_VALUE));
+    for (buffer, sample) in [(&first, SAMPLE_VALUE), (&second, -SAMPLE_VALUE)] {
+        let remaining: Vec<_> = buffer.pcm.lock().unwrap().pop_iter().collect();
+        assert_eq!(remaining, vec![sample; samples_in_150_ms]);
     }
 }

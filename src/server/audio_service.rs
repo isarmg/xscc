@@ -42,11 +42,9 @@ fn get_audio_input() -> String {
 }
 
 pub fn restart() {
-    log::info!("restart the audio service, freezing now...");
-    if RESTARTING.load(Ordering::SeqCst) {
-        return;
+    if !RESTARTING.swap(true, Ordering::SeqCst) {
+        log::info!("Audio capture restart requested");
     }
-    RESTARTING.store(true, Ordering::SeqCst);
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -88,36 +86,32 @@ mod pa_impl {
             LowDelay,
         )?);
         #[cfg(target_os = "linux")]
-        allow_err!(
-            stream
-                .send(&crate::ipc::Data::Config((
-                    "audio-input".to_owned(),
-                    Some(super::get_audio_input())
-                )))
-                .await
-        );
+        stream
+            .send(&crate::ipc::Data::Config((
+                "audio-input".to_owned(),
+                Some(super::get_audio_input()),
+            )))
+            .await?;
+        let format = Arc::new(create_format_msg(crate::platform::PA_SAMPLE_RATE, 2));
+        let mut refresh_format = true;
         #[cfg(target_os = "linux")]
         let zero_audio_frame: Vec<f32> = vec![0.; AUDIO_DATA_SIZE_U8 / 4];
         #[cfg(target_os = "android")]
         let mut android_data = vec![];
         while sp.ok() && !RESTARTING.load(Ordering::SeqCst) {
-            sp.snapshot(|sps| {
-                sps.send(create_format_msg(crate::platform::PA_SAMPLE_RATE, 2));
-                Ok(())
-            })?;
-
             #[cfg(target_os = "linux")]
             {
-                // The `_pa` peer closing surfaces as `Err` here. Dropping it left the loop polling
-                // a dead socket -- one 0-byte read per poll, ready at once and never `Pending` --
-                // which burned a full core for the rest of the process lifetime.
-                let data = stream.next_raw().await?;
-                if data.len() == 0 {
-                    send_f32(&zero_audio_frame, &mut encoder, &sp);
+                // A stalled audio source should not prevent service shutdown or a device change.
+                let data = match hbb_common::timeout(250, stream.next_raw()).await {
+                    Ok(data) => data?,
+                    Err(_) => continue,
+                };
+                if !data.is_empty() && data.len() != AUDIO_DATA_SIZE_U8 {
                     continue;
                 }
-
-                if data.len() != AUDIO_DATA_SIZE_U8 {
+                sp.publish_audio_format(&format, std::mem::take(&mut refresh_format));
+                if data.is_empty() {
+                    send_f32(&zero_audio_frame, &mut encoder, &sp);
                     continue;
                 }
 
@@ -132,6 +126,8 @@ mod pa_impl {
                 send_f32(data, &mut encoder, &sp);
             }
 
+            #[cfg(target_os = "android")]
+            sp.publish_audio_format(&format, std::mem::take(&mut refresh_format));
             #[cfg(target_os = "android")]
             if scrap::android::ffi::get_audio_raw(&mut android_data, &mut vec![]).is_some() {
                 // Keep `android_data` as the reusable receive buffer: overwriting it with
@@ -165,12 +161,12 @@ pub fn is_screen_capture_kit_available() -> bool {
 mod audio_capture;
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod audio_capture_error;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(any(test, not(any(target_os = "linux", target_os = "android"))))]
 mod audio_capture_queue;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod cpal_impl {
-    use self::service::{Reset, ServiceSwap};
+    use self::service::Reset;
     use super::audio_capture_error::CaptureErrorHandler;
     use super::*;
     use cpal::{
@@ -197,7 +193,7 @@ mod cpal_impl {
     struct ActiveCaptureStream {
         stream: Option<Box<dyn StreamTrait>>,
         format: Arc<Message>,
-        _encoder_worker: audio_capture_queue::CaptureEncoderWorker,
+        encoder_worker: audio_capture_queue::CaptureEncoderWorker,
         errors: CaptureErrorHandler,
     }
 
@@ -213,53 +209,27 @@ mod cpal_impl {
         }
     }
 
-    fn run_restart(sp: EmptyExtraFieldService, state: &mut State) -> ResultType<()> {
-        state.reset();
-        sp.snapshot(|_sps: ServiceSwap<_>| Ok(()))?;
-        match &state.stream {
-            None => {
-                state.stream = Some(play(&sp)?);
-            }
-            _ => {}
-        }
-        if let Some(stream) = &state.stream {
-            sp.send_shared(stream.format.clone());
-            #[cfg(target_os = "macos")]
-            log::info!("Audio capture stream recreated; replacement format sent");
-        }
-        RESTARTING.store(false, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn run_serv_snapshot(sp: EmptyExtraFieldService, state: &mut State) -> ResultType<()> {
-        sp.snapshot(|sps| {
-            match &state.stream {
-                None => {
-                    state.stream = Some(play(&sp)?);
-                }
-                _ => {}
-            }
-            if let Some(stream) = &state.stream {
-                sps.send_shared(stream.format.clone());
-            }
-            Ok(())
-        })?;
-        Ok(())
-    }
-
     pub fn run(sp: EmptyExtraFieldService, state: &mut State) -> ResultType<()> {
+        let requested = RESTARTING.swap(false, Ordering::SeqCst);
+        let interrupted = state
+            .stream
+            .as_ref()
+            .is_some_and(|stream| stream.errors.needs_restart());
+        if requested || interrupted {
+            state.reset();
+        }
         if let Some(stream) = &state.stream {
-            if stream.errors.needs_restart() {
-                // Recreate on the service thread, outside the capture callbacks.
-                log::warn!("Recreating audio capture stream after an error");
-                super::restart();
+            sp.publish_audio_format(&stream.format, false);
+        } else if sp.ok() {
+            let mut stream = play(&sp)?;
+            sp.publish_audio_format(&stream.format, true);
+            stream.encoder_worker.start();
+            state.stream = Some(stream);
+            if requested || interrupted {
+                log::info!("Audio capture stream recreated; replacement format sent");
             }
         }
-        if !RESTARTING.load(Ordering::SeqCst) {
-            run_serv_snapshot(sp, state)
-        } else {
-            run_restart(sp, state)
-        }
+        Ok(())
     }
 
     #[derive(Clone, Copy)]
@@ -493,7 +463,7 @@ mod cpal_impl {
         Ok(ActiveCaptureStream {
             stream: Some(Box::new(stream)),
             format: Arc::new(create_format_msg(sample_rate, ch as _)),
-            _encoder_worker: encoder_worker,
+            encoder_worker,
             errors,
         })
     }

@@ -26,6 +26,12 @@ impl Capturer {
             Capturer::WAYLAND(d) => d.height(),
         }
     }
+
+    pub fn reset_frame_history(&mut self) {
+        match self {
+            Capturer::WAYLAND(capturer) => capturer.reset_frame_history(),
+        }
+    }
 }
 
 impl TraitCapturer for Capturer {

@@ -1,12 +1,11 @@
 use crate::{quartz, Frame, Pixfmt};
 use std::io;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, TryLockError};
 
 pub struct Capturer {
     inner: quartz::Capturer,
     frame: Arc<Mutex<Option<io::Result<quartz::Frame>>>>,
-    saved_raw_data: Vec<u8>, // for faster compare and copy
+    current: Option<quartz::Frame>,
 }
 
 impl Capturer {
@@ -33,7 +32,7 @@ impl Capturer {
         Ok(Capturer {
             inner,
             frame,
-            saved_raw_data: Vec::new(),
+            current: None,
         })
     }
 
@@ -65,10 +64,15 @@ impl crate::TraitCapturer for Capturer {
         let mut frame = frame?;
         let (width, height) = (self.width(), self.height());
         frame.surface_to_bgra(width, height)?;
-        crate::would_block_if_equal(&mut self.saved_raw_data, &frame)?;
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.stride() == frame.stride() && current[..] == frame[..])
+        {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
         Ok(Frame::PixelBuffer(PixelBuffer {
-            frame,
-            data: PhantomData,
+            frame: self.current.insert(frame),
             width,
             height,
         }))
@@ -76,15 +80,14 @@ impl crate::TraitCapturer for Capturer {
 }
 
 pub struct PixelBuffer<'a> {
-    frame: quartz::Frame,
-    data: PhantomData<&'a [u8]>,
+    frame: &'a quartz::Frame,
     width: usize,
     height: usize,
 }
 
 impl<'a> crate::TraitPixelBuffer for PixelBuffer<'a> {
     fn data(&self) -> &[u8] {
-        &*self.frame
+        self.frame
     }
 
     fn width(&self) -> usize {

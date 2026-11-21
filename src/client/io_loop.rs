@@ -6,7 +6,7 @@ use crate::{
     client::{
         self,
         video_queue::{VideoPacket, VideoQueue},
-        Client, Data, Interface, MediaData, MediaSender, QualityStatus, SEC30,
+        Client, Data, Interface, QualityStatus, SEC30,
     },
     session_transport::SessionTransport,
     ui_session_interface::{InvokeUiSession, Session},
@@ -17,7 +17,7 @@ use crate::{
 const RESTART_REMOTE_DEVICE_NO_DATA_TIMEOUT: Duration = Duration::from_secs(5);
 use base::message_proto::{permission_info::Permission, *};
 use hbb_common::{
-    allow_err, config, log,
+    allow_err, bytes::Bytes, config, log,
     protobuf::Message as _,
     rendezvous_proto::ConnType,
     timeout,
@@ -57,7 +57,7 @@ pub struct Remote<T: InvokeUiSession> {
         any(target_os = "ios", target_os = "android"),
         feature = "gpui-mobile-session"
     )))]
-    audio_sender: MediaSender,
+    audio_sender: client::audio_queue::AudioSender,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
     timer: crate::RustDeskInterval,
@@ -216,7 +216,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                         self.handler.on_establish_connection_error(format!("{err:#}"));
                                         break;
                                     }
-                                    Ok(ref bytes) => {
+                                    Ok(bytes) => {
                                         #[cfg(feature = "udp-media")]
                                         if reported_protocol != peer.protocol() {
                                             reported_protocol = peer.protocol().to_owned();
@@ -228,7 +228,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                             self.handler.update_received(true);
                                         }
                                         self.data_count.fetch_add(bytes.len(), Ordering::Relaxed);
-                                        if !self.handle_msg_from_peer(bytes, &mut peer).await {
+                                        if !self.handle_msg_from_peer(bytes.freeze(), &mut peer).await {
                                             break
                                         }
                                     }
@@ -788,8 +788,8 @@ impl<T: InvokeUiSession> Remote<T> {
         true
     }
 
-    async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut SessionTransport) -> bool {
-        if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+    async fn handle_msg_from_peer(&mut self, data: Bytes, peer: &mut SessionTransport) -> bool {
+        if let Ok(msg_in) = Message::parse_from_tokio_bytes(&data) {
             if base::session_protocol::is_legacy_role_switch_message(&msg_in) {
                 self.send_close_reason(peer, "Runtime role switching is not supported")
                     .await;
@@ -1076,7 +1076,7 @@ impl<T: InvokeUiSession> Remote<T> {
                             any(target_os = "ios", target_os = "android"),
                             feature = "gpui-mobile-session"
                         )))]
-                        self.audio_sender.send(MediaData::AudioFormat(f)).ok();
+                        self.audio_sender.set_format(f);
                     }
                     Some(misc::Union::PermissionInfo(p)) => {
                         log::info!("Change permission {:?} -> {}", p.permission, p.enabled);
@@ -1152,24 +1152,6 @@ impl<T: InvokeUiSession> Remote<T> {
                             {
                                 thread.video_queue.reset();
                             }
-                        }
-
-                        let mut scale = 1.0;
-                        if let Some(pi) = &self.handler.lc.read().unwrap().peer_info {
-                            if let Some(d) = pi.displays.get(s.display as usize) {
-                                scale = d.scale;
-                            }
-                        }
-
-                        if s.width > 0 && s.height > 0 {
-                            self.handler.set_display(
-                                s.x,
-                                s.y,
-                                s.width,
-                                s.height,
-                                s.cursor_embedded,
-                                scale,
-                            );
                         }
                     }
                     Some(misc::Union::CloseReason(c)) => {
@@ -1296,9 +1278,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         feature = "gpui-mobile-session"
                     )))]
                     if !self.handler.lc.read().unwrap().disable_audio.v {
-                        self.audio_sender
-                            .send(MediaData::AudioFrame(Box::new(frame)))
-                            .ok();
+                        self.audio_sender.push(frame);
                     }
                 }
                 Some(message::Union::MessageBox(msgbox)) => {
@@ -1809,7 +1789,7 @@ mod ui_send_tests {
             message.set_misc(misc);
             assert!(
                 remote
-                    .handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer)
+                    .handle_msg_from_peer(message.write_to_bytes().unwrap().into(), &mut peer)
                     .await
             );
             if reset {
@@ -1954,7 +1934,7 @@ mod tests {
                 remote.is_connected = connected;
                 assert!(
                     !remote
-                        .handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer)
+                        .handle_msg_from_peer(message.write_to_bytes().unwrap().into(), &mut peer)
                         .await
                 );
                 let bytes = hbb_common::timeout(1000, far.next())

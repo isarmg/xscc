@@ -9,33 +9,36 @@ use scrap::{
     wayland::pipewire::{fill_displays, try_fix_logical_size},
     Capturer, Display, Frame, TraitCapturer,
 };
-use std::collections::HashMap;
 use std::io;
 
 lazy_static::lazy_static! {
-    static ref CAP_DISPLAY_INFO: RwLock<HashMap<usize, u64>> = RwLock::new(HashMap::new());
-    static ref PIPEWIRE_INITIALIZED: RwLock<bool> = RwLock::new(false);
+    static ref CAP_DISPLAY_INFO: RwLock<Option<CapDisplayInfo>> = RwLock::new(None);
     static ref LOG_SCRAP_COUNT: Mutex<u32> = Mutex::new(0);
     static ref LAST_STAGE_ERR: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
-    static ref ACTIVE_DISPLAY_COUNT: RwLock<usize> = RwLock::new(0);
+    static ref ACTIVE_DISPLAY_COUNT: Mutex<usize> = Mutex::new(0);
 }
 
 pub fn init() {
     set_map_err(map_err_scrap);
 }
 
-pub(super) fn increment_active_display_count() -> usize {
-    let mut count = ACTIVE_DISPLAY_COUNT.write().unwrap();
-    *count += 1;
-    *count
+pub(super) struct ActiveCapture;
+
+pub(super) fn begin_capture() -> ActiveCapture {
+    *ACTIVE_DISPLAY_COUNT.lock().unwrap() += 1;
+    ActiveCapture
 }
 
-pub(super) fn decrement_active_display_count() -> usize {
-    let mut count = ACTIVE_DISPLAY_COUNT.write().unwrap();
-    if *count > 0 {
+impl Drop for ActiveCapture {
+    fn drop(&mut self) {
+        let mut count = ACTIVE_DISPLAY_COUNT.lock().unwrap();
         *count -= 1;
+        let last = *count == 0;
+        drop(count);
+        if last {
+            clear();
+        }
     }
-    *count
 }
 
 fn map_err_scrap(err: String) -> io::Error {
@@ -199,6 +202,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wayland_capturer_has_one_owner_until_returned() {
+        let slot = Arc::new(Mutex::new(Some(1)));
+        let mut lease = CaptureLease::checkout(&slot).unwrap();
+        assert!(CaptureLease::checkout(&slot).is_none());
+        *lease.capturer() = 2;
+        drop(lease);
+        assert_eq!(*CaptureLease::checkout(&slot).unwrap().capturer(), 2);
+    }
+
+    #[test]
     fn staged_message_names_the_outcome() {
         let m = |tag| staged_message(tag, false);
         assert_eq!(m("start:declined:"), WAYLAND_DECLINED);
@@ -228,27 +241,48 @@ mod tests {
     }
 }
 
-struct CapturerPtr(*mut Capturer);
+struct CaptureLease<T> {
+    capturer: Option<T>,
+    slot: Arc<Mutex<Option<T>>>,
+}
 
-impl Clone for CapturerPtr {
-    fn clone(&self) -> Self {
-        Self(self.0)
+impl<T> CaptureLease<T> {
+    fn checkout(slot: &Arc<Mutex<Option<T>>>) -> Option<Self> {
+        let capturer = slot.lock().unwrap().take()?;
+        Some(Self {
+            capturer: Some(capturer),
+            slot: slot.clone(),
+        })
+    }
+
+    fn capturer(&mut self) -> &mut T {
+        self.capturer
+            .as_mut()
+            .expect("invariant: capture lease owns its capturer")
     }
 }
 
-impl TraitCapturer for CapturerPtr {
+impl<T> Drop for CaptureLease<T> {
+    fn drop(&mut self) {
+        *self.slot.lock().unwrap() = self.capturer.take();
+    }
+}
+
+impl TraitCapturer for CaptureLease<Capturer> {
     fn frame<'a>(&'a mut self, timeout: std::time::Duration) -> std::io::Result<Frame<'a>> {
-        unsafe { (*self.0).frame(timeout) }
+        self.capturer().frame(timeout)
     }
 }
 
 struct CapDisplayInfo {
-    rects: Vec<((i32, i32), usize, usize)>,
     displays: Vec<DisplayInfo>,
-    num: usize,
     primary: usize,
-    current: usize,
-    capturer: CapturerPtr,
+    capturers: Vec<CapDisplay>,
+}
+
+struct CapDisplay {
+    rect: ((i32, i32), usize, usize),
+    capturer: Arc<Mutex<Option<Capturer>>>,
 }
 
 /// Uinput desktop rect from the DRM display list, for a login screen where no compositor can be
@@ -399,7 +433,7 @@ pub(super) fn is_inited() -> Option<Message> {
         }
         // try_read: an init waiting for the portal's picker holds the write lock, and this runs on
         // every desktop login. Busy (that init, or clear()) answers not inited yet.
-        if !matches!(CAP_DISPLAY_INFO.try_read(), Ok(map) if !map.is_empty()) {
+        if !matches!(CAP_DISPLAY_INFO.try_read(), Ok(info) if info.is_some()) {
             let mut msg_out = Message::new();
             let res = MessageBox {
                 msgtype: "nook-nocancel-hasclose".to_owned(),
@@ -422,11 +456,11 @@ pub(super) async fn check_init() -> ResultType<()> {
     }
     {
         // try_read for the same reason as is_inited; when busy, the same look waits off the worker.
-        let looked = CAP_DISPLAY_INFO.try_read().map(|map| map.is_empty()).ok();
+        let looked = CAP_DISPLAY_INFO.try_read().map(|info| info.is_none()).ok();
         let empty = match looked {
             Some(empty) => empty,
             None => hbb_common::tokio::task::spawn_blocking(|| {
-                CAP_DISPLAY_INFO.read().unwrap().is_empty()
+                CAP_DISPLAY_INFO.read().unwrap().is_none()
             })
             .await
             .map_err(|err| anyhow::anyhow!("Wayland display state task failed: {err}"))?,
@@ -532,14 +566,11 @@ pub(super) async fn check_init() -> ResultType<()> {
 /// portal's picker is open included. Blocking.
 fn init_displays() -> ResultType<()> {
     let mut lock = CAP_DISPLAY_INFO.write().unwrap();
-    if lock.is_empty() {
-        // Check if PipeWire is already initialized to prevent duplicate recorder creation
-        if *PIPEWIRE_INITIALIZED.read().unwrap() {
-            log::warn!("wayland_diag: Preventing duplicate PipeWire initialization");
-            return Ok(());
-        }
-
+    if lock.is_none() {
         let mut all = Display::all()?;
+        if all.is_empty() {
+            bail!("PipeWire returned no capturable displays");
+        }
         log::debug!("Initializing displays with fill_displays()");
         {
             let temp_mouse_move_handle = input_service::TemporaryMouseMoveHandle::new();
@@ -549,10 +580,9 @@ fn init_displays() -> ResultType<()> {
         }
         log::debug!("Attempting to fix logical size with try_fix_logical_size()");
         try_fix_logical_size(&mut all);
-        *PIPEWIRE_INITIALIZED.write().unwrap() = true;
         let num = all.len();
         let primary = super::display_service::get_primary_2(&all);
-        let mut displays = super::display_service::update_sync_displays(&all);
+        let mut displays = super::display_service::describe_displays(&all);
         for display in displays.iter_mut() {
             display.cursor_embedded = is_cursor_embedded();
         }
@@ -571,24 +601,22 @@ fn init_displays() -> ResultType<()> {
             num_cpus::get()
         );
 
-        // Create individual CapDisplayInfo for each display with its own capturer
-        for (idx, display) in all.into_iter().enumerate() {
+        let mut capturers = Vec::with_capacity(num);
+        for (rect, display) in rects.into_iter().zip(all) {
             // No `with_context` here: the peer is shown `format!("{}", err)`, which
             // renders only the outermost layer, and the mapped reason is the inner one.
-            let capturer = Box::into_raw(Box::new(Capturer::new(display)?));
-            let capturer = CapturerPtr(capturer);
-
-            let cap_display_info = Box::into_raw(Box::new(CapDisplayInfo {
-                rects: rects.clone(),
-                displays: displays.clone(),
-                num,
-                primary,
-                current: idx,
-                capturer,
-            }));
-
-            lock.insert(idx, cap_display_info as u64);
+            let capturer = Capturer::new(display)?;
+            capturers.push(CapDisplay {
+                rect,
+                capturer: Arc::new(Mutex::new(Some(capturer))),
+            });
         }
+        super::display_service::publish_displays(&displays);
+        *lock = Some(CapDisplayInfo {
+            displays,
+            primary,
+            capturers,
+        });
     }
     Ok(())
 }
@@ -619,22 +647,21 @@ pub(super) async fn get_displays_and_primary() -> ResultType<(Vec<DisplayInfo>, 
     // The read can wait for an init another thread started since: off the worker too.
     hbb_common::tokio::task::spawn_blocking(|| -> ResultType<(Vec<DisplayInfo>, usize)> {
         // Keep one read guard so clear/reinitialization cannot split these across cache snapshots.
-        let cap_map = CAP_DISPLAY_INFO.read().unwrap();
-        if let Some(addr) = cap_map.values().next() {
-            let cap_display_info: *const CapDisplayInfo = *addr as _;
-            unsafe {
-                let cap_display_info = &*cap_display_info;
-                Ok((cap_display_info.displays.clone(), cap_display_info.primary))
-            }
-        } else {
-            bail!("Failed to get capturer display info");
-        }
+        let cache = CAP_DISPLAY_INFO.read().unwrap();
+        let info = cache
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get capturer display info"))?;
+        Ok((info.displays.clone(), info.primary))
     })
     .await
     .map_err(|err| anyhow::anyhow!("Wayland display info task failed: {err}"))?
 }
 
 pub fn clear() {
+    let mut cache = CAP_DISPLAY_INFO.write().unwrap();
+    if *ACTIVE_DISPLAY_COUNT.lock().unwrap() != 0 {
+        return;
+    }
     // The DRM path augments its geometry from the compositor's Wayland outputs (logical origin +
     // scale), which scrap caches process-wide. The PipeWire path clears that cache on session close,
     // but the DRM path opens no PipeWire session, so without this it would keep matching DRM outputs
@@ -648,18 +675,7 @@ pub fn clear() {
     // teardown (which happens on each video-service restart), and re-probing `_drm` from the async
     // enumeration path blocks the executor long enough to trip "deadline has elapsed" and spiral
     // into a restart loop. DRM availability is fixed at service start, so the cache stays valid.
-    let mut write_lock = CAP_DISPLAY_INFO.write().unwrap();
-    for (_, addr) in write_lock.iter() {
-        let cap_display_info: *mut CapDisplayInfo = *addr as _;
-        unsafe {
-            let _box_capturer = Box::from_raw((*cap_display_info).capturer.0);
-            let _box_cap_display_info = Box::from_raw(cap_display_info);
-        }
-    }
-    write_lock.clear();
-
-    // Reset PipeWire initialization flag to allow recreation on next init
-    *PIPEWIRE_INITIALIZED.write().unwrap() = false;
+    *cache = None;
 }
 
 /// The portal session close when the last remote connection goes (`AuthedConnID::drop`). A portal
@@ -759,116 +775,63 @@ pub(super) fn get_capturer_for_display(
     } else {
         None
     };
-    let cap_map = CAP_DISPLAY_INFO.read().unwrap();
-    // Serve ONLY the exact PipeWire entry for this index. Do NOT fall back to another index's
-    // `CapDisplayInfo`: `CapturerPtr` is a bare `*mut Capturer` cloned by raw-pointer copy, so aliasing
-    // one entry to two `display_idx` values would let two video-service threads call `frame()` on the
-    // same `Recorder` with no lock (data race / UB), and it would also mis-map input against the wrong
-    // rect. DRM and PipeWire do not share an index space (the portal often exposes one whole-desktop
-    // stream at index 0), so a demoted non-primary DRM index has no PipeWire entry here; that case is
-    // handled at the source by dropping the demoted display from the advertised list (see
-    // drm_capturer demotion) so the client re-enumerates against a consistent list, rather than being
-    // papered over with a shared/mismatched capturer.
-    if let Some(addr) = cap_map.get(&display_idx) {
-        let cap_display_info: *const CapDisplayInfo = *addr as _;
-        unsafe {
-            let cap_display_info = &*cap_display_info;
-            let rect = cap_display_info.rects[cap_display_info.current];
-            // Reaching here with DRM active means get_capturer_info bailed (a demoted display) and
-            // we fell through to PipeWire. Serve this stream ONLY if its rect matches the
-            // geometry we advertised for this index. The portal typically exposes one whole-desktop
-            // stream, so on a multi-monitor host that rect is the FULL desktop while the advertised DRM
-            // geometry is a single connector -> serving it would stretch the frame and offset all
-            // input. Bail instead; get_display_infos advertised the display offline, so the client
-            // re-enumerates against a consistent list. A single-display host matches (whole-desktop ==
-            // that display) and is served normally. On a pure-PipeWire host is_available() is false and
-            // this guard is skipped, preserving upstream behavior exactly.
-            #[cfg(feature = "drm")]
-            if let Some((advertised, single_display)) = drm_advertised {
-                if let Some(advertised) = advertised {
-                    // BOTH SIDES ARE PHYSICAL, so compare them raw. Traced rather than assumed,
-                    // because it was twice "corrected" to a scale conversion that broke it:
-                    // `rect` is built above from `Display::width()/height()`, and the WAYLAND
-                    // variant of those returns `physical_width()/physical_height()`
-                    // (scrap `common/wayland.rs`), i.e. `PipeWireCapturable.physical_size`.
-                    // `try_fix_logical_size` only repairs the capturable's SEPARATE
-                    // `logical_size` field and never touches `physical_size`, so the rect is not
-                    // logical. The advertised DRM geometry is physical too, in DELIVERED
-                    // orientation: `augment_with_wayland_geometry` transposes width/height for a
-                    // 90/270 output (rustdesk#15886). Whether the portal's caps arrive rotated
-                    // is UNMEASURED on a rotated display (pipewiresrc does not apply
-                    // SPA_META_VideoTransform), so the size half accepts either orientation
-                    // rather than gambling a permanent offline on one of them. Dividing a side
-                    // by the scale would still be wrong: logical against physical.
-                    //
-                    // The size check is what tells one connector apart from the whole-desktop
-                    // rect the portal usually exposes. It is skipped only when BOTH sides say
-                    // there is a single display -- the DRM list has one entry and the PipeWire
-                    // map has one -- because only then is "the whole-desktop stream IS this
-                    // display" true by construction. (The portal can report a different physical
-                    // size for a Full Workspace selection than the connector's mode, which is why
-                    // that case needs the carve-out at all.) The DRM count alone is not enough:
-                    // a monitor on a card the service cannot open is missing from the DRM list
-                    // while the compositor still drives it.
-                    let single_display = single_display && cap_display_info.num == 1;
-                    // Exact orientation only: a transposed stream would be encoded at the
-                    // PipeWire dimensions while the client keeps the advertised (rotated) ones,
-                    // and no wayland path ever reconciles the two, so every frame would be
-                    // rejected client-side. Falling into the bail instead advertises the display
-                    // offline, which the client recovers from by re-enumerating.
-                    let size_matches = advertised.width as usize == rect.1
-                        && advertised.height as usize == rect.2;
-                    let transposed = advertised.width as usize == rect.2
-                        && advertised.height as usize == rect.1;
-                    // The single-display carve-out forgives a size DIFFERENCE (a Full Workspace
-                    // stream may report the workspace, not the mode), but never a transposed
-                    // pair: that is the same served-vs-advertised orientation split as above,
-                    // and it blanks the client the same way.
-                    let consistent = advertised.x == rect.0 .0
-                        && advertised.y == rect.0 .1
-                        && (size_matches || (single_display && !transposed));
-                    if !consistent {
-                        // Recorded so the lone-display carve-out in `mark_demoted_displays` makes
-                        // the "advertised offline" below true for a single display too, instead of
-                        // restart-looping against a stream nothing can serve.
-                        super::drm_capturer::mark_fallback_rejected(display_idx);
-                        bail!(
-                            "drm display {} demoted with no geometry-consistent PipeWire stream{} (advertised {}x{}+{}+{} vs stream {}x{}+{}+{}); advertised offline",
-                            display_idx,
-                            if transposed {
-                                " - stream is transposed vs advertised"
-                            } else {
-                                ""
-                            },
-                            advertised.width,
-                            advertised.height,
-                            advertised.x,
-                            advertised.y,
-                            rect.1,
-                            rect.2,
-                            rect.0 .0,
-                            rect.0 .1
-                        );
-                    }
-                }
-            }
-            Ok(super::video_service::CapturerInfo {
-                origin: rect.0,
-                width: rect.1,
-                height: rect.2,
-                ndisplay: cap_display_info.num,
-                current: cap_display_info.current,
-                privacy_mode_id: 0,
-                _capturer_privacy_mode_id: 0,
-                capturer: Box::new(cap_display_info.capturer.clone()),
-            })
+    let cache = CAP_DISPLAY_INFO.read().unwrap();
+    let info = cache
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get capturer display info"))?;
+    let display = info.capturers.get(display_idx).ok_or_else(|| {
+        anyhow::anyhow!("Failed to get capturer display info for display {display_idx}")
+    })?;
+    let rect = display.rect;
+
+    #[cfg(feature = "drm")]
+    if let Some((Some(advertised), single_display)) = drm_advertised {
+        // Both backends report physical dimensions. A full-workspace portal stream
+        // can substitute for a single output, but a transposed stream would still
+        // disagree with the client's advertised orientation.
+        let single_display = single_display && info.capturers.len() == 1;
+        let size_matches =
+            advertised.width as usize == rect.1 && advertised.height as usize == rect.2;
+        let transposed =
+            advertised.width as usize == rect.2 && advertised.height as usize == rect.1;
+        let consistent = advertised.x == rect.0 .0
+            && advertised.y == rect.0 .1
+            && (size_matches || (single_display && !transposed));
+        if !consistent {
+            super::drm_capturer::mark_fallback_rejected(display_idx);
+            bail!(
+                "drm display {} demoted with no geometry-consistent PipeWire stream{} (advertised {}x{}+{}+{} vs stream {}x{}+{}+{}); advertised offline",
+                display_idx,
+                if transposed {
+                    " - stream is transposed vs advertised"
+                } else {
+                    ""
+                },
+                advertised.width,
+                advertised.height,
+                advertised.x,
+                advertised.y,
+                rect.1,
+                rect.2,
+                rect.0 .0,
+                rect.0 .1
+            );
         }
-    } else {
-        bail!(
-            "Failed to get capturer display info for display {}",
-            display_idx
-        );
     }
+    let mut capturer = CaptureLease::checkout(&display.capturer).ok_or_else(|| {
+        anyhow::anyhow!("Wayland display {display_idx} is already being captured")
+    })?;
+    capturer.capturer().reset_frame_history();
+    Ok(super::video_service::CapturerInfo {
+        origin: rect.0,
+        width: rect.1,
+        height: rect.2,
+        ndisplay: info.capturers.len(),
+        current: display_idx,
+        privacy_mode_id: 0,
+        _capturer_privacy_mode_id: 0,
+        capturer: Box::new(capturer),
+    })
 }
 
 pub fn common_get_error() -> String {

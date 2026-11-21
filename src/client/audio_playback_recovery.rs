@@ -1,9 +1,12 @@
-use super::{AudioDecoder, AudioFormat, AudioHandler, MediaData, Mono, Stereo};
+use super::{
+    audio_queue::{AudioItem, AudioQueue},
+    AudioDecoder, AudioFormat, AudioHandler, Mono, Stereo,
+};
 use cpal::StreamError;
 use crossbeam_queue::SegQueue;
 use hbb_common::{log, tokio::time::Instant, ResultType};
 use std::{
-    sync::{atomic::Ordering, mpsc, Arc},
+    sync::{atomic::Ordering, mpsc::RecvTimeoutError, Arc},
     time::Duration,
 };
 
@@ -156,29 +159,15 @@ impl AudioHandler {
 
     pub(super) fn receive_audio(
         &mut self,
-        receiver: &mpsc::Receiver<MediaData>,
-    ) -> Result<MediaData, mpsc::RecvError> {
-        receive_with_recovery(receiver, RECOVERY_INTERVAL, || {
+        receiver: &AudioQueue,
+    ) -> Result<AudioItem, RecvTimeoutError> {
+        let received = receiver.recv_timeout(RECOVERY_INTERVAL);
+        if matches!(
+            &received,
+            Ok(AudioItem::Frame(..)) | Err(RecvTimeoutError::Timeout)
+        ) {
             self.recover_playback_with(Instant::now(), Self::restart_playback);
-        })
-    }
-}
-
-pub(super) fn receive_with_recovery(
-    receiver: &mpsc::Receiver<MediaData>,
-    interval: Duration,
-    mut recover: impl FnMut(),
-) -> Result<MediaData, mpsc::RecvError> {
-    loop {
-        match receiver.recv_timeout(interval) {
-            Ok(data) => {
-                if !matches!(data, MediaData::AudioFormat(_)) {
-                    recover();
-                }
-                return Ok(data);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => recover(),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(mpsc::RecvError),
         }
+        received
     }
 }

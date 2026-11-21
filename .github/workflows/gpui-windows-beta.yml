@@ -253,6 +253,12 @@ jobs:
       - name: Test cursor-only high-refresh pacing
         if: matrix.role == 'host' && !inputs.build_only
         run: ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter "server::video_service::frame_pacing::tests::"
+      - name: Test capture frame handling
+        if: matrix.role == 'host' && !inputs.build_only
+        run: |
+          foreach ($filter in @('portable_frame_outlives_shared_slot_reuse_and_teardown', 'screenshot_preserves_channels_and_removes_padded_rows')) {
+            ./.github/scripts/test-gpui-root-filter.ps1 -Features "${{ matrix.core_features }}" -Filter $filter
+          }
       - name: Test UDP encoder adaptation
         if: matrix.role == 'host' && !inputs.build_only
         run: |
@@ -332,8 +338,12 @@ jobs:
         run: |
           cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::rate_control::tests::
           if ($LASTEXITCODE -ne 0) { throw 'Codec rate-control tests failed' }
-          cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::streaming_tests::
-          if ($LASTEXITCODE -ne 0) { throw 'Software codec streaming tests failed' }
+          $streamingTests = & cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::streaming_tests:: 2>&1
+          $streamingExit = $LASTEXITCODE
+          $streamingTests | Write-Output
+          if ($streamingExit -ne 0 -or ($streamingTests | Out-String) -notmatch '(?m)^test result: ok\. 3 passed; 0 failed;') {
+            throw 'Software codec streaming regressions did not all pass'
+          }
           $limitTests = & cargo test --locked -p scrap --lib --target x86_64-pc-windows-msvc codec::bitrate_limit_tests:: 2>&1
           $limitExit = $LASTEXITCODE
           $limitTests | Write-Output

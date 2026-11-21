@@ -94,18 +94,18 @@ impl VideoSendQueue {
         &self,
         current: Option<FrameMetadata>,
         repair: Option<FrameMetadata>,
+        acknowledged: &impl Fn(FrameMetadata) -> bool,
     ) -> Option<QueuedFrame> {
         let mut pending = self.pending.lock().unwrap();
-        let position = if current.is_none() && repair.is_none() {
-            0
-        } else {
-            pending.frames.iter().position(|frame| {
-                let metadata = frame.plan.descriptor().metadata;
-                metadata.keyframe
+        let idle = current.is_none() && repair.is_none();
+        let position = pending.frames.iter().position(|frame| {
+            let metadata = frame.plan.descriptor().metadata;
+            (idle
+                || (metadata.keyframe
                     && current.is_none_or(|prior| !prior.keyframe && supersedes(metadata, prior))
-                    && repair.is_none_or(|prior| supersedes(metadata, prior))
-            })?
-        };
+                    && repair.is_none_or(|prior| supersedes(metadata, prior))))
+                && acknowledged(metadata)
+        })?;
         let frame = pending.frames.remove(position)?;
         pending.bytes -= frame.plan.descriptor().total_size as usize;
         Some(frame)
@@ -116,10 +116,11 @@ impl VideoSendQueue {
         &self,
         current: Option<FrameMetadata>,
         repair: Option<FrameMetadata>,
+        acknowledged: impl Fn(FrameMetadata) -> bool,
     ) -> QueuedFrame {
         loop {
             let notified = self.available.notified();
-            if let Some(frame) = self.pop(current, repair) {
+            if let Some(frame) = self.pop(current, repair, &acknowledged) {
                 return frame;
             }
             notified.await;

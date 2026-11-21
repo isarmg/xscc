@@ -88,6 +88,7 @@ pub(crate) mod mobile_audio;
 mod audio_playback;
 #[cfg(target_os = "windows")]
 mod audio_playback_recovery;
+mod audio_queue;
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "client/tests/audio_state_tests.rs"]
 mod audio_state_tests;
@@ -109,8 +110,7 @@ const RESTART_REMOTE_DEVICE_GRACE: Duration = Duration::from_secs(5 * 60);
 pub const VIDEO_QUEUE_SIZE: usize = 120;
 const MAX_DECODE_FAIL_COUNTER: usize = 3;
 
-#[cfg(not(target_os = "linux"))]
-pub const AUDIO_BUFFER_MS: usize = 3000;
+const AUDIO_BUFFER_MS: usize = 150;
 
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -374,6 +374,8 @@ pub struct AudioHandler {
     audio_decoder: Option<(AudioDecoder, Vec<f32>)>,
     #[cfg(target_os = "linux")]
     simple: Option<psimple::Simple>,
+    #[cfg(target_os = "linux")]
+    pulse_retry_at: Option<Instant>,
     #[cfg(not(target_os = "linux"))]
     audio_buffer: AudioBuffer,
     #[cfg(not(target_os = "linux"))]
@@ -439,114 +441,49 @@ fn prepare_decoded_audio(
 }
 
 #[cfg(not(target_os = "linux"))]
-struct AudioBuffer(
-    pub Arc<std::sync::Mutex<ringbuf::HeapRb<f32>>>,
-    usize,
-    [usize; 30],
-    Arc<std::sync::atomic::AtomicUsize>,
-    Option<std::time::Instant>,
-);
+struct AudioBuffer {
+    pcm: Arc<Mutex<ringbuf::HeapRb<f32>>>,
+    discontinuity: Arc<std::sync::atomic::AtomicUsize>,
+}
 
 #[cfg(not(target_os = "linux"))]
 impl Default for AudioBuffer {
     fn default() -> Self {
-        Self(
-            Arc::new(std::sync::Mutex::new(
-                ringbuf::HeapRb::<f32>::new(48000 * 2 * AUDIO_BUFFER_MS / 1000), // 48000hz, 2 channel
-            )),
-            48000 * 2,
-            [0; 30],
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            None,
-        )
+        Self {
+            pcm: Arc::new(Mutex::new(ringbuf::HeapRb::new(
+                48_000 * 2 * AUDIO_BUFFER_MS / 1000,
+            ))),
+            discontinuity: Default::default(),
+        }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 impl AudioBuffer {
     pub fn resize(&mut self, sample_rate: usize, channels: usize) {
-        let capacity = sample_rate * channels * AUDIO_BUFFER_MS / 1000;
-        let old_capacity = self.0.lock().unwrap().capacity();
+        let capacity = (sample_rate * AUDIO_BUFFER_MS / 1000) * channels;
+        let mut pcm = self.pcm.lock().unwrap();
+        let old_capacity = pcm.capacity();
         if capacity != old_capacity {
-            *self.0.lock().unwrap() = ringbuf::HeapRb::<f32>::new(capacity);
-            self.1 = sample_rate * channels;
+            *pcm = ringbuf::HeapRb::new(capacity);
             log::info!("Audio buffer resized from {old_capacity} to {capacity}");
-        }
-    }
-
-    fn try_shrink(&mut self, having: usize) {
-        let mut i = (having * 10) / self.1;
-        if i > 29 {
-            i = 29;
-        }
-        self.2[i] += 1;
-
-        let now = std::time::Instant::now();
-        let last_shrink = self.4.get_or_insert(now);
-        if now.duration_since(*last_shrink) < Duration::from_secs(12) {
-            return;
-        }
-        *last_shrink = now;
-
-        // the safer water mark to drop
-        let mut zero = 0;
-        // the water mark taking most of time
-        let mut max = 0;
-        for i in 0..30 {
-            if self.2[i] == 0 && zero == i {
-                zero += 1;
-            }
-
-            if self.2[i] > self.2[max] {
-                self.2[max] = 0;
-                max = i;
-            } else {
-                self.2[i] = 0;
-            }
-        }
-        zero = zero * 2 / 3;
-
-        // how many data can be dropped:
-        // 1. will not drop if buffered data is less than 600ms
-        // 2. choose based on min(zero, max)
-        const N: usize = 4;
-        self.2[max] = 0;
-        if max < 6 {
-            return;
-        } else if max > zero * N {
-            max = zero * N;
-        }
-
-        let mut lock = self.0.lock().unwrap();
-        let cap = lock.capacity();
-        let having = lock.occupied_len();
-        let skip = (cap * max / (30 * N) + 1) & (!1);
-        if (having > skip * 3) && (skip > 0) {
-            lock.skip(skip);
-            let generation = self.signal_discontinuity();
-            drop(lock);
-            log::info!("skip {skip}, based {max} {zero}, generation={generation}");
         }
     }
 
     /// The caller must hold the PCM buffer lock while signaling the discard.
     fn signal_discontinuity(&self) -> usize {
-        self.3
+        self.discontinuity
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             .wrapping_add(1)
     }
 
-    /// append pcm to audio buffer, if buffered data
-    /// exceeds AUDIO_BUFFER_MS,  only AUDIO_BUFFER_MS
-    /// will be kept.
-    fn append_pcm2(&self, buffer: &[f32]) -> usize {
-        let mut lock = self.0.lock().unwrap();
-        let cap = lock.capacity();
-        let having = lock.occupied_len() + buffer.len();
-        lock.push_slice_overwrite(buffer);
+    fn append_pcm(&self, buffer: &[f32]) {
+        let mut pcm = self.pcm.lock().unwrap();
+        let cap = pcm.capacity();
+        let having = pcm.occupied_len() + buffer.len();
+        pcm.push_slice_overwrite(buffer);
         let discard = (having > cap).then(|| (having - cap, self.signal_discontinuity()));
-        let occupied = lock.occupied_len();
-        drop(lock);
+        drop(pcm);
         if let Some((discarded, generation)) = discard {
             hbb_common::throttled_log!(
                 audio_playback::AUDIO_PLAYBACK_LOG_INTERVAL,
@@ -554,15 +491,12 @@ impl AudioBuffer {
                 "Audio buffer capacity discard: samples={discarded}, generation={generation}"
             );
         }
-        occupied
     }
 
-    /// append pcm to audio buffer, trying to drop data
-    /// when data is too much (per 12 seconds) based
-    /// statistics.
-    pub fn append_pcm(&mut self, buffer: &[f32]) {
-        let having = self.append_pcm2(buffer);
-        self.try_shrink(having);
+    fn discard_pending(&self) {
+        let mut pcm = self.pcm.lock().unwrap();
+        pcm.clear();
+        self.signal_discontinuity();
     }
 }
 
@@ -570,8 +504,11 @@ impl AudioHandler {
     #[cfg(target_os = "linux")]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
         use psimple::Simple;
-        use pulse::sample::{Format, Spec};
-        use pulse::stream::Direction;
+        use pulse::{
+            def::BufferAttr,
+            sample::{Format, Spec},
+            stream::Direction,
+        };
 
         let spec = Spec {
             format: Format::F32le,
@@ -582,6 +519,15 @@ impl AudioHandler {
             bail!("Invalid audio format");
         }
 
+        let bytes_for_ms = |ms: usize| (spec.bytes_per_second() * ms / 1000) as u32;
+        let attributes = BufferAttr {
+            maxlength: bytes_for_ms(AUDIO_BUFFER_MS),
+            tlength: bytes_for_ms(AUDIO_BUFFER_MS),
+            prebuf: bytes_for_ms(20),
+            minreq: u32::MAX,
+            fragsize: u32::MAX,
+        };
+        self.sample_rate = (format0.sample_rate, format0.sample_rate);
         self.simple = Some(Simple::new(
             None,                   // Use the default server
             &crate::get_app_name(), // Our application’s name
@@ -590,10 +536,20 @@ impl AudioHandler {
             "playback",             // Description of our stream
             &spec,                  // Our sample format
             None,                   // Use default channel map
-            None,                   // Use default buffering attributes
+            Some(&attributes),
         )?);
-        self.sample_rate = (format0.sample_rate, format0.sample_rate);
+        self.pulse_retry_at = None;
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn retry_pulse_output(&mut self, error: impl std::fmt::Display) {
+        self.simple = None;
+        self.pulse_retry_at = Some(Instant::now() + Duration::from_secs(1));
+        hbb_common::throttled_log!(
+            Duration::from_secs(5), warn,
+            "Audio playback unavailable; will reopen the PulseAudio stream: {error}"
+        );
     }
 
     /// Start the audio playback.
@@ -610,11 +566,15 @@ impl AudioHandler {
         let sample_format = config.sample_format();
         log::info!("Default output format: {:?}", config);
         log::info!("Remote input format: {:?}", format0);
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let supports_fixed_buffer = matches!(
+            config.buffer_size(),
+            cpal::SupportedBufferSize::Range { min, max } if (*min..=*max).contains(&64)
+        );
         #[allow(unused_mut)]
         let mut config: StreamConfig = config.into();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            // this makes ios and android audio output not work
+        if supports_fixed_buffer {
             config.buffer_size = cpal::BufferSize::Fixed(64);
         }
 
@@ -685,6 +645,13 @@ impl AudioHandler {
                 self.audio_decoder = Some((d, buffer));
                 self.channels = f.channels as _;
                 let result = start(self, f);
+                #[cfg(target_os = "linux")]
+                if let Err(error) = &result {
+                    if !keep_existing_stream {
+                        self.retry_pulse_output(format_args!("{error:#}"));
+                        return;
+                    }
+                }
                 #[cfg(target_os = "windows")]
                 let keep_existing_stream = keep_existing_stream
                     && !playback_failed
@@ -721,6 +688,24 @@ impl AudioHandler {
         }
     }
 
+    fn reset_audio_after_gap(&mut self) -> ResultType<()> {
+        let Some((decoder, _)) = self.audio_decoder.as_mut() else {
+            return Ok(());
+        };
+        decoder.reset_state()?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.audio_resampler =
+                create_audio_resampler(self.sample_rate.0, self.sample_rate.1, self.channels)?;
+            self.audio_buffer.discard_pending();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(Err(error)) = self.simple.as_ref().map(psimple::Simple::flush) {
+            self.retry_pulse_output(error);
+        }
+        Ok(())
+    }
+
     /// Handle audio frame and play it.
     #[inline]
     pub fn handle_frame(&mut self, frame: AudioFrame) {
@@ -737,46 +722,61 @@ impl AudioHandler {
         }
         #[cfg(target_os = "linux")]
         if self.simple.is_none() {
-            log::trace!("PulseAudio simple binding does not exists");
-            return;
-        }
-        self.audio_decoder.as_mut().map(|(d, buffer)| {
-            let decoded_frames = match d.decode_float(&frame.data, buffer, false) {
-                Ok(decoded_frames) => decoded_frames,
-                Err(error) => {
-                    log::warn!("Failed to decode audio frame: {error:?}");
-                    return;
-                }
+            if !self.pulse_retry_at.is_some_and(|due| Instant::now() >= due) {
+                return;
+            }
+            let format = AudioFormat {
+                sample_rate: self.sample_rate.0,
+                channels: u32::from(self.channels),
+                ..Default::default()
             };
-            let channels = self.channels;
-            let n = decoded_frames * channels as usize;
-            #[cfg(not(target_os = "linux"))]
-            {
-                let config = DecodedAudioConfig {
-                    sample_rate: self.sample_rate.1,
-                    input_channels: self.channels,
-                    output_channels: self.device_channel,
-                };
-                let buffer = match prepare_decoded_audio(
-                    &buffer[0..n],
-                    self.audio_resampler.as_mut(),
-                    config,
-                ) {
-                    Ok(output) => output,
-                    Err(error) => {
-                        log::error!("Failed to resample decoded audio: {error:#}");
-                        return;
-                    }
-                };
-                self.audio_buffer.append_pcm(&buffer);
+            if let Err(error) = self.start_audio(format) {
+                self.retry_pulse_output(format_args!("{error:#}"));
+                return;
             }
-            #[cfg(target_os = "linux")]
-            {
-                let data_u8 =
-                    unsafe { std::slice::from_raw_parts::<u8>(buffer.as_ptr() as _, n * 4) };
-                self.simple.as_mut().map(|x| x.write(data_u8));
+        }
+        let Some((decoder, buffer)) = self.audio_decoder.as_mut() else {
+            return;
+        };
+        let decoded_frames = match decoder.decode_float(&frame.data, buffer, false) {
+            Ok(decoded_frames) => decoded_frames,
+            Err(error) => {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(5), warn, "Failed to decode audio frame: {error:?}"
+                );
+                return;
             }
-        });
+        };
+        let n = decoded_frames * self.channels as usize;
+        let pcm = &buffer[..n];
+        #[cfg(not(target_os = "linux"))]
+        {
+            if self.audio_resampler.is_none() && self.channels == self.device_channel {
+                self.audio_buffer.append_pcm(pcm);
+                return;
+            }
+            let config = DecodedAudioConfig {
+                sample_rate: self.sample_rate.1,
+                input_channels: self.channels,
+                output_channels: self.device_channel,
+            };
+            match prepare_decoded_audio(pcm, self.audio_resampler.as_mut(), config) {
+                Ok(output) => self.audio_buffer.append_pcm(&output),
+                Err(error) => hbb_common::throttled_log!(
+                    audio_playback::AUDIO_PLAYBACK_LOG_INTERVAL, error,
+                    "Failed to resample decoded audio: {error:#}"
+                ),
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let data = unsafe {
+                std::slice::from_raw_parts(pcm.as_ptr().cast(), std::mem::size_of_val(pcm))
+            };
+            if let Some(Err(error)) = self.simple.as_ref().map(|stream| stream.write(data)) {
+                self.retry_pulse_output(error);
+            }
+        }
     }
 
     /// Build audio output stream for current device.
@@ -806,13 +806,9 @@ impl AudioHandler {
         self.audio_buffer
             .resize(config.sample_rate.0 as _, config.channels as _);
         #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
-        if self.mobile_audio_gate.is_some() {
-            self.resize_mobile_audio_buffer(config.sample_rate.0, config.channels);
-        }
-        #[cfg(all(any(target_os = "ios", target_os = "android"), feature = "gpui-mobile-session"))]
         let mobile_output_gate = self.mobile_audio_gate.clone();
-        let audio_buffer = self.audio_buffer.0.clone();
-        let discontinuity_generation = self.audio_buffer.3.clone();
+        let audio_buffer = self.audio_buffer.pcm.clone();
+        let discontinuity_generation = self.audio_buffer.discontinuity.clone();
         let mut playback_writer = audio_playback::AudioPlaybackWriter::new(
             audio_playback::AudioPlaybackConfig {
                 sample_rate: config.sample_rate.0,
@@ -2055,14 +2051,6 @@ impl LoginConfigHandler {
 
 }
 
-/// Media data.
-pub enum MediaData {
-    AudioFrame(Box<AudioFrame>),
-    AudioFormat(AudioFormat),
-}
-
-pub type MediaSender = mpsc::Sender<MediaData>;
-
 /// Start video thread.
 ///
 /// # Arguments
@@ -2443,10 +2431,9 @@ fn start_video_thread<F, T>(
     });
 }
 
-/// Start an audio thread
-/// Return a audio [`MediaSender`]
-pub fn start_audio_thread() -> MediaSender {
-    let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
+fn start_audio_thread() -> audio_queue::AudioSender {
+    use audio_queue::{AudioItem, AudioQueue};
+    let (audio_sender, audio_receiver) = AudioQueue::new();
     std::thread::spawn(move || {
         let mut audio_handler = AudioHandler::default();
         loop {
@@ -2454,19 +2441,22 @@ pub fn start_audio_thread() -> MediaSender {
             let received = audio_handler.receive_audio(&audio_receiver);
             #[cfg(not(target_os = "windows"))]
             let received = audio_receiver.recv();
-            if let Ok(data) = received {
-                match data {
-                    MediaData::AudioFrame(af) => {
-                        audio_handler.handle_frame(*af);
+            match received {
+                Ok(AudioItem::Frame(frame, discontinuity)) => {
+                    if discontinuity {
+                        if let Err(error) = audio_handler.reset_audio_after_gap() {
+                            hbb_common::throttled_log!(
+                                Duration::from_secs(5), warn,
+                                "Failed to reset audio playback after a queue discard: {error:#}"
+                            );
+                            continue;
+                        }
                     }
-                    MediaData::AudioFormat(f) => {
-                        log::debug!("recved audio format, sample rate={}", f.sample_rate);
-                        audio_handler.handle_format(f);
-                    }
-                    _ => {}
+                    audio_handler.handle_frame(frame);
                 }
-            } else {
-                break;
+                Ok(AudioItem::Format(format)) => audio_handler.handle_format(format),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
         log::info!("Audio decoder loop exits");

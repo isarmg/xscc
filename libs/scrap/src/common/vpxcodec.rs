@@ -48,6 +48,46 @@ pub struct VpxDecoder {
     ctx: vpx_codec_ctx_t,
 }
 
+struct VpxInputLayout {
+    w: usize,
+    h: usize,
+    stride: [usize; 4],
+    u: usize,
+    v: usize,
+    len: usize,
+}
+
+impl VpxInputLayout {
+    fn new(width: usize, height: usize, i444: bool, stride_align: usize) -> Option<Self> {
+        let stride_align = stride_align.max(1);
+        // These are the upper bounds accepted by vpx_img_wrap.
+        if width > 0x0800_0000
+            || height > 0x0800_0000
+            || stride_align > 65_536
+            || !stride_align.is_power_of_two()
+        {
+            return None;
+        }
+        // vpx_img_wrap uses the storage height divided by two for I420 chroma planes.
+        let subsampling = if i444 { 1 } else { 2 };
+        let w = width.next_multiple_of(subsampling);
+        let h = height.next_multiple_of(subsampling);
+        let y_stride = w.next_multiple_of(stride_align);
+        let uv_stride = y_stride / subsampling;
+        let u = h.checked_mul(y_stride)?;
+        let chroma_len = (h / subsampling).checked_mul(uv_stride)?;
+        let v = u.checked_add(chroma_len)?;
+        Some(Self {
+            w,
+            h,
+            stride: [y_stride, uv_stride, uv_stride, y_stride],
+            u,
+            v,
+            len: v.checked_add(chroma_len)?,
+        })
+    }
+}
+
 impl EncoderApi for VpxEncoder {
     fn new(cfg: crate::codec::EncoderCfg, i444: bool) -> ResultType<Self>
     where
@@ -70,6 +110,7 @@ impl EncoderApi for VpxEncoder {
                 c.g_h = config.height;
                 c.g_timebase.num = 1;
                 c.g_timebase.den = 1000; // Output timestamp precision
+                c.g_lag_in_frames = 0;
                 c.rc_undershoot_pct = 95;
                 // When the data buffer falls below this percentage of fullness, a dropped frame is indicated. Set the threshold to zero (0) to disable this feature.
                 // In dynamic scenes, low bitrate gets low fps while high bitrate gets high fps.
@@ -107,6 +148,9 @@ impl EncoderApi for VpxEncoder {
                 This approach enables the best PSNR at the same bit rate.
                 */
 
+                let layout =
+                    VpxInputLayout::new(config.width as _, config.height as _, i444, STRIDE_ALIGN)
+                        .ok_or_else(|| anyhow!("Invalid VPx input layout"))?;
                 let mut ctx = Default::default();
                 call_vpx!(vpx_codec_enc_init_ver(
                     &mut ctx,
@@ -167,7 +211,14 @@ impl EncoderApi for VpxEncoder {
                     height: config.height as _,
                     id: config.codec,
                     i444,
-                    yuvfmt: Self::get_yuvfmt(config.width, config.height, i444),
+                    yuvfmt: EncodeYuvFormat {
+                        pixfmt: if i444 { Pixfmt::I444 } else { Pixfmt::I420 },
+                        w: layout.w,
+                        h: layout.h,
+                        stride: layout.stride.to_vec(),
+                        u: layout.u,
+                        v: layout.v,
+                    },
                     streaming_fps: None,
                     bitrate_limit: None,
                     quality: config.quality,
@@ -185,11 +236,6 @@ impl EncoderApi for VpxEncoder {
         {
             frames.push(VpxEncoder::create_frame(frame));
         }
-        for ref frame in self.flush().with_context(|| "Failed to flush")? {
-            frames.push(VpxEncoder::create_frame(frame));
-        }
-
-        // to-do: flush periodically, e.g. 1 second
         if frames.len() > 0 {
             Ok(VpxEncoder::create_video_frame(self.id, frames))
         } else {
@@ -266,10 +312,16 @@ impl EncoderApi for VpxEncoder {
 }
 
 impl VpxEncoder {
-    pub fn encode<'a>(&'a mut self, pts: i64, data: &[u8], stride_align: usize) -> Result<EncodeFrames<'a>> {
-        let bpp = if self.i444 { 24 } else { 12 };
-        if data.len() < self.width * self.height * bpp / 8 {
-            return Err(Error::FailedCall("len not enough".to_string()));
+    pub fn encode<'a>(
+        &'a mut self,
+        pts: i64,
+        data: &[u8],
+        stride_align: usize,
+    ) -> Result<EncodeFrames<'a>> {
+        let layout = VpxInputLayout::new(self.width, self.height, self.i444, stride_align)
+            .ok_or_else(|| Error::FailedCall("Invalid VPx input layout".to_owned()))?;
+        if data.len() < layout.len {
+            return Err(Error::FailedCall("VPx input buffer is too short".to_owned()));
         }
         let fmt = if self.i444 {
             vpx_img_fmt::VPX_IMG_FMT_I444
@@ -281,11 +333,20 @@ impl VpxEncoder {
         call_vpx_ptr!(vpx_img_wrap(
             &mut image,
             fmt,
-            self.width as _,
-            self.height as _,
+            layout.w as _,
+            layout.h as _,
             stride_align as _,
             data.as_ptr() as _,
         ));
+        if layout.w != self.width || layout.h != self.height {
+            call_vpx!(vpx_img_set_rect(
+                &mut image,
+                0,
+                0,
+                self.width as _,
+                self.height as _,
+            ));
+        }
 
         call_vpx!(vpx_codec_encode(
             &mut self.ctx,
@@ -369,34 +430,6 @@ impl VpxEncoder {
         q_max = q_max.clamp(q_max2, q_max1);
 
         (q_min, q_max)
-    }
-
-    fn get_yuvfmt(width: u32, height: u32, i444: bool) -> EncodeYuvFormat {
-        let mut img = Default::default();
-        let fmt = if i444 {
-            vpx_img_fmt::VPX_IMG_FMT_I444
-        } else {
-            vpx_img_fmt::VPX_IMG_FMT_I420
-        };
-        unsafe {
-            vpx_img_wrap(
-                &mut img,
-                fmt,
-                width as _,
-                height as _,
-                crate::STRIDE_ALIGN as _,
-                0x1 as _,
-            );
-        }
-        let pixfmt = if i444 { Pixfmt::I444 } else { Pixfmt::I420 };
-        EncodeYuvFormat {
-            pixfmt,
-            w: img.w as _,
-            h: img.h as _,
-            stride: img.stride.map(|s| s as usize).to_vec(),
-            u: img.planes[1] as usize - img.planes[0] as usize,
-            v: img.planes[2] as usize - img.planes[0] as usize,
-        }
     }
 }
 

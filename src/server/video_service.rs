@@ -34,8 +34,6 @@ mod metrics;
 
 use super::video_lifecycle::VideoRestart;
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
-#[cfg(target_os = "linux")]
-use crate::common::SimpleCallOnReturn;
 use crate::privacy_mode::{get_privacy_mode_conn_id, INVALID_PRIVACY_MODE_CONN_ID};
 #[cfg(windows)]
 use crate::{
@@ -548,28 +546,11 @@ fn run(vs: VideoService) -> ResultType<()> {
     let raii = Raii::new(vs.idx, vs.sp.name());
     #[cfg(not(windows))]
     let mut raii = raii;
-    // Wayland only support one video capturer for now. It is ok to call ensure_inited() here.
-    //
-    // ensure_inited() is needed because clear() may be called.
-    // to-do: wayland ensure_inited should pass current display index.
-    // But for now, we do not support multi-screen capture on wayland.
     #[cfg(target_os = "linux")]
-    super::wayland::ensure_inited()?;
-    #[cfg(target_os = "linux")]
-    let _wayland_call_on_ret = {
-        // Increment active display count when starting
-        let _display_count = super::wayland::increment_active_display_count();
-
-        SimpleCallOnReturn {
-            b: true,
-            f: Box::new(|| {
-                // Decrement active display count and only clear if this was the last display
-                let remaining_count = super::wayland::decrement_active_display_count();
-                if remaining_count == 0 {
-                    super::wayland::clear();
-                }
-            }),
-        }
+    let _capture_lifetime = {
+        let capture = super::wayland::begin_capture();
+        super::wayland::ensure_inited()?;
+        capture
     };
 
     #[cfg(windows)]
@@ -593,13 +574,14 @@ fn run(vs: VideoService) -> ResultType<()> {
         .then(Instant::now);
     #[cfg(windows)]
     if dxgi_recovery_state.lock().unwrap().take_fallback_pending() {
-        c.set_gdi();
+        if !c.is_gdi() && !c.set_gdi() {
+            bail!("DXGI recovery exhausted and GDI capture could not be started");
+        }
         log::info!("dxgi recovery exhausted, fall back to gdi");
     }
     #[cfg(windows)]
-    if !scrap::codec::enable_directx_capture() && !c.is_gdi() {
+    if !scrap::codec::enable_directx_capture() && !c.is_gdi() && c.set_gdi() {
         log::info!("disable dxgi with option, fall back to gdi");
-        c.set_gdi();
     }
     #[cfg(all(windows, feature = "gpui-host"))]
     let _capture_scheduling = if vs.source.is_monitor() && !c.is_gdi() {
@@ -768,11 +750,12 @@ fn run_encoder(
         limit
     };
     apply_bitrate_limit(&mut encoder, sp, bitrate_limit)?;
-    VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
-    VIDEO_QOS
-        .lock()
-        .unwrap()
-        .set_support_changing_quality(&sp.name(), encoder.support_changing_quality());
+    {
+        let name = sp.name();
+        let mut qos = VIDEO_QOS.lock().unwrap();
+        qos.store_display_bitrate(&name, encoder.bitrate());
+        qos.set_support_changing_quality(&name, encoder.support_changing_quality());
+    }
     log::info!("initial quality: {quality:?}");
 
     if sp.is_option_true(OPTION_REFRESH) {
@@ -817,7 +800,9 @@ fn run_encoder(
     let mut stages = metrics::Metrics::new(Instant::now());
     let sp_name = sp.name();
     #[cfg(all(windows, feature = "vram"))]
-    let vram_failure = |error| handle_vram_runtime_failure(sp, &encoder_cfg, error);
+    let vram_failure = |error| {
+        handle_vram_runtime_failure(sp, matches!(&encoder_cfg, EncoderCfg::VRAM(_)), error)
+    };
     #[cfg(feature = "gpui-host")]
     let mut frame_pacer = frame_pacing::FramePacer::new();
 
@@ -900,7 +885,8 @@ fn run_encoder(
         if c.is_gdi() && encoder.input_texture() {
             log::info!("changed to gdi when using vram");
             VRamEncoder::set_fallback_gdi(sp.name(), true);
-            bail!(VideoRestart::CaptureBackendChanged);
+            *cached = CaptureFrameCache::default();
+            bail!(VideoRestart::EncoderReconfiguration);
         }
         if vs.source.is_monitor() {
             check_privacy_mode_changed(&sp, display_idx, &c)?;
@@ -1113,11 +1099,13 @@ fn run_encoder(
                 {
                     if try_gdi > 0 && !c.is_gdi() {
                         if try_gdi > 3 {
-                            c.set_gdi();
+                            if c.set_gdi() {
+                                log::info!("No image, fall back to gdi");
+                            }
                             try_gdi = 0;
-                            log::info!("No image, fall back to gdi");
+                        } else {
+                            try_gdi += 1;
                         }
-                        try_gdi += 1;
                     }
                 }
                 if !encoder.latency_free() && !cached.texture && !cached.yuv.is_empty() {
@@ -1168,15 +1156,12 @@ fn run_encoder(
                             );
                             bail!(VideoRestart::CaptureLost);
                         }
-                        log::warn!(
-                            "dxgi access lost after {DXGI_RECOVERY_LIMIT} restarts in {} seconds, fall back to gdi: {err:?}",
-                            DXGI_RECOVERY_WINDOW.as_secs()
-                        );
                         dxgi_recovery_state.lock().unwrap().take_fallback_pending();
                     }
-                    c.set_gdi();
-                    log::info!("dxgi error, fall back to gdi: {:?}", err);
-                    continue;
+                    if c.set_gdi() {
+                        log::info!("capture error, fall back to gdi: {err:?}");
+                        continue;
+                    }
                 }
                 return Err(err.into());
             }
@@ -1250,6 +1235,8 @@ impl Raii {
 impl Drop for Raii {
     fn drop(&mut self) {
         log::info!("stop video service: {}", self.name);
+        #[cfg(all(windows, feature = "vram"))]
+        VRamEncoder::set_fallback_gdi(self.name.clone(), false);
         #[cfg(feature = "vram")]
         if self.try_vram {
             VRamEncoder::set_not_use(self.name.clone(), false);
@@ -1264,11 +1251,11 @@ impl Drop for Raii {
 #[cfg(all(windows, feature = "vram"))]
 fn handle_vram_runtime_failure(
     _service: &GenericService,
-    _config: &EncoderCfg,
+    _vram: bool,
     error: hbb_common::anyhow::Error,
 ) -> hbb_common::anyhow::Error {
     #[cfg(all(feature = "gpui-host", feature = "hwcodec"))]
-    if matches!(_config, EncoderCfg::VRAM(_)) {
+    if _vram {
         _service.set_option_bool(OPTION_VRAM_RUNTIME_FAILED, true);
         hbb_common::throttled_log!(
             Duration::from_secs(5), warn,
@@ -1563,10 +1550,7 @@ fn handle_one_frame(
                     *encode_fail_counter
                 );
             }
-            if scrap::codec::encoder_needs_reconfigure(&e) {
-                encoder.disable();
-                bail!(VideoRestart::EncoderReconfiguration);
-            }
+            let reconfigure = scrap::codec::encoder_needs_reconfigure(&e);
             let max_fail_times = if cfg!(target_os = "android") && encoder.is_hardware() {
                 9
             } else {
@@ -1574,7 +1558,16 @@ fn handle_one_frame(
             };
             let repeat = !encoder.latency_free();
             // repeat encoders can reach max_fail_times on the first frame
-            if (first && !repeat) || *encode_fail_counter >= max_fail_times {
+            let repeated_failure = (first && !repeat) || *encode_fail_counter >= max_fail_times;
+            #[cfg(all(windows, feature = "gpui-host", feature = "vram", feature = "hwcodec"))]
+            if encoder.input_texture() && (reconfigure || repeated_failure) {
+                return Err(handle_vram_runtime_failure(sp, true, e));
+            }
+            if reconfigure {
+                encoder.disable();
+                bail!(VideoRestart::EncoderReconfiguration);
+            }
+            if repeated_failure {
                 *encode_fail_counter = 0;
                 if encoder.is_hardware() {
                     encoder.disable();
@@ -1751,7 +1744,11 @@ fn apply_bitrate_limit(
         service.send(failure);
         encoder.set_bitrate_limit(None)?;
     }
-    VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
+    let name = service.name();
+    VIDEO_QOS
+        .lock()
+        .unwrap()
+        .store_display_bitrate(&name, encoder.bitrate());
     Ok(())
 }
 
@@ -1768,6 +1765,8 @@ fn check_qos(
 ) -> ResultType<()> {
     #[cfg(feature = "gpui-host")]
     let subscriber_ids = service.subscriber_ids();
+    #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+    let transport_budget;
     let (requested_fps, requested_ratio, in_vbr, custom_quality, bitrate_limit) = {
         let mut qos = VIDEO_QOS.lock().unwrap();
         #[cfg(feature = "gpui-host")]
@@ -1786,6 +1785,10 @@ fn check_qos(
         let bitrate_limit = qos.bitrate_limit_for_connections(&subscriber_ids);
         #[cfg(not(feature = "gpui-host"))]
         let bitrate_limit = qos.bitrate_limit();
+        #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
+        {
+            transport_budget = qos.transport_bitrate_for_connections(&subscriber_ids);
+        }
         if second_instant.elapsed() > Duration::from_secs(1) {
             *second_instant = Instant::now();
             qos.update_display_data(name, *send_counter);
@@ -1801,12 +1804,8 @@ fn check_qos(
     };
     #[cfg(all(feature = "gpui-host", feature = "udp-media"))]
     {
-        let budget = VIDEO_QOS
-            .lock()
-            .unwrap()
-            .transport_bitrate_for_connections(&subscriber_ids);
         let effective_limit =
-            budget.map(|budget| bitrate_limit.map_or(budget, |limit| budget.min(limit)));
+            transport_budget.map(|budget| bitrate_limit.map_or(budget, |limit| budget.min(limit)));
         if let Some(limit) = effective_limit.filter(|limit| Some(*limit) != *rejected_transport_limit) {
             let wire_limit = limit;
             let limit = encoder_bitrate_limit(Some(limit))?;
@@ -1821,7 +1820,10 @@ fn check_qos(
                     );
                     apply_bitrate_limit(encoder, service, bitrate_limit)?;
                 }
-                VIDEO_QOS.lock().unwrap().store_bitrate(encoder.bitrate());
+                VIDEO_QOS
+                    .lock()
+                    .unwrap()
+                    .store_display_bitrate(name, encoder.bitrate());
             }
         } else {
             apply_bitrate_limit(encoder, service, bitrate_limit)?;
@@ -1841,7 +1843,7 @@ fn check_qos(
         if encoder.support_changing_quality() {
             allow_err!(encoder.set_quality(*ratio));
             let bitrate = encoder.bitrate();
-            VIDEO_QOS.lock().unwrap().store_bitrate(bitrate);
+            VIDEO_QOS.lock().unwrap().store_display_bitrate(name, bitrate);
         } else if !in_vbr && !custom_quality {
             log::info!("switch to change quality");
             bail!(VideoRestart::QualityChanged);
@@ -1861,30 +1863,44 @@ pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String,
     );
 }
 
-// We need to this function, because the `stride` may be larger than `width * 4`.
-fn get_rgba_from_pixelbuf<'a>(pixbuf: &scrap::PixelBuffer<'a>) -> ResultType<Vec<u8>> {
-    let w = pixbuf.width();
-    let h = pixbuf.height();
+fn get_rgba_from_pixelbuf(pixbuf: &scrap::PixelBuffer<'_>) -> ResultType<Vec<u8>> {
+    let row_bytes = pixbuf
+        .width()
+        .checked_mul(4)
+        .filter(|&bytes| bytes != 0)
+        .ok_or_else(|| anyhow!("Invalid screenshot width"))?;
     let stride = pixbuf.stride();
-    let Some(s) = stride.get(0) else {
-        bail!("Invalid pixel buf stride.")
-    };
+    let stride = *stride
+        .first()
+        .filter(|&&stride| stride >= row_bytes)
+        .ok_or_else(|| anyhow!("Invalid screenshot stride"))?;
+    let data = stride
+        .checked_mul(pixbuf.height())
+        .and_then(|len| pixbuf.data().get(..len))
+        .ok_or_else(|| anyhow!("Incomplete screenshot buffer"))?;
 
-    if *s == w * 4 {
+    if stride == row_bytes && data.len() == pixbuf.data().len() {
         let mut rgba = vec![];
         scrap::convert(pixbuf, scrap::Pixfmt::RGBA, &mut rgba)?;
-        Ok(rgba)
-    } else {
-        let bgra = pixbuf.data();
-        let mut bit_flipped = Vec::with_capacity(w * h * 4);
-        for y in 0..h {
-            for x in 0..w {
-                let i = s * y + 4 * x;
-                bit_flipped.extend_from_slice(&[bgra[i + 2], bgra[i + 1], bgra[i], bgra[i + 3]]);
+        return Ok(rgba);
+    }
+
+    let rows = data.chunks_exact(stride).map(|row| &row[..row_bytes]);
+    let mut rgba = Vec::with_capacity(row_bytes * pixbuf.height());
+    match pixbuf.pixfmt() {
+        scrap::Pixfmt::RGBA => {
+            for row in rows {
+                rgba.extend_from_slice(row);
             }
         }
-        Ok(bit_flipped)
+        scrap::Pixfmt::BGRA => {
+            for pixel in rows.flat_map(|row| row.chunks_exact(4)) {
+                rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+            }
+        }
+        format => bail!("Unsupported screenshot pixel format: {format:?}"),
     }
+    Ok(rgba)
 }
 
 fn handle_screenshot(screenshot: Screenshot, msg: String, w: usize, h: usize, data: Vec<u8>) {
@@ -1933,6 +1949,20 @@ mod tests {
         sync::{mpsc, Arc, Mutex},
         time::{Duration, Instant},
     };
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn screenshot_preserves_channels_and_removes_padded_rows() {
+        let rgba = [1, 2, 3, 255, 0, 0, 0, 0, 4, 5, 6, 255, 0, 0, 0, 0];
+        let bgra = [3, 2, 1, 255, 0, 0, 0, 0, 6, 5, 4, 255, 0, 0, 0, 0];
+        for (format, pixels) in [(scrap::Pixfmt::RGBA, rgba), (scrap::Pixfmt::BGRA, bgra)] {
+            let pixels = scrap::PixelBuffer::new(&pixels, format, 1, 2);
+            assert_eq!(
+                super::get_rgba_from_pixelbuf(&pixels).unwrap(),
+                [1, 2, 3, 255, 4, 5, 6, 255]
+            );
+        }
+    }
 
     #[cfg(feature = "udp-media")]
     #[test]

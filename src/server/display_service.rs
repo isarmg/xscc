@@ -1130,14 +1130,19 @@ fn wayland_has_compositor() -> bool {
 
 // Return the converted input snapshot while updating the shared display cache.
 pub(super) fn update_sync_displays(all: &Vec<Display>) -> Vec<DisplayInfo> {
+    let displays = describe_displays(all);
+    publish_displays(&displays);
+    displays
+}
+
+pub(super) fn describe_displays(all: &[Display]) -> Vec<DisplayInfo> {
     // For compatibility: if only one display, scale remains 1.0 and we use the physical size for `uinput`.
     // If there are multiple displays, we use the logical size for `uinput` by setting scale to d.scale().
     #[cfg(target_os = "linux")]
     let use_logical_scale = crate::is_server()
         && wayland_has_compositor()
         && scrap::wayland::display::get_displays().displays.len() > 1;
-    let displays = all
-        .iter()
+    all.iter()
         .map(|d| {
             let display_name = d.name();
             #[allow(unused_assignments)]
@@ -1171,9 +1176,11 @@ pub(super) fn update_sync_displays(all: &Vec<Display>) -> Vec<DisplayInfo> {
                 ..Default::default()
             }
         })
-        .collect::<Vec<DisplayInfo>>();
-    SYNC_DISPLAYS.lock().unwrap().check_changed(&displays);
-    displays
+        .collect()
+}
+
+pub(super) fn publish_displays(displays: &[DisplayInfo]) {
+    SYNC_DISPLAYS.lock().unwrap().check_changed(displays);
 }
 
 pub fn is_inited_msg() -> Option<Message> {

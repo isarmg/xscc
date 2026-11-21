@@ -21,7 +21,7 @@ impl Connection {
             || previous.as_ref().is_some_and(|name| {
                 displays
                     .get(self.display_idx)
-                    .is_some_and(|display| usable(display) && &display.name == name)
+                    .is_some_and(|display| is_capturable_display(display) && &display.name == name)
             })
         {
             return None;
@@ -34,7 +34,7 @@ impl Connection {
                 let primary = scrap::Display::primary().ok()?.name();
                 find_display(displays, &primary)
             })
-            .or_else(|| displays.iter().position(usable))?;
+            .or_else(|| displays.iter().position(is_capturable_display))?;
         let server = self.server.upgrade()?;
         if !self.switch_display_to(preferred, server.clone()) {
             return None;
@@ -48,7 +48,6 @@ impl Connection {
                 true,
             );
         }
-        self.refresh_video_display(Some(preferred));
         video_service::make_display_changed_msg(
             preferred,
             displays.get(preferred).cloned(),
@@ -57,12 +56,8 @@ impl Connection {
     }
 }
 
-fn usable(display: &DisplayInfo) -> bool {
-    display.online && display.width > 0 && display.height > 0
-}
-
 fn find_display(displays: &[DisplayInfo], name: &str) -> Option<usize> {
     displays
         .iter()
-        .position(|display| display.name == name && usable(display))
+        .position(|display| display.name == name && is_capturable_display(display))
 }

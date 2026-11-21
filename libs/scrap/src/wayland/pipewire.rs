@@ -468,6 +468,10 @@ impl PipeWireRecorder {
 }
 
 impl Recorder for PipeWireRecorder {
+    fn reset_frame_history(&mut self) {
+        self.previous = None;
+    }
+
     fn capture(&mut self, timeout_ms: u64) -> Result<PixelProvider<'_>, Box<dyn Error>> {
         let Some(sample) = self
             .appsink

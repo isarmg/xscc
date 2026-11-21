@@ -81,7 +81,9 @@ grep -Eq '^test result: ok\. 1 passed; 0 failed;' <<< "$parse_tests" || { echo '
 cargo test --locked -p xscc-native-management --target "$target"
 cargo test --locked -p hbb_common --lib --target "$target" tcp::tests
 cargo test --locked -p scrap --lib --target "$target" codec::rate_control::tests::
-cargo test --locked -p scrap --lib --target "$target" codec::streaming_tests::
+streaming_tests=$(cargo test --locked -p scrap --lib --target "$target" codec::streaming_tests:: 2>&1) || { printf '%s\n' "$streaming_tests"; exit 1; }
+printf '%s\n' "$streaming_tests"
+grep -Eq '^test result: ok\. 3 passed; 0 failed;' <<< "$streaming_tests" || { echo 'Software codec streaming regressions did not all run' >&2; exit 1; }
 limit_tests=$(cargo test --locked -p scrap --lib --target "$target" codec::bitrate_limit_tests:: 2>&1) || { printf '%s\n' "$limit_tests"; exit 1; }
 printf '%s\n' "$limit_tests"
 grep -Eq '^test result: ok\. [1-9][0-9]* passed;' <<< "$limit_tests" || { echo 'No passing explicit bitrate tests' >&2; exit 1; }

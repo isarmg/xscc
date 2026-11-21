@@ -8,7 +8,7 @@ use std::{
     collections::VecDeque,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc, Mutex, OnceLock, TryLockError,
+        mpsc, Arc, Mutex, OnceLock, TryLockError,
     },
     thread::{JoinHandle, Thread},
 };
@@ -89,12 +89,22 @@ pub(super) struct CaptureEncoderConfig {
 }
 
 pub(super) struct CaptureEncoderWorker {
+    start: Option<mpsc::Sender<()>>,
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
 }
 
+impl CaptureEncoderWorker {
+    pub(super) fn start(&mut self) {
+        if let Some(start) = self.start.take() {
+            let _ = start.send(());
+        }
+    }
+}
+
 impl Drop for CaptureEncoderWorker {
     fn drop(&mut self) {
+        self.start.take();
         self.stop.store(true, Ordering::Release);
         if let Some(handle) = self.handle.take() {
             // Owner-thread shutdown already waits via join(); see CapturePcmSender::wake for Win7.
@@ -277,12 +287,19 @@ pub(super) fn start_capture_encoder(
         service,
         stop: stop.clone(),
     };
+    let (start, started) = mpsc::channel();
     let handle = std::thread::Builder::new()
         .name(CAPTURE_ENCODER_THREAD_NAME.to_owned())
-        .spawn(move || encoder::run_capture_encoder(context, config))
+        .spawn(move || {
+            // CoreAudio can deliver PCM before build_input_stream returns.
+            if started.recv().is_ok() {
+                encoder::run_capture_encoder(context, config);
+            }
+        })
         .with_context(|| "Failed to start audio encoder thread")?;
     let wake_thread = handle.thread().clone();
     let worker = CaptureEncoderWorker {
+        start: Some(start),
         stop,
         handle: Some(handle),
     };

@@ -385,6 +385,20 @@ impl<T: Subscriber + From<ConnInner>> Drop for ServiceSwap<T> {
 }
 
 impl ServiceTmpl<ConnInner> {
+    pub(super) fn publish_audio_format(&self, format: &Arc<Message>, refresh: bool) {
+        if !refresh && self.0.read().unwrap().new_subscribes.is_empty() {
+            return;
+        }
+        let mut state = self.0.write().unwrap();
+        if refresh {
+            for subscriber in state.subscribes.values_mut() {
+                subscriber.send(format.clone());
+            }
+        }
+        state.send_new_subscribes(format.clone());
+        state.swap_new_subscribes();
+    }
+
     pub fn send_video_frame(&self, msg: Message) -> HashSet<i32> {
         self.send_video_frame_shared(Arc::new(msg))
     }

@@ -803,12 +803,8 @@ impl Render for RemoteVideo {
         let frame = self
             .session
             .as_ref()
-            .and_then(SessionHandle::take_frame)
-            .filter(|frame| {
-                monitor_available
-                    && !self.switching_monitor
-                    && frame.display == self.current_monitor
-            });
+            .filter(|_| monitor_available && !self.switching_monitor)
+            .and_then(|session| session.take_frame(self.current_monitor));
         match self.video.update(frame, window) {
             Ok(Some(extent)) => self.extent = extent,
             Ok(None) => {}

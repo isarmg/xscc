@@ -1538,7 +1538,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn expired_audio_backlog_drains_before_the_next_live_packet() {
+    async fn expired_and_obsolete_audio_do_not_block_the_next_live_packet() {
         let (client, host, _listener, udp) = media_streams(udp_host::bind).await;
         let mut host = SessionTransport::accepted(host, Some(udp.registration()));
         let offer = host.offer_host().await.unwrap().unwrap();
@@ -1578,10 +1578,22 @@ mod tests {
         };
         {
             let mut ledger = transport.outbound.inner.lock().unwrap();
-            let epoch = ledger.sending.get(&(MediaKind::Audio, 0)).unwrap().epoch;
-            // A suspended producer can leave every queued packet older than its
-            // playout deadline. These still use real signed UDP frame plans.
+            let previous = ledger.sending.get(&(MediaKind::Audio, 0)).unwrap().epoch;
+            let epoch = ledger
+                .epoch(
+                    MediaKind::Audio,
+                    0,
+                    Some(message.write_to_bytes().unwrap()),
+                    None,
+                )
+                .unwrap();
+            let queued = Instant::now();
             for id in 0..16 {
+                let (epoch, queued) = match id {
+                    14 => (previous, queued),
+                    15 => (epoch, queued),
+                    _ => (epoch, queued - Duration::from_secs(1)),
+                };
                 ledger
                     .audio
                     .try_send(QueuedFrame {
@@ -1597,21 +1609,15 @@ mod tests {
                             media::DEFAULT_MTU,
                         )
                         .unwrap(),
-                        queued: Instant::now() - Duration::from_secs(1),
+                        queued,
                     })
                     .unwrap_or_else(|_| panic!("fixture audio queue must fit"));
             }
-            ledger.sending.get_mut(&(MediaKind::Audio, 0)).unwrap().next = 16;
         }
-        let serving = tokio::spawn(async move {
-            let mut tick = interval(Duration::from_millis(20));
-            loop {
-                tokio::select! {
-                    _=tick.tick()=>host.send(&audio).await.unwrap(),
-                    packet=host.next()=>{if packet.is_none() || packet.is_some_and(|p|p.is_err()){break;}}
-                }
-            }
-        });
+        let serving =
+            tokio::spawn(
+                async move { while host.next().await.is_some_and(|packet| packet.is_ok()) {} },
+            );
         timeout(Duration::from_millis(500), async {
             loop {
                 let bytes = client.next().await.unwrap().unwrap();
@@ -1625,6 +1631,49 @@ mod tests {
         })
         .await
         .expect("stale packets must not keep a live audio stream behind a timer-sized backlog");
+        serving.abort();
+        let _ = serving.await;
+    }
+
+    #[tokio::test]
+    async fn an_unacknowledged_video_epoch_does_not_block_another_display() {
+        let (client, host, _listener, udp) = media_streams(udp_host::bind).await;
+        let mut host = SessionTransport::accepted(host, Some(udp.registration()));
+        let offer = host.offer_host().await.unwrap().unwrap();
+        let mut client: SessionTransport = client.into();
+        client.enable_client(&offer).await.unwrap();
+        timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let producer = host.media_sender().unwrap();
+        let serving =
+            tokio::spawn(
+                async move { while host.next().await.is_some_and(|packet| packet.is_ok()) {} },
+            );
+        producer.send_video(Arc::new(video(true, 64))).unwrap();
+        let first = timeout(Duration::from_secs(3), client.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(Message::parse_from_bytes(&first).unwrap(), video(true, 64));
+
+        let mut second_display = video(true, 128);
+        second_display.mut_video_frame().display = 1;
+        producer.send_video(Arc::new(second_display)).unwrap();
+        let next = video(true, 96);
+        producer.send_video(Arc::new(next.clone())).unwrap();
+        let SessionTransport::Hybrid(client) = &mut client else {
+            unreachable!();
+        };
+        // Leave the new display's TCP epoch unacknowledged while UDP continues.
+        let completed = timeout(Duration::from_millis(500), client.media.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(Message::parse_from_bytes(&completed.payload).unwrap(), next);
         serving.abort();
         let _ = serving.await;
     }
@@ -2291,28 +2340,28 @@ mod tests {
         }
         let a = channels
             .frames
-            .next(None, None)
+            .next(None, None, |_| true)
             .await
             .plan
             .descriptor()
             .metadata;
         let b = channels
             .frames
-            .next(None, None)
+            .next(None, None, |_| true)
             .await
             .plan
             .descriptor()
             .metadata;
         assert_eq!((a.epoch, a.frame_id, b.epoch, b.frame_id), (1, 0, 1, 1));
         for expected in 2..VIDEO_QUEUE - 1 {
-            let queued = channels.frames.pop(None, None).unwrap();
+            let queued = channels.frames.pop(None, None, &|_| true).unwrap();
             assert_eq!(queued.plan.descriptor().metadata.frame_id, expected as u64);
         }
         assert!(channels.frames.is_empty());
         second.send_video(Arc::new(video(false, 64))).unwrap();
         let after_gap = channels
             .frames
-            .next(None, None)
+            .next(None, None, |_| true)
             .await
             .plan
             .descriptor()
@@ -2341,8 +2390,16 @@ mod tests {
         let shared = SharedVideoFrame::new(&message);
         first.outbound.send_shared_video(&shared).unwrap();
         second.outbound.send_shared_video(&shared).unwrap();
-        let first = first_channels.frames.pop(None, None).unwrap().plan;
-        let second = second_channels.frames.pop(None, None).unwrap().plan;
+        let first = first_channels
+            .frames
+            .pop(None, None, &|_| true)
+            .unwrap()
+            .plan;
+        let second = second_channels
+            .frames
+            .pop(None, None, &|_| true)
+            .unwrap()
+            .plan;
         assert_eq!(Message::parse_from_bytes(first.payload()).unwrap(), message);
         assert_eq!(first.payload().as_ptr(), second.payload().as_ptr());
     }
@@ -2368,9 +2425,19 @@ mod tests {
         producer.send_video(Arc::new(format)).unwrap();
         producer.send_video(delta).unwrap();
 
-        let other = channels.frames.pop(None, None).unwrap().plan.descriptor();
+        let other = channels
+            .frames
+            .pop(None, None, &|_| true)
+            .unwrap()
+            .plan
+            .descriptor();
         assert_eq!((other.metadata.display_id, other.metadata.epoch), (1, 1));
-        let changed = channels.frames.pop(None, None).unwrap().plan.descriptor();
+        let changed = channels
+            .frames
+            .pop(None, None, &|_| true)
+            .unwrap()
+            .plan
+            .descriptor();
         assert_eq!(
             (changed.metadata.display_id, changed.metadata.epoch),
             (0, 2)
@@ -2389,7 +2456,7 @@ mod tests {
         producer.send_video(Arc::new(video(false, 64))).unwrap();
         let active = channels
             .frames
-            .pop(None, None)
+            .pop(None, None, &|_| true)
             .unwrap()
             .plan
             .descriptor()
@@ -2407,12 +2474,13 @@ mod tests {
                     keyframe: true,
                     ..active
                 }),
-                None
+                None,
+                &|_| true,
             )
             .is_none());
         let recovery = channels
             .frames
-            .next(Some(active), None)
+            .next(Some(active), None, |_| true)
             .await
             .plan
             .descriptor()
@@ -2421,7 +2489,7 @@ mod tests {
         assert_eq!(recovery.frame_id, VIDEO_QUEUE as u64);
         let following = channels
             .frames
-            .next(None, None)
+            .next(None, None, |_| true)
             .await
             .plan
             .descriptor()
@@ -2826,6 +2894,11 @@ async fn client_media(
                                     #[cfg(debug_assertions)] &mut video_metrics).await?;
                             }
                             Err(MediaError::WrongEpoch) => {}
+                            Err(error @ MediaError::Capacity) => {
+                                let FrameNotice::Sent(descriptor) = notice else { return Err(error.into()); };
+                                let metadata = descriptor.metadata;
+                                refresh(&writer, metadata, metadata.keyframe, &video_recovery)?;
+                            }
                             Err(error) => return Err(error.into()),
                         }
                     }
@@ -3314,6 +3387,10 @@ async fn host_media(
                 },
                 frame = audio.recv(), if sound.is_none() => {
                     let frame = frame.context("UDP audio producer stopped")?;
+                    let metadata = frame.plan.descriptor().metadata;
+                    if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) {
+                        continue;
+                    }
                     let indices = (0..frame.plan.fragment_count()).collect();
                     let next = transmission(frame.plan, true, indices, pacer.effective_bitrate(), frame.queued);
                     if next.deadline <= Instant::now() { continue; }
@@ -3323,12 +3400,11 @@ async fn host_media(
                 frame = frames.next(
                     current.as_ref().filter(|frame| !frame.indices.is_empty()).map(|frame| frame.plan.descriptor().metadata),
                     repair.as_ref().map(|frame| frame.plan.descriptor().metadata),
+                    |metadata| epochs.get(&(metadata.kind, metadata.display_id))
+                        .is_some_and(|(epoch, ack)| *epoch == metadata.epoch && *ack),
                 ) => {
                     let QueuedFrame { plan: frame, queued } = frame;
                     let metadata = frame.descriptor().metadata;
-                    if epochs.get(&(metadata.kind, metadata.display_id)).is_none_or(|(epoch, _)| *epoch != metadata.epoch) {
-                        continue;
-                    }
                     if !metadata.keyframe && queued.elapsed() >= VIDEO_QUEUE_AGE {
                         #[cfg(debug_assertions)]
                         { video_metrics.expired_messages += 1; }

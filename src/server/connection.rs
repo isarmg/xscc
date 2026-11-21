@@ -49,7 +49,7 @@ use std::{
     net::{IpAddr, Ipv6Addr},
     str::FromStr,
     sync::{
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
         mpsc as std_mpsc,
     },
 };
@@ -59,6 +59,8 @@ use system_shutdown;
 #[cfg(any(windows, all(target_os = "macos", feature = "gpui-host")))]
 use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
+const AUDIO_QUEUE_CAPACITY: usize = 16;
+const AUDIO_QUEUE_MAX_AGE: Duration = Duration::from_millis(150);
 
 const FAILURE_IDX_ID_WHITELIST: usize = 2;
 // How long a rejection counts, so also how long a blocked address stays blocked. Longer
@@ -179,7 +181,7 @@ lazy_static::lazy_static! {
     static ref ALIVE_CONNS: Arc::<Mutex<Vec<i32>>> = Default::default();
     pub static ref AUTHED_CONNS: Arc::<Mutex<Vec<AuthedConn>>> = Default::default();
     pub static ref CONTROL_PERMISSIONS_ARRAY: Arc::<Mutex<Vec<(i32, ControlPermissions)>>> = Default::default();
-    static ref WAKELOCK_SENDER: Arc::<Mutex<std::sync::mpsc::Sender<(usize, usize)>>> = Arc::new(Mutex::new(start_wakelock_thread()));
+    static ref WAKELOCK_SENDER: std_mpsc::SyncSender<()> = start_wakelock_thread();
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
 }
 
@@ -209,6 +211,7 @@ pub struct ConnInner {
     tx: Option<Sender>,
     tx_video: Option<Sender>,
     video_writer: Arc<Mutex<Option<MediaSender>>>,
+    queued_audio: Arc<AtomicUsize>,
 }
 
 struct InputMouse {
@@ -350,6 +353,10 @@ fn service_bitrate_auto_reset(misc: &Misc) -> bool {
     )
 }
 
+fn is_capturable_display(display: &DisplayInfo) -> bool {
+    display.online && display.width > 0 && display.height > 0
+}
+
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
         Self {
@@ -357,7 +364,20 @@ impl ConnInner {
             tx,
             tx_video,
             video_writer: Default::default(),
+            queued_audio: Default::default(),
         }
+    }
+
+    fn reserve_audio_slot(&self) -> bool {
+        self.queued_audio
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                (count < AUDIO_QUEUE_CAPACITY).then(|| count + 1)
+            })
+            .is_ok()
+    }
+
+    fn release_audio_slot(&self) {
+        self.queued_audio.fetch_sub(1, Ordering::Relaxed);
     }
 
     // Return whether the legacy TCP queue requires a handoff acknowledgement.
@@ -401,7 +421,15 @@ impl Subscriber for ConnInner {
         if tx_by_video {
             self.send_video(msg, None);
         } else if let Some(tx) = self.tx.as_ref() {
-            allow_err!(tx.send((Instant::now(), msg)));
+            let audio = matches!(&msg.union, Some(message::Union::AudioFrame(_)));
+            if audio && !self.reserve_audio_slot() {
+                return;
+            }
+            let sent = tx.send((Instant::now(), msg));
+            if audio && sent.is_err() {
+                self.release_audio_slot();
+            }
+            allow_err!(sent);
         }
     }
 }
@@ -475,12 +503,7 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
         let mut conn = Self {
-            inner: ConnInner {
-                id,
-                tx: Some(tx),
-                tx_video: Some(tx_video),
-                video_writer: Default::default(),
-            },
+            inner: ConnInner::new(id, Some(tx), Some(tx_video)),
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,
             // Defer display enumeration until login succeeds. Monitor login replaces this
@@ -801,17 +824,13 @@ impl Connection {
                     }
                 },
                 Some((instant, value)) = rx.recv() => {
-                    let latency = instant.elapsed().as_millis() as i64;
                     #[allow(unused_mut)]
                     let mut msg = value;
 
-                    if latency > 1000 {
-                        match &msg.union {
-                            Some(message::Union::AudioFrame(_)) => {
-                                // log::info!("audio frame latency {}", instant.elapsed().as_secs_f32());
-                                continue;
-                            }
-                            _ => {}
+                    if matches!(&msg.union, Some(message::Union::AudioFrame(_))) {
+                        conn.inner.release_audio_slot();
+                        if !conn.audio_enabled() || instant.elapsed() > AUDIO_QUEUE_MAX_AGE {
+                            continue;
                         }
                     }
                     #[cfg(all(target_os = "macos", feature = "gpui-host"))]
@@ -828,6 +847,7 @@ impl Connection {
                                 }
                             }
                             match &m.union {
+                                Some(misc::Union::AudioFormat(_)) if !conn.audio_enabled() => continue,
                                 Some(misc::Union::StopService(_)) => {
                                     conn.send_close_reason_no_retry("").await;
                                     conn.on_close("stop service", false).await;
@@ -883,6 +903,7 @@ impl Connection {
                     #[cfg(all(target_os = "macos", feature = "gpui-host"))]
                     if let Some(display_change) = display_change {
                         conn.send(display_change).await;
+                        conn.refresh_video_display(Some(conn.display_idx));
                     }
                 },
                 Some(data) = rx_from_authed.recv() => {
@@ -941,10 +962,17 @@ impl Connection {
                     // The control end will jump out of the loop after receiving LoginResponse and will not reply to the TestDelay
                     if conn.last_test_delay.is_none() {
                         conn.last_test_delay = Some(Instant::now());
+                        #[cfg(feature = "gpui-host")]
+                        let target_bitrate = {
+                            let name = video_service::get_service_name(conn.video_source(), conn.display_idx);
+                            video_service::VIDEO_QOS.lock().unwrap().bitrate_for_display(&name)
+                        };
+                        #[cfg(not(feature = "gpui-host"))]
+                        let target_bitrate = video_service::VIDEO_QOS.lock().unwrap().bitrate();
                         let mut msg_out = Message::new();
                         msg_out.set_test_delay(TestDelay{
                             last_delay: conn.network_delay,
-                            target_bitrate: video_service::VIDEO_QOS.lock().unwrap().bitrate(),
+                            target_bitrate,
                             ..Default::default()
                         });
                         conn.send(msg_out.into()).await;
@@ -2823,6 +2851,23 @@ impl Connection {
 
     async fn handle_switch_display(&mut self, s: SwitchDisplay) {
         let display_idx = s.display as usize;
+        #[cfg(feature = "gpui-host")]
+        if self.display_idx == display_idx {
+            if let Some(display) =
+                display_service::get_display_info(display_idx).filter(is_capturable_display)
+            {
+                if let Some(confirmation) = video_service::make_display_changed_msg(
+                    display_idx,
+                    Some(display),
+                    self.video_source(),
+                ) {
+                    self.send(confirmation).await;
+                    // UDP publishes this confirmation as a new format epoch.
+                    self.refresh_video_display(Some(display_idx));
+                }
+            }
+            return;
+        }
         if self.display_idx != display_idx {
             if let Some(server) = self.server.upgrade() {
                 if !self.switch_display_to(display_idx, server.clone()) {
@@ -2850,13 +2895,9 @@ impl Connection {
                 video_service::make_display_changed_msg(self.display_idx, None, self.video_source())
             {
                 self.send(msg_out).await;
+                #[cfg(feature = "gpui-host")]
+                self.refresh_video_display(Some(self.display_idx));
             }
-        }
-    }
-
-    fn video_source_count(video_source: VideoSource) -> usize {
-        match video_source {
-            VideoSource::Monitor => display_service::get_sync_displays().len(),
         }
     }
 
@@ -2865,15 +2906,12 @@ impl Connection {
     }
 
     fn switch_display_to(&mut self, display_idx: usize, server: Arc<RwLock<Server>>) -> bool {
-        let source_count = Self::video_source_count(self.video_source());
-        if display_idx >= source_count {
+        if !display_service::get_display_info(display_idx)
+            .as_ref()
+            .is_some_and(is_capturable_display)
+        {
             // Do not remap an explicit switch: its resolution belongs to the requested source.
-            log::warn!(
-                "Ignore switch to invalid {:?} index {}, available source count: {}",
-                self.video_source(),
-                display_idx,
-                source_count
-            );
+            log::trace!("Ignore switch to unavailable display {display_idx}");
             return false;
         }
 
@@ -2921,32 +2959,28 @@ impl Connection {
 
     async fn capture_displays(&mut self, add: &[usize], sub: &[usize], set: &[usize]) {
         let video_source = self.video_source();
-        let source_count = Self::video_source_count(video_source);
+        let displays = display_service::get_sync_displays();
+        let capturable = |display: &usize| displays.get(*display).is_some_and(is_capturable_display);
         // Only add/set can create services; sub only narrows existing subscriptions.
         let valid_add = add
             .iter()
             .copied()
-            .filter(|display| *display < source_count)
+            .filter(capturable)
             .collect::<Vec<_>>();
         let valid_sub = sub
             .iter()
             .copied()
-            .filter(|display| *display < source_count)
+            .filter(|display| *display < displays.len())
             .collect::<Vec<_>>();
         let valid_set = set
             .iter()
             .copied()
-            .filter(|display| *display < source_count)
+            .filter(capturable)
             .collect::<Vec<_>>();
         let invalid_count =
             add.len() + sub.len() + set.len() - valid_add.len() - valid_sub.len() - valid_set.len();
         if invalid_count != 0 {
-            log::warn!(
-                "Ignore {} invalid {:?} indices, available source count: {}",
-                invalid_count,
-                video_source,
-                source_count
-            );
+            log::trace!("Ignore {invalid_count} unavailable {video_source:?} indices");
         }
         // Passing an invalid sub request as an empty exclude list would unsubscribe all services.
         if (!add.is_empty() && valid_add.is_empty())
@@ -3830,53 +3864,47 @@ fn try_activate_screen() {
     });
 }
 
-fn start_wakelock_thread() -> std::sync::mpsc::Sender<(usize, usize)> {
+fn start_wakelock_thread() -> std_mpsc::SyncSender<()> {
     // Check if we should keep awake during incoming sessions
     use crate::platform::{get_wakelock, WakeLock};
-    let (tx, rx) = std::sync::mpsc::channel::<(usize, usize)>();
+    let (tx, rx) = std_mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut wakelock: Option<WakeLock> = None;
         let mut last_display = false;
-        loop {
-            match rx.recv() {
-                Ok((conn_count, remote_count)) => {
-                    let keep_awake = config::Config::get_bool_option(
-                        keys::OPTION_KEEP_AWAKE_DURING_INCOMING_SESSIONS,
-                    );
-                    *WAKELOCK_KEEP_AWAKE_OPTION.lock().unwrap() = Some(keep_awake);
-                    if conn_count == 0 || !keep_awake {
-                        if wakelock.is_some() {
-                            wakelock = None;
-                            log::info!("drop wakelock");
+        while rx.recv().is_ok() {
+            let keep_awake = config::Config::get_bool_option(
+                keys::OPTION_KEEP_AWAKE_DURING_INCOMING_SESSIONS,
+            );
+            *WAKELOCK_KEEP_AWAKE_OPTION.lock().unwrap() = Some(keep_awake);
+            let (has_connections, display) = {
+                let connections = AUTHED_CONNS.lock().unwrap();
+                (
+                    !connections.is_empty(),
+                    cfg!(target_os = "linux")
+                        || connections.iter().any(|c| c.conn_type == AuthConnType::Remote),
+                )
+            };
+            if !has_connections || !keep_awake {
+                if wakelock.take().is_some() {
+                    log::info!("drop wakelock");
+                }
+                continue;
+            }
+            if let Some(_w) = wakelock.as_mut() {
+                if display != last_display {
+                    #[cfg(any(target_os = "windows", target_os = "macos"))]
+                    {
+                        log::info!("set wakelock display to {display}");
+                        if let Err(e) = _w.set_display(display) {
+                            log::error!("failed to set wakelock display to {display}: {e:?}");
+                            continue;
                         }
-                    } else {
-                        let mut display = remote_count > 0;
-                        if let Some(_w) = wakelock.as_mut() {
-                            if display != last_display {
-                                #[cfg(any(target_os = "windows", target_os = "macos"))]
-                                {
-                                    log::info!("set wakelock display to {display}");
-                                    if let Err(e) = _w.set_display(display) {
-                                        log::error!(
-                                            "failed to set wakelock display to {display}: {e:?}"
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            if cfg!(target_os = "linux") {
-                                display = true;
-                            }
-                            wakelock = Some(get_wakelock(display));
-                        }
-                        last_display = display;
                     }
                 }
-                Err(e) => {
-                    log::error!("wakelock receive error: {e:?}");
-                    break;
-                }
+            } else {
+                wakelock = Some(get_wakelock(display));
             }
+            last_display = display;
         }
     });
     tx
@@ -4218,17 +4246,12 @@ mod raii {
         }
 
         fn check_wake_lock() {
-            let conn_count = AUTHED_CONNS.lock().unwrap().len();
-            let remote_count = AUTHED_CONNS
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|c| c.conn_type == AuthConnType::Remote)
-                .count();
-            allow_err!(WAKELOCK_SENDER
-                .lock()
-                .unwrap()
-                .send((conn_count, remote_count)));
+            // The owner reads current state on receipt. One pending wake covers any newer changes.
+            if let Err(std_mpsc::TrySendError::Disconnected(())) = WAKELOCK_SENDER.try_send(()) {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(5), error, "Incoming session wake-lock worker stopped"
+                );
+            }
         }
 
         pub fn check_wake_lock_on_setting_changed() {
@@ -4476,6 +4499,36 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 mod test {
     #[allow(unused)]
     use super::*;
+
+    #[test]
+    fn congested_peer_bounds_queued_audio_and_keeps_the_format_ordered() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut peer = ConnInner::new(1, Some(tx), None);
+        let mut audio = Message::new();
+        audio.set_audio_frame(AudioFrame::new());
+        let audio = Arc::new(audio);
+        let mut misc = Misc::new();
+        misc.set_audio_format(AudioFormat::new());
+        let mut format = Message::new();
+        format.set_misc(misc);
+        let format = Arc::new(format);
+
+        for _ in 0..=AUDIO_QUEUE_CAPACITY {
+            peer.send(audio.clone());
+        }
+        peer.send(format.clone());
+        for _ in 0..AUDIO_QUEUE_CAPACITY {
+            let (_, queued) = rx.try_recv().unwrap();
+            assert!(Arc::ptr_eq(&queued, &audio));
+            peer.release_audio_slot();
+        }
+        assert!(Arc::ptr_eq(&rx.try_recv().unwrap().1, &format));
+        assert!(rx.try_recv().is_err());
+
+        peer.send(audio.clone());
+        assert!(Arc::ptr_eq(&rx.try_recv().unwrap().1, &audio));
+        peer.release_audio_slot();
+    }
 
     // The registry is process-global and the harness runs tests in parallel threads, so every
     // test that admits connections holds this first; a poisoned lock is still a lock.

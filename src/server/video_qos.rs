@@ -288,6 +288,8 @@ impl UserData {
 struct DisplayData {
     send_counter: usize, // Number of times encode during period
     support_changing_quality: bool,
+    #[cfg(any(feature = "gpui-host", test))]
+    bitrate: u32,
 }
 
 // Main QoS controller structure
@@ -408,9 +410,22 @@ impl VideoQoS {
         self.bitrate_store = bitrate;
     }
 
+    pub fn store_display_bitrate(&mut self, _display: &str, bitrate: u32) {
+        self.store_bitrate(bitrate);
+        #[cfg(any(feature = "gpui-host", test))]
+        if let Some(display) = self.displays.get_mut(_display) {
+            display.bitrate = bitrate;
+        }
+    }
+
     // Get stored bitrate
     pub fn bitrate(&self) -> u32 {
         self.bitrate_store
+    }
+
+    #[cfg(any(feature = "gpui-host", test))]
+    pub fn bitrate_for_display(&self, display: &str) -> u32 {
+        self.displays.get(display).map_or(0, |data| data.bitrate)
     }
 
     pub fn user_bitrate_limit(&mut self, id: i32, limit: Option<u32>) {
@@ -1115,6 +1130,19 @@ mod tests {
 #[cfg(test)]
 mod bitrate_limit_tests {
     use super::*;
+
+    #[test]
+    fn advertised_bitrate_follows_the_viewers_selected_display() {
+        let mut qos = VideoQoS::default();
+        qos.new_display("main".into());
+        qos.new_display("second".into());
+        qos.store_display_bitrate("main", 8_000);
+        qos.store_display_bitrate("second", 1_000);
+        assert_eq!(qos.bitrate_for_display("main"), 8_000);
+        assert_eq!(qos.bitrate_for_display("second"), 1_000);
+        qos.remove_display("second");
+        assert_eq!(qos.bitrate_for_display("second"), 0);
+    }
 
     #[test]
     fn bitrate_limits_only_combine_viewers_sharing_the_encoded_stream() {
