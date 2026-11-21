@@ -35,6 +35,7 @@ libc = "=0.2.189"
 [target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 base = { path = "../../libs/base", optional = true }
 image = { version = "0.25", default-features = false, optional = true }
+log = "0.4"
 [target.'cfg(target_os = "ios")'.dependencies]
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session"], optional = true }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSFileManager", "NSPathUtilities", "NSString", "NSURL", "NSError"] }
@@ -43,7 +44,6 @@ objc2-foundation = { version = "=0.3.2", default-features = false, features = ["
 librustdesk = { package = "rustdesk", path = "../..", default-features = false, features = ["use_dasp", "gpui-mobile-session", "mediacodec"], optional = true }
 jni = "=0.22.4"
 android_logger = "=0.13.3"
-log = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
