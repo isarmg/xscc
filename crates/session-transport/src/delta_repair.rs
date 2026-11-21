@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) const REPAIR_AGE: Duration = Duration::from_millis(60);
 const MAX_TRACKED_FRAGMENTS: usize = 128;
 const MAX_PENDING_REPAIRS: usize = 16;
 const MAX_REPAIR_FRAME_SIZE: u32 = 64 * 1024;
@@ -103,6 +102,7 @@ impl DeltaRepairs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::VIDEO_DELTA_REPAIR_AGE;
     use base::direct_transport::udp_media::{
         AuthenticatedPacket, DatagramReceiver, DatagramSender, Direction, MediaKind, Reassembler,
         SessionId, DEFAULT_MTU,
@@ -144,7 +144,13 @@ mod tests {
                 pacer
                     .on_sent(packet.sequence, packet.bytes.len(), now)
                     .unwrap();
-                repairs.track(packet.sequence, original, index, now + REPAIR_AGE, now);
+                repairs.track(
+                    packet.sequence,
+                    original,
+                    index,
+                    now + VIDEO_DELTA_REPAIR_AGE,
+                    now,
+                );
                 if packet.sequence == 0 {
                     continue;
                 }

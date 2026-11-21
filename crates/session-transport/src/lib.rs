@@ -67,6 +67,7 @@ const VIDEO_QUEUE: usize = 64;
 const VIDEO_QUEUE_BYTES: usize = 2 * media::MAX_VIDEO_FRAME;
 const VIDEO_QUEUE_AGE: Duration = Duration::from_millis(600);
 const VIDEO_REORDER_FRAMES: usize = 16;
+const VIDEO_DELTA_REPAIR_AGE: Duration = Duration::from_millis(60);
 const CONTROL_LIMIT: usize = 128 * 1024;
 const MAX_STREAMS: usize = 65;
 const RELIABLE_BYTES: usize = 64 * 1024 * 1024;
@@ -539,7 +540,7 @@ impl ReceiveStream {
         let wait = if self.recovery_requested {
             media::DELTA_TTL
         } else {
-            delta_repair::REPAIR_AGE
+            VIDEO_DELTA_REPAIR_AGE
         };
         Some(started + wait)
     }
@@ -2063,7 +2064,7 @@ mod tests {
         assert!(transport.deliver(frame(6, false)).unwrap().is_some());
 
         assert!(transport.deliver(frame(8, false)).unwrap().is_none());
-        let repair_started = Instant::now() + delta_repair::REPAIR_AGE;
+        let repair_started = Instant::now() + VIDEO_DELTA_REPAIR_AGE;
         assert!(transport.take_reordered(repair_started).unwrap().is_none());
         assert!(transport.deliver(frame(7, false)).unwrap().is_some());
         assert!(transport.take_reordered(repair_started).unwrap().is_some());
@@ -3609,7 +3610,7 @@ async fn host_media(
                                 continue;
                             }
                             if frame.initial && metadata.kind == MediaKind::Video && !metadata.keyframe {
-                                let deadline = (frame.selected + delta_repair::REPAIR_AGE).min(frame.deadline);
+                                let deadline = (frame.selected + VIDEO_DELTA_REPAIR_AGE).min(frame.deadline);
                                 delta_repairs.track(packet.sequence, &frame.plan, index, deadline, sent);
                             }
                             #[cfg(debug_assertions)]
