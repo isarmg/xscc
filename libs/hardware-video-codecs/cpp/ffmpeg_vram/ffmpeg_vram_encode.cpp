@@ -559,7 +559,10 @@ private:
 #ifdef XSCC_STREAM_DEBUG
     const auto flushing = util::now();
 #endif
-    amf_device_->context_->Flush();
+    // The keyed release synchronizes the shared BGRA read. The NV12 output
+    // of that blit stays on the same D3D11 device as AMF.
+    if (!amf_high_rate_hevc(framerate_, dataFormat_ == H265))
+      amf_device_->context_->Flush();
     slot.submitted = util::now();
     const HRESULT released = slot.encoder_mutex->ReleaseSync(0);
     if (released != S_OK) return AVERROR_EXTERNAL;

@@ -5,8 +5,12 @@
 #include <cstddef>
 #include <cstdint>
 
+constexpr bool amf_high_rate_hevc(int framerate, bool hevc) {
+  return hevc && framerate >= 240;
+}
+
 constexpr unsigned int amf_pending_frame_limit(int framerate, bool hevc) {
-  return hevc && framerate >= 240 ? 3 : 2;
+  return amf_high_rate_hevc(framerate, hevc) ? 3 : 2;
 }
 
 class AmfInputQueue {
