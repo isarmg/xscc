@@ -518,7 +518,7 @@ define_class!(
             let count = bounds.len();
             let rectangles = bounds.into_iter().enumerate().map(|(index, bounds)| {
                     let this = SelectionRect::alloc(self.mtm()).set_ivars(SelectionRectIvars {
-                        rect: native_rect(bounds),
+                        rect: self.local_rect(bounds),
                         contains_start: index == 0,
                         contains_end: index + 1 == count,
                     });
@@ -530,6 +530,7 @@ define_class!(
         }
         #[unsafe(method_id(closestPositionToPoint:))]
         fn closest_position(&self, point: CGPoint) -> Option<Retained<UITextPosition>> {
+            let point = self.window_point(point);
             self.with_handler(|handler| {
                 let offset = handler.character_index_for_point(gpui::point(px(point.x as f32), px(point.y as f32)))?;
                 allowed_range(handler, &(offset..offset)).then_some(offset)
@@ -553,8 +554,7 @@ define_class!(
         }
         #[unsafe(method_id(textInputView))]
         fn text_input_view(&self) -> Retained<UIView> {
-            // Caret and selection geometry is expressed in the GPUI rendering view.
-            self.superview().unwrap_or_else(|| self.retain().into_super())
+            self.retain().into_super()
         }
 
         #[unsafe(method_id(editMenuForTextRange:suggestedActions:))]
@@ -615,6 +615,17 @@ impl TextInputView {
         if self.isUserInteractionEnabled() != bounds.is_some() {
             self.setUserInteractionEnabled(bounds.is_some());
         }
+    }
+
+    fn local_rect(&self, bounds: gpui::Bounds<gpui::Pixels>) -> CGRect {
+        let rect = native_rect(bounds);
+        self.superview()
+            .map_or(rect, |parent| self.convertRect_fromView(rect, Some(&parent)))
+    }
+
+    fn window_point(&self, point: CGPoint) -> CGPoint {
+        self.superview()
+            .map_or(point, |parent| self.convertPoint_toView(point, Some(&parent)))
     }
 
     fn copy_selection(&self, remove: bool) {
@@ -704,7 +715,7 @@ impl TextInputView {
             handler.bounds_for_range(range)
         })
         .flatten()
-        .map(native_rect)
+        .map(|bounds| self.local_rect(bounds))
     }
 
     fn character_range(&self, offset: usize) -> Option<Retained<UITextRange>> {
@@ -1152,9 +1163,13 @@ pub(super) mod tests {
         let view = TextInputView::new(CGRect::new(CGPoint::ZERO, CGSize::new(1., 1.)), main_thread);
         container.addSubview(&view);
         view.install_editing_interaction();
-        assert!(container.interactions().is_empty());
-        let interactions = view.interactions();
         let responder: &UIResponder = &view;
+        let child: &UIView = &view;
+        assert!(!container.interactions().iter().any(|part| {
+            part.downcast::<UITextInteraction>()
+                .is_ok_and(|editing| editing.textInput().as_deref() == Some(responder))
+        }));
+        let interactions = view.interactions();
         let interaction = (0..interactions.len())
             .filter_map(|index| {
                 interactions
@@ -1163,25 +1178,27 @@ pub(super) mod tests {
                     .ok()
             })
             .find(|interaction| interaction.textInput().as_deref() == Some(responder))
-            .expect("container must expose the installed text editing interaction");
+            .expect("the text input view must own its editing interaction");
         assert_eq!(
             interaction.textInteractionMode(),
             UITextInteractionMode::Editable
         );
         assert_eq!(interaction.textInput().as_deref(), Some(responder));
+        assert_eq!(interaction.view().as_deref(), Some(child));
         let delegate = interaction.delegate().unwrap();
         assert!(!delegate.interactionShouldBegin_atPoint(&interaction, CGPoint::new(20., 40.)));
-        assert_eq!(view.textInputView(), container);
+        assert_eq!(&*view.textInputView(), child);
 
         let bounds = gpui::Bounds::new(
             gpui::point(px(20.), px(30.)),
             gpui::size(px(140.), px(36.)),
         );
         view.set_editing_region(Some(bounds));
-        let child: &UIView = &view;
         let hit = |x, y| container.hitTest_withEvent(CGPoint::new(x, y), None);
         assert_eq!(hit(40., 45.).as_deref(), Some(child));
         assert_eq!(hit(40., 100.).as_deref(), Some(&*container));
+        assert_eq!(view.local_rect(bounds), CGRect::new(CGPoint::ZERO, CGSize::new(140., 36.)));
+        assert_eq!(view.window_point(CGPoint::new(20., 15.)), CGPoint::new(40., 45.));
         view.set_editing_region(None);
         assert_eq!(hit(40., 45.).as_deref(), Some(&*container));
     }
