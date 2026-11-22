@@ -5286,6 +5286,8 @@ impl Window {
             let cx = self.to_async(cx);
             let input_handler =
                 PlatformInputHandler::new(cx, Box::new(input_handler)).with_focus(focus_handle.id);
+            #[cfg(target_os = "ios")]
+            let input_handler = input_handler.with_text_input_clip(self.content_mask().bounds);
             #[cfg(target_os = "android")]
             let input_handler = input_handler.with_text_style(self.text_style(), self.rem_size());
             self.next_frame.input_handlers.push(Some(input_handler));
@@ -5792,7 +5794,9 @@ impl Window {
         // keyboard visibility there, inside the user gesture). Input handlers
         // are registered during draw, so draw now to make them reflect any
         // focus change the tap just caused.
-        if tapped && self.invalidator.is_dirty() {
+        // iOS reconciles its keyboard after the next draw. Drawing here would
+        // put a render of the old state ahead of the tap's queued app effects.
+        if tapped && self.invalidator.is_dirty() && !cfg!(target_os = "ios") {
             self.draw(cx).clear(cx);
         }
         if self.touch_gestures.has_momentum() {

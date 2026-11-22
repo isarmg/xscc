@@ -158,18 +158,23 @@ impl RemoteKeyboard {
         } else {
             self.changed(window, cx);
         }
-        let epoch = self.control.epoch();
-        // The first frame mounts the input handler; the following frame can safely show IME.
-        cx.on_next_frame(window, move |view, window, cx| {
-            if !view.ime_requested(epoch, window) {
-                return;
-            }
-            cx.on_next_frame(window, move |view, window, _| {
-                if view.ime_requested(epoch, window) {
-                    window.request_virtual_keyboard();
+        #[cfg(target_os = "ios")]
+        window.request_virtual_keyboard();
+        #[cfg(not(target_os = "ios"))]
+        {
+            let epoch = self.control.epoch();
+            // The first frame mounts the input handler; the following frame can safely show IME.
+            cx.on_next_frame(window, move |view, window, cx| {
+                if !view.ime_requested(epoch, window) {
+                    return;
                 }
+                cx.on_next_frame(window, move |view, window, _| {
+                    if view.ime_requested(epoch, window) {
+                        window.request_virtual_keyboard();
+                    }
+                });
             });
-        });
+        }
     }
 
     pub fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -178,6 +183,7 @@ impl RemoteKeyboard {
         self.changed(window, cx);
     }
 
+    #[cfg(not(target_os = "ios"))]
     fn ime_requested(&self, epoch: u64, window: &Window) -> bool {
         self.page == KeyboardPage::Input
             && self.control.enabled.get()

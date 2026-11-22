@@ -167,6 +167,11 @@ impl<V: 'static> ElementInputHandler<V> {
 }
 
 impl<V: EntityInputHandler> InputHandler for ElementInputHandler<V> {
+    #[cfg(target_os = "ios")]
+    fn text_input_bounds(&self) -> Option<Bounds<Pixels>> {
+        Some(self.element_bounds)
+    }
+
     fn selected_text_range(
         &mut self,
         ignore_disabled_input: bool,

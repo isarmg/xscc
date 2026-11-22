@@ -151,6 +151,7 @@ define_class!(
                 // without changing GPUI focus. A repaint must not reclaim it.
                 self.ivars().keyboard_desired.set(false);
                 self.ivars().keyboard_eligible.set(false);
+                self.set_editing_region(None);
             }
             resigned
         }
@@ -223,13 +224,17 @@ define_class!(
         #[unsafe(method(reconcileTextInput))]
         fn reconcile_text_input(&self) {
             self.ivars().update_pending.set(false);
-            let eligible = self.ivars().keyboard_desired.get()
-                && self.with_handler(|handler| {
-                    if !handler.query_accepts_focused_text_input() { return false; }
-                    let Some(document) = document_range(handler) else { return false; };
-                    handler.selected_text_range(false)
-                        .is_some_and(|selection| contains_range(&document, &selection.range))
-                }).unwrap_or(false);
+            let (eligible, bounds) = if self.ivars().keyboard_desired.get() {
+                self.with_handler(|handler| {
+                    if !handler.query_accepts_focused_text_input() { return (false, None); }
+                    let Some(document) = document_range(handler) else { return (false, None); };
+                    let eligible = handler.selected_text_range(false)
+                        .is_some_and(|selection| contains_range(&document, &selection.range));
+                    (eligible, handler.text_input_bounds())
+                }).unwrap_or_default()
+            } else {
+                (false, None)
+            };
             self.ivars().keyboard_eligible.set(eligible);
             if self.canBecomeFirstResponder() {
                 if !self.isFirstResponder() { self.becomeFirstResponder(); }
@@ -238,6 +243,7 @@ define_class!(
                 self.resignFirstResponder();
                 self.ivars().reconciling_responder.set(previous);
             }
+            self.set_editing_region(if self.isFirstResponder() && eligible { bounds } else { None });
             if self.ivars().configuration_changed.replace(false) && self.isFirstResponder() {
                 self.reloadInputViews();
             }
@@ -260,11 +266,10 @@ define_class!(
 
     unsafe impl UITextInteractionDelegate for TextInputView {
         #[unsafe(method(interactionShouldBegin:atPoint:))]
-        fn interaction_should_begin(&self, _interaction: &UITextInteraction, point: CGPoint) -> bool {
-            self.isFirstResponder() && self.with_handler(|handler| {
-                handler.query_accepts_focused_text_input()
-                    && handler.character_index_for_point(gpui::point(px(point.x as f32), px(point.y as f32))).is_some()
-            }).unwrap_or(false)
+        fn interaction_should_begin(&self, _interaction: &UITextInteraction, _point: CGPoint) -> bool {
+            self.isFirstResponder()
+                && self.isUserInteractionEnabled()
+                && self.with_handler(|handler| handler.query_accepts_focused_text_input()).unwrap_or(false)
         }
     }
 
@@ -548,8 +553,7 @@ define_class!(
         }
         #[unsafe(method_id(textInputView))]
         fn text_input_view(&self) -> Retained<UIView> {
-            // GPUI's bounds and hit testing use the rendering view's coordinate space,
-            // not the hidden responder's one-point frame.
+            // Caret and selection geometry is expressed in the GPUI rendering view.
             self.superview().unwrap_or_else(|| self.retain().into_super())
         }
 
@@ -592,14 +596,25 @@ impl TextInputView {
         unsafe { msg_send![super(this), initWithFrame: frame] }
     }
 
-    pub(super) fn install_editing_interaction(&self, view: &UIView) {
+    pub(super) fn install_editing_interaction(&self) {
         let interaction =
             UITextInteraction::textInteractionForMode(UITextInteractionMode::Editable, self.mtm());
         unsafe {
             interaction.setTextInput(Some(self));
         }
         interaction.setDelegate(Some(ProtocolObject::from_ref(self)));
-        view.addInteraction(ProtocolObject::from_ref(&*interaction));
+        self.addInteraction(ProtocolObject::from_ref(&*interaction));
+    }
+
+    fn set_editing_region(&self, bounds: Option<gpui::Bounds<gpui::Pixels>>) {
+        let bounds = bounds.filter(|bounds| !bounds.is_empty());
+        let frame = bounds.map_or(CGRect::ZERO, native_rect);
+        if self.frame() != frame {
+            self.setFrame(frame);
+        }
+        if self.isUserInteractionEnabled() != bounds.is_some() {
+            self.setUserInteractionEnabled(bounds.is_some());
+        }
     }
 
     fn copy_selection(&self, remove: bool) {
@@ -1136,8 +1151,9 @@ pub(super) mod tests {
         );
         let view = TextInputView::new(CGRect::new(CGPoint::ZERO, CGSize::new(1., 1.)), main_thread);
         container.addSubview(&view);
-        view.install_editing_interaction(&container);
-        let interactions = container.interactions();
+        view.install_editing_interaction();
+        assert!(container.interactions().is_empty());
+        let interactions = view.interactions();
         let responder: &UIResponder = &view;
         let interaction = (0..interactions.len())
             .filter_map(|index| {
@@ -1156,6 +1172,18 @@ pub(super) mod tests {
         let delegate = interaction.delegate().unwrap();
         assert!(!delegate.interactionShouldBegin_atPoint(&interaction, CGPoint::new(20., 40.)));
         assert_eq!(view.textInputView(), container);
+
+        let bounds = gpui::Bounds::new(
+            gpui::point(px(20.), px(30.)),
+            gpui::size(px(140.), px(36.)),
+        );
+        view.set_editing_region(Some(bounds));
+        let child: &UIView = &view;
+        let hit = |x, y| container.hitTest_withEvent(CGPoint::new(x, y), None);
+        assert_eq!(hit(40., 45.).as_deref(), Some(child));
+        assert_eq!(hit(40., 100.).as_deref(), Some(&*container));
+        view.set_editing_region(None);
+        assert_eq!(hit(40., 45.).as_deref(), Some(&*container));
     }
 
     fn native_edit_actions_test(main_thread: MainThreadMarker) {

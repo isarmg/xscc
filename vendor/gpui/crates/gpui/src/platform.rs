@@ -2054,6 +2054,8 @@ pub struct PlatformInputHandler {
     cx: AsyncWindowContext,
     handler: Box<dyn InputHandler>,
     focus_id: Option<crate::FocusId>,
+    #[cfg(target_os = "ios")]
+    text_input_bounds: Option<Bounds<Pixels>>,
     #[cfg(target_os = "android")]
     text_style: Option<(crate::TextStyle, Pixels)>,
 }
@@ -2072,6 +2074,8 @@ impl PlatformInputHandler {
             cx,
             handler,
             focus_id: None,
+            #[cfg(target_os = "ios")]
+            text_input_bounds: None,
             #[cfg(target_os = "android")]
             text_style: None,
         }
@@ -2080,6 +2084,21 @@ impl PlatformInputHandler {
     pub(crate) fn with_focus(mut self, focus_id: crate::FocusId) -> Self {
         self.focus_id = Some(focus_id);
         self
+    }
+
+    #[cfg(target_os = "ios")]
+    pub(crate) fn with_text_input_clip(mut self, clip: Bounds<Pixels>) -> Self {
+        self.text_input_bounds = self
+            .handler
+            .text_input_bounds()
+            .map(|bounds| bounds.intersect(&clip));
+        self
+    }
+
+    /// The visible area that accepts native text editing gestures.
+    #[cfg(target_os = "ios")]
+    pub fn text_input_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.text_input_bounds
     }
 
     #[cfg(target_os = "android")]
@@ -2366,6 +2385,12 @@ pub struct UTF16Selection {
 ///
 /// Text offsets and ranges use UTF-16 code units unless stated otherwise.
 pub trait InputHandler: 'static {
+    /// The area of the focused input element before applying the window's clip.
+    #[cfg(target_os = "ios")]
+    fn text_input_bounds(&self) -> Option<Bounds<Pixels>> {
+        None
+    }
+
     /// Get the range of the user's currently selected text, if any
     /// Corresponds to [selectedRange()](https://developer.apple.com/documentation/appkit/nstextinputclient/1438242-selectedrange)
     ///
