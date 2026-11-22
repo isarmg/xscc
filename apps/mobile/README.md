@@ -64,8 +64,9 @@ position-isolated synthetic anchor for empty-document Backspace. This is not a
 copy of the remote document. Pointer/control-key navigation, focus loss, background,
 mode changes and revocation cancel that context. Edits outside the known suffix
 are rejected rather than guessing remote selection. Failed sends clear context.
-The iOS input toolbar can send text from the local clipboard when the user taps
-Paste. This uses the same permission and text checks as typed input. macOS and Windows targets use native
+On iOS, long-press the remote input field above the system keyboard and choose
+Paste from the UIKit edit menu. Pasted text uses the same permission and text
+checks as typed input. macOS and Windows targets use native
 Unicode text injection; Linux targets accept printable ASCII only. Return, Tab and
 the control-key bar use separate single-press protocol commands. Hardware keyboard
 support and native Wayland Unicode remain separate unfinished work. Unmodified,
@@ -134,7 +135,8 @@ unsupported app platform rather than opening a production binding store.
    permission while dragging. Exercise software-keyboard composition/commit/cancel,
    emoji deletion, empty Backspace, navigation, and view-only rejection. Verify
    Linux non-ASCII is explicitly rejected without altering the clipboard.
-   On iOS, check local text paste and the keyboard toolbar in both orientations.
+   On iOS, long-press the remote input field in both orientations and select Paste
+   with text on the clipboard. Verify the text reaches the focused remote field.
 7. Enable remote sound, test mute and system volume, then interrupt audio focus,
    unplug headphones, background, disconnect and reconnect. Old audio must not
    replay; interruptions require explicitly enabling sound again.

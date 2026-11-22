@@ -1636,9 +1636,12 @@ impl Render for SessionView {
             .keyboard
             .as_ref()
             .is_some_and(|keyboard| keyboard.read(cx).input_notice().is_some());
+        let input_height = if input_notice { key_height } else { 0. };
+        #[cfg(target_os = "ios")]
+        let input_height = input_height + crate::remote_keyboard::INPUT_BAR_HEIGHT;
         let keyboard_height = key_height
             + if self.keyboard_page == KeyboardPage::Input {
-                if input_notice { key_height } else { 0. }
+                input_height
             } else {
                 (body_height - ime).max(0.)
             };
@@ -1822,31 +1825,6 @@ impl Render for SessionView {
                         .child(label)
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.keyboard_page(page, window, cx)
-                        })),
-                );
-            }
-            #[cfg(target_os = "ios")]
-            if self.keyboard_page == KeyboardPage::Input && enabled {
-                header = header.child(
-                    div()
-                        .id("session-keyboard-paste")
-                        .h(px(key_height))
-                        .px_2()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .text_size(px(13.))
-                        .text_color(rgb(0x4d88fa))
-                        .child("粘贴")
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            if view.input_allowed()
-                                && let Some(keyboard) = &view.keyboard
-                            {
-                                keyboard.update(cx, |keyboard, cx| {
-                                    keyboard.paste_from_clipboard(window, cx)
-                                });
-                            }
-                            cx.stop_propagation();
                         })),
                 );
             }

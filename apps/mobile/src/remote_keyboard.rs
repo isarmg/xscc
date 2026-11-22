@@ -34,6 +34,9 @@ pub enum KeyboardPage {
     Keys,
 }
 
+#[cfg(target_os = "ios")]
+pub(crate) const INPUT_BAR_HEIGHT: f32 = 36.;
+
 pub struct KeyboardControl {
     state: RefCell<KeyboardState>,
     enabled: Cell<bool>,
@@ -73,6 +76,8 @@ impl KeyboardControl {
 pub struct RemoteKeyboard {
     pub control: Rc<KeyboardControl>,
     focus: FocusHandle,
+    #[cfg(target_os = "ios")]
+    input_bar_bounds: Rc<Cell<Bounds<Pixels>>>,
     notice: String,
     page: KeyboardPage,
     computer_second_page: bool,
@@ -93,6 +98,8 @@ impl RemoteKeyboard {
         Self {
             control,
             focus,
+            #[cfg(target_os = "ios")]
+            input_bar_bounds: Rc::default(),
             notice: String::new(),
             page: KeyboardPage::Input,
             computer_second_page: false,
@@ -169,18 +176,6 @@ impl RemoteKeyboard {
         self.control.cancel();
         window.dismiss_virtual_keyboard();
         self.changed(window, cx);
-    }
-
-    #[cfg(target_os = "ios")]
-    pub fn paste_from_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.accepts_text_input(window, cx) {
-            if let Some(item) = cx.read_from_clipboard() {
-                self.paste(item, window, cx);
-            } else {
-                self.notice = "剪贴板中没有可粘贴的文本。".into();
-                self.changed(window, cx);
-            }
-        }
     }
 
     fn ime_requested(&self, epoch: u64, window: &Window) -> bool {
@@ -389,31 +384,39 @@ impl EntityInputHandler for RemoteKeyboard {
     }
     fn character_index_for_point(
         &mut self,
-        _: Point<Pixels>,
-        _: &mut Window,
-        _: &mut Context<Self>,
+        point: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> Option<usize> {
-        // The real caret is on the host. A fabricated index would let UIKit
-        // start a local text gesture anywhere over the remote touch canvas.
         #[cfg(target_os = "ios")]
-        return None;
+        if !self.accepts_text_input(window, cx) || !self.input_bar_bounds.get().contains(&point) {
+            return None;
+        }
         #[cfg(not(target_os = "ios"))]
+        let _ = (point, window, cx);
         Some(self.control.state.borrow().selection().end)
     }
 }
 impl Render for RemoteKeyboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(not(target_os = "ios"))]
         let entity = cx.entity();
+        #[cfg(not(target_os = "ios"))]
         let focus = self.focus.clone();
         let content = match self.page {
-            KeyboardPage::Input => div()
-                .text_size(gpui::px(12.))
-                .text_color(rgb(0xb0b1b8))
-                .children(self.input_notice().map(str::to_owned)),
+            KeyboardPage::Input => {
+                let notice = div()
+                    .text_size(gpui::px(12.))
+                    .text_color(rgb(0xb0b1b8))
+                    .children(self.input_notice().map(str::to_owned));
+                #[cfg(target_os = "ios")]
+                let notice = div().child(self.input_bar(cx)).child(notice);
+                notice
+            }
             KeyboardPage::Keys => self.computer_keyboard(window, cx),
             KeyboardPage::Shortcuts => self.shortcut_keyboard(window, cx),
         };
-        div()
+        let view = div()
             .id("remote-keyboard")
             .debug_selector(|| "remote-keyboard".into())
             .relative()
@@ -445,27 +448,63 @@ impl Render for RemoteKeyboard {
                     .when(self.page != KeyboardPage::Keys, |page| {
                         page.overflow_y_scroll()
                     })
-                    .p_1()
-                    .child(content),
-            )
-            .when(self.page == KeyboardPage::Input, |view| {
-                view.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, cx| {
-                            window.handle_input(
-                                &focus,
-                                ElementInputHandler::new(bounds, entity),
-                                cx,
-                            );
-                        },
+                    .when(
+                        !cfg!(target_os = "ios") || self.page != KeyboardPage::Input,
+                        |page| page.p_1(),
                     )
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .w_full()
-                    .h(gpui::px(1.)),
+                    .child(content),
+            );
+        #[cfg(not(target_os = "ios"))]
+        let view = view.when(self.page == KeyboardPage::Input, |view| {
+            view.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, cx| {
+                        window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
+                    },
                 )
-            })
+                .absolute()
+                .top_0()
+                .left_0()
+                .w_full()
+                .h(gpui::px(1.)),
+            )
+        });
+        view
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl RemoteKeyboard {
+    fn input_bar(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let input_bar_bounds = self.input_bar_bounds.clone();
+        let focus = self.focus.clone();
+        let entity = cx.entity();
+        div()
+            .id("remote-keyboard-native-input")
+            .relative()
+            .w_full()
+            .h(gpui::px(INPUT_BAR_HEIGHT))
+            .flex()
+            .items_center()
+            .px_2()
+            .rounded(gpui::px(6.))
+            .bg(rgb(computer::KEY))
+            .text_size(gpui::px(13.))
+            .child("远端输入 · 长按粘贴")
+            .on_click(cx.listener(|view, _, window, cx| view.show(KeyboardPage::Input, window, cx)))
+            .child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, cx| {
+                        input_bar_bounds.set(bounds);
+                        window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
     }
 }

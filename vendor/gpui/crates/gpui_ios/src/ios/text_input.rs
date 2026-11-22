@@ -1,6 +1,6 @@
 use super::window::{IosWindowState, WindowReference};
 use gpui::{
-    Autocapitalize, PlatformInputHandler, TextInputAction, TextInputConfiguration,
+    Autocapitalize, ClipboardItem, PlatformInputHandler, TextInputAction, TextInputConfiguration,
     TextInputStateChange, px,
 };
 use objc2::rc::{Retained, Weak};
@@ -182,10 +182,13 @@ define_class!(
         }
 
         #[unsafe(method(paste:))]
-        fn paste(&self, _sender: Option<&AnyObject>) {
-            if !self.isFirstResponder() { return; }
+        fn paste(&self, sender: Option<&AnyObject>) {
+            if !unsafe { self.canPerformAction_withSender(sel!(paste:), sender) } { return; }
+            let session = self.ivars().session.borrow().clone();
             if let Some(text) = unsafe { UIPasteboard::generalPasteboard().string() } {
-                self.edit(|handler| handler.replace_text_in_range(None, &text.to_string()));
+                if self.isFirstResponder() && Rc::ptr_eq(&session, &self.ivars().session.borrow()) {
+                    self.edit(|handler| handler.paste(ClipboardItem::new_string(text.to_string())));
+                }
             }
         }
 
@@ -549,6 +552,19 @@ define_class!(
             // not the hidden responder's one-point frame.
             self.superview().unwrap_or_else(|| self.retain().into_super())
         }
+
+        #[unsafe(method_id(editMenuForTextRange:suggestedActions:))]
+        fn edit_menu_for_text_range(
+            &self,
+            range: &UITextRange,
+            suggested_actions: &NSArray<UIMenuElement>,
+        ) -> Option<Retained<UIMenu>> {
+            self.validated_range(range)?;
+            if !unsafe { self.canPerformAction_withSender(sel!(paste:), None) } {
+                return None;
+            }
+            menu_with_missing_paste(suggested_actions, self.mtm())
+        }
     }
 
 );
@@ -780,6 +796,45 @@ fn document_range(handler: &mut PlatformInputHandler) -> Option<Range<usize>> {
         .filter(|range| range.start <= range.end)
 }
 
+fn is_paste_command(element: &UIMenuElement) -> bool {
+    if let Some(command) = element.downcast_ref::<UICommand>() {
+        return (unsafe { command.action() }) == sel!(paste:);
+    }
+    element
+        .downcast_ref::<UIMenu>()
+        .is_some_and(|menu| menu.children().iter().any(|child| is_paste_command(&child)))
+}
+
+fn menu_with_missing_paste(
+    suggested_actions: &NSArray<UIMenuElement>,
+    mtm: MainThreadMarker,
+) -> Option<Retained<UIMenu>> {
+    if suggested_actions
+        .iter()
+        .any(|action| is_paste_command(&action))
+    {
+        return None;
+    }
+    // Preserve system suggestions and route the standard paste: action through
+    // the first responder when UIKit supplies only auxiliary actions.
+    let paste = unsafe {
+        UICommand::commandWithTitle_image_action_propertyList(
+            &NSString::from_str("Paste"),
+            None,
+            sel!(paste:),
+            None,
+            mtm,
+        )
+    };
+    let actions = std::iter::once(paste.into_super())
+        .chain(suggested_actions.iter())
+        .collect::<Vec<_>>();
+    Some(UIMenu::menuWithChildren(
+        &NSArray::from_retained_slice(&actions),
+        mtm,
+    ))
+}
+
 fn allowed_range(handler: &mut PlatformInputHandler, range: &Range<usize>) -> bool {
     document_range(handler).is_some_and(|editable| contains_range(&editable, range))
 }
@@ -892,6 +947,7 @@ pub(super) mod tests {
         stale_native_objects_test(main_thread);
         native_editing_interaction_test(main_thread);
         native_edit_actions_test(main_thread);
+        native_paste_menu_test(main_thread);
         let view = TextInputView::new(CGRect::ZERO, main_thread);
         let position = view.new_position(3);
         assert_eq!(view.validated_offset(&position), Some(3));
@@ -1112,6 +1168,7 @@ pub(super) mod tests {
             assert!(view.respondsToSelector(action));
             assert!(!unsafe { view.canPerformAction_withSender(action, None) });
         }
+        assert!(view.respondsToSelector(sel!(editMenuForTextRange:suggestedActions:)));
         unsafe {
             let _: () = msg_send![&*view, paste: Option::<&AnyObject>::None];
             let _: () = msg_send![&*view, copy: Option::<&AnyObject>::None];
@@ -1119,6 +1176,35 @@ pub(super) mod tests {
             let _: () = msg_send![&*view, selectAll: Option::<&AnyObject>::None];
         }
         assert!(view.selectedTextRange().is_none());
+    }
+
+    fn native_paste_menu_test(main_thread: MainThreadMarker) {
+        let select_all = unsafe {
+            UICommand::commandWithTitle_image_action_propertyList(
+                &NSString::from_str("Select All"),
+                None,
+                sel!(selectAll:),
+                None,
+                main_thread,
+            )
+        };
+        let suggestions = NSArray::from_retained_slice(&[select_all.into_super()]);
+        let menu = menu_with_missing_paste(&suggestions, main_thread)
+            .expect("missing Paste must be added");
+        let entries = menu.children();
+        assert_eq!(entries.len(), 2);
+        assert!(is_paste_command(&entries.objectAtIndex(0)));
+        let preserved = entries.objectAtIndex(1).downcast::<UICommand>().unwrap();
+        assert_eq!(unsafe { preserved.action() }, sel!(selectAll:));
+        let nested = NSArray::from_retained_slice(&[menu.into_super()]);
+        assert!(menu_with_missing_paste(&nested, main_thread).is_none());
+
+        let view = TextInputView::new(CGRect::ZERO, main_thread);
+        let range = view.new_range(0..0);
+        assert!(
+            view.editMenuForTextRange_suggestedActions(&range, &suggestions)
+                .is_none()
+        );
     }
 
     fn stale_native_objects_test(main_thread: MainThreadMarker) {
