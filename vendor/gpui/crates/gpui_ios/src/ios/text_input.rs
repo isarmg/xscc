@@ -559,11 +559,13 @@ define_class!(
             range: &UITextRange,
             suggested_actions: &NSArray<UIMenuElement>,
         ) -> Option<Retained<UIMenu>> {
-            self.validated_range(range)?;
-            if !unsafe { self.canPerformAction_withSender(sel!(paste:), None) } {
-                return None;
+            if self.validated_range(range).is_some()
+                && unsafe { self.canPerformAction_withSender(sel!(paste:), None) }
+            {
+                menu_with_missing_paste(suggested_actions, self.mtm())
+            } else {
+                None
             }
-            menu_with_missing_paste(suggested_actions, self.mtm())
         }
     }
 
